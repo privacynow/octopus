@@ -161,11 +161,15 @@ The current shipped model is:
 - enforce stage completion through shared SDK contracts, artifact observations,
   and versioned operator actions instead of UI-only state
 - serve built-in protocol templates from the seeded registry database after
-  bootstrap, not from a parallel SDK-only read path
-- sweep expired protocol-stage timeouts through normal registry traffic so
-  timeout handling uses the same canonical run-state applier as task results
+  bootstrap via the shared SDK bootstrap helper, not from a parallel SDK-only
+  read path
+- sweep expired protocol-stage timeouts through the registry maintenance loop
+  so timeout handling uses the same canonical run-state applier as task results
 - refresh protocol UI state through registry realtime invalidation topics
   instead of maintaining a separate browser-side protocol state machine
+- expose protocol issue summaries for blocked runs, invalid contracts, expired
+  timeouts, and stuck leases through the control plane instead of ad hoc
+  transport-specific inspection
 
 The first built-in protocol is `software-engineering`, which models planning,
 review, architecture, implementation, review, and acceptance over durable repo

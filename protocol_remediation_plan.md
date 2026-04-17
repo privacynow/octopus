@@ -699,14 +699,14 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 
 | Phase | Status | Evidence / gap |
 |-------|--------|----------------|
-| **P1** Engine extraction | **partial** | Named SDK engine now exists in `octopus_sdk/protocol_engine.py` (`ProtocolRunEngine`), with dedicated engine-only tests in `tests/test_protocol_engine.py`. Store still owns selector resolution, prompt rendering, and routed-task request construction inside `_dispatch_protocol_stage_in_tx`, so the full **§18.1 / §19.3** “load → engine → apply” seam is not complete yet. |
-| **P1b** §15 shell | **partial** | Builtin protocol seeding now runs through `app/db/postgres_init.py` via `app/db/protocol_bootstrap.py`, and `RegistryPostgresStore` no longer seeds definitions in its constructor. Broader operational backfill / migration hardening remains open under P10. |
+| **P1** Engine extraction | **partial** | Named SDK engine exists in `octopus_sdk/protocol_engine.py` (`ProtocolRunEngine`), with engine-only tests in `tests/test_protocol_engine.py`. Store still owns selector resolution and routed-task creation in `_dispatch_protocol_stage_in_tx`, but prompt rendering, session-key derivation, and routed-task request construction now live in the SDK engine. |
+| **P1b** §15 shell | **partial** | Builtin protocol seeding now runs through `app/db/postgres_init.py` via `octopus_sdk/protocol_bootstrap.py`, and `RegistryPostgresStore` no longer seeds definitions in its constructor. Broader operational backfill / migration hardening remains open under P10. |
 | **P2** Policies + DSL + migrators | **partial** | Leases + max rounds enforced in SDK; `schema_version` required on `ProtocolDefinitionDocumentRecord` (~199–212 `protocols.py`). Full **§8.3** in-memory migrators for older published versions **not** evidenced (strict version equality). |
 | **P3** Artifacts + verification | **partial** | Observations + `protocol_artifact_contract_error` on task result; **`PROTOCOL_WAIVER_MODE = "forbid"`** (~27, ~134 `protocols.py`) implements §5.3b **mode A** only—**mode B** (publisher-gated) **missing**. |
-| **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, contract-invalid blocking, and timeout evaluation live in `octopus_sdk/protocol_engine.py`. Timeout sweep exists for running stages without a result, but it is still piggybacked on registry heartbeat/poll traffic rather than a dedicated maintenance worker. |
+| **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, contract-invalid blocking, and timeout evaluation live in `octopus_sdk/protocol_engine.py`. Timeout sweep now has a dedicated registry maintenance loop and still reuses the same canonical applier for synthetic timeout events. |
 | **P5** Full API + auth + export | **partial** | Sub-resources, export, actions with `Idempotency-Key` / `If-Match`, definition archive, `created_after`, and `NOT_VISIBLE` handling are now part of the shipped surface. Remaining work is broader contract coverage and documentation hardening. |
 | **P5a** Thin UI | **partial** | `octopus_registry/ui/js/api.js` + `protocol-workspace.js` call core endpoints—complete only relative to whatever P5 ships. |
-| **P6** Realtime + metrics + admin views | **partial** | Protocol run invalidation topics now refresh run detail from the canonical registry path on create, operator action, and protocol-stage completion. Named protocol events, metrics instrumentation, and admin/support views remain open. |
+| **P6** Realtime + metrics + admin views | **partial** | Protocol run invalidation topics now refresh run detail from the canonical registry path on create, operator action, and protocol-stage completion. Registry summary includes protocol issue counts and the control plane exposes typed protocol issue listings for blocked runs, contract failures, expired timeouts, and stuck leases. Named protocol events and deeper metrics instrumentation remain open. |
 | **P7** Full UI | **missing** | Depends on P5/P6; designer/operator UX per §11 not fully product-complete. |
 | **P8** Telegram parity | **partial** | Protocol commands exist in `app/runtime/telegram_ingress.py` (e.g. create/act flows)—parity with §11.2 not fully verified here. |
 | **P9** Security + audit + retention | **partial** | `retention_until`, compliance hooks in store; §10 redaction/pen-test **not** verified as complete. |
@@ -724,7 +724,7 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | Export | `export_protocol_run` / `resource_export_protocol_run` ~1243+ `server.py` |
 | Waiver mode A | `ProtocolArtifactDefinitionRecord` validator ~130–136 `protocols.py` |
 | Transport avoids double continuation | `delivery_transport.py` `protocol-stage:` short-circuit ~531–532 |
-| Canonical builtin bootstrap | `app/db/postgres_init.py` + `app/db/protocol_bootstrap.py` |
+| Canonical builtin bootstrap | `app/db/postgres_init.py` + `octopus_sdk/protocol_bootstrap.py` |
 | Protocol run invalidation on stage completion | `resource_routed_task_result` + `_protocol_run_id_from_task_record` `server.py` |
 
 ### 20.3 Gaps with file citations

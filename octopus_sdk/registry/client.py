@@ -18,6 +18,7 @@ from octopus_sdk.protocols import (
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
+    ProtocolIssueRecord,
     ProtocolRunExportRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
@@ -355,6 +356,21 @@ class RegistryClient:
             extra_headers={"Idempotency-Key": idempotency_key} if idempotency_key else None,
         )
         return ProtocolRunMutationRecord.model_validate(result)
+
+    async def list_protocol_issues(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 25,
+        issue_kind: str = "",
+    ) -> list[ProtocolIssueRecord]:
+        result = await self._request(
+            "GET",
+            "/v1/protocol-runs/issues",
+            params={"cursor": cursor, "limit": limit, "issue_kind": issue_kind},
+        )
+        rows = result.get("issues", result)
+        return [ProtocolIssueRecord.model_validate(item) for item in rows]
 
     async def get_protocol_run(self, run_id: str) -> ProtocolRunDetailRecord:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}")

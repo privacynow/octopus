@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from octopus_sdk.protocols import (
+    ProtocolArtifactRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDispatchDecisionRecord,
     ProtocolEngineDecisionRecord,
@@ -19,14 +20,89 @@ from octopus_sdk.protocols import (
     is_protocol_terminal_target,
     parse_protocol_stage_decision,
     protocol_artifact_contract_error,
+    protocol_participant_session_key,
     protocol_retention_until,
+    protocol_stage_internal_context,
+    render_protocol_stage_prompt,
     stage_target_for_decision,
     utcnow_iso,
 )
+from octopus_sdk.registry.models import RoutedTaskRequest
 
 
 class ProtocolRunEngine:
     """Pure protocol lifecycle evaluator used by the registry store."""
+
+    def dispatch_target_selector(
+        self,
+        *,
+        run: ProtocolRunRecord,
+        participant,
+    ) -> TargetSelector:
+        if participant.selector is not None:
+            return participant.selector
+        if participant.required_skills:
+            return TargetSelector(
+                kind="skill",
+                value=participant.required_skills[0],
+                preferred_agent_id=run.entry_agent_id,
+            )
+        return TargetSelector(kind="agent", value=run.entry_agent_id)
+
+    def build_dispatch_request(
+        self,
+        *,
+        document: ProtocolDefinitionDocumentRecord,
+        run: ProtocolRunRecord,
+        stage,
+        participant,
+        stage_execution_id: str,
+        target_agent_id: str,
+        artifacts: Sequence[ProtocolArtifactRecord],
+        previous_feedback: str,
+        now: str,
+    ) -> RoutedTaskRequest:
+        routed_task_id = f"protocol-stage:{stage_execution_id}"
+        instructions = render_protocol_stage_prompt(
+            document=document,
+            run=run,
+            stage=stage,
+            artifacts=list(artifacts),
+            previous_feedback=previous_feedback,
+        )
+        return RoutedTaskRequest(
+            routed_task_id=routed_task_id,
+            parent_conversation_id=run.root_conversation_id,
+            origin_transport_ref=str(run.root_conversation_id or ""),
+            authorized_actor_key="",
+            origin_agent_id=run.entry_agent_id,
+            target_agent_id=str(target_agent_id or "").strip(),
+            title=stage.display_name or stage.stage_key,
+            instructions=instructions,
+            context=RegistryJsonRecord.model_validate(
+                {
+                    "protocol_run_id": run.protocol_run_id,
+                    "protocol_stage_execution_id": stage_execution_id,
+                    "protocol_definition_version_id": run.protocol_definition_version_id,
+                    "participant_key": participant.participant_key,
+                    "stage_key": stage.stage_key,
+                    "artifact_manifest": [item.model_dump(mode="json") for item in artifacts],
+                }
+            ),
+            internal_context=protocol_stage_internal_context(
+                document=document,
+                run=run,
+                stage_execution_id=stage_execution_id,
+                stage=stage,
+            ),
+            constraints=run.constraints_json,
+            requested_skills=participant.required_skills,
+            session_key_override=protocol_participant_session_key(run.protocol_run_id, participant.participant_key),
+            project_id_override=run.workspace_ref,
+            file_policy_override="edit" if stage.write_capable else "",
+            priority="normal",
+            created_at=now,
+        )
 
     def dispatch_preflight(
         self,
@@ -387,14 +463,13 @@ class ProtocolRunEngine:
                 run_status="running",
                 stage_status=stage_execution.status,
                 summary=summary,
-                transition_kind="retry",
-                transition_reason=summary,
-                next_stage_key=stage.stage_key,
-                create_next_execution=True,
-                repeat_current_stage=True,
-                input_snapshot=RegistryJsonRecord.model_validate(
-                    {
-                        "previous_stage_key": stage.stage_key,
+            transition_kind="retry",
+            transition_reason=summary,
+            next_stage_key=stage.stage_key,
+            create_next_execution=True,
+            input_snapshot=RegistryJsonRecord.model_validate(
+                {
+                    "previous_stage_key": stage.stage_key,
                         "previous_stage_execution_id": stage_execution.protocol_stage_execution_id,
                         "decision": "retry",
                         "decision_summary": summary,
@@ -457,4 +532,3 @@ class ProtocolRunEngine:
 
 
 DEFAULT_PROTOCOL_RUN_ENGINE = ProtocolRunEngine()
-

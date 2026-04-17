@@ -74,6 +74,54 @@ def test_protocol_run_engine_dispatch_preflight_blocks_active_write_lease() -> N
     assert decision.error_code == "LEASE_HELD"
 
 
+def test_protocol_run_engine_builds_dispatch_request_from_shared_contract() -> None:
+    document = _document()
+    run = _run().model_copy(
+        update={
+            "entry_agent_id": "agent-1",
+            "root_conversation_id": "conv-1",
+            "protocol_definition_version_id": "version-1",
+            "workspace_ref": "workspace-a",
+            "problem_statement": "Build the thing.",
+        }
+    )
+    stage = document.stage("planning")
+    participant = document.participant(stage.participant_key)
+
+    request = _engine().build_dispatch_request(
+        document=document,
+        run=run,
+        stage=stage,
+        participant=participant,
+        stage_execution_id="planning-exec",
+        target_agent_id="agent-2",
+        artifacts=[],
+        previous_feedback="Tighten the scope.",
+        now="2026-04-16T00:00:00+00:00",
+    )
+
+    assert request.routed_task_id == "protocol-stage:planning-exec"
+    assert request.target_agent_id == "agent-2"
+    assert request.session_key_override == "protocol:run-1:participant:worker"
+    assert request.project_id_override == "workspace-a"
+    assert request.context["protocol_run_id"] == "run-1"
+    assert request.internal_context["protocol_stage_contract"]["stage_key"] == "planning"
+
+
+def test_protocol_run_engine_prefers_required_skill_for_dispatch_selector() -> None:
+    document = _document()
+    participant = document.participant("worker").model_copy(update={"required_skills": ["planning"]})
+
+    selector = _engine().dispatch_target_selector(
+        run=_run().model_copy(update={"entry_agent_id": "agent-1"}),
+        participant=participant,
+    )
+
+    assert selector.kind == "skill"
+    assert selector.value == "planning"
+    assert selector.preferred_agent_id == "agent-1"
+
+
 def test_protocol_run_engine_marks_late_completed_result_as_timeout() -> None:
     document = _document()
     result = ProtocolStageTaskResultRecord(

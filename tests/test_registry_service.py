@@ -1192,6 +1192,7 @@ def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, 
         for item in paths["/v1/protocols"]["get"].get("parameters", [])
     }
     assert "created_after" in protocol_list_parameters
+    assert "/v1/protocol-runs/issues" in paths
 
 
 def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):
@@ -1256,6 +1257,49 @@ def test_protocol_stage_result_broadcasts_protocol_run_invalidation(monkeypatch,
     assert response.status_code == 200
     assert captured
     assert {"tasks", "conversations", "summary", "protocols", "protocol-run:run-1"} in captured
+
+
+def test_protocol_issues_route_returns_issue_rows(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_protocol_issues(self, *, access, limit=25, cursor=0, issue_kind=""):
+            assert issue_kind == "blocked_run"
+            return [
+                {
+                    "issue_kind": "blocked_run",
+                    "protocol_run_id": "run-1",
+                    "protocol_id": "protocol-1",
+                    "protocol_display_name": "Software Engineering",
+                    "stage_execution_id": "stage-1",
+                    "stage_key": "planning",
+                    "participant_key": "worker",
+                    "run_status": "blocked",
+                    "stage_status": "blocked",
+                    "issue_code": "artifact_missing",
+                    "issue_detail": "Artifact missing.",
+                    "lease_expires_at": "",
+                    "timeout_at": "",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                }
+            ]
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/issues?issue_kind=blocked_run")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["issues"][0]["protocol_run_id"] == "run-1"
 
 
 def test_registry_http_module_stays_under_guard_threshold():

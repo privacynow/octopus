@@ -177,6 +177,90 @@ def test_registry_store_protocol_timeout_sweeps_without_task_result(postgres_reg
     assert refreshed.stage_executions[0].failure_code == "stage_timeout"
 
 
+def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(
+        store,
+        document={
+            **protocol_document(),
+            "stages": [
+                {
+                    **protocol_document()["stages"][0],
+                    "timeout_seconds": 1,
+                },
+                protocol_document()["stages"][1],
+            ],
+        },
+    )
+    stage = detail.stage_executions[0]
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agent_registry.protocol_stage_executions
+                SET timeout_at = %s
+                WHERE protocol_stage_execution_id = %s
+                """,
+                (expired, stage.protocol_stage_execution_id),
+            )
+        conn.commit()
+
+    timeout_issues = store.list_protocol_issues(
+        access=operator_access(),
+        issue_kind="expired_timeout",
+    )
+    assert any(item.protocol_run_id == created.run.protocol_run_id for item in timeout_issues)
+
+    store.run_protocol_maintenance()
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert refreshed.run.status == "failed"
+
+    blocked_enroll = store.enroll(agent_card(bot_key="m2"))
+    blocked_published = published_protocol(
+        store,
+        slug="mini-protocol-blocked",
+        document={
+            **protocol_document(),
+            "metadata": {
+                **protocol_document()["metadata"],
+                "slug": "mini-protocol-blocked",
+                "display_name": "Mini Protocol Blocked",
+            },
+        },
+    )
+    blocked_created = store.create_protocol_run(
+        {
+            "protocol_id": blocked_published.protocol.protocol_id,
+            "entry_agent_id": blocked_enroll.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the blocked feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    blocked_detail = store.get_protocol_run(blocked_created.run.protocol_run_id, access=operator_access())
+    blocked_stage = blocked_detail.stage_executions[0]
+    store.update_routed_task_result(
+        blocked_enroll.agent_token,
+        blocked_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "blocked-1",
+            "summary": "Missing artifact.",
+            "full_text": "Updated plan.\nPROTOCOL_SUMMARY: Missing artifact.",
+            "artifacts": [],
+        },
+    )
+    blocked_issues = store.list_protocol_issues(
+        access=operator_access(),
+        issue_kind="blocked_run",
+    )
+    assert any(item.protocol_run_id == blocked_created.run.protocol_run_id for item in blocked_issues)
+
+
 def test_registry_store_uses_database_for_builtin_protocol_template(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 

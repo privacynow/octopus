@@ -137,10 +137,13 @@ objects:
 - operator actions are versioned, idempotent registry mutations over the same
   run state (`cancel`, `retry`, `accept`, `send-back` in the current release)
 - built-in protocol templates are seeded by the canonical DB init/bootstrap path
-  (`app/db/postgres_init.py`), then served from the registry database as the
-  runtime/control-plane source of truth
-- stage timeout enforcement uses registry maintenance traffic and the same
+  (`app/db/postgres_init.py` calling `octopus_sdk/protocol_bootstrap.py`), then
+  served from the registry database as the runtime/control-plane source of truth
+- stage timeout enforcement uses a registry maintenance loop and the same
   canonical applier; it does not depend on receiving a late routed-task result
+- protocol support/admin visibility is exposed through registry-backed issue
+  queries for blocked runs, invalid contracts, expired timeouts, and stuck
+  leases; the dashboard and protocol workspace consume those control-plane reads
 - transport clients such as Telegram invoke and observe protocol runs, but they
   do not own protocol state or state-machine rules
 - `protocol-stage:` routed-task results intentionally short-circuit delegation

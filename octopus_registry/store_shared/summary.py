@@ -113,9 +113,30 @@ def get_summary(
             (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')}) AS runs_total,
             (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status IN ('queued', 'running', 'blocked')) AS runs_active,
             (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status = 'blocked') AS runs_blocked,
-            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status = 'failed' AND updated_at >= {dialect.placeholder(1)}) AS runs_failed_24h
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status = 'failed' AND updated_at >= {dialect.placeholder(1)}) AS runs_failed_24h,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE blocked_code = 'protocol_contract_invalid') AS runs_contract_invalid,
+            (
+                SELECT COUNT(*)
+                FROM {dialect.qualify('protocol_stage_executions')} pse
+                JOIN {dialect.qualify('protocol_runs')} pr
+                  ON pr.protocol_run_id = pse.protocol_run_id
+                WHERE pse.status = 'running'
+                  AND COALESCE(pse.lease_expires_at, '') <> ''
+                  AND pse.lease_expires_at <= {dialect.placeholder(2)}
+                  AND pr.status = 'running'
+            ) AS stuck_leases,
+            (
+                SELECT COUNT(*)
+                FROM {dialect.qualify('protocol_stage_executions')} pse
+                JOIN {dialect.qualify('protocol_runs')} pr
+                  ON pr.protocol_run_id = pse.protocol_run_id
+                WHERE pse.status = 'running'
+                  AND COALESCE(pse.timeout_at, '') <> ''
+                  AND pse.timeout_at <= {dialect.placeholder(2)}
+                  AND pr.status = 'running'
+            ) AS overdue_timeouts
         """,
-        (window_start,),
+        (window_start, now_iso, now_iso),
     ) or {}
 
     connected = 0
@@ -163,6 +184,9 @@ def get_summary(
             "runs_active": int(protocol_totals.get("runs_active") or 0),
             "runs_blocked": int(protocol_totals.get("runs_blocked") or 0),
             "runs_failed_24h": int(protocol_totals.get("runs_failed_24h") or 0),
+            "runs_contract_invalid": int(protocol_totals.get("runs_contract_invalid") or 0),
+            "stuck_leases": int(protocol_totals.get("stuck_leases") or 0),
+            "overdue_timeouts": int(protocol_totals.get("overdue_timeouts") or 0),
         },
         "usage_24h": usage_total,
     })

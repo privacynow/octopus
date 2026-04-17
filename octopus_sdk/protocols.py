@@ -22,6 +22,7 @@ ProtocolArtifactKind = Literal["workspace_file", "control_plane_text"]
 ProtocolResolutionOutcome = Literal["queued", "ok", "error"]
 ProtocolArtifactVerificationState = Literal["declared", "available", "verified", "missing", "waived"]
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
+ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
@@ -480,6 +481,23 @@ class ProtocolRunExportRecord(RegistryRecordModel):
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
 
+class ProtocolIssueRecord(RegistryRecordModel):
+    issue_kind: ProtocolIssueKind
+    protocol_run_id: str = ""
+    protocol_id: str = ""
+    protocol_display_name: str = ""
+    stage_execution_id: str = ""
+    stage_key: str = ""
+    participant_key: str = ""
+    run_status: ProtocolRunStatus = "queued"
+    stage_status: ProtocolStageExecutionStatus = "queued"
+    issue_code: str = ""
+    issue_detail: str = ""
+    lease_expires_at: str = ""
+    timeout_at: str = ""
+    updated_at: str = ""
+
+
 class ProtocolStageDecisionRecord(RegistryRecordModel):
     decision: str = ""
     summary: str = ""
@@ -556,7 +574,6 @@ class ProtocolEngineDecisionRecord(RegistryRecordModel):
     transition_error_code: str = ""
     next_stage_key: str = ""
     create_next_execution: bool = False
-    repeat_current_stage: bool = False
     terminal_status: ProtocolRunStatus | None = None
     run_blocked_code: str = ""
     run_blocked_detail: str = ""
@@ -713,7 +730,16 @@ def render_protocol_stage_prompt(
     for artifact_key in dict.fromkeys([*stage.inputs, *stage.outputs]):
         definition = document.artifact(artifact_key)
         artifact = artifact_by_key.get(artifact_key)
-        location = str(artifact.workspace_path or artifact.location or definition.path or "").strip()
+        location = str(
+            (
+                artifact.workspace_path
+                if artifact is not None and artifact.workspace_path
+                else artifact.location
+                if artifact is not None and artifact.location
+                else definition.path
+            )
+            or ""
+        ).strip()
         detail = f"{artifact_key}: {location}" if location else artifact_key
         artifact_lines.append(f"- {detail}")
     lines = [

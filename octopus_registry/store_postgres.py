@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from contextlib import contextmanager
 from collections.abc import Mapping
@@ -32,6 +33,7 @@ from octopus_sdk.protocols import (
     ProtocolMutationRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
+    ProtocolIssueRecord,
     ProtocolRunExportRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
@@ -41,11 +43,9 @@ from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
     canonical_protocol_document,
     protocol_retention_until,
-    protocol_stage_internal_context,
     ProtocolStageTaskResultRecord,
     protocol_definition_content_hash,
     protocol_participant_session_key,
-    render_protocol_stage_prompt,
     validate_protocol_document,
 )
 from psycopg.rows import dict_row
@@ -183,6 +183,7 @@ from octopus_sdk.registry.models import (
 from octopus_sdk.task_protocol import RoutedTaskSnapshot
 
 _SCHEMA = "agent_registry"
+log = logging.getLogger(__name__)
 _REGISTRY_EPOCH_KEY = "registry_epoch"
 
 
@@ -430,7 +431,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 agent_token=agent_token,
                 payload=payload,
             )
-            self._sweep_protocol_timeouts_in_tx(conn, now=utcnow_iso())
+            self._run_protocol_maintenance_in_tx(conn, now=utcnow_iso())
             return result
 
     def get_routing_skill_override(self, skill_name: str) -> bool | None:
@@ -1415,16 +1416,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             run_id=run.protocol_run_id,
             current_stage_key=stage.stage_key,
         )
-        if participant.selector is not None:
-            selector = participant.selector
-        elif participant.required_skills:
-            selector = TargetSelector(
-                kind="skill",
-                value=participant.required_skills[0],
-                preferred_agent_id=run.entry_agent_id,
-            )
-        else:
-            selector = TargetSelector(kind="agent", value=run.entry_agent_id)
+        selector = self._protocol_engine.dispatch_target_selector(run=run, participant=participant)
         try:
             resolved_target = self._resolve_selector(conn, selector)
         except Exception as exc:
@@ -1443,49 +1435,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now=now,
             )
             return {}
-        session_key = protocol_participant_session_key(run.protocol_run_id, participant.participant_key)
-        instructions = render_protocol_stage_prompt(
+        request = self._protocol_engine.build_dispatch_request(
             document=document,
             run=run,
             stage=stage,
+            participant=participant,
+            stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+            target_agent_id=str(resolved_target["agent_id"] or ""),
             artifacts=artifacts,
             previous_feedback=previous_feedback,
+            now=now,
         )
-        routed_task_id = f"protocol-stage:{stage_execution_row['protocol_stage_execution_id']}"
-        context_payload = {
-            "protocol_run_id": run.protocol_run_id,
-            "protocol_stage_execution_id": stage_execution_row["protocol_stage_execution_id"],
-            "protocol_definition_version_id": run.protocol_definition_version_id,
-            "participant_key": participant.participant_key,
-            "stage_key": stage.stage_key,
-            "artifact_manifest": [item.model_dump(mode="json") for item in artifacts],
-        }
-        internal_context = protocol_stage_internal_context(
-            document=document,
-            run=run,
-            stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
-            stage=stage,
-        )
-        request = {
-            "routed_task_id": routed_task_id,
-            "parent_conversation_id": run.root_conversation_id,
-            "origin_transport_ref": str(run.root_conversation_id or ""),
-            "authorized_actor_key": "",
-            "external_conversation_ref": routed_task_external_conversation_ref(routed_task_id),
-            "origin_agent_id": run.entry_agent_id,
-            "target_agent_id": resolved_target["agent_id"],
-            "title": stage.display_name or stage.stage_key,
-            "instructions": instructions,
-            "context": context_payload,
-            "internal_context": internal_context,
-            "constraints": run.constraints_json.as_dict(),
-            "requested_skills": participant.required_skills,
-            "session_key_override": session_key,
-            "project_id_override": run.workspace_ref,
-            "file_policy_override": "edit" if stage.write_capable else "",
-            "priority": "normal",
-            "created_at": now,
-        }
         try:
             return self._apply_protocol_engine_decision_in_tx(
                 conn,
@@ -1494,7 +1454,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 engine=self._protocol_engine.dispatch_started(
                     run=run,
                     stage_execution=stage_execution,
-                    routed_task_id=routed_task_id,
+                    routed_task_id=request.routed_task_id,
                     timeout_at=dispatch.timeout_at,
                     lease_owner=dispatch.lease_owner,
                     lease_expires_at=dispatch.lease_expires_at,
@@ -1506,7 +1466,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 actor_type="protocol_engine",
                 actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
                 now=now,
-                routed_task_request=request,
+                routed_task_request=request.model_dump(mode="json"),
             ) or {}
         except RoutingSkillDisabledError as exc:
             self._apply_protocol_engine_decision_in_tx(
@@ -1739,6 +1699,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
             actor_ref=actor_ref,
             now=now,
         )
+        log.info(
+            "protocol transition applied run_id=%s stage_execution_id=%s transition=%s run_status=%s stage_status=%s error_code=%s next_stage=%s",
+            str(run_row["protocol_run_id"] or ""),
+            str(stage_execution_row["protocol_stage_execution_id"] or ""),
+            str(engine.transition_kind or ""),
+            str(engine.run_status or ""),
+            str(engine.stage_status or ""),
+            str(engine.transition_error_code or ""),
+            str(engine.next_stage_key or ""),
+        )
         if next_execution_id:
             refreshed_run_row = _POSTGRES_STORE_DIALECT.fetchone(
                 conn,
@@ -1806,7 +1776,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             now=now,
         )
 
-    def _sweep_protocol_timeouts_in_tx(self, conn, *, now: str) -> None:
+    def _sweep_protocol_timeouts_in_tx(self, conn, *, now: str) -> int:
         rows = _POSTGRES_STORE_DIALECT.fetchall(
             conn,
             f"""
@@ -1822,6 +1792,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             """,
             (now,),
         )
+        swept = 0
         for row in rows:
             stage_execution_id = str(row.get("protocol_stage_execution_id", "") or "")
             run_id = str(row.get("protocol_run_id", "") or "")
@@ -1855,6 +1826,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 actor_ref=str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
                 now=now,
             )
+            swept += 1
+        return swept
+
+    def _run_protocol_maintenance_in_tx(self, conn, *, now: str) -> int:
+        swept = self._sweep_protocol_timeouts_in_tx(conn, now=now)
+        if swept:
+            log.info("protocol maintenance swept_timeouts=%s at=%s", swept, now)
+        return swept
+
+    def run_protocol_maintenance(self, *, now: str = "") -> int:
+        maintenance_now = str(now or utcnow_iso())
+        with self._connect() as conn, _write_tx(conn):
+            return self._run_protocol_maintenance_in_tx(conn, now=maintenance_now)
 
     def create_routed_task(self, request: RegistryRecordModel) -> TaskRecord:
         now = utcnow_iso()
@@ -1883,7 +1867,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 registry_epoch=self._registry_epoch(conn),
                 task_snapshot_row=self._task_snapshot__row,
             )
-            self._sweep_protocol_timeouts_in_tx(conn, now=now)
+            self._run_protocol_maintenance_in_tx(conn, now=now)
             return result
 
     def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
@@ -2550,6 +2534,170 @@ class RegistryPostgresStore(AbstractRegistryStore):
             if self._assert_protocol_run_visible(row, access=access) is not None
         ]
         return visible[cursor:cursor + limit]
+
+    def _protocol_issues_for_row(
+        self,
+        row: Mapping[str, object],
+        *,
+        now: str,
+    ) -> list[ProtocolIssueRecord]:
+        issues: list[ProtocolIssueRecord] = []
+        run_status = str(row.get("run_status", "") or row.get("status", "") or "")
+        stage_status = str(row.get("stage_status", "") or "")
+        blocked_code = str(row.get("blocked_code", "") or "")
+        blocked_detail = str(row.get("blocked_detail", "") or "")
+        failure_code = str(row.get("failure_code", "") or "")
+        failure_detail = str(row.get("failure_detail", "") or "")
+        lease_expires_at = str(row.get("lease_expires_at", "") or "")
+        timeout_at = str(row.get("timeout_at", "") or "")
+        run_id = str(row.get("protocol_run_id", "") or "")
+        protocol_id = str(row.get("protocol_id", "") or "")
+        display_name = str(row.get("protocol_display_name", "") or row.get("display_name", "") or "")
+        stage_execution_id = str(row.get("protocol_stage_execution_id", "") or "")
+        stage_key = str(row.get("stage_key", "") or "")
+        participant_key = str(row.get("participant_key", "") or "")
+        updated_at = str(row.get("run_updated_at", "") or row.get("updated_at", "") or "")
+
+        if run_status == "blocked":
+            issues.append(
+                ProtocolIssueRecord(
+                    issue_kind="blocked_run",
+                    protocol_run_id=run_id,
+                    protocol_id=protocol_id,
+                    protocol_display_name=display_name,
+                    stage_execution_id=stage_execution_id,
+                    stage_key=stage_key,
+                    participant_key=participant_key,
+                    run_status=run_status,
+                    stage_status=stage_status or "blocked",
+                    issue_code=blocked_code or failure_code or "blocked",
+                    issue_detail=blocked_detail or failure_detail or "Protocol run is blocked.",
+                    lease_expires_at=lease_expires_at,
+                    timeout_at=timeout_at,
+                    updated_at=updated_at,
+                )
+            )
+        if blocked_code == "protocol_contract_invalid" or failure_code == "protocol_contract_invalid":
+            issues.append(
+                ProtocolIssueRecord(
+                    issue_kind="invalid_contract",
+                    protocol_run_id=run_id,
+                    protocol_id=protocol_id,
+                    protocol_display_name=display_name,
+                    stage_execution_id=stage_execution_id,
+                    stage_key=stage_key,
+                    participant_key=participant_key,
+                    run_status=run_status,
+                    stage_status=stage_status or "blocked",
+                    issue_code="protocol_contract_invalid",
+                    issue_detail=blocked_detail or failure_detail or "Protocol result contract is invalid.",
+                    lease_expires_at=lease_expires_at,
+                    timeout_at=timeout_at,
+                    updated_at=updated_at,
+                )
+            )
+        if stage_status == "running" and lease_expires_at:
+            try:
+                if datetime.fromisoformat(lease_expires_at) <= datetime.fromisoformat(now):
+                    issues.append(
+                        ProtocolIssueRecord(
+                            issue_kind="stuck_lease",
+                            protocol_run_id=run_id,
+                            protocol_id=protocol_id,
+                            protocol_display_name=display_name,
+                            stage_execution_id=stage_execution_id,
+                            stage_key=stage_key,
+                            participant_key=participant_key,
+                            run_status=run_status or "running",
+                            stage_status=stage_status,
+                            issue_code="lease_expired",
+                            issue_detail=f"Write lease expired at {lease_expires_at}.",
+                            lease_expires_at=lease_expires_at,
+                            timeout_at=timeout_at,
+                            updated_at=updated_at,
+                        )
+                    )
+            except ValueError:
+                pass
+        if stage_status == "running" and timeout_at:
+            try:
+                if datetime.fromisoformat(timeout_at) <= datetime.fromisoformat(now):
+                    issues.append(
+                        ProtocolIssueRecord(
+                            issue_kind="expired_timeout",
+                            protocol_run_id=run_id,
+                            protocol_id=protocol_id,
+                            protocol_display_name=display_name,
+                            stage_execution_id=stage_execution_id,
+                            stage_key=stage_key,
+                            participant_key=participant_key,
+                            run_status=run_status or "running",
+                            stage_status=stage_status,
+                            issue_code="stage_timeout_pending_sweep",
+                            issue_detail=f"Stage timeout elapsed at {timeout_at}.",
+                            lease_expires_at=lease_expires_at,
+                            timeout_at=timeout_at,
+                            updated_at=updated_at,
+                        )
+                    )
+            except ValueError:
+                pass
+        return issues
+
+    def list_protocol_issues(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        issue_kind: str = "",
+    ) -> list[ProtocolIssueRecord]:
+        normalized_kind = str(issue_kind or "").strip().lower()
+        now = utcnow_iso()
+        with self._connect() as conn:
+            rows = _POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT
+                    pr.protocol_run_id,
+                    pr.protocol_id,
+                    pr.run_org_id,
+                    pr.status AS run_status,
+                    pr.blocked_code,
+                    pr.blocked_detail,
+                    pr.updated_at AS run_updated_at,
+                    pd.display_name AS protocol_display_name,
+                    pse.protocol_stage_execution_id,
+                    pse.stage_key,
+                    pse.participant_key,
+                    pse.status AS stage_status,
+                    pse.failure_code,
+                    pse.failure_detail,
+                    pse.lease_expires_at,
+                    pse.timeout_at
+                FROM {_SCHEMA}.protocol_runs pr
+                LEFT JOIN {_SCHEMA}.protocol_stage_executions pse
+                  ON pse.protocol_stage_execution_id = pr.current_stage_execution_id
+                LEFT JOIN {_SCHEMA}.protocol_definitions pd
+                  ON pd.protocol_id = pr.protocol_id
+                ORDER BY pr.updated_at DESC, pr.protocol_run_id DESC
+                """,
+            )
+            issues: list[ProtocolIssueRecord] = []
+            for row in rows:
+                run_row = {
+                    "protocol_run_id": row.get("protocol_run_id", ""),
+                    "protocol_id": row.get("protocol_id", ""),
+                    "status": row.get("run_status", ""),
+                    "run_org_id": row.get("run_org_id", ""),
+                }
+                if self._assert_protocol_run_visible(run_row, access=access) is None:
+                    continue
+                for issue in self._protocol_issues_for_row(row, now=now):
+                    if normalized_kind and issue.issue_kind != normalized_kind:
+                        continue
+                    issues.append(issue)
+        return issues[cursor:cursor + limit]
 
     def create_protocol_run(
         self,

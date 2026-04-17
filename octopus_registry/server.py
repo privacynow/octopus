@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import hmac
 import logging
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request, WebSocket
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
 from starlette.websockets import WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
@@ -87,6 +88,7 @@ from .ingress import (
 )
 from .authority import StoreBackedRegistryAuthority
 from .backend import get_registry_authority, get_registry_store
+from .protocol_http import build_protocol_router
 from .store_base import (
     AbstractRegistryStore,
     RoutingSkillDisabledError,
@@ -113,6 +115,7 @@ from .http_support import (
     secure_html_response as _secure_html_response,
 )
 from .store_shared.usage import aggregate_usage_rows
+from .ui_http import register_ui_routes
 
 _REGISTRY_UI_SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -147,7 +150,29 @@ def get_authority() -> StoreBackedRegistryAuthority:
 async def _registry_lifespan(app: FastAPI):
     del app
     validate_settings()
-    yield
+    stop_event = asyncio.Event()
+
+    async def _protocol_maintenance_loop() -> None:
+        while not stop_event.is_set():
+            try:
+                await asyncio.to_thread(get_store().run_protocol_maintenance)
+            except Exception:
+                log.warning("Protocol maintenance sweep failed", exc_info=True)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                continue
+
+    maintenance_task = asyncio.create_task(_protocol_maintenance_loop(), name="registry-protocol-maintenance")
+    try:
+        yield
+    finally:
+        stop_event.set()
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
@@ -166,57 +191,6 @@ def _protocol_access(auth: AuthContext) -> ProtocolAccessContextRecord:
         org_id=str(auth.org_id or "local"),
         roles=list(auth.roles or ()),
     )
-
-
-def _protocol_http_error(
-    status_code: int,
-    *,
-    error_code: str,
-    message: str,
-    details: dict[str, Any] | None = None,
-    headers: dict[str, str] | None = None,
-) -> HTTPException:
-    return HTTPException(
-        status_code=status_code,
-        detail={
-            "error_code": error_code,
-            "message": message,
-            "details": details or {},
-        },
-        headers=headers,
-    )
-
-
-def _protocol_result_http_error(result) -> HTTPException:
-    status = str(getattr(result, "status", "") or "")
-    message = str(getattr(result, "message", "") or "Protocol request failed.")
-    if status == "not_found":
-        return _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message=message)
-    if status == "not_visible":
-        return _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message=message)
-    if status == "forbidden":
-        return _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=message)
-    if status in {"conflict", "idempotency_conflict"}:
-        return _protocol_http_error(409, error_code=status.upper(), message=message)
-    if status == "duplicate_slug":
-        return _protocol_http_error(409, error_code="PROTOCOL_DUPLICATE_SLUG", message=message)
-    if status == "invalid_action":
-        return _protocol_http_error(400, error_code="PROTOCOL_INVALID_ACTION", message=message)
-    if status == "invalid":
-        return _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=message)
-    return _protocol_http_error(400, error_code="PROTOCOL_REQUEST_FAILED", message=message)
-
-
-def _expected_protocol_version(if_match: str | None) -> int | None:
-    text = str(if_match or "").strip().strip('"')
-    if not text:
-        return None
-    if text.startswith("W/"):
-        text = text.removeprefix("W/").strip().strip('"')
-    try:
-        return int(text)
-    except ValueError as exc:
-        raise _protocol_http_error(400, error_code="PROTOCOL_INVALID_IF_MATCH", message="If-Match must be an integer protocol run version.") from exc
 
 
 def _raise_ingress_http_error(exc: RegistryIngressError) -> None:
@@ -273,6 +247,18 @@ async def _broadcast_invalidations(
             agent_id=agent_id,
             routed_task_id=routed_task_id,
         )
+
+
+app.include_router(
+    build_protocol_router(
+        get_store=get_store,
+        require_authenticated=require_authenticated,
+        require_operator_session=require_operator_session,
+        protocol_access=_protocol_access,
+        broadcast_invalidations=_broadcast_invalidations,
+    )
+)
+register_ui_routes(app, security_headers=_REGISTRY_UI_SECURITY_HEADERS)
 
 
 @app.websocket("/v1/ws")
@@ -532,12 +518,14 @@ async def routed_task_result(
     if (parent_conversation_id or result.recipient_conversation_id) and (result.inserted_events or result.recipient_inserted_events):
         await _broadcast_task_record_events(result)
     topics = {"tasks", "conversations", "summary"}
+    reason = "routed_task.completed"
     if protocol_run_id:
         topics.add("protocols")
         topics.add(f"protocol-run:{protocol_run_id}")
+        reason = "protocol.run.updated"
     await _broadcast_invalidations(
         topics=topics,
-        reason="routed_task.completed",
+        reason=reason,
         conversation_id=parent_conversation_id,
         agent_id=agent_id,
         routed_task_id=routed_task_id,
@@ -1039,303 +1027,6 @@ def resource_get_task(
         }:
             raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
     return _json_payload(task)
-
-
-@app.get("/v1/protocols")
-def resource_list_protocols(
-    cursor: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
-    lifecycle_state: str = Query(default=""),
-    slug: str = Query(default=""),
-    created_after: str = Query(default=""),
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> list[dict[str, Any]]:
-    try:
-        return _json_payload(
-            store.list_protocols(
-                access=_protocol_access(auth),
-                cursor=cursor,
-                limit=limit,
-                lifecycle_state=lifecycle_state,
-                slug=slug,
-                created_after=created_after,
-            )
-        )
-    except ValueError as exc:
-        raise _protocol_http_error(400, error_code="PROTOCOL_INVALID_FILTER", message=str(exc)) from exc
-
-
-@app.get("/v1/protocol-templates/{slug}")
-def resource_get_protocol_template(
-    slug: str,
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    try:
-        document = store.get_protocol_template(slug, access=_protocol_access(auth))
-    except PermissionError as exc:
-        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol is not visible to this actor.") from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Protocol template not found") from exc
-    return _json_payload(document)
-
-
-@app.get("/v1/protocols/{protocol_id}")
-def resource_get_protocol(
-    protocol_id: str,
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    result = store.get_protocol(protocol_id, access=_protocol_access(auth))
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    return _json_payload(result)
-
-
-@app.get("/v1/protocols/{protocol_id}/versions/{version_id}")
-def resource_get_protocol_version(
-    protocol_id: str,
-    version_id: str,
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    try:
-        version = store.get_protocol_version(protocol_id, version_id, access=_protocol_access(auth))
-    except PermissionError as exc:
-        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol is not visible to this actor.") from exc
-    except KeyError as exc:
-        raise _protocol_http_error(404, error_code="PROTOCOL_VERSION_NOT_FOUND", message="Protocol version not found.") from exc
-    return _json_payload(version)
-
-
-@app.post("/v1/protocols")
-async def resource_create_protocol(
-    request: Request,
-    auth: AuthContext = Depends(require_operator_session),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    payload = await request.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Invalid protocol payload")
-    result = store.save_protocol_draft(
-        access=_protocol_access(auth),
-        protocol_id=str(payload.get("protocol_id", "") or ""),
-        slug=str(payload.get("slug", "") or ""),
-        display_name=str(payload.get("display_name", "") or ""),
-        description=str(payload.get("description", "") or ""),
-        definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
-    )
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    await _broadcast_invalidations(topics=("protocols",), reason="protocol.saved")
-    return _json_payload(result)
-
-
-@app.put("/v1/protocols/{protocol_id}/draft")
-async def resource_save_protocol_draft(
-    protocol_id: str,
-    request: Request,
-    auth: AuthContext = Depends(require_operator_session),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    payload = await request.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Invalid protocol payload")
-    result = store.save_protocol_draft(
-        access=_protocol_access(auth),
-        protocol_id=protocol_id,
-        slug=str(payload.get("slug", "") or ""),
-        display_name=str(payload.get("display_name", "") or ""),
-        description=str(payload.get("description", "") or ""),
-        definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
-    )
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    await _broadcast_invalidations(topics=("protocols",), reason="protocol.saved")
-    return _json_payload(result)
-
-
-@app.post("/v1/protocols/{protocol_id}/validate")
-async def resource_validate_protocol(
-    protocol_id: str,
-    auth: AuthContext = Depends(require_operator_session),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    result = store.validate_protocol(protocol_id, access=_protocol_access(auth))
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    await _broadcast_invalidations(topics=("protocols",), reason="protocol.validated")
-    return _json_payload(result)
-
-
-@app.post("/v1/protocols/{protocol_id}/publish")
-async def resource_publish_protocol(
-    protocol_id: str,
-    auth: AuthContext = Depends(require_operator_session),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    result = store.publish_protocol(protocol_id, access=_protocol_access(auth))
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    await _broadcast_invalidations(topics=("protocols",), reason="protocol.published")
-    return _json_payload(result)
-
-
-@app.post("/v1/protocols/{protocol_id}/archive")
-async def resource_archive_protocol(
-    protocol_id: str,
-    auth: AuthContext = Depends(require_operator_session),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    result = store.archive_protocol(protocol_id, access=_protocol_access(auth))
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    await _broadcast_invalidations(topics=("protocols",), reason="protocol.archived")
-    return _json_payload(result)
-
-
-@app.get("/v1/protocol-runs")
-def resource_list_protocol_runs(
-    cursor: int = Query(default=0, ge=0),
-    limit: int = Query(default=25, ge=1, le=100),
-    status: str = Query(default=""),
-    protocol_id: str = Query(default=""),
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    runs = store.list_protocol_runs(
-        access=_protocol_access(auth),
-        limit=limit,
-        cursor=cursor,
-        status=status,
-        protocol_id=protocol_id,
-    )
-    return _json_payload(_paginated_response("runs", runs, cursor, limit))
-
-
-@app.post("/v1/protocol-runs")
-async def resource_create_protocol_run(
-    payload: ProtocolRunCreateRecord,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    result = store.create_protocol_run(
-        payload,
-        access=_protocol_access(auth),
-        idempotency_key=str(idempotency_key or "").strip(),
-    )
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    topics = {"protocols", "summary"}
-    if result.run is not None:
-        topics.add(f"protocol-run:{result.run.protocol_run_id}")
-    await _broadcast_invalidations(topics=topics, reason="protocol.run.created")
-    return _json_payload(result)
-
-
-@app.get("/v1/protocol-runs/{run_id}")
-def resource_get_protocol_run(
-    run_id: str,
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    try:
-        detail = store.get_protocol_run(run_id, access=_protocol_access(auth))
-    except PermissionError as exc:
-        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
-    except KeyError as exc:
-        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
-    return _json_payload(detail)
-
-
-@app.get("/v1/protocol-runs/{run_id}/participants")
-def resource_get_protocol_run_participants(
-    run_id: str,
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    try:
-        participants = store.get_protocol_run_participants(run_id, access=_protocol_access(auth))
-    except PermissionError as exc:
-        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
-    except KeyError as exc:
-        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
-    return _json_payload({"participants": participants})
-
-
-@app.get("/v1/protocol-runs/{run_id}/artifacts")
-def resource_get_protocol_run_artifacts(
-    run_id: str,
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    try:
-        artifacts = store.get_protocol_run_artifacts(run_id, access=_protocol_access(auth))
-    except PermissionError as exc:
-        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
-    except KeyError as exc:
-        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
-    return _json_payload({"artifacts": artifacts})
-
-
-@app.get("/v1/protocol-runs/{run_id}/timeline")
-def resource_get_protocol_run_timeline(
-    run_id: str,
-    auth: AuthContext = Depends(require_authenticated),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    try:
-        transitions = store.get_protocol_run_timeline(run_id, access=_protocol_access(auth))
-    except PermissionError as exc:
-        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
-    except KeyError as exc:
-        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
-    return _json_payload({"transitions": transitions})
-
-
-@app.get("/v1/protocol-runs/{run_id}/export")
-def resource_export_protocol_run(
-    run_id: str,
-    auth: AuthContext = Depends(require_operator_session),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    try:
-        exported = store.export_protocol_run(run_id, access=_protocol_access(auth))
-    except PermissionError as exc:
-        error_code = "PROTOCOL_NOT_VISIBLE" if "not visible" in str(exc).lower() else "PROTOCOL_EXPORT_FORBIDDEN"
-        raise _protocol_http_error(403, error_code=error_code, message=str(exc)) from exc
-    except KeyError as exc:
-        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
-    return _json_payload(exported)
-
-
-@app.post("/v1/protocol-runs/{run_id}/actions/{action}")
-async def resource_act_on_protocol_run(
-    run_id: str,
-    action: str,
-    payload: dict[str, Any],
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    if_match: str | None = Header(default=None, alias="If-Match"),
-    auth: AuthContext = Depends(require_operator_session),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    result = store.act_on_protocol_run(
-        run_id,
-        access=_protocol_access(auth),
-        action=action,
-        reason=str(payload.get("reason", "") or ""),
-        idempotency_key=str(idempotency_key or "").strip(),
-        expected_version=_expected_protocol_version(if_match),
-    )
-    if not result.ok:
-        raise _protocol_result_http_error(result)
-    await _broadcast_invalidations(
-        topics=("protocols", "summary", f"protocol-run:{run_id}"),
-        reason=f"protocol.run.{action}",
-    )
-    return _json_payload(result)
 
 
 @app.get("/v1/routing/skills")
@@ -2050,116 +1741,3 @@ async def api_provider_guidance_archive(
             note=payload.note,
         )
     except RegistryIngressError as exc: _raise_ingress_http_error(exc)
-
-
-def _render_login_html(title: str, error: str = "") -> str:
-    error_block = f'<p class="error">{error}</p>' if error else ""
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} — Login</title>
-<style>
-  body {{ font-family: system-ui, sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }}
-  .box {{ background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12); padding: 2rem; min-width: 320px; }}
-  h1 {{ font-size: 1.25rem; margin: 0 0 1.5rem; }}
-  label {{ display: block; margin-bottom: .4rem; font-size: .875rem; font-weight: 500; }}
-  input[type=password] {{ width: 100%; box-sizing: border-box; padding: .5rem .75rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; margin-bottom: 1rem; }}
-  button {{ width: 100%; padding: .6rem; background: #1a73e8; color: #fff; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; }}
-  button:hover {{ background: #1558b0; }}
-  .error {{ color: #c62828; font-size: .875rem; margin-bottom: .75rem; }}
-</style>
-</head>
-<body>
-<div class="box">
-  <h1>{title}</h1>
-  {error_block}
-  <form method="post" action="/ui/login">
-    <label for="password">Password</label>
-    <input type="password" id="password" name="password" autofocus required>
-    <button type="submit">Sign in</button>
-  </form>
-</div>
-</body>
-</html>"""
-
-
-import os as _os
-from pathlib import Path as _Path
-from fastapi.staticfiles import StaticFiles as _StaticFiles
-
-_UI_DIR = _Path(__file__).resolve().parent / "ui"
-
-
-@app.get("/ui/login", response_class=HTMLResponse)
-def ui_login_page(request: Request):
-    settings = load_settings()
-    if ui_session_is_valid(request):
-        return RedirectResponse("/ui", status_code=303)
-    return _secure_html_response(
-        _render_login_html(settings.display_name or "Agent Registry"),
-        headers=_REGISTRY_UI_SECURITY_HEADERS,
-    )
-
-
-@app.post("/ui/login")
-async def ui_login(request: Request, password: str = Form(default="")):
-    settings = load_settings()
-    if ui_session_is_valid(request):
-        return RedirectResponse("/ui", status_code=303)
-    enforce_auth_attempt_limit(request, "registry-ui-login")
-    if not ui_password_matches(password, settings=settings):
-        return _secure_html_response(
-            _render_login_html(settings.display_name or "Agent Registry", error="Incorrect password."),
-            headers=_REGISTRY_UI_SECURITY_HEADERS,
-        )
-    clear_auth_attempt_limit(request, "registry-ui-login")
-    mark_ui_session_authenticated(request)
-    return RedirectResponse("/ui", status_code=303)
-
-
-@app.get("/ui/logout")
-def ui_logout(request: Request):
-    clear_ui_session(request)
-    return RedirectResponse("/ui/login", status_code=303)
-
-
-@app.get("/ui", response_class=HTMLResponse)
-def ui_shell(request: Request) -> HTMLResponse:
-    require_ui_session(request)
-    return HTMLResponse(
-        (_UI_DIR / "index.html").read_text(),
-        headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
-    )
-
-
-# ---------------------------------------------------------------------------
-# New SPA static file serving (Phase 7)
-# ---------------------------------------------------------------------------
-
-if _UI_DIR.is_dir():
-    app.mount("/ui/css", _StaticFiles(directory=str(_UI_DIR / "css")), name="ui-css")
-    app.mount("/ui/js", _StaticFiles(directory=str(_UI_DIR / "js")), name="ui-js")
-    if (_UI_DIR / "vendor").is_dir():
-        app.mount("/ui/vendor", _StaticFiles(directory=str(_UI_DIR / "vendor")), name="ui-vendor")
-
-    @app.get("/ui/{path:path}", response_class=HTMLResponse)
-    def ui_spa_subpath(request: Request, path: str) -> HTMLResponse:
-        """Serve SPA index for client-side routes so /ui/conversations etc. work on refresh/bookmark."""
-        if path == "login":
-            raise HTTPException(status_code=404)
-        require_ui_session(request)
-        return HTMLResponse(
-            (_UI_DIR / "index.html").read_text(),
-            headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
-        )
-
-    @app.get("/ui/spa/{path:path}", response_class=HTMLResponse)
-    def ui_spa_catchall(request: Request, path: str = ""):
-        """Legacy: Serve the SPA index.html for all /ui/spa/* routes (client-side routing)."""
-        require_ui_session(request)
-        return HTMLResponse(
-            (_UI_DIR / "index.html").read_text(),
-            headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
-        )

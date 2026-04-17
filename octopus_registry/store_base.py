@@ -24,6 +24,7 @@ from octopus_sdk.protocols import (
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
+    ProtocolIssueRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
@@ -703,6 +704,16 @@ class AbstractRegistryStore(Protocol):
     ) -> list[ProtocolRunRecord]:
         """Return protocol runs in UI-ready form."""
 
+    def list_protocol_issues(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        issue_kind: str = "",
+    ) -> list[ProtocolIssueRecord]:
+        """Return protocol support/admin issues for visible runs."""
+
     def create_protocol_run(
         self,
         payload: ProtocolRunCreateRecord,
@@ -758,6 +769,9 @@ class AbstractRegistryStore(Protocol):
         expected_version: int | None = None,
     ) -> ProtocolRunMutationRecord:
         """Apply one idempotent operator action to a protocol run."""
+
+    def run_protocol_maintenance(self, *, now: str = "") -> int:
+        """Sweep protocol maintenance work such as overdue timeouts."""
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

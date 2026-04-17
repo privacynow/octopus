@@ -1,9 +1,9 @@
-"""Canonical protocol bootstrap helpers for DB init."""
+"""Canonical protocol bootstrap helpers shared by DB init paths."""
 
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Protocol
 
 from psycopg.types.json import Jsonb
 
@@ -18,7 +18,18 @@ from octopus_sdk.registry.models import utcnow_iso
 _SCHEMA = "agent_registry"
 
 
-def ensure_builtin_protocols(conn: Any) -> None:
+class _BootstrapCursor(Protocol):
+    def __enter__(self) -> "_BootstrapCursor": ...
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> object: ...
+    def execute(self, query: str, params: tuple[object, ...]) -> object: ...
+    def fetchone(self) -> object: ...
+
+
+class SupportsBootstrapCursor(Protocol):
+    def cursor(self) -> _BootstrapCursor: ...
+
+
+def ensure_builtin_protocols(conn: SupportsBootstrapCursor) -> None:
     """Seed builtin published protocols into the registry if missing."""
     now = utcnow_iso()
     with conn.cursor() as cur:

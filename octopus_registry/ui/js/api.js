@@ -231,6 +231,8 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
         listProtocolRuns: (opts = {}) =>
             request('GET', '/v1/protocol-runs', { params: opts }),
+        listProtocolIssues: (opts = {}) =>
+            request('GET', '/v1/protocol-runs/issues', { params: opts }),
         createProtocolRun: (body = {}, opts = {}) =>
             request('POST', '/v1/protocol-runs', {
                 body,

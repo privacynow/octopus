@@ -1,7 +1,7 @@
 # Protocol System Remediation Plan
 
-Status: draft
-Last updated: 2026-04-16 (v3.7)
+Status: implemented
+Last updated: 2026-04-16 (v3.8)
 Audience: engineering, product, operations
 
 ---
@@ -23,7 +23,7 @@ Bring the protocol system from a **working vertical slice** to a **commercially 
 - **Artifact handling** must move from logical placeholders to a **verifiable contract** (observations, hashes, blocking rules).
 - **Shipping docs, API, authorization, and operations** must match **actual behavior** (OpenAPI, runbooks, client types).
 
-### 1.3 Current gaps to close (reference)
+### 1.3 Initial gap list this remediation addressed (reference)
 
 | Gap | Location / symptom |
 |-----|---------------------|
@@ -691,34 +691,36 @@ Close **§1.6** before writing feature code. No coding affected phases until eac
 
 ## 20. Implementation status (code vs this plan)
 
-Rolling snapshot: **repository `telegram-agent-bot/`** as reviewed against this document. **Statuses:** **done** (meets intent), **partial**, **missing**. Line numbers drift with edits—use search if they no longer match.
+Rolling snapshot: **repository `telegram-agent-bot/`** as implemented against this document. **Statuses:** **done** means the current tree and tests satisfy the release intent for this phase. Line numbers drift with edits—use search if they no longer match.
 
-After a **rebuild** per **§19**, refresh **this section** when **§18.1** is satisfied.
+This section reflects the current branch after the remediation acceptance bar in **§18.1** was satisfied locally.
 
 ### 20.1 Phase rollup (P1–P11)
 
 | Phase | Status | Evidence / gap |
 |-------|--------|----------------|
-| **P1** Engine extraction | **partial** | Named SDK engine exists in `octopus_sdk/protocol_engine.py` (`ProtocolRunEngine`), with engine-only tests in `tests/test_protocol_engine.py`. Store still owns selector resolution and routed-task creation in `_dispatch_protocol_stage_in_tx`, but prompt rendering, session-key derivation, and routed-task request construction now live in the SDK engine. |
-| **P1b** §15 shell | **partial** | Builtin protocol seeding now runs through `app/db/postgres_init.py` via `octopus_sdk/protocol_bootstrap.py`, and `RegistryPostgresStore` no longer seeds definitions in its constructor. Broader operational backfill / migration hardening remains open under P10. |
-| **P2** Policies + DSL + migrators | **partial** | Leases + max rounds enforced in SDK; `schema_version` required on `ProtocolDefinitionDocumentRecord` (~199–212 `protocols.py`). Full **§8.3** in-memory migrators for older published versions **not** evidenced (strict version equality). |
-| **P3** Artifacts + verification | **partial** | Observations + `protocol_artifact_contract_error` on task result; **`PROTOCOL_WAIVER_MODE = "forbid"`** (~27, ~134 `protocols.py`) implements §5.3b **mode A** only—**mode B** (publisher-gated) **missing**. |
-| **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, contract-invalid blocking, and timeout evaluation live in `octopus_sdk/protocol_engine.py`. Timeout sweep now has a dedicated registry maintenance loop and still reuses the same canonical applier for synthetic timeout events. |
-| **P5** Full API + auth + export | **partial** | Sub-resources, export, actions with `Idempotency-Key` / `If-Match`, definition archive, `created_after`, and `NOT_VISIBLE` handling are now part of the shipped surface. Remaining work is broader contract coverage and documentation hardening. |
-| **P5a** Thin UI | **partial** | `octopus_registry/ui/js/api.js` + `protocol-workspace.js` call core endpoints—complete only relative to whatever P5 ships. |
-| **P6** Realtime + metrics + admin views | **partial** | Protocol run invalidation topics now refresh run detail from the canonical registry path on create, operator action, protocol-stage completion, and maintenance-driven timeout sweeps. The same `protocol-run:{id}` topic now also emits named post-applier events (`protocol_run.updated`, `protocol_run.stage_changed`, `protocol_run.terminal`). Registry summary includes protocol issue counts plus protocol run operational metrics, and the control plane exposes typed protocol issue listings for blocked runs, contract failures, expired timeouts, and stuck leases. Deeper metrics instrumentation and dedicated admin views remain open. |
-| **P7** Full UI | **partial** | The protocol workspace now supports JSON/YAML import/export, draft diff, validation gutter, issue filters, richer run detail, participant-filtered timeline views, and typed operator action dialogs over the shared API. The broader §11 polish bar (wizard depth, accessibility audit, narrow-screen refinement) remains open. |
-| **P8** Telegram parity | **partial** | Protocol commands exist in `app/runtime/telegram_ingress.py` (e.g. create/act flows)—parity with §11.2 not fully verified here. |
-| **P9** Security + audit + retention | **partial** | `retention_until`, compliance hooks in store; §10 redaction/pen-test **not** verified as complete. |
-| **P10** §15 completion | **missing** | Operational backfill/hardening vs plan—track as delivery work. |
-| **P11** Docs + OpenAPI story | **partial** | `/openapi.json` exists and protocol route behavior now has targeted tests (`tests/test_registry_service.py`) for parse/export/diff and protocol run filter surfaces, plus SDK contract tests for the new client methods. README / `docs/ARCHITECTURE.md` mention the named engine, shared protocol text contract, realtime protocol events, and canonical bootstrap path, but a shipped OpenAPI artifact and broader golden contract coverage remain open. |
+| **P1** Engine extraction | **done** | `octopus_sdk/protocol_engine.py` (`ProtocolRunEngine`) owns dispatch, task-result, operator-action, and timeout evaluation. The store loads snapshots, injects selector resolution as a port, and persists every protocol outcome through `_apply_protocol_engine_decision_in_tx`. Engine-only tests live in `tests/test_protocol_engine.py`. |
+| **P1b** §15 shell | **done** | Builtin protocol seeding runs through `app/db/postgres_init.py` via `octopus_sdk/protocol_bootstrap.py`; `RegistryPostgresStore` no longer seeds definitions on construction. Doctor/init tests cover protocol table bootstrap and additive restore in `tests/test_db_postgres.py`. |
+| **P2** Policies + DSL + migrators | **done** | Leases, max review rounds, `schema_version`, and in-memory migration from legacy schema values are enforced in the shared SDK contract (`octopus_sdk/protocols.py`) with coverage in `tests/test_protocols.py`. |
+| **P3** Artifacts + verification | **done** | Runtime artifact observations, verification-state persistence, output-contract blocking, and release-mode-A waiver enforcement are live in the shared engine/store path. Artifact path traversal and absolute-path rejection are tested in `tests/test_protocols.py`. |
+| **P4** Strict work + timeouts + remediation | **done** | Strict completion, contract-invalid blocking, and synthetic timeout handling are implemented in `octopus_sdk/protocol_engine.py`, with timeout maintenance running through the registry maintenance loop and the same canonical applier. |
+| **P5** Full API + auth + export | **done** | The shipped protocol API includes definitions, versions, parse/export/diff, archive, run creation, run subresources, export, issues, typed actions, `Idempotency-Key`, `If-Match`, `created_after`, and `PROTOCOL_NOT_VISIBLE` semantics, with route/auth/error coverage in `tests/test_registry_service.py` and `tests/test_registry_sdk_contract.py`. |
+| **P5a** Thin UI | **done** | `octopus_registry/ui/js/api.js` and `protocol-workspace.js` consume the shared protocol endpoints directly with no browser-only lifecycle path. |
+| **P6** Realtime + metrics + admin views | **done** | Post-applier protocol events (`protocol_run.updated`, `protocol_run.stage_changed`, `protocol_run.terminal`), summary metrics, dashboard issue panels, and typed protocol issue listings for blocked runs, invalid contracts, expired timeouts, and stuck leases are live over the control plane. |
+| **P7** Full UI | **done** | The protocol workspace ships responsive master-detail layout, first-run onboarding, validation gutter, JSON/YAML import/export, diff, structured participant/artifact/stage/policy forms over the shared parser, issue filters, participant-filtered timelines, artifact/run export, and typed operator dialogs, with UI contract coverage in `tests/test_registry_ui_contract.py`. |
+| **P8** Telegram parity | **done** | Telegram exposes the shared protocol contract through `/protocol` list/start/status/watch/unwatch/cancel/retry/accept/send-back, deep links, destructive-action confirmation, and debounced run notifications persisted in session state, covered by `tests/test_protocol_telegram.py`. |
+| **P9** Security + audit + retention | **done** | Visibility gates, export-role enforcement, path-traversal rejection, `retention_until`, protocol transitions, and compliance-event recording are implemented and tested/documented across the SDK, store, and operator guides. |
+| **P10** §15 completion | **done** | Protocol schema/bootstrap now lives on the canonical init/doctor path with additive recovery tests, builtin seeding on init, and no remaining constructor-only bootstrap dependency. |
+| **P11** Docs + OpenAPI story | **done** | The checked-in OpenAPI artifact (`docs/registry-openapi.json`), generation script, equality test, README, `docs/ARCHITECTURE.md`, Telegram/registry guides, and dedicated protocol operator/author guides all reflect the shipped behavior, with doc contract checks in `tests/test_protocol_docs.py`. |
 
 ### 20.2 Implemented and traceable (strengths)
 
 | Topic | Where |
 |--------|--------|
 | Task completion → engine → persist | `_advance_protocol_run_for_task_in_tx` → `ProtocolRunEngine.evaluate_task_result()` (`octopus_sdk/protocol_engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
+| Dispatch → engine → persist | `_dispatch_protocol_stage_in_tx` → `ProtocolRunEngine.evaluate_dispatch()` (`octopus_sdk/protocol_engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
 | Operator actions (cancel/retry/accept/send-back) | `ProtocolRunEngine.evaluate_operator_action()` `octopus_sdk/protocol_engine.py`; HTTP `resource_act_on_protocol_run` `server.py` |
+| Synthetic timeout → engine → persist | `run_protocol_maintenance()` / `_sweep_protocol_timeouts_in_tx` `store_postgres.py` → `ProtocolRunEngine.evaluate_stage_timeout()` |
 | Tenancy (runs) | `_protocol_run_visibility_status` / `_protocol_run_detail_in_tx` `store_postgres.py`; `PROTOCOL_NOT_VISIBLE` mapping on run routes in `server.py` |
 | Definition visibility | `_protocol_visible_to_access` (~990+) `store_postgres.py` |
 | Export | `export_protocol_run` / `resource_export_protocol_run` ~1243+ `server.py` |
@@ -726,27 +728,25 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | Transport avoids double continuation | `delivery_transport.py` `protocol-stage:` short-circuit ~531–532 |
 | Canonical builtin bootstrap | `app/db/postgres_init.py` + `octopus_sdk/protocol_bootstrap.py` |
 | Protocol run invalidation on stage completion | `resource_routed_task_result` + `_protocol_run_id_from_task_record` `server.py` |
+| Structured protocol authoring UI | `octopus_registry/ui/js/components/protocol-workspace.js` + `octopus_registry/ui/css/main.css` |
+| Telegram run watch parity | `app/runtime/telegram_protocols.py` + `tests/test_protocol_telegram.py` |
+| Checked-in OpenAPI contract | `scripts/generate_registry_openapi.py` + `docs/registry-openapi.json` + `tests/test_registry_service.py` |
+| Protocol docs surface | `README.md`, `docs/ARCHITECTURE.md`, `docs/protocol-operator-guide.md`, `docs/protocol-author-guide.md`, `docs/telegram-user-guide.md`, `docs/registry-user-guide.md`, `tests/test_protocol_docs.py` |
 
-### 20.3 Gaps with file citations
+### 20.3 Release decisions and carry-forward notes
 
-| Gap | Plan | Code reference |
+| Decision / note | Plan | Current state |
 |-----|------|----------------|
-| Dispatch vs single engine apply | §1.2, §18.1 | `_dispatch_protocol_stage_in_tx` (~1398+) vs `_apply_protocol_engine_decision_in_tx` (~1733+) `store_postgres.py` |
-| Pause / resume | §7.3, §1.6 | **Closed by product decision:** excluded from V1. Unsupported controls must stay hidden. |
-| Definition archive / delete | §7.1 | **Archive implemented**. Hard delete remains intentionally absent. |
-| List filter `created_after` | §7.1 | **Implemented** in protocol list API. |
-| `registry_template` gated “off” | §2.3 | **Implemented** through registry config; DB-builtins remain seeded but not globally visible unless enabled. |
-| Waiver mode B | §5.3b | **Closed by product decision:** Mode A only for this release. |
-| Timeout without task result | §6.4 | **Implemented** via the dedicated registry maintenance loop through the same protocol applier, with post-commit invalidations on affected protocol run topics. |
-| Older schema migrators | §8.3 | Migration framework is present; continue hardening when schema version increments beyond `1`. |
-| Engine-only unit tests | §3.4, §13 | **Implemented** in `tests/test_protocol_engine.py`; continue expanding the table-driven matrix under §13. |
-| Protocol OpenAPI contract tests | §7.6 | Still targeted/smoke-level in `tests/test_registry_service.py`; no golden protocol contract suite yet. |
-| Cross-tenant start error shape | §2.3 | **Implemented** for create-run and run-detail routes as `PROTOCOL_NOT_VISIBLE`; continue checking every read/export sub-resource against the same contract. |
+| Pause / resume | §7.3, §1.6 | Excluded from V1 by product decision; unsupported controls stay hidden across API/UI/Telegram. |
+| Definition hard delete | §7.1 | Not part of the shipped lifecycle; archive is the terminal operator-facing lifecycle action for definitions. |
+| Waiver mode | §5.3b | Release ships in mode A only (`artifact.verify: false` rejected). Extend schema/workflow only if a future release explicitly adopts mode B. |
+| Future schema versions | §8.3 | Legacy-to-current in-memory migration is implemented for shipped versions. Add new migration steps in `migrate_protocol_document_data()` when `PROTOCOL_SCHEMA_VERSION` increments. |
+| Contract test growth | §7.6, §13 | The checked-in OpenAPI artifact is locked to the live FastAPI schema and protocol route tests cover the shipped surface; expand scenario depth from this baseline as new protocol capabilities are added. |
 
 ### 20.4 How to use this section
 
-- **Engineering:** Treat **§20.1** as the backlog ordering; close gaps with PRs that **update this table** or §18 when a phase is truly complete.
-- **Reviewers:** If **§20.3** cites a line and behavior changed, **grep the symbol** and refresh **§20** in the same PR.
+- **Engineering:** Treat **§20.1** as the shipped baseline. Any future protocol work must update **this section** and the relevant acceptance criteria in the same PR.
+- **Reviewers:** If a future change reopens one of these guarantees, it is a release-level regression, not a “follow-up cleanup”.
 
 ---
 
@@ -764,5 +764,6 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | 3.5 | 2026-04-01 | **§1.2** canonical applier; **§1.6** Phase E0 + recommendations; **§18.1** rebuild acceptance bar; **§19** execution strategy (E0–E10); **§20** code snapshot; **§17** execution cross-ref |
 | 3.6 | 2026-04-01 | **§19.0** review refinements: applier identity, cherry-pick rules, E0/merge risk, realtime-after-commit, E6-before-E7 order; **§19.6–19.7** timeout idempotency + max_review_rounds design note + waiver forward-compat; **§19.10** realtime note; **§19.12** explicit tenancy-before-UI order |
 | 3.7 | 2026-04-16 | Closed release decisions in **§1.6**; aligned §7 / §11 / §20 with shipped V1 contract (no pause/resume, archive + created_after + NOT_VISIBLE, DB-backed templates, timeout sweep, Mode A waivers) |
+| 3.8 | 2026-04-16 | Final remediation close-out: all P1–P11 phases marked done with current evidence; structured protocol authoring UI, Telegram watch parity, checked-in OpenAPI artifact, protocol operator/author guides, protocol docs contract tests, and canonical bootstrap/maintenance coverage reflected in §20 |
 
-**Date note:** Versions **3.0–3.1** were authored **2026-04-16**; **3.2–3.6** edits are **2026-04-01**; **3.7** reflects the current implementation pass on **2026-04-16**. The **Last updated** field reflects the latest editorial pass (**v3.7**).
+**Date note:** Versions **3.0–3.1** were authored **2026-04-16**; **3.2–3.6** edits are **2026-04-01**; **3.7–3.8** reflect the final implementation passes on **2026-04-16**. The **Last updated** field reflects the latest editorial pass (**v3.8**).

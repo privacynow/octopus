@@ -99,6 +99,8 @@ Useful Telegram commands:
 - `/protocol list`
 - `/protocol start <slug> <problem statement>`
 - `/protocol status <run_id>`
+- `/protocol watch <run_id>`
+- `/protocol unwatch <run_id>`
 - `/protocol cancel <run_id> [reason]`
 - `/protocol retry <run_id> [reason]`
 - `/protocol accept <run_id> [reason]`
@@ -187,6 +189,11 @@ artifacts.
 The protocol implementation is described in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the active delivery backlog
 lives in [protocol_remediation_plan.md](protocol_remediation_plan.md).
+The operator workflow, authoring contract, and checked-in API artifact live in:
+
+- [docs/protocol-operator-guide.md](docs/protocol-operator-guide.md)
+- [docs/protocol-author-guide.md](docs/protocol-author-guide.md)
+- [docs/registry-openapi.json](docs/registry-openapi.json)
 
 `./octopus` generates `BOT_CREDENTIAL_KEY` for managed bot env files. Keep it:
 
@@ -220,5 +227,9 @@ fault state.
   SDK-oriented bot development guide
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   System architecture and runtime boundaries
+- [docs/protocol-operator-guide.md](docs/protocol-operator-guide.md)
+  Protocol run operations, metrics, and runbooks
+- [docs/protocol-author-guide.md](docs/protocol-author-guide.md)
+  Protocol authoring and validation guide
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

@@ -2,6 +2,7 @@
 
 import contextlib
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import re
@@ -32,6 +33,7 @@ from app.runtime_health import (
 )
 from app.storage import default_session, ensure_data_dirs, load_session, save_session, session_exists
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
+from octopus_sdk.protocols import ProtocolRunMutationRecord
 from octopus_sdk.registry.management import (
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
@@ -1214,6 +1216,18 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
     assert "origin_channel" in run_list_parameters
 
 
+def test_registry_openapi_asset_matches_generated_schema(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    expected_path = Path(__file__).resolve().parents[1] / "docs" / "registry-openapi.json"
+    expected = json.loads(expected_path.read_text(encoding="utf-8"))
+    client = TestClient(app)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
 def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1372,6 +1386,91 @@ def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_
 
     assert response.status_code == 403
     assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+
+
+@pytest.mark.parametrize(
+    ("path", "store_method"),
+    [
+        ("/v1/protocol-runs/run-1/participants", "get_protocol_run_participants"),
+        ("/v1/protocol-runs/run-1/artifacts", "get_protocol_run_artifacts"),
+        ("/v1/protocol-runs/run-1/timeline", "get_protocol_run_timeline"),
+        ("/v1/protocol-runs/run-1/export", "export_protocol_run"),
+    ],
+)
+def test_protocol_run_subresources_return_not_visible_for_hidden_run(
+    monkeypatch,
+    tmp_path: Path,
+    path: str,
+    store_method: str,
+):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __getattr__(self, name: str):
+            if name != store_method:
+                raise AttributeError(name)
+
+            def _handler(run_id: str, *, access):
+                raise PermissionError("Protocol run is not visible to this actor.")
+
+            return _handler
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get(path)
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+
+
+def test_protocol_run_action_route_returns_conflict_for_version_mismatch(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def act_on_protocol_run(self, run_id: str, *, access, action: str, reason: str, idempotency_key: str = "", expected_version=None):
+            assert run_id == "run-1"
+            assert action == "retry"
+            assert expected_version == 4
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="concurrent_modification",
+                message="Protocol run version conflict: expected 4, found 5.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/actions/retry",
+            headers={"If-Match": "4", "Idempotency-Key": "idem-1"},
+            json={"reason": "Retry after fix."},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == "CONCURRENT_MODIFICATION"
 
 
 def test_protocol_stage_result_broadcasts_protocol_run_invalidation(monkeypatch, tmp_path: Path):

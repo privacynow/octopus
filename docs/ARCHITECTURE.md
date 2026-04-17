@@ -124,6 +124,10 @@ All management endpoints are agent-scoped: `/v1/agents/{agent_id}/catalog/skills
 `/v1/agents/{agent_id}/guidance/{provider}`, etc. No global management endpoints
 that assume a single connected bot.
 
+The generated registry OpenAPI artifact is checked in at
+`docs/registry-openapi.json` and locked by tests against the live FastAPI app,
+so protocol clients do not depend on undocumented route drift.
+
 Protocol definitions and protocol runs are registry-owned control-plane
 objects:
 

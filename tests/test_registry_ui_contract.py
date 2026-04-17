@@ -44,6 +44,7 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         "usage-view.js": "function renderUsageView(",
         "skill-catalog.js": "function renderSkillCatalog(",
         "guidance-editor.js": "function renderGuidanceEditor(",
+        "protocol-workspace.js": "function renderProtocolWorkspace(",
     }
 
     for name, marker in expected.items():
@@ -112,6 +113,51 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
+
+
+def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operator_controls() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    assert "API.parseProtocolDocument(" in workspace
+    assert "API.exportProtocolDraft(" in workspace
+    assert "API.diffProtocolDraft(" in workspace
+    assert "API.listProtocolIssues({" in workspace
+    assert "API.actOnProtocolRun(" in workspace
+    assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
+    assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
+    assert "role: 'alertdialog'" in workspace
+    assert "Structured editor" in workspace
+    assert "Add participant" in workspace
+    assert "Add artifact" in workspace
+    assert "Add stage" in workspace
+    assert "Raw editor has unsynced errors." in workspace
+    assert "Only published protocol versions can start runs." in workspace
+    assert "No protocol issues detected for this run." in workspace
+    assert "No blocked runs, lease issues, contract failures, or expired timeouts are visible right now." in workspace
+
+
+def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".protocol-workspace-grid {" in css
+    assert "grid-template-columns: minmax(240px, 0.9fr) minmax(360px, 1.3fr) minmax(280px, 1fr) minmax(320px, 1.2fr);" in css
+    assert ".protocol-scroll {" in css
+    assert "max-height: min(36dvh, 460px);" in css
+    assert ".protocol-structured-editor," in css
+    assert ".protocol-structured-card {" in css
+    assert ".protocol-inline-checkbox {" in css
+    assert "@media (max-width: 1080px)" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
+    assert "@media (max-width: 900px)" in css
+    assert "grid-template-columns: 1fr;" in css
+    assert ".protocol-sticky-actions {" in css
+    assert "position: sticky;" in css
 
 
 def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:

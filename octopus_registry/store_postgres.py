@@ -1398,91 +1398,32 @@ class RegistryPostgresStore(AbstractRegistryStore):
         run = self._protocol_run_from_row(run_row)
         stage_execution = self._protocol_stage_execution_from_row(stage_execution_row)
         document = self._protocol_document_for_run(conn, run_row)
-        stage = document.stage(str(stage_execution_row["stage_key"] or ""))
-        participant = document.participant(stage.participant_key)
         artifacts = self._protocol_artifacts_for_run(conn, run.protocol_run_id)
         stage_executions = self._protocol_stage_executions_for_run(conn, run.protocol_run_id)
-        dispatch = self._protocol_engine.dispatch_preflight(
-            document=document,
-            run=run,
-            stage=stage,
-            stage_executions=stage_executions,
-            now=now,
-            lease_owner=str(stage_execution_row["protocol_stage_execution_id"] or ""),
-            lease_ttl_seconds=900,
-        )
-        if not dispatch.ok:
-            self._apply_protocol_engine_decision_in_tx(
-                conn,
-                run_row=run_row,
-                stage_execution_row=stage_execution_row,
-                engine=self._protocol_engine.dispatch_blocked(
-                    run=run,
-                    stage_execution=stage_execution,
-                    error_code=dispatch.error_code,
-                    error_detail=dispatch.error_detail,
-                ),
-                actor_type="protocol_engine",
-                actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
-                now=now,
-            )
-            return {}
         previous_feedback = self._latest_protocol_review_feedback(
             conn,
             run_id=run.protocol_run_id,
-            current_stage_key=stage.stage_key,
+            current_stage_key=str(stage_execution_row["stage_key"] or ""),
         )
-        selector = self._protocol_engine.dispatch_target_selector(run=run, participant=participant)
-        try:
-            resolved_target = self._resolve_selector(conn, selector)
-        except Exception as exc:
-            self._apply_protocol_engine_decision_in_tx(
-                conn,
-                run_row=run_row,
-                stage_execution_row=stage_execution_row,
-                engine=self._protocol_engine.dispatch_resolution_failed(
-                    run=run,
-                    stage_execution=stage_execution,
-                    selector=selector,
-                    error_detail=str(exc),
-                ),
-                actor_type="protocol_engine",
-                actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
-                now=now,
-            )
-            return {}
-        request = self._protocol_engine.build_dispatch_request(
+        engine = self._protocol_engine.evaluate_dispatch(
             document=document,
             run=run,
-            stage=stage,
-            participant=participant,
-            stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
-            target_agent_id=str(resolved_target["agent_id"] or ""),
+            stage_execution=stage_execution,
+            stage_executions=stage_executions,
             artifacts=artifacts,
             previous_feedback=previous_feedback,
             now=now,
+            resolve_selector=lambda selector: self._resolve_selector(conn, selector),
         )
         try:
             return self._apply_protocol_engine_decision_in_tx(
                 conn,
                 run_row=run_row,
                 stage_execution_row=stage_execution_row,
-                engine=self._protocol_engine.dispatch_started(
-                    run=run,
-                    stage_execution=stage_execution,
-                    routed_task_id=request.routed_task_id,
-                    timeout_at=dispatch.timeout_at,
-                    lease_owner=dispatch.lease_owner,
-                    lease_expires_at=dispatch.lease_expires_at,
-                    selector=selector,
-                    resolved_agent_id=str(resolved_target["agent_id"] or ""),
-                    resolved_authority_ref=str(resolved_target.get("authority_ref", "") or ""),
-                    now=now,
-                ),
+                engine=engine,
                 actor_type="protocol_engine",
                 actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
                 now=now,
-                routed_task_request=request.model_dump(mode="json"),
             ) or {}
         except RoutingSkillDisabledError as exc:
             self._apply_protocol_engine_decision_in_tx(
@@ -1493,7 +1434,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     run=run,
                     stage_execution=stage_execution,
                     error_code="ROUTING_SKILL_DISABLED",
-                    error_detail=str(exc),
+                    error_detail=f"Routing skill disabled: {exc}",
                 ),
                 actor_type="protocol_engine",
                 actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
@@ -1572,12 +1513,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
         actor_type: str,
         actor_ref: str,
         now: str,
-        routed_task_request: Mapping[str, object] | None = None,
     ) -> dict[str, object] | None:
         created_routed_task: dict[str, object] | None = None
         routed_task_id = str(stage_execution_row.get("routed_task_id", "") or "")
-        if routed_task_request is not None:
-            created_routed_task = self._create_routed_task_in_tx(conn, dict(routed_task_request), now=now)
+        if engine.routed_task_request is not None:
+            created_routed_task = self._create_routed_task_in_tx(
+                conn,
+                engine.routed_task_request.model_dump(mode="json"),
+                now=now,
+            )
             request_record = created_routed_task.get("request")
             routed_task_id = str(getattr(request_record, "routed_task_id", "") or routed_task_id)
         completion_timestamp = now if engine.stage_status in {"completed", "failed", "blocked", "cancelled"} else ""
@@ -3156,7 +3100,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             if expected_version is not None and current_version != int(expected_version):
                 return ProtocolRunMutationRecord(
                     ok=False,
-                    status="conflict",
+                    status="concurrent_modification",
                     message=f"Protocol run version conflict: expected {expected_version}, found {current_version}.",
                 )
             current_stage_execution_id = str(run_row.get("current_stage_execution_id", "") or "")

@@ -7,7 +7,7 @@ async — the client and store run in different processes.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 import httpx
 from pydantic import BaseModel
@@ -54,6 +54,40 @@ from octopus_sdk.registry.models import (
 )
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+ProtocolRegistryErrorCode = Literal[
+    "PROTOCOL_NOT_FOUND",
+    "PROTOCOL_NOT_VISIBLE",
+    "PROTOCOL_FORBIDDEN",
+    "PROTOCOL_DUPLICATE_SLUG",
+    "PROTOCOL_INVALID_ACTION",
+    "PROTOCOL_INVALID",
+    "PROTOCOL_INVALID_FILTER",
+    "PROTOCOL_INVALID_FORMAT",
+    "PROTOCOL_INVALID_IF_MATCH",
+    "PROTOCOL_RUN_NOT_FOUND",
+    "PROTOCOL_VERSION_NOT_FOUND",
+    "PROTOCOL_EXPORT_FORBIDDEN",
+    "CONCURRENT_MODIFICATION",
+    "IDEMPOTENCY_CONFLICT",
+    "PROTOCOL_REQUEST_FAILED",
+]
+PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
+    "PROTOCOL_NOT_FOUND",
+    "PROTOCOL_NOT_VISIBLE",
+    "PROTOCOL_FORBIDDEN",
+    "PROTOCOL_DUPLICATE_SLUG",
+    "PROTOCOL_INVALID_ACTION",
+    "PROTOCOL_INVALID",
+    "PROTOCOL_INVALID_FILTER",
+    "PROTOCOL_INVALID_FORMAT",
+    "PROTOCOL_INVALID_IF_MATCH",
+    "PROTOCOL_RUN_NOT_FOUND",
+    "PROTOCOL_VERSION_NOT_FOUND",
+    "PROTOCOL_EXPORT_FORBIDDEN",
+    "CONCURRENT_MODIFICATION",
+    "IDEMPOTENCY_CONFLICT",
+    "PROTOCOL_REQUEST_FAILED",
+})
 
 
 class RegistryClientError(RuntimeError):
@@ -71,6 +105,10 @@ class RegistryClientError(RuntimeError):
         self.operator_detail = operator_detail or message
         self.status_code = status_code
         super().__init__(message)
+
+    @property
+    def is_protocol_error(self) -> bool:
+        return str(self.error_code or "").upper() in PROTOCOL_REGISTRY_ERROR_CODES
 
 
 def _registry_http_error_code(status_code: int) -> str:

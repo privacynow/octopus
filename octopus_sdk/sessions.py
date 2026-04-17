@@ -200,6 +200,45 @@ class PendingDelegation:
 
 
 @dataclass
+class ProtocolRunWatch:
+    """Durable transport-facing subscription for protocol run updates."""
+
+    run_id: str
+    protocol_id: str = ""
+    protocol_slug: str = ""
+    last_notified_version: int = 0
+    last_notified_status: str = ""
+    last_notified_stage_key: str = ""
+    last_notified_at: str = ""
+    registry_url: str = ""
+
+
+def coerce_protocol_run_watches(
+    values: list[ProtocolRunWatch] | list[Mapping[str, object]] | None,
+) -> list[ProtocolRunWatch]:
+    if not values:
+        return []
+    watches: list[ProtocolRunWatch] = []
+    for value in values:
+        if isinstance(value, ProtocolRunWatch):
+            watches.append(value)
+            continue
+        watches.append(
+            ProtocolRunWatch(
+                run_id=str(value.get("run_id", "") or ""),
+                protocol_id=str(value.get("protocol_id", "") or ""),
+                protocol_slug=str(value.get("protocol_slug", "") or ""),
+                last_notified_version=int(value.get("last_notified_version", 0) or 0),
+                last_notified_status=str(value.get("last_notified_status", "") or ""),
+                last_notified_stage_key=str(value.get("last_notified_stage_key", "") or ""),
+                last_notified_at=str(value.get("last_notified_at", "") or ""),
+                registry_url=str(value.get("registry_url", "") or ""),
+            )
+        )
+    return [item for item in watches if item.run_id]
+
+
+@dataclass
 class SessionState:
     """Typed representation of a chat session.
 
@@ -217,6 +256,7 @@ class SessionState:
     pending_retry: PendingRetry | None = None
     awaiting_skill_setup: AwaitingSkillSetup | None = None
     pending_delegation: PendingDelegation | None = None
+    protocol_run_watches: list[ProtocolRunWatch] = field(default_factory=list)
     compact_mode: bool | None = None  # None = use config default
     project_id: str = ""
     file_policy: str = ""  # "inspect", "edit", or "" (use config default)
@@ -227,6 +267,7 @@ class SessionState:
 
     def __post_init__(self) -> None:
         self.provider_state = coerce_provider_state(self.provider_state)
+        self.protocol_run_watches = coerce_protocol_run_watches(self.protocol_run_watches)
 
     # -- Convenience accessors ------------------------------------------------
 
@@ -318,6 +359,7 @@ def session_from_dict(d: Mapping[str, object]) -> SessionState:
         pending_retry=_make_optional(PendingRetry, pending_retry_raw),
         awaiting_skill_setup=_make_optional(AwaitingSkillSetup, d.get("awaiting_skill_setup")),
         pending_delegation=_make_pending_delegation(pending_delegation_raw),
+        protocol_run_watches=coerce_protocol_run_watches(d.get("protocol_run_watches")),
         compact_mode=d.get("compact_mode"),
         project_id=d.get("project_id", ""),
         file_policy=d.get("file_policy") or "",
@@ -389,6 +431,7 @@ def default_session(
         "pending_retry": None,
         "awaiting_skill_setup": None,
         "pending_delegation": None,
+        "protocol_run_watches": [],
         "created_at": now,
         "updated_at": now,
         "last_skill_subject": None,

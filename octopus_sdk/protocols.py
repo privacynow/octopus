@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+from pathlib import PurePosixPath
 import re
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta, timezone
@@ -13,7 +14,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 import yaml
 
-from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, TargetSelector, utcnow_iso
+from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, RoutedTaskRequest, TargetSelector, utcnow_iso
 
 ProtocolLifecycleState = Literal["draft", "published", "archived"]
 ProtocolVisibility = Literal["org_private", "org_shared", "registry_template"]
@@ -29,6 +30,7 @@ ProtocolDocumentTextFormat = Literal["json", "yaml"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
+PROTOCOL_LEGACY_SCHEMA_VERSION = 0
 PROTOCOL_WAIVER_MODE = "forbid"
 PROTOCOL_DEFAULT_RETENTION_DAYS = 90
 PROTOCOL_DEFAULT_RUN_ORG_ID = "local"
@@ -54,6 +56,25 @@ def _normalize_key(value: object, *, field_name: str) -> str:
     if not text:
         raise ValueError(f"{field_name} must not be blank")
     return text
+
+
+def _validate_relative_workspace_path(value: object, *, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "\\" in text:
+        raise ValueError(f"{field_name} must use forward slashes")
+    path = PurePosixPath(text)
+    if path.is_absolute():
+        raise ValueError(f"{field_name} must be relative to the workspace root")
+    if any(part == ".." for part in path.parts):
+        raise ValueError(f"{field_name} must not escape the workspace root")
+    normalized = path.as_posix()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if not normalized:
+        raise ValueError(f"{field_name} must not be blank")
+    return normalized
 
 
 def _normalize_slug_list(raw: Iterable[str] | None) -> list[str]:
@@ -131,6 +152,11 @@ class ProtocolArtifactDefinitionRecord(RegistryRecordModel):
     @classmethod
     def _artifact_key(cls, value: object) -> str:
         return _normalize_key(value, field_name="artifact_key")
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def _path(cls, value: object) -> str:
+        return _validate_relative_workspace_path(value, field_name="path")
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "ProtocolArtifactDefinitionRecord":
@@ -543,6 +569,11 @@ class ProtocolArtifactObservationRecord(RegistryRecordModel):
     def _artifact_key(cls, value: object) -> str:
         return _normalize_key(value, field_name="artifact_key")
 
+    @field_validator("path", mode="before")
+    @classmethod
+    def _path(cls, value: object) -> str:
+        return _validate_relative_workspace_path(value, field_name="path")
+
 
 class ProtocolStageArtifactContractRecord(RegistryRecordModel):
     artifact_key: str = Field(..., min_length=1)
@@ -617,6 +648,7 @@ class ProtocolEngineDecisionRecord(RegistryRecordModel):
     participant_resolved_authority_ref: str = ""
     participant_selector_snapshot: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     transition_metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    routed_task_request: RoutedTaskRequest | None = None
 
 
 class ProtocolAccessContextRecord(RegistryRecordModel):
@@ -658,35 +690,43 @@ def migrate_protocol_document_data(value: object) -> dict[str, object]:
     if not raw:
         return {}
     migrated = json.loads(json.dumps(raw))
-    raw_schema_version = migrated.get("schema_version", PROTOCOL_SCHEMA_VERSION)
+    raw_schema_version = migrated.get("schema_version", PROTOCOL_LEGACY_SCHEMA_VERSION)
     try:
-        schema_version = int(raw_schema_version or PROTOCOL_SCHEMA_VERSION)
+        schema_version = int(raw_schema_version or PROTOCOL_LEGACY_SCHEMA_VERSION)
     except (TypeError, ValueError) as exc:
         raise ValueError("protocol definition schema_version must be an integer") from exc
-    if schema_version < PROTOCOL_MIN_SCHEMA_VERSION:
-        schema_version = PROTOCOL_MIN_SCHEMA_VERSION
+    if schema_version < PROTOCOL_LEGACY_SCHEMA_VERSION:
+        schema_version = PROTOCOL_LEGACY_SCHEMA_VERSION
     if schema_version > PROTOCOL_SCHEMA_VERSION:
         raise ValueError(
             f"Unsupported protocol schema_version {schema_version}; expected at most {PROTOCOL_SCHEMA_VERSION}"
         )
+    while schema_version < PROTOCOL_SCHEMA_VERSION:
+        if schema_version == PROTOCOL_LEGACY_SCHEMA_VERSION:
+            migrated.setdefault("metadata", {})
+            migrated.setdefault("participants", [])
+            migrated.setdefault("artifacts", [])
+            migrated.setdefault("stages", [])
+            migrated.setdefault("policies", {})
+            for artifact in migrated.get("artifacts", []) or []:
+                if isinstance(artifact, dict):
+                    artifact.setdefault("verify", True)
+            for stage in migrated.get("stages", []) or []:
+                if isinstance(stage, dict):
+                    stage.setdefault("strict_completion", False)
+                    stage.setdefault("require_output_verification", None)
+                    stage.setdefault("timeout_seconds", 0)
+            policies = migrated.get("policies")
+            if isinstance(policies, dict):
+                policies.setdefault("single_active_writer", True)
+                policies.setdefault("max_review_rounds", 5)
+            schema_version = 1
+            migrated["schema_version"] = schema_version
+            continue
+        raise ValueError(
+            f"Unsupported protocol schema_version migration path {schema_version} -> {PROTOCOL_SCHEMA_VERSION}"
+        )
     migrated["schema_version"] = PROTOCOL_SCHEMA_VERSION
-    migrated.setdefault("metadata", {})
-    migrated.setdefault("participants", [])
-    migrated.setdefault("artifacts", [])
-    migrated.setdefault("stages", [])
-    migrated.setdefault("policies", {})
-    for artifact in migrated.get("artifacts", []) or []:
-        if isinstance(artifact, dict):
-            artifact.setdefault("verify", True)
-    for stage in migrated.get("stages", []) or []:
-        if isinstance(stage, dict):
-            stage.setdefault("strict_completion", False)
-            stage.setdefault("require_output_verification", None)
-            stage.setdefault("timeout_seconds", 0)
-    policies = migrated.get("policies")
-    if isinstance(policies, dict):
-        policies.setdefault("single_active_writer", True)
-        policies.setdefault("max_review_rounds", 5)
     return migrated
 
 

@@ -122,6 +122,61 @@ def test_protocol_run_engine_prefers_required_skill_for_dispatch_selector() -> N
     assert selector.preferred_agent_id == "agent-1"
 
 
+def test_protocol_run_engine_evaluates_dispatch_with_shared_request_contract() -> None:
+    document = _document()
+    run = _run().model_copy(
+        update={
+            "entry_agent_id": "agent-1",
+            "root_conversation_id": "conv-1",
+            "protocol_definition_version_id": "version-1",
+            "workspace_ref": "workspace-a",
+            "problem_statement": "Build the thing.",
+        }
+    )
+    stage_execution = _stage_execution(status="queued")
+
+    decision = _engine().evaluate_dispatch(
+        document=document,
+        run=run,
+        stage_execution=stage_execution,
+        stage_executions=[],
+        artifacts=[],
+        previous_feedback="Tighten the scope.",
+        now="2026-04-16T00:00:00+00:00",
+        resolve_selector=lambda selector: {
+            "agent_id": "agent-2",
+            "authority_ref": "registry:local",
+        },
+    )
+
+    assert decision.run_status == "running"
+    assert decision.stage_status == "running"
+    assert decision.transition_kind == "dispatch"
+    assert decision.routed_task_request is not None
+    assert decision.routed_task_request.routed_task_id == "protocol-stage:planning-exec"
+    assert decision.routed_task_request.target_agent_id == "agent-2"
+
+
+def test_protocol_run_engine_blocks_dispatch_when_resolution_fails() -> None:
+    document = _document()
+    def _raise(selector):
+        raise RuntimeError(f"no agent for {selector.value}")
+
+    decision = _engine().evaluate_dispatch(
+        document=document,
+        run=_run().model_copy(update={"entry_agent_id": "agent-1"}),
+        stage_execution=_stage_execution(status="queued"),
+        stage_executions=[],
+        artifacts=[],
+        previous_feedback="",
+        now="2026-04-16T00:00:00+00:00",
+        resolve_selector=_raise,
+    )
+
+    assert decision.run_status == "blocked"
+    assert decision.failure_code == "participant_resolution_failed"
+
+
 def test_protocol_run_engine_marks_late_completed_result_as_timeout() -> None:
     document = _document()
     result = ProtocolStageTaskResultRecord(

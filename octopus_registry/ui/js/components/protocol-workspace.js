@@ -46,6 +46,8 @@ function renderProtocolWorkspace(container) {
         display_name: '',
         description: '',
         definition_text: '',
+        document_json: null,
+        parse_error: '',
     };
 
     const header = document.createElement('header');
@@ -107,32 +109,101 @@ function renderProtocolWorkspace(container) {
         };
     }
 
-    async function _syncEditorFormat(nextFormat) {
-        const parsed = await API.parseProtocolDocument({
-            definition_text: draft.definition_text || '',
-            format: editorFormat,
-        });
-        editorFormat = nextFormat;
-        if (nextFormat === 'yaml') {
-            const exported = await API.parseProtocolDocument({
-                definition_text: JSON.stringify(parsed.document || {}, null, 2),
-                format: 'yaml',
-            });
-            draft.definition_text = String(exported.text || '');
-        } else {
-            draft.definition_text = JSON.stringify(parsed.document || {}, null, 2);
-        }
+    function _cloneDocument(value) {
+        return JSON.parse(JSON.stringify(value || _defaultProtocolDocument()));
     }
 
-    async function _parseDraftDocument() {
+    function _draftDocument() {
+        return _cloneDocument(draft.document_json || _defaultProtocolDocument());
+    }
+
+    function _syncDraftFieldsFromDocument(document) {
+        const metadata = (document && document.metadata) || {};
+        draft.slug = String(metadata.slug || draft.slug || '');
+        draft.display_name = String(metadata.display_name || draft.display_name || '');
+        draft.description = String(metadata.description || draft.description || '');
+    }
+
+    function _applyDraftMetadataToDocument(document) {
+        const next = _cloneDocument(document);
+        next.schema_version = Number(next.schema_version || 1) || 1;
+        next.metadata = Object.assign({}, next.metadata || {}, {
+            slug: String(draft.slug || next.metadata?.slug || '').trim(),
+            display_name: String(draft.display_name || next.metadata?.display_name || '').trim(),
+            description: String(draft.description || next.metadata?.description || '').trim(),
+        });
+        next.participants = Array.isArray(next.participants) ? next.participants : [];
+        next.artifacts = Array.isArray(next.artifacts) ? next.artifacts : [];
+        next.stages = Array.isArray(next.stages) ? next.stages : [];
+        next.policies = Object.assign({
+            single_active_writer: true,
+            max_review_rounds: 5,
+        }, next.policies || {});
+        return next;
+    }
+
+    async function _serializeProtocolDocument(document, format = editorFormat) {
+        const normalized = _applyDraftMetadataToDocument(document);
+        if (format === 'json') {
+            return JSON.stringify(normalized, null, 2);
+        }
+        const parsed = await API.parseProtocolDocument({
+            definition_text: JSON.stringify(normalized, null, 2),
+            format,
+        });
+        return String(parsed.text || '');
+    }
+
+    async function _parseDraftDocument({ report = false } = {}) {
         const result = await API.parseProtocolDocument({
             definition_text: draft.definition_text || '',
             format: editorFormat,
         });
         if (!result.document || !(result.validation && result.validation.ok)) {
-            throw new Error((result.validation && result.validation.errors && result.validation.errors.join(' · ')) || 'Protocol draft is invalid.');
+            const message = (result.validation && result.validation.errors && result.validation.errors.join(' · '))
+                || 'Protocol draft is invalid.';
+            draft.parse_error = message;
+            if (report) {
+                throw new Error(message);
+            }
+            return null;
         }
-        return result.document;
+        const document = _applyDraftMetadataToDocument(result.document);
+        draft.document_json = document;
+        draft.parse_error = '';
+        _syncDraftFieldsFromDocument(document);
+        return document;
+    }
+
+    async function _commitDraftDocument(document, { rerender = true } = {}) {
+        const normalized = _applyDraftMetadataToDocument(document);
+        draft.document_json = normalized;
+        draft.parse_error = '';
+        _syncDraftFieldsFromDocument(normalized);
+        draft.definition_text = await _serializeProtocolDocument(normalized, editorFormat);
+        if (rerender) {
+            renderWorkspace();
+        }
+        return normalized;
+    }
+
+    async function _applyStructuredChange(mutator) {
+        try {
+            const document = await _parseDraftDocument() || _draftDocument();
+            const working = _cloneDocument(document);
+            mutator(working);
+            await _commitDraftDocument(working);
+        } catch (err) {
+            UI.reportError('Failed to update the structured protocol editor', err, {
+                context: 'Protocol structured editor update failed',
+            });
+        }
+    }
+
+    async function _syncEditorFormat(nextFormat) {
+        const parsed = await _parseDraftDocument({ report: true }) || _draftDocument();
+        editorFormat = nextFormat;
+        draft.definition_text = await _serializeProtocolDocument(parsed, nextFormat);
     }
 
     function _applyDraftFromProtocol(detail) {
@@ -150,11 +221,14 @@ function renderProtocolWorkspace(container) {
             definition_text: editorFormat === 'yaml'
                 ? ''
                 : JSON.stringify(draftDocument, null, 2),
+            document_json: _cloneDocument(draftDocument),
+            parse_error: '',
         };
     }
 
     async function _refreshDraftTextForCurrentFormat() {
         if (!currentProtocol && !draft.definition_text) {
+            draft.document_json = _cloneDocument(_defaultProtocolDocument());
             draft.definition_text = editorFormat === 'yaml'
                 ? String((await API.parseProtocolDocument({
                     definition_text: JSON.stringify(_defaultProtocolDocument(), null, 2),
@@ -163,11 +237,13 @@ function renderProtocolWorkspace(container) {
                 : JSON.stringify(_defaultProtocolDocument(), null, 2);
             return;
         }
-        const source = currentProtocol?.draft_document || currentProtocol?.draft_definition_json || _defaultProtocolDocument();
+        const source = currentProtocol?.draft_document || currentProtocol?.draft_definition_json || draft.document_json || _defaultProtocolDocument();
         const parsed = await API.parseProtocolDocument({
             definition_text: JSON.stringify(source, null, 2),
             format: editorFormat,
         });
+        draft.document_json = _cloneDocument(source);
+        draft.parse_error = '';
         draft.definition_text = String(parsed.text || '');
     }
 
@@ -294,22 +370,24 @@ function renderProtocolWorkspace(container) {
 
     function _renderValidationGutter(parent) {
         const validation = currentProtocol?.validation;
-        if (!validation) {
+        const parseError = String(draft.parse_error || '');
+        if (!validation && !parseError) {
             return;
         }
+        const ok = Boolean(validation && validation.ok && !parseError);
         const gutter = document.createElement('section');
-        gutter.className = `protocol-validation-gutter ${validation.ok ? 'is-valid' : 'is-invalid'}`;
-        gutter.setAttribute('role', validation.ok ? 'status' : 'alert');
+        gutter.className = `protocol-validation-gutter ${ok ? 'is-valid' : 'is-invalid'}`;
+        gutter.setAttribute('role', ok ? 'status' : 'alert');
         const title = document.createElement('strong');
-        title.textContent = validation.ok ? 'Validation passed' : 'Validation issues';
+        title.textContent = ok ? 'Validation passed' : 'Validation issues';
         gutter.appendChild(title);
         const summary = document.createElement('div');
         summary.className = 'quiet-note';
-        summary.textContent = validation.ok
-            ? `Draft valid. Content hash: ${validation.content_hash || 'n/a'}`
-            : `${validation.errors.length} issue(s) found.`;
+        summary.textContent = ok
+            ? `Draft valid. Content hash: ${validation?.content_hash || 'n/a'}`
+            : parseError || `${validation?.errors.length || 0} issue(s) found.`;
         gutter.appendChild(summary);
-        if (!validation.ok && validation.errors.length) {
+        if (!ok && validation?.errors.length) {
             const list = document.createElement('ul');
             list.className = 'protocol-validation-list';
             validation.errors.forEach((item) => {
@@ -386,12 +464,14 @@ function renderProtocolWorkspace(container) {
                     definition_text: definitionText,
                     format: formatValue,
                 });
-                const document = parsed.document || _defaultProtocolDocument();
+                const document = _applyDraftMetadataToDocument(parsed.document || _defaultProtocolDocument());
+                draft.document_json = document;
                 draft.slug = document.metadata?.slug || draft.slug || '';
                 draft.display_name = document.metadata?.display_name || draft.display_name || '';
                 draft.description = document.metadata?.description || draft.description || '';
                 editorFormat = formatValue;
                 draft.definition_text = String(parsed.text || definitionText);
+                draft.parse_error = '';
                 currentProtocol = null;
                 currentProtocolId = '';
                 currentRunId = '';
@@ -417,10 +497,10 @@ function renderProtocolWorkspace(container) {
             if (currentProtocolId) {
                 exported = await API.exportProtocolDraft(currentProtocolId, normalized);
             } else {
-                exported = await API.parseProtocolDocument({
-                    definition_text: draft.definition_text || '',
-                    format: normalized,
-                });
+                const document = await _parseDraftDocument({ report: true }) || _draftDocument();
+                exported = {
+                    text: await _serializeProtocolDocument(document, normalized),
+                };
             }
             _downloadText(
                 `${UI.safeFilename(draft.slug || currentProtocol?.protocol?.slug || 'protocol')}.${normalized === 'yaml' ? 'yaml' : 'json'}`,
@@ -541,6 +621,440 @@ function renderProtocolWorkspace(container) {
         });
     }
 
+    function _textInput(value, onCommit, { placeholder = '', ariaLabel = '' } = {}) {
+        const input = document.createElement('input');
+        input.className = 'search-input';
+        input.placeholder = placeholder;
+        input.value = String(value || '');
+        if (ariaLabel) {
+            input.setAttribute('aria-label', ariaLabel);
+        }
+        input.addEventListener('change', () => onCommit(String(input.value || '')));
+        return input;
+    }
+
+    function _numberInput(value, onCommit, { min = 0, placeholder = '', ariaLabel = '' } = {}) {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'search-input';
+        input.min = String(min);
+        input.placeholder = placeholder;
+        input.value = String(value ?? '');
+        if (ariaLabel) {
+            input.setAttribute('aria-label', ariaLabel);
+        }
+        input.addEventListener('change', () => onCommit(Number.parseInt(String(input.value || '0'), 10) || 0));
+        return input;
+    }
+
+    function _textAreaInput(value, onCommit, { placeholder = '', rows = 3, ariaLabel = '' } = {}) {
+        const area = document.createElement('textarea');
+        area.className = 'guidance-textarea protocol-structured-textarea';
+        area.rows = rows;
+        area.placeholder = placeholder;
+        area.value = String(value || '');
+        if (ariaLabel) {
+            area.setAttribute('aria-label', ariaLabel);
+        }
+        area.addEventListener('change', () => onCommit(String(area.value || '')));
+        return area;
+    }
+
+    function _selectInput(options, value, onCommit, { ariaLabel = '' } = {}) {
+        const select = document.createElement('select');
+        select.className = 'search-input';
+        if (ariaLabel) {
+            select.setAttribute('aria-label', ariaLabel);
+        }
+        options.forEach((item) => {
+            const option = document.createElement('option');
+            option.value = String(item.value || '');
+            option.textContent = String(item.label || item.value || '');
+            option.selected = String(item.value || '') === String(value || '');
+            select.appendChild(option);
+        });
+        select.addEventListener('change', () => onCommit(String(select.value || '')));
+        return select;
+    }
+
+    function _checkboxInput(checked, labelText, onCommit, { ariaLabel = '' } = {}) {
+        const label = document.createElement('label');
+        label.className = 'protocol-inline-checkbox';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = Boolean(checked);
+        if (ariaLabel) {
+            input.setAttribute('aria-label', ariaLabel);
+        }
+        input.addEventListener('change', () => onCommit(Boolean(input.checked)));
+        const text = document.createElement('span');
+        text.textContent = labelText;
+        label.appendChild(input);
+        label.appendChild(text);
+        return label;
+    }
+
+    function _commaList(value) {
+        return String(value || '')
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean);
+    }
+
+    function _renderStructuredEditor(parent) {
+        const protocolDoc = _draftDocument();
+        const wrapper = document.createElement('section');
+        wrapper.className = 'protocol-structured-editor';
+        const title = document.createElement('div');
+        title.className = 'editor-section-title';
+        title.textContent = 'Structured editor';
+        wrapper.appendChild(title);
+
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = draft.parse_error
+            ? `Raw editor has unsynced errors. Structured controls are using the last valid document: ${draft.parse_error}`
+            : 'Participants, artifacts, stages, and policies edit the same shared protocol document model as the raw JSON/YAML editor.';
+        wrapper.appendChild(note);
+
+        const section = (headingText, addAction) => {
+            const block = document.createElement('section');
+            block.className = 'protocol-structured-section';
+            const header = document.createElement('div');
+            header.className = 'protocol-structured-header';
+            const heading = document.createElement('strong');
+            heading.textContent = headingText;
+            header.appendChild(heading);
+            if (addAction) {
+                const addButton = document.createElement('button');
+                addButton.type = 'button';
+                addButton.className = 'btn';
+                addButton.textContent = addAction.label;
+                addButton.addEventListener('click', addAction.onClick);
+                header.appendChild(addButton);
+            }
+            block.appendChild(header);
+            return block;
+        };
+
+        const participantSection = section('Participants', {
+            label: 'Add participant',
+            onClick: () => void _applyStructuredChange((next) => {
+                const index = (next.participants || []).length + 1;
+                next.participants = [...(next.participants || []), {
+                    participant_key: `participant_${index}`,
+                    display_name: `Participant ${index}`,
+                    required_skills: [],
+                    instructions: '',
+                }];
+            }),
+        });
+        (protocolDoc.participants || []).forEach((item, index) => {
+            const card = document.createElement('div');
+            card.className = 'protocol-structured-card';
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Key',
+                control: _textInput(item.participant_key, (value) => void _applyStructuredChange((next) => {
+                    next.participants[index].participant_key = value;
+                }), { placeholder: 'participant_key', ariaLabel: 'Participant key' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Display name',
+                control: _textInput(item.display_name, (value) => void _applyStructuredChange((next) => {
+                    next.participants[index].display_name = value;
+                }), { placeholder: 'Display name', ariaLabel: 'Participant display name' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Required skills',
+                control: _textInput((item.required_skills || []).join(', '), (value) => void _applyStructuredChange((next) => {
+                    next.participants[index].required_skills = _commaList(value);
+                }), { placeholder: 'skill-a, skill-b', ariaLabel: 'Participant required skills' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Selector kind',
+                control: _selectInput([
+                    { value: '', label: 'None' },
+                    { value: 'agent', label: 'Agent' },
+                    { value: 'skill', label: 'Skill' },
+                    { value: 'role', label: 'Role' },
+                ], item.selector?.kind || '', (value) => void _applyStructuredChange((next) => {
+                    next.participants[index].selector = value
+                        ? Object.assign({}, next.participants[index].selector || {}, { kind: value })
+                        : null;
+                }), { ariaLabel: 'Participant selector kind' }),
+            }));
+            if (item.selector?.kind) {
+                card.appendChild(UI.renderSettingsRow({
+                    label: 'Selector value',
+                    control: _textInput(item.selector?.value || '', (value) => void _applyStructuredChange((next) => {
+                        next.participants[index].selector = Object.assign({}, next.participants[index].selector || {}, { value });
+                    }), { placeholder: 'selector value', ariaLabel: 'Participant selector value' }),
+                }));
+                card.appendChild(UI.renderSettingsRow({
+                    label: 'Preferred agent',
+                    control: _textInput(item.selector?.preferred_agent_id || '', (value) => void _applyStructuredChange((next) => {
+                        next.participants[index].selector = Object.assign({}, next.participants[index].selector || {}, { preferred_agent_id: value });
+                    }), { placeholder: 'agent id (optional)', ariaLabel: 'Participant preferred agent' }),
+                }));
+            }
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Instructions',
+                control: _textAreaInput(item.instructions || '', (value) => void _applyStructuredChange((next) => {
+                    next.participants[index].instructions = value;
+                }), { placeholder: 'Participant-specific instructions', rows: 3, ariaLabel: 'Participant instructions' }),
+            }));
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn';
+            remove.textContent = 'Remove participant';
+            remove.addEventListener('click', () => void _applyStructuredChange((next) => {
+                next.participants.splice(index, 1);
+            }));
+            card.appendChild(remove);
+            participantSection.appendChild(card);
+        });
+        if (!(protocolDoc.participants || []).length) {
+            participantSection.appendChild(UI.renderEmptyState('No participants defined yet.', true));
+        }
+        wrapper.appendChild(participantSection);
+
+        const artifactSection = section('Artifacts', {
+            label: 'Add artifact',
+            onClick: () => void _applyStructuredChange((next) => {
+                const index = (next.artifacts || []).length + 1;
+                next.artifacts = [...(next.artifacts || []), {
+                    artifact_key: `artifact_${index}`,
+                    display_name: `Artifact ${index}`,
+                    description: '',
+                    kind: 'workspace_file',
+                    path: `docs/artifact-${index}.md`,
+                    verify: true,
+                }];
+            }),
+        });
+        (protocolDoc.artifacts || []).forEach((item, index) => {
+            const card = document.createElement('div');
+            card.className = 'protocol-structured-card';
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Key',
+                control: _textInput(item.artifact_key, (value) => void _applyStructuredChange((next) => {
+                    next.artifacts[index].artifact_key = value;
+                }), { placeholder: 'artifact_key', ariaLabel: 'Artifact key' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Display name',
+                control: _textInput(item.display_name, (value) => void _applyStructuredChange((next) => {
+                    next.artifacts[index].display_name = value;
+                }), { placeholder: 'Display name', ariaLabel: 'Artifact display name' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Kind',
+                control: _selectInput([
+                    { value: 'workspace_file', label: 'Workspace file' },
+                    { value: 'control_plane_text', label: 'Control-plane text' },
+                ], item.kind || 'workspace_file', (value) => void _applyStructuredChange((next) => {
+                    next.artifacts[index].kind = value || 'workspace_file';
+                }), { ariaLabel: 'Artifact kind' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Path',
+                control: _textInput(item.path || '', (value) => void _applyStructuredChange((next) => {
+                    next.artifacts[index].path = value;
+                }), { placeholder: 'relative/path.md', ariaLabel: 'Artifact path' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Description',
+                control: _textAreaInput(item.description || '', (value) => void _applyStructuredChange((next) => {
+                    next.artifacts[index].description = value;
+                }), { placeholder: 'Artifact description', rows: 2, ariaLabel: 'Artifact description' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Verification',
+                control: _checkboxInput(Boolean(item.verify !== false), 'Require verification', (checked) => void _applyStructuredChange((next) => {
+                    next.artifacts[index].verify = checked;
+                }), { ariaLabel: 'Artifact verification required' }),
+            }));
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn';
+            remove.textContent = 'Remove artifact';
+            remove.addEventListener('click', () => void _applyStructuredChange((next) => {
+                next.artifacts.splice(index, 1);
+            }));
+            card.appendChild(remove);
+            artifactSection.appendChild(card);
+        });
+        if (!(protocolDoc.artifacts || []).length) {
+            artifactSection.appendChild(UI.renderEmptyState('No artifacts defined yet.', true));
+        }
+        wrapper.appendChild(artifactSection);
+
+        const participantOptions = [{ value: '', label: 'Select participant' }].concat(
+            (protocolDoc.participants || []).map((item) => ({
+                value: String(item.participant_key || ''),
+                label: item.display_name || item.participant_key || '',
+            })),
+        );
+        const artifactOptions = (protocolDoc.artifacts || []).map((item) => String(item.artifact_key || '')).filter(Boolean);
+        const stageSection = section('Stages', {
+            label: 'Add stage',
+            onClick: () => void _applyStructuredChange((next) => {
+                const index = (next.stages || []).length + 1;
+                next.stages = [...(next.stages || []), {
+                    stage_key: `stage_${index}`,
+                    display_name: `Stage ${index}`,
+                    participant_key: String(next.participants?.[0]?.participant_key || ''),
+                    stage_kind: 'work',
+                    instructions: '',
+                    inputs: [],
+                    outputs: [],
+                    transitions: { completed: '__complete__' },
+                    write_capable: false,
+                    max_rounds: 0,
+                    strict_completion: false,
+                    require_output_verification: null,
+                    timeout_seconds: 0,
+                }];
+            }),
+        });
+        (protocolDoc.stages || []).forEach((item, index) => {
+            const card = document.createElement('div');
+            card.className = 'protocol-structured-card';
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Key',
+                control: _textInput(item.stage_key, (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].stage_key = value;
+                }), { placeholder: 'stage_key', ariaLabel: 'Stage key' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Display name',
+                control: _textInput(item.display_name, (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].display_name = value;
+                }), { placeholder: 'Display name', ariaLabel: 'Stage display name' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Participant',
+                control: _selectInput(participantOptions, item.participant_key || '', (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].participant_key = value;
+                }), { ariaLabel: 'Stage participant' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Kind',
+                control: _selectInput([
+                    { value: 'work', label: 'Work' },
+                    { value: 'review', label: 'Review' },
+                    { value: 'acceptance', label: 'Acceptance' },
+                ], item.stage_kind || 'work', (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].stage_kind = value || 'work';
+                }), { ariaLabel: 'Stage kind' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Instructions',
+                control: _textAreaInput(item.instructions || '', (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].instructions = value;
+                }), { placeholder: 'Stage instructions', rows: 4, ariaLabel: 'Stage instructions' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Inputs',
+                control: _textInput((item.inputs || []).join(', '), (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].inputs = _commaList(value);
+                }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage inputs' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Outputs',
+                control: _textInput((item.outputs || []).join(', '), (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].outputs = _commaList(value);
+                }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage outputs' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Transitions',
+                control: _textAreaInput(JSON.stringify(item.transitions || {}, null, 2), (value) => {
+                    try {
+                        const transitions = value.trim() ? JSON.parse(value) : {};
+                        void _applyStructuredChange((next) => {
+                            next.stages[index].transitions = transitions;
+                        });
+                    } catch (err) {
+                        UI.reportError('Transitions must be valid JSON', err, {
+                            context: 'Protocol stage transitions invalid',
+                        });
+                    }
+                }, { placeholder: '{"completed":"next_stage"}', rows: 4, ariaLabel: 'Stage transitions JSON' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Write lease',
+                control: _checkboxInput(Boolean(item.write_capable), 'Write-capable stage', (checked) => void _applyStructuredChange((next) => {
+                    next.stages[index].write_capable = checked;
+                }), { ariaLabel: 'Stage write capable' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Strict completion',
+                control: _checkboxInput(Boolean(item.strict_completion), 'Require protocol control lines', (checked) => void _applyStructuredChange((next) => {
+                    next.stages[index].strict_completion = checked;
+                }), { ariaLabel: 'Stage strict completion' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Output verification',
+                control: _selectInput([
+                    { value: '', label: 'Inherit default' },
+                    { value: 'true', label: 'Required' },
+                    { value: 'false', label: 'Not required' },
+                ], item.require_output_verification === null || item.require_output_verification === undefined
+                    ? ''
+                    : String(Boolean(item.require_output_verification)), (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].require_output_verification = value === ''
+                        ? null
+                        : value === 'true';
+                }), { ariaLabel: 'Stage output verification' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Max rounds',
+                control: _numberInput(item.max_rounds || 0, (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].max_rounds = value;
+                }), { min: 0, ariaLabel: 'Stage max rounds' }),
+            }));
+            card.appendChild(UI.renderSettingsRow({
+                label: 'Timeout seconds',
+                control: _numberInput(item.timeout_seconds || 0, (value) => void _applyStructuredChange((next) => {
+                    next.stages[index].timeout_seconds = value;
+                }), { min: 0, ariaLabel: 'Stage timeout seconds' }),
+            }));
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn';
+            remove.textContent = 'Remove stage';
+            remove.addEventListener('click', () => void _applyStructuredChange((next) => {
+                next.stages.splice(index, 1);
+            }));
+            card.appendChild(remove);
+            stageSection.appendChild(card);
+        });
+        if (!(protocolDoc.stages || []).length) {
+            stageSection.appendChild(UI.renderEmptyState('No stages defined yet.', true));
+        }
+        wrapper.appendChild(stageSection);
+
+        const policySection = section('Policies');
+        const policyCard = document.createElement('div');
+        policyCard.className = 'protocol-structured-card';
+        policyCard.appendChild(UI.renderSettingsRow({
+            label: 'Single active writer',
+            control: _checkboxInput(Boolean(protocolDoc.policies?.single_active_writer !== false), 'Enforce one write lease at a time', (checked) => void _applyStructuredChange((next) => {
+                next.policies.single_active_writer = checked;
+            }), { ariaLabel: 'Single active writer' }),
+        }));
+        policyCard.appendChild(UI.renderSettingsRow({
+            label: 'Max review rounds',
+            control: _numberInput(protocolDoc.policies?.max_review_rounds || 5, (value) => void _applyStructuredChange((next) => {
+                next.policies.max_review_rounds = Math.max(value, 1);
+            }), { min: 1, ariaLabel: 'Max review rounds' }),
+        }));
+        policySection.appendChild(policyCard);
+        wrapper.appendChild(policySection);
+
+        parent.appendChild(wrapper);
+    }
+
     function _bindRunSubscription() {
         if (currentRunSubscription) {
             currentRunSubscription();
@@ -599,6 +1113,8 @@ function renderProtocolWorkspace(container) {
                     display_name: defaultTemplate.metadata?.display_name || '',
                     description: defaultTemplate.metadata?.description || '',
                     definition_text: JSON.stringify(defaultTemplate, null, 2),
+                    document_json: _cloneDocument(defaultTemplate),
+                    parse_error: '',
                 };
                 _writeState();
                 renderWorkspace();
@@ -677,6 +1193,9 @@ function renderProtocolWorkspace(container) {
         slugInput.addEventListener('input', () => {
             draft.slug = slugInput.value;
         });
+        slugInput.addEventListener('change', () => {
+            void _commitDraftDocument(_draftDocument());
+        });
         editorPanel.appendChild(UI.renderSettingsRow({ label: 'Slug', control: slugInput }));
 
         const nameInput = document.createElement('input');
@@ -686,6 +1205,9 @@ function renderProtocolWorkspace(container) {
         nameInput.addEventListener('input', () => {
             draft.display_name = nameInput.value;
         });
+        nameInput.addEventListener('change', () => {
+            void _commitDraftDocument(_draftDocument());
+        });
         editorPanel.appendChild(UI.renderSettingsRow({ label: 'Display name', control: nameInput }));
 
         const descriptionInput = document.createElement('input');
@@ -694,6 +1216,9 @@ function renderProtocolWorkspace(container) {
         descriptionInput.value = draft.description || '';
         descriptionInput.addEventListener('input', () => {
             draft.description = descriptionInput.value;
+        });
+        descriptionInput.addEventListener('change', () => {
+            void _commitDraftDocument(_draftDocument());
         });
         editorPanel.appendChild(UI.renderSettingsRow({ label: 'Description', control: descriptionInput }));
 
@@ -725,12 +1250,20 @@ function renderProtocolWorkspace(container) {
         editorPanel.appendChild(formatControl.element);
 
         _renderValidationGutter(editorPanel);
+        _renderStructuredEditor(editorPanel);
 
         const definitionInput = document.createElement('textarea');
         definitionInput.className = 'guidance-textarea';
         definitionInput.value = draft.definition_text || '';
         definitionInput.addEventListener('input', () => {
             draft.definition_text = definitionInput.value;
+        });
+        definitionInput.addEventListener('change', () => {
+            void _parseDraftDocument().then((document) => {
+                if (document) {
+                    renderWorkspace();
+                }
+            });
         });
         editorPanel.appendChild(definitionInput);
 
@@ -743,7 +1276,7 @@ function renderProtocolWorkspace(container) {
         saveButton.textContent = currentProtocolId ? 'Save draft' : 'Create protocol';
         saveButton.addEventListener('click', async () => {
             try {
-                const parsed = await _parseDraftDocument();
+                const parsed = await _parseDraftDocument({ report: true });
                 const payload = {
                     slug: draft.slug,
                     display_name: draft.display_name,
@@ -1225,6 +1758,8 @@ function renderProtocolWorkspace(container) {
                     display_name: '',
                     description: '',
                     definition_text: '',
+                    document_json: null,
+                    parse_error: '',
                 };
             }
             await _refreshDraftTextForCurrentFormat();
@@ -1316,5 +1851,5 @@ function renderProtocolWorkspace(container) {
     UI.subscribeWithRefresh(cleanups, 'protocols', () => refreshWorkspace(), 350);
     UI.subscribeWithRefresh(cleanups, 'summary', () => loadIssues(), 400);
 
-    void bootstrap();
+    container.__routeReady = bootstrap();
 }

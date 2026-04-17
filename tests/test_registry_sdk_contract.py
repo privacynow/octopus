@@ -955,3 +955,21 @@ def test_sdk_client_list_protocol_runs_sends_entry_agent_and_origin_channel_filt
     assert captured["url"].endswith("/v1/protocol-runs")
     assert captured["params"]["entry_agent_id"] == "agent-9"
     assert captured["params"]["origin_channel"] == "telegram"
+
+
+def test_registry_client_error_marks_protocol_error_codes():
+    from octopus_sdk.registry.client import RegistryClientError
+
+    protocol_error = RegistryClientError(
+        "Protocol not visible.",
+        error_code="PROTOCOL_NOT_VISIBLE",
+        status_code=403,
+    )
+    generic_error = RegistryClientError(
+        "Registry timeout.",
+        error_code="registry_timeout",
+        status_code=504,
+    )
+
+    assert protocol_error.is_protocol_error is True
+    assert generic_error.is_protocol_error is False

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
@@ -32,6 +32,71 @@ from octopus_sdk.registry.models import RoutedTaskRequest
 
 class ProtocolRunEngine:
     """Pure protocol lifecycle evaluator used by the registry store."""
+
+    def evaluate_dispatch(
+        self,
+        *,
+        document: ProtocolDefinitionDocumentRecord,
+        run: ProtocolRunRecord,
+        stage_execution: ProtocolStageExecutionRecord,
+        stage_executions: Sequence[ProtocolStageExecutionRecord],
+        artifacts: Sequence[ProtocolArtifactRecord],
+        previous_feedback: str,
+        now: str,
+        resolve_selector: Callable[[TargetSelector], Mapping[str, object]],
+        lease_ttl_seconds: int = 900,
+    ) -> ProtocolEngineDecisionRecord:
+        stage = document.stage(stage_execution.stage_key)
+        participant = document.participant(stage.participant_key)
+        dispatch = self.dispatch_preflight(
+            document=document,
+            run=run,
+            stage=stage,
+            stage_executions=stage_executions,
+            now=now,
+            lease_owner=stage_execution.protocol_stage_execution_id,
+            lease_ttl_seconds=lease_ttl_seconds,
+        )
+        if not dispatch.ok:
+            return self.dispatch_blocked(
+                run=run,
+                stage_execution=stage_execution,
+                error_code=dispatch.error_code,
+                error_detail=dispatch.error_detail,
+            )
+        selector = self.dispatch_target_selector(run=run, participant=participant)
+        try:
+            resolved_target = resolve_selector(selector)
+        except Exception as exc:
+            return self.dispatch_resolution_failed(
+                run=run,
+                stage_execution=stage_execution,
+                selector=selector,
+                error_detail=str(exc),
+            )
+        request = self.build_dispatch_request(
+            document=document,
+            run=run,
+            stage=stage,
+            participant=participant,
+            stage_execution_id=stage_execution.protocol_stage_execution_id,
+            target_agent_id=str(resolved_target.get("agent_id", "") or ""),
+            artifacts=artifacts,
+            previous_feedback=previous_feedback,
+            now=now,
+        )
+        return self.dispatch_started(
+            run=run,
+            stage_execution=stage_execution,
+            routed_task_id=request.routed_task_id,
+            timeout_at=dispatch.timeout_at,
+            lease_owner=dispatch.lease_owner,
+            lease_expires_at=dispatch.lease_expires_at,
+            selector=selector,
+            resolved_agent_id=str(resolved_target.get("agent_id", "") or ""),
+            resolved_authority_ref=str(resolved_target.get("authority_ref", "") or ""),
+            now=now,
+        ).model_copy(update={"routed_task_request": request})
 
     def dispatch_target_selector(
         self,

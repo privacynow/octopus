@@ -463,7 +463,7 @@ function renderDashboard(container) {
             kind: String(item.issue_kind || ''),
             code: String(item.issue_code || ''),
             stage: String(item.stage_key || ''),
-            updatedAt: String(item.updated_at || ''),
+            updatedLabel: item.updated_at ? UI.relativeTime(item.updated_at) : '',
         }));
         const issueRows = issues.map((item) => createRow({
             key: `protocol-issue:${item.protocol_run_id}:${item.issue_kind}:${item.stage_execution_id || ''}`,

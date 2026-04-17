@@ -12,7 +12,6 @@ from telegram.ext import ContextTypes
 from app import access
 from app import user_messages as _msg
 from app.presentation import telegram as telegram_presenters
-from app.agents.state import load_runtime_registry_connection_state
 from app.config import BotConfig
 from octopus_sdk.identity import (
     parse_actor_key,
@@ -20,7 +19,7 @@ from octopus_sdk.identity import (
     telegram_conversation_ref,
     telegram_numeric_id,
 )
-from octopus_sdk.registry.client import RegistryClient, RegistryClientError
+from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.sessions import (
     SessionState,
     session_to_dict,
@@ -48,6 +47,7 @@ from app.runtime.telegram_execution import (
     send_path_to_chat,
 )
 from app.runtime import telegram_normalization
+from app.runtime import telegram_protocols
 from app.runtime import telegram_session_io as telegram_session_io
 from app.channels.telegram.state import TelegramRuntime
 from app.workflows.runtime_skills.telegram import (
@@ -125,18 +125,6 @@ def event_trust_tier(*, config, dispatcher, event) -> str:
         config=config,
         dispatcher=dispatcher,
     )
-
-
-def _registry_client_for_runtime(runtime: TelegramRuntime) -> tuple[RegistryClient, str] | None:
-    for registry in runtime.config.agent_registries:
-        state = load_runtime_registry_connection_state(
-            runtime.config.data_dir,
-            registry.registry_id,
-            registry_scope=registry.registry_scope,
-        )
-        if state.agent_token:
-            return RegistryClient(registry.url, agent_token=state.agent_token), str(state.agent_id or "")
-    return None
 
 
 @contextlib.asynccontextmanager
@@ -829,24 +817,16 @@ async def cmd_protocol(
     del context
     if await _public_guard(runtime, event, update):
         return
-    registry_access = _registry_client_for_runtime(runtime)
+    registry_access = telegram_protocols.registry_client_for_runtime(runtime)
     if registry_access is None:
         await update.effective_message.reply_text("Protocol control requires a connected registry.")
         return
-    client, agent_id = registry_access
+    client, agent_id, registry_url = registry_access
     args = tuple(event.args or ())
     sub = str(args[0] or "").strip().lower() if args else ""
     if sub in {"", "help"}:
-        await update.effective_message.reply_text(
-            "Usage:\n"
-            "/protocol list\n"
-            "/protocol start <slug> <problem statement>\n"
-            "/protocol status <run_id>\n"
-            "/protocol cancel <run_id> [reason]\n"
-            "/protocol retry <run_id> [reason]\n"
-            "/protocol accept <run_id> [reason]\n"
-            "/protocol send-back <run_id> [reason]"
-        )
+        rendered = telegram_presenters.protocol_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "list":
         try:
@@ -858,14 +838,8 @@ async def cmd_protocol(
             item for item in protocols
             if str(item.lifecycle_state or "") == "published" and str(item.current_version_id or "")
         ]
-        if not published:
-            await update.effective_message.reply_text("No protocols are published in the registry yet.")
-            return
-        lines = ["Protocols:"]
-        for item in published[:12]:
-            label = item.display_name or item.slug or item.protocol_id
-            lines.append(f"- {label} ({item.slug or item.protocol_id})")
-        await update.effective_message.reply_text("\n".join(lines))
+        rendered = telegram_presenters.protocol_list_message(published)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "start":
         if len(args) < 3:
@@ -920,12 +894,26 @@ async def cmd_protocol(
         if run is None:
             await update.effective_message.reply_text("Protocol run creation failed without a run record.")
             return
-        await update.effective_message.reply_text(
-            f"Protocol run started.\n"
-            f"Run id: {run.protocol_run_id}\n"
-            f"Protocol: {match.display_name or match.slug or match.protocol_id}\n"
-            f"Current stage: {run.current_stage_key or 'queued'}"
+        telegram_protocols.persist_protocol_run_watch(
+            runtime,
+            chat_id=event.chat_id,
+            run_id=run.protocol_run_id,
+            protocol_id=match.protocol_id,
+            protocol_slug=str(match.slug or ""),
+            version=int(run.version or 0),
+            status=str(run.status or ""),
+            stage_key=str(run.current_stage_key or ""),
+            registry_url=registry_url,
+            last_notified_at=datetime.now(timezone.utc).isoformat(),
         )
+        rendered = telegram_presenters.protocol_run_started_message(
+            run_id=run.protocol_run_id,
+            protocol_label=str(match.display_name or match.slug or match.protocol_id),
+            current_stage=str(run.current_stage_key or "queued"),
+            deep_link=telegram_protocols.protocol_run_url(runtime, run.protocol_run_id, registry_url=registry_url),
+            watching=True,
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "status":
         if len(args) < 2:
@@ -937,45 +925,73 @@ async def cmd_protocol(
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
             return
-        run = detail.run
-        lines = [
-            f"Run id: {run.protocol_run_id}",
-            f"Status: {run.status}",
-            f"Version: {run.version or 1}",
-            f"Current stage: {run.current_stage_key or 'n/a'}",
-            f"Workspace: {run.workspace_ref or 'default'}",
-        ]
-        if run.termination_summary:
-            lines.append(f"Summary: {run.termination_summary}")
-        if run.blocked_detail:
-            lines.append(f"Blocked: {run.blocked_detail}")
-        if detail.participants:
-            participants = ", ".join(
-                f"{item.participant_key}:{item.state or item.resolution_outcome or 'queued'}"
-                for item in detail.participants[:6]
+        session = telegram_session_io.load(runtime, event.chat_id)
+        rendered = telegram_presenters.protocol_run_status_message(
+            detail,
+            deep_link=telegram_protocols.protocol_run_url(runtime, run_id, registry_url=registry_url),
+            watching=telegram_protocols.is_protocol_run_watched(session, run_id),
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if sub in {"watch", "unwatch"}:
+        if len(args) < 2:
+            await update.effective_message.reply_text(f"Usage: /protocol {sub} <run_id>")
+            return
+        run_id = str(args[1] or "").strip()
+        if sub == "watch":
+            try:
+                detail = await client.get_protocol_run(run_id)
+            except RegistryClientError as exc:
+                await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
+                return
+            telegram_protocols.persist_protocol_run_watch(
+                runtime,
+                chat_id=event.chat_id,
+                run_id=detail.run.protocol_run_id,
+                protocol_id=detail.run.protocol_id,
+                protocol_slug=str(getattr(detail.definition, "slug", "") or ""),
+                version=int(detail.run.version or 0),
+                status=str(detail.run.status or ""),
+                stage_key=str(detail.run.current_stage_key or ""),
+                registry_url=registry_url,
+                last_notified_at=datetime.now(timezone.utc).isoformat(),
             )
-            lines.append(f"Participants: {participants}")
-        if detail.artifacts:
-            artifacts = ", ".join(
-                f"{item.artifact_key}:{item.verification_state or item.state or 'declared'}"
-                for item in detail.artifacts[:6]
+            rendered = telegram_presenters.protocol_watch_changed_message(
+                run_id=detail.run.protocol_run_id,
+                watching=True,
+                deep_link=telegram_protocols.protocol_run_url(runtime, detail.run.protocol_run_id, registry_url=registry_url),
             )
-            lines.append(f"Artifacts: {artifacts}")
-        if detail.stage_executions:
-            latest = detail.stage_executions[0]
-            lines.append(f"Latest stage: {latest.stage_key} ({latest.status})")
-            if latest.decision_summary:
-                lines.append(f"Latest summary: {latest.decision_summary}")
-            elif latest.failure_detail:
-                lines.append(f"Latest failure: {latest.failure_detail}")
-        await update.effective_message.reply_text("\n".join(lines))
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+            return
+        telegram_protocols.discard_protocol_run_watch(runtime, chat_id=event.chat_id, run_id=run_id)
+        rendered = telegram_presenters.protocol_watch_changed_message(
+            run_id=run_id,
+            watching=False,
+            deep_link=telegram_protocols.protocol_run_url(runtime, run_id, registry_url=registry_url),
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub in {"cancel", "retry", "accept", "send-back"}:
         if len(args) < 2:
             await update.effective_message.reply_text(f"Usage: /protocol {sub} <run_id> [reason]")
             return
         run_id = str(args[1] or "").strip()
-        reason = " ".join(str(part).strip() for part in args[2:] if str(part).strip()).strip()
+        confirmation = len(args) >= 3 and str(args[2] or "").strip().lower() == "confirm"
+        reason_parts = args[3:] if confirmation else args[2:]
+        reason = " ".join(str(part).strip() for part in reason_parts if str(part).strip()).strip()
+        if telegram_protocols.protocol_action_requires_confirmation(sub):
+            if not reason:
+                await update.effective_message.reply_text(f"Usage: /protocol {sub} <run_id> [reason]")
+                return
+            if not confirmation:
+                rendered = telegram_presenters.protocol_action_confirmation_message(
+                    action=sub,
+                    run_id=run_id,
+                    reason=reason,
+                    deep_link=telegram_protocols.protocol_run_url(runtime, run_id, registry_url=registry_url),
+                )
+                await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+                return
         try:
             detail = await client.get_protocol_run(run_id)
             result = await client.act_on_protocol_run(
@@ -991,23 +1007,31 @@ async def cmd_protocol(
         if run is None:
             await update.effective_message.reply_text("Protocol action completed without a refreshed run payload.")
             return
-        await update.effective_message.reply_text(
-            f"Protocol run updated.\n"
-            f"Run id: {run.protocol_run_id}\n"
-            f"Status: {run.status}\n"
-            f"Current stage: {run.current_stage_key or 'n/a'}"
+        if str(run.status or "") in {"completed", "failed", "cancelled"}:
+            telegram_protocols.discard_protocol_run_watch(runtime, chat_id=event.chat_id, run_id=run.protocol_run_id)
+        else:
+            telegram_protocols.persist_protocol_run_watch(
+                runtime,
+                chat_id=event.chat_id,
+                run_id=run.protocol_run_id,
+                protocol_id=run.protocol_id,
+                protocol_slug=str(getattr(detail.definition, "slug", "") or ""),
+                version=int(run.version or 0),
+                status=str(run.status or ""),
+                stage_key=str(run.current_stage_key or ""),
+                registry_url=registry_url,
+                last_notified_at=datetime.now(timezone.utc).isoformat(),
+            )
+        rendered = telegram_presenters.protocol_run_updated_message(
+            run_id=run.protocol_run_id,
+            status=str(run.status or ""),
+            current_stage=str(run.current_stage_key or "n/a"),
+            deep_link=telegram_protocols.protocol_run_url(runtime, run.protocol_run_id, registry_url=registry_url),
         )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    await update.effective_message.reply_text(
-        "Usage:\n"
-        "/protocol list\n"
-        "/protocol start <slug> <problem statement>\n"
-        "/protocol status <run_id>\n"
-        "/protocol cancel <run_id> [reason]\n"
-        "/protocol retry <run_id> [reason]\n"
-        "/protocol accept <run_id> [reason]\n"
-        "/protocol send-back <run_id> [reason]"
-    )
+    rendered = telegram_presenters.protocol_usage_message()
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler

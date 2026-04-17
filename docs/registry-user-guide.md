@@ -136,6 +136,24 @@ You can:
 - preview the composed runtime prompt
 - publish provider guidance for Claude or Codex
 
+### Protocols
+
+Use `Protocols` when the work is a reusable multi-stage workflow instead of a
+one-off conversation.
+
+You can:
+
+- create or import protocol drafts
+- validate, diff, publish, and archive protocol definitions
+- start runs against a connected bot
+- inspect participants, artifacts, transitions, and blocked reasons
+- intervene with typed actions: `retry`, `accept`, `send-back`, `cancel`
+- inspect protocol issues for blocked runs, invalid contracts, expired
+  timeouts, and stuck leases
+
+For the full workflow and runbook, use
+[protocol-operator-guide.md](protocol-operator-guide.md).
+
 ## Typical Operator Workflows
 
 ### Review A New Conversation
@@ -179,6 +197,28 @@ For the full skills workflow, use
 3. edit the draft
 4. review the runtime preview
 5. publish
+
+### Run A Protocol
+
+1. open `Protocols`
+2. choose a published definition
+3. pick a target bot
+4. enter workspace and problem statement
+5. start the run
+6. monitor the run detail and support-issues views
+7. intervene only when the run is blocked or policy requires it
+
+### Author A Protocol
+
+1. open `Protocols`
+2. create a draft or import JSON/YAML
+3. edit participants, artifacts, stages, and policies
+4. validate the draft
+5. diff against the published version
+6. publish when ready
+
+For authoring details, use
+[protocol-author-guide.md](protocol-author-guide.md).
 
 ## Reading Status Correctly
 

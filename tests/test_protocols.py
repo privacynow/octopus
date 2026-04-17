@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from octopus_sdk.protocols import (
+    ProtocolArtifactObservationRecord,
     ProtocolAccessContextRecord,
     ProtocolStageDefinitionRecord,
     parse_protocol_stage_decision,
@@ -55,6 +56,43 @@ def test_validate_protocol_document_migrates_legacy_schema_value() -> None:
     assert result.ok is True
     assert result.normalized_document is not None
     assert result.normalized_document.schema_version == 1
+
+
+def test_validate_protocol_document_rejects_workspace_path_traversal() -> None:
+    invalid = protocol_document()
+    invalid["artifacts"] = [
+        {
+            "artifact_key": "plan",
+            "kind": "workspace_file",
+            "path": "../secret/plan.md",
+        }
+    ]
+
+    result = validate_protocol_document(invalid)
+
+    assert result.ok is False
+    assert result.errors
+    assert "escape the workspace root" in result.errors[0]
+
+
+def test_protocol_artifact_observation_rejects_absolute_or_traversing_paths() -> None:
+    with pytest.raises(ValueError, match="relative to the workspace root"):
+        ProtocolArtifactObservationRecord.model_validate(
+            {
+                "artifact_key": "plan",
+                "artifact_kind": "workspace_file",
+                "path": "/tmp/plan.md",
+            }
+        )
+
+    with pytest.raises(ValueError, match="escape the workspace root"):
+        ProtocolArtifactObservationRecord.model_validate(
+            {
+                "artifact_key": "plan",
+                "artifact_kind": "workspace_file",
+                "path": "../secret/plan.md",
+            }
+        )
 
 
 def test_registry_store_preserves_invalid_protocol_draft(postgres_registry_truncated: str) -> None:
@@ -138,6 +176,51 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert detail.run.status == "completed"
     assert detail.run.termination_summary == "Accepted."
+
+
+def test_registry_store_loads_legacy_published_protocol_versions_via_in_memory_migration(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    published = published_protocol(store)
+    assert published.version is not None
+
+    legacy_payload = protocol_document()
+    legacy_payload["schema_version"] = 0
+
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agent_registry.protocol_definition_versions
+                SET definition_json = %s
+                WHERE protocol_definition_version_id = %s
+                """,
+                (
+                    Jsonb(legacy_payload),
+                    published.version.protocol_definition_version_id,
+                ),
+            )
+        conn.commit()
+
+    template = store.get_protocol_template("mini-protocol", access=operator_access())
+    assert template.schema_version == 1
+    assert template.stage("planning").strict_completion is False
+    assert template.stage("planning").timeout_seconds == 0
+
+    enroll = store.enroll(agent_card(bot_key="m1"))
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": enroll.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    assert created.ok is True
 
 
 def test_registry_store_protocol_timeout_sweeps_without_task_result(postgres_registry_truncated: str) -> None:
@@ -362,6 +445,34 @@ def test_registry_store_archive_protocol_marks_definition_archived(postgres_regi
     assert archived.ok is True
     assert archived.protocol is not None
     assert archived.protocol.lifecycle_state == "archived"
+
+
+def test_registry_store_protocol_export_requires_operator_or_auditor_role(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, created, _detail = running_protocol_run(store)
+
+    with pytest.raises(PermissionError, match="operator or auditor access"):
+        store.export_protocol_run(
+            created.run.protocol_run_id,
+            access=ProtocolAccessContextRecord(
+                actor_ref="author-only",
+                org_id="local",
+                roles=["author"],
+            ),
+        )
+
+    exported = store.export_protocol_run(
+        created.run.protocol_run_id,
+        access=ProtocolAccessContextRecord(
+            actor_ref="auditor-session",
+            org_id="local",
+            roles=["auditor"],
+        ),
+    )
+    assert exported.run.protocol_run_id == created.run.protocol_run_id
+    assert exported.definition_document.slug == "mini-protocol"
+    assert [artifact.artifact_key for artifact in exported.artifacts] == ["plan"]
+    assert exported.artifacts[0].verification_state == "declared"
 
 
 def test_registry_store_protocol_text_routes_round_trip_json_yaml_and_diff(postgres_registry_truncated: str) -> None:

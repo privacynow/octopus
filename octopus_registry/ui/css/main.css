@@ -2125,6 +2125,40 @@ select {
     gap: var(--space-1);
 }
 
+.protocol-structured-editor,
+.protocol-structured-section {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.protocol-structured-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+}
+
+.protocol-structured-card {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--compact-card-padding);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+}
+
+.protocol-structured-textarea {
+    min-height: 120px;
+}
+
+.protocol-inline-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text);
+    font-size: var(--text-sm);
+}
+
 .protocol-run-launcher,
 .protocol-run-notes {
     display: grid;

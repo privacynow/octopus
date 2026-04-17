@@ -31,6 +31,7 @@ Common commands you may see:
 - `/project <name>`
 - `/skills ...`
 - `/guidance ...`
+- `/protocol ...`
 
 The exact command set depends on how the bot is configured, but `/help` is the
 entrypoint.
@@ -122,6 +123,45 @@ Typical examples:
 /guidance show codex
 /guidance preview codex
 ```
+
+## Protocols In Telegram
+
+Telegram exposes the same shared protocol backend as the registry UI.
+
+Current commands:
+
+```text
+/protocol list
+/protocol start <slug> <problem statement>
+/protocol status <run_id>
+/protocol watch <run_id>
+/protocol unwatch <run_id>
+/protocol retry <run_id> [reason]
+/protocol accept <run_id> [reason]
+/protocol send-back <run_id> [reason]
+/protocol cancel <run_id> [reason]
+```
+
+Important behavior:
+
+- `start` automatically begins watching the new run in that Telegram chat
+- `watch` and `unwatch` control follow-up notifications explicitly
+- `status` includes the registry deep link when one is available
+- `send-back` and `cancel` require an explicit `confirm` token plus a short
+  reason before the action is applied
+- stage-change and terminal notifications come from the shared registry run
+  state, not a Telegram-only state machine
+
+Examples:
+
+```text
+/protocol start software-engineering Build a secure review workflow for this repo
+/protocol status run-123
+/protocol send-back run-123 confirm tighten the artifact contract for plan.md
+```
+
+For the full operator workflow and runbook, use
+[protocol-operator-guide.md](protocol-operator-guide.md).
 
 ## Routed Work
 

@@ -361,6 +361,15 @@ def test_registry_store_running_status_renews_protocol_write_lease(postgres_regi
     assert renewed.lease_expires_at > expired
 
 
+def test_registry_store_list_protocols_accepts_default_include_drafts(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    published = published_protocol(store)
+
+    listed = store.list_protocols(access=operator_access(), limit=10)
+
+    assert any(item.protocol_id == published.protocol.protocol_id for item in listed)
+
+
 def test_registry_store_exposes_review_loop_count_and_cap(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     enroll, _published, created, detail = running_protocol_run(store)

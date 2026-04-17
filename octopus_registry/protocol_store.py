@@ -1254,6 +1254,7 @@ class ProtocolPostgresAdapter:
         lifecycle_state: str = "",
         slug: str = "",
         created_after: str = "",
+        include_drafts: bool | None = None,
     ) -> list[ProtocolDefinitionRecord]:
         clauses: list[str] = []
         params: list[object] = []
@@ -1271,7 +1272,8 @@ class ProtocolPostgresAdapter:
             params.append(created_after_iso)
             clauses.append("created_at >= %s")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
+        if include_drafts is None:
+            include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,

@@ -712,6 +712,9 @@ class AbstractRegistryStore(Protocol):
     ) -> ProtocolMutationRecord:
         """Create one persisted draft from a blank starter, template, or existing protocol."""
 
+    def delete_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        """Discard one unpublished protocol draft."""
+
     def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Validate the current draft for one protocol."""
 

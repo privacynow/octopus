@@ -382,6 +382,10 @@ class RegistryClient:
         )
         return ProtocolMutationRecord.model_validate(result)
 
+    async def delete_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("DELETE", f"/v1/protocols/{protocol_id}")
+        return ProtocolMutationRecord.model_validate(result)
+
     async def validate_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
         result = await self._request("POST", f"/v1/protocols/{protocol_id}/validate", json={})
         return ProtocolMutationRecord.model_validate(result)

@@ -1103,6 +1103,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> ProtocolMutationRecord:
         return self._protocol_store.create_protocol_draft(payload, access=access)
 
+    def delete_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        return self._protocol_store.delete_protocol(protocol_id, access=access)
+
     def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.validate_protocol(protocol_id, access=access)
 

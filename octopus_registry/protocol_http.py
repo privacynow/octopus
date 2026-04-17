@@ -255,6 +255,18 @@ def build_protocol_router(
         await broadcast_invalidations(topics=("protocols",), reason="protocol.saved")
         return _json_payload(result)
 
+    @router.delete("/v1/protocols/{protocol_id}")
+    async def resource_delete_protocol(
+        protocol_id: str,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.delete_protocol(protocol_id, access=protocol_access(auth))
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols",), reason="protocol.deleted")
+        return _json_payload(result)
+
     @router.put("/v1/protocols/{protocol_id}/draft")
     async def resource_save_protocol_draft(
         protocol_id: str,

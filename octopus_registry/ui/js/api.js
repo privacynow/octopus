@@ -227,6 +227,8 @@ const API = (() => {
             request('POST', '/v1/protocol-drafts', { body }),
         createProtocol: (body = {}) =>
             request('POST', '/v1/protocols', { body }),
+        deleteProtocol: (id) =>
+            request('DELETE', `/v1/protocols/${encodeURIComponent(id)}`),
         saveProtocolDraft: (id, body = {}) =>
             request('PUT', `/v1/protocols/${encodeURIComponent(id)}/draft`, { body }),
         validateProtocol: (id) =>

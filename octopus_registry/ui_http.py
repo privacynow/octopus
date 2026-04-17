@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from os import PathLike
 from typing import Any
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -22,6 +23,39 @@ from .auth import (
 from .http_support import secure_html_response
 
 _UI_DIR = Path(__file__).resolve().parent / "ui"
+_UI_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+}
+
+
+def _ui_asset_version() -> str:
+    latest_mtime = 0
+    for path in _UI_DIR.rglob("*"):
+        if path.is_file():
+            latest_mtime = max(latest_mtime, int(path.stat().st_mtime_ns))
+    return str(latest_mtime)
+
+
+_UI_ASSET_VERSION = _ui_asset_version()
+_INDEX_HTML = (_UI_DIR / "index.html").read_text()
+
+
+def _render_ui_shell() -> str:
+    return _INDEX_HTML.replace("__UI_ASSET_VERSION__", _UI_ASSET_VERSION)
+
+
+class _NoStoreStaticFiles(StaticFiles):
+    def file_response(
+        self,
+        full_path: str | PathLike[str],
+        stat_result: Any,
+        scope: dict[str, Any],
+        status_code: int = 200,
+    ):
+        response = super().file_response(full_path, stat_result, scope, status_code=status_code)
+        response.headers.update(_UI_CACHE_HEADERS)
+        return response
 
 
 def _render_login_html(title: str, error: str = "") -> str:
@@ -58,6 +92,9 @@ def _render_login_html(title: str, error: str = "") -> str:
 
 
 def register_ui_routes(app: FastAPI, *, security_headers: dict[str, str]) -> None:
+    shell_headers = dict(security_headers)
+    shell_headers.update(_UI_CACHE_HEADERS)
+
     @app.get("/ui/login", response_class=HTMLResponse)
     def ui_login_page(request: Request):
         settings = load_settings()
@@ -65,7 +102,7 @@ def register_ui_routes(app: FastAPI, *, security_headers: dict[str, str]) -> Non
             return RedirectResponse("/ui", status_code=303)
         return secure_html_response(
             _render_login_html(settings.display_name or "Agent Registry"),
-            headers=security_headers,
+            headers=shell_headers,
         )
 
     @app.post("/ui/login")
@@ -77,7 +114,7 @@ def register_ui_routes(app: FastAPI, *, security_headers: dict[str, str]) -> Non
         if not ui_password_matches(password, settings=settings):
             return secure_html_response(
                 _render_login_html(settings.display_name or "Agent Registry", error="Incorrect password."),
-                headers=security_headers,
+                headers=shell_headers,
             )
         clear_auth_attempt_limit(request, "registry-ui-login")
         mark_ui_session_authenticated(request)
@@ -92,15 +129,15 @@ def register_ui_routes(app: FastAPI, *, security_headers: dict[str, str]) -> Non
     def ui_shell(request: Request) -> HTMLResponse:
         require_ui_session(request)
         return HTMLResponse(
-            (_UI_DIR / "index.html").read_text(),
-            headers=dict(security_headers),
+            _render_ui_shell(),
+            headers=dict(shell_headers),
         )
 
     if _UI_DIR.is_dir():
-        app.mount("/ui/css", StaticFiles(directory=str(_UI_DIR / "css")), name="ui-css")
-        app.mount("/ui/js", StaticFiles(directory=str(_UI_DIR / "js")), name="ui-js")
+        app.mount("/ui/css", _NoStoreStaticFiles(directory=str(_UI_DIR / "css")), name="ui-css")
+        app.mount("/ui/js", _NoStoreStaticFiles(directory=str(_UI_DIR / "js")), name="ui-js")
         if (_UI_DIR / "vendor").is_dir():
-            app.mount("/ui/vendor", StaticFiles(directory=str(_UI_DIR / "vendor")), name="ui-vendor")
+            app.mount("/ui/vendor", _NoStoreStaticFiles(directory=str(_UI_DIR / "vendor")), name="ui-vendor")
 
         @app.get("/ui/{path:path}", response_class=HTMLResponse)
         def ui_spa_subpath(request: Request, path: str) -> HTMLResponse:
@@ -108,8 +145,8 @@ def register_ui_routes(app: FastAPI, *, security_headers: dict[str, str]) -> Non
                 raise HTTPException(status_code=404)
             require_ui_session(request)
             return HTMLResponse(
-                (_UI_DIR / "index.html").read_text(),
-                headers=dict(security_headers),
+                _render_ui_shell(),
+                headers=dict(shell_headers),
             )
 
         @app.get("/ui/spa/{path:path}", response_class=HTMLResponse)
@@ -117,6 +154,6 @@ def register_ui_routes(app: FastAPI, *, security_headers: dict[str, str]) -> Non
             del path
             require_ui_session(request)
             return HTMLResponse(
-                (_UI_DIR / "index.html").read_text(),
-                headers=dict(security_headers),
+                _render_ui_shell(),
+                headers=dict(shell_headers),
             )

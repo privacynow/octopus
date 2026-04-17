@@ -1070,6 +1070,29 @@ def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_p
     assert "Incorrect password." in response.text
 
 
+def test_ui_shell_renders_versioned_assets_with_no_store_headers(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    response = client.get("/ui")
+
+    assert response.status_code == 200
+    assert "__UI_ASSET_VERSION__" not in response.text
+    assert "/ui/js/api.js?v=" in response.text
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+
+
+def test_ui_static_assets_are_served_with_no_store_headers(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/ui/js/api.js")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+
+
 def test_registry_enroll_rate_limits_repeated_failed_attempts(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1436,6 +1459,68 @@ def test_protocol_draft_create_route_rejects_template_without_slug(monkeypatch, 
     assert response.status_code == 400
     assert response.json()["detail"]["error_code"] == "PROTOCOL_INVALID"
     assert "template_slug is required" in response.json()["detail"]["message"]
+
+
+def test_protocol_delete_route_discards_unpublished_draft(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def delete_protocol(self, protocol_id, *, access):
+            assert protocol_id == "protocol-blank"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="deleted",
+                message="Protocol draft discarded.",
+                protocol={
+                    "protocol_id": "protocol-blank",
+                    "slug": "protocol-blank",
+                    "display_name": "Untitled Protocol",
+                    "description": "",
+                    "lifecycle_state": "draft",
+                    "current_version_id": "",
+                    "owner_org_id": "local",
+                    "visibility": "org_shared",
+                    "created_by": "operator",
+                    "updated_by": "operator",
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                },
+                draft_definition_json={
+                    "schema_version": 1,
+                    "metadata": {
+                        "slug": "protocol-blank",
+                        "display_name": "Untitled Protocol",
+                        "description": "",
+                    },
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                validation={
+                    "ok": False,
+                    "errors": ["At least one stage is required."],
+                    "content_hash": "",
+                },
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.delete("/v1/protocols/protocol-blank")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "deleted"
+    assert payload["protocol"]["protocol_id"] == "protocol-blank"
 
 
 def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(monkeypatch, tmp_path: Path):

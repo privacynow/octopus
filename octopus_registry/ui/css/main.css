@@ -2155,7 +2155,7 @@ select {
 }
 
 .protocol-author-board {
-    grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+    grid-template-columns: 1fr;
 }
 
 .protocol-author-header {
@@ -2163,6 +2163,7 @@ select {
     align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-3);
+    flex-wrap: wrap;
 }
 
 .protocol-author-title {
@@ -2172,14 +2173,13 @@ select {
 
 .protocol-author-workspace {
     display: grid;
-    grid-template-columns: minmax(0, 0.92fr) minmax(320px, 0.88fr);
+    grid-template-columns: 1fr;
     gap: var(--space-3);
     align-items: start;
 }
 
 .protocol-inspector-panel {
-    position: sticky;
-    top: var(--space-2);
+    position: static;
     align-self: start;
 }
 
@@ -2214,12 +2214,53 @@ select {
     gap: var(--space-3);
 }
 
-.protocol-stage-flow:not(.protocol-stage-flow-compact) {
+.protocol-stage-flow:not(.protocol-stage-flow-compact):not(.protocol-stage-flow-preview) {
     grid-template-columns: 1fr;
 }
 
 .protocol-stage-flow-compact {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.protocol-stage-flow-preview {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.protocol-stage-preview-node {
+    display: inline-grid;
+    gap: 0.2rem;
+    padding: 0.8rem 0.95rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    color: var(--text);
+    text-align: left;
+    box-shadow: var(--shadow-card);
+    transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.protocol-stage-preview-node:hover {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+    transform: translateY(-1px);
+}
+
+.protocol-stage-preview-node.is-selected {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+    box-shadow: var(--shadow-soft);
+}
+
+.protocol-stage-preview-meta {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+}
+
+.protocol-stage-preview-arrow {
+    color: var(--text-muted);
+    font-size: 1rem;
+    line-height: 1;
 }
 
 .protocol-stage-node {

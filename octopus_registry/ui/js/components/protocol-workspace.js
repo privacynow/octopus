@@ -206,6 +206,32 @@ function renderProtocolWorkspace(container) {
         }, { replace: !push });
     }
 
+    function _resetDraftState() {
+        currentProtocolId = '';
+        currentProtocol = null;
+        protocolDetailLoading = false;
+        currentSection = 'overview';
+        selectedParticipantKey = '';
+        selectedArtifactKey = '';
+        selectedStageKey = '';
+        draft = {
+            protocol_id: '',
+            slug: '',
+            display_name: '',
+            description: '',
+            definition_text: '',
+            document_json: _cloneDocument(_defaultProtocolDocument()),
+            parse_error: '',
+        };
+        _clearStructuredDrafts();
+    }
+
+    function _revealEditorSurface() {
+        requestAnimationFrame(() => {
+            editorColumnEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        });
+    }
+
     function _defaultProtocolDocument() {
         return {
             schema_version: 1,
@@ -701,7 +727,25 @@ function renderProtocolWorkspace(container) {
         await _refreshDraftTextForCurrentFormat();
         await loadProtocols();
         renderAuthorRoute();
+        _revealEditorSurface();
         UI.notify('Protocol draft created.', 'success');
+    }
+
+    async function _discardCurrentDraft() {
+        if (!currentProtocolId) {
+            _resetDraftState();
+            _writeState({ push: true });
+            renderAuthorRoute();
+            _revealEditorSurface();
+            return;
+        }
+        await API.deleteProtocol(currentProtocolId);
+        _resetDraftState();
+        _writeState({ push: true });
+        await loadProtocols();
+        renderAuthorRoute();
+        _revealEditorSurface();
+        UI.notify('Protocol draft discarded.', 'success');
     }
 
     async function _duplicateCurrentProtocol() {
@@ -775,6 +819,7 @@ function renderProtocolWorkspace(container) {
                 selectedStageKey = '';
                 _writeState({ push: true });
                 renderAuthorRoute();
+                _revealEditorSurface();
                 void loadProtocolDetail();
             },
         }));
@@ -860,6 +905,7 @@ function renderProtocolWorkspace(container) {
                 await loadProtocols();
                 _writeState({ push: true });
                 renderAuthorRoute();
+                _revealEditorSurface();
                 view.close();
                 UI.notify('Protocol definition imported into a new draft.', 'success');
             } catch (err) {
@@ -898,21 +944,10 @@ function renderProtocolWorkspace(container) {
         newButton.className = 'btn btn-primary';
         newButton.textContent = 'New protocol';
         newButton.addEventListener('click', () => {
-            currentProtocolId = '';
-            currentProtocol = null;
-            currentSection = 'overview';
-            draft = {
-                protocol_id: '',
-                slug: '',
-                display_name: '',
-                description: '',
-                definition_text: '',
-                document_json: _cloneDocument(_defaultProtocolDocument()),
-                parse_error: '',
-            };
-            _clearStructuredDrafts();
+            _resetDraftState();
             _writeState({ push: true });
             renderAuthorRoute();
+            _revealEditorSurface();
         });
         definitionActions.appendChild(newButton);
 
@@ -937,10 +972,48 @@ function renderProtocolWorkspace(container) {
         return definitionPanel;
     }
 
-    function _buildStageFlow(protocolDocument, { compact = false } = {}) {
+    function _buildStageFlow(protocolDocument, { compact = false, preview = false } = {}) {
+        const stages = protocolDocument.stages || [];
+        if (preview) {
+            const previewFlow = document.createElement('div');
+            previewFlow.className = 'protocol-stage-flow protocol-stage-flow-preview';
+            stages.forEach((stage, index) => {
+                if (index > 0) {
+                    const arrow = document.createElement('span');
+                    arrow.className = 'protocol-stage-preview-arrow';
+                    arrow.textContent = '→';
+                    previewFlow.appendChild(arrow);
+                }
+                const previewNode = document.createElement('button');
+                previewNode.type = 'button';
+                previewNode.className = `protocol-stage-preview-node ${String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
+                previewNode.addEventListener('click', () => {
+                    selectedStageKey = String(stage.stage_key || '');
+                    currentSection = 'stages';
+                    _writeState({ push: true });
+                    renderAuthorRoute();
+                    _revealEditorSurface();
+                });
+                const title = document.createElement('strong');
+                title.textContent = stage.display_name || stage.stage_key || 'Stage';
+                previewNode.appendChild(title);
+                const meta = document.createElement('span');
+                meta.className = 'protocol-stage-preview-meta';
+                meta.textContent = [
+                    stage.stage_kind || 'work',
+                    stage.participant_key || '',
+                ].filter(Boolean).join(' · ');
+                previewNode.appendChild(meta);
+                previewFlow.appendChild(previewNode);
+            });
+            if (!stages.length) {
+                previewFlow.appendChild(UI.renderEmptyState('No stages defined yet.', true));
+            }
+            return previewFlow;
+        }
         const flow = document.createElement('div');
         flow.className = compact ? 'protocol-stage-flow protocol-stage-flow-compact' : 'protocol-stage-flow';
-        (protocolDocument.stages || []).forEach((stage) => {
+        stages.forEach((stage) => {
             const card = document.createElement('button');
             card.type = 'button';
             card.className = `protocol-stage-node ${String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
@@ -949,6 +1022,7 @@ function renderProtocolWorkspace(container) {
                 currentSection = 'stages';
                 _writeState();
                 renderAuthorRoute();
+                _revealEditorSurface();
             });
 
             const title = document.createElement('strong');
@@ -974,7 +1048,7 @@ function renderProtocolWorkspace(container) {
             }
             flow.appendChild(card);
         });
-        if (!(protocolDocument.stages || []).length) {
+        if (!stages.length) {
             flow.appendChild(UI.renderEmptyState('No stages defined yet.', true));
         }
         return flow;
@@ -1126,6 +1200,28 @@ function renderProtocolWorkspace(container) {
             actions.appendChild(duplicateButton);
         }
 
+        const isDiscardableDraft = Boolean(
+            currentProtocolId
+            && String(currentProtocol?.protocol?.lifecycle_state || '') === 'draft'
+            && !String(currentProtocol?.protocol?.current_version_id || '').trim(),
+        );
+        if (isDiscardableDraft) {
+            const discardButton = document.createElement('button');
+            discardButton.type = 'button';
+            discardButton.className = 'btn';
+            discardButton.textContent = 'Discard draft';
+            discardButton.addEventListener('click', () => {
+                UI.showConfirm(
+                    'Discard protocol draft?',
+                    'This permanently deletes the unpublished draft. Published protocols must be archived instead.',
+                    async () => {
+                        await _discardCurrentDraft();
+                    },
+                );
+            });
+            actions.appendChild(discardButton);
+        }
+
         const reviewButton = document.createElement('button');
         reviewButton.type = 'button';
         reviewButton.className = 'btn';
@@ -1134,6 +1230,7 @@ function renderProtocolWorkspace(container) {
             currentSection = 'review';
             _writeState({ push: true });
             renderAuthorRoute();
+            _revealEditorSurface();
         });
         actions.appendChild(reviewButton);
         header.appendChild(actions);
@@ -1191,7 +1288,7 @@ function renderProtocolWorkspace(container) {
         flowTitle.className = 'editor-section-title';
         flowTitle.textContent = 'Workflow map';
         flowCard.appendChild(flowTitle);
-        flowCard.appendChild(_buildStageFlow(protocolDocument, { compact: true }));
+        flowCard.appendChild(_buildStageFlow(protocolDocument, { preview: true }));
         main.appendChild(flowCard);
         return main;
     }

@@ -71,8 +71,20 @@ test.describe('protocol routes live', () => {
     await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
     await expect(page.getByText('Advanced raw editor')).toHaveCount(0);
 
+    const authorColumns = page.locator('.protocol-author-board > .dashboard-column');
+    const listBox = await authorColumns.nth(0).boundingBox();
+    const editorBox = await authorColumns.nth(1).boundingBox();
+    expect(listBox).toBeTruthy();
+    expect(editorBox).toBeTruthy();
+    expect(editorBox.y).toBeGreaterThan(listBox.y);
+
     await page.getByRole('tab', { name: /^Advanced$/ }).click();
     await expect(page.getByText('Advanced raw editor')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Discard draft' }).click();
+    await page.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.getByText('Blank protocol')).toBeVisible();
+    await expect(page).toHaveURL(/\/ui\/protocols(\?.*)?$/);
 
     const protocolRow = page.getByRole('button', { name: /software engineering/i }).first();
     await expect(protocolRow).toBeVisible();
@@ -80,6 +92,7 @@ test.describe('protocol routes live', () => {
     await expect(protocolRow).toHaveClass(/is-selected/);
     await expect(page.getByText('Workflow summary')).toBeVisible();
     await expect(page.getByText('Workflow map')).toBeVisible();
+    await expect(page.getByText('Stage details')).toHaveCount(0);
     await expect(page.getByText('Advanced raw editor')).toHaveCount(0);
 
     await page.getByRole('tab', { name: /^Stages/ }).click();

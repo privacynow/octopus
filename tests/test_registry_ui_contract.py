@@ -128,6 +128,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.diffProtocolDraft(" in workspace
     assert "API.getProtocolAuthoringManifest()" in workspace
     assert "API.createProtocolDraft(" in workspace
+    assert "API.deleteProtocol(" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
     assert "API.getProtocolRun(currentRunId)" in workspace
@@ -177,6 +178,7 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "API.getProtocolTemplate('software-engineering')" not in workspace
     assert "loadDefaultTemplate" not in workspace
     assert "const structuredInputDrafts = new Map();" in workspace
+    assert "_revealEditorSurface()" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols(), 350);" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" in app_js
@@ -194,9 +196,12 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".protocol-scroll {" in css
     assert ".protocol-workspace-grid {" not in css
     assert "max-height: min(36dvh, 460px);" not in css
+    assert ".protocol-author-board {" in css
     assert ".protocol-author-workspace {" in css
     assert ".protocol-template-grid {" in css
     assert ".protocol-stage-flow {" in css
+    assert ".protocol-stage-flow-preview {" in css
+    assert ".protocol-stage-preview-node {" in css
     assert ".protocol-inspector-panel {" in css
     assert ".protocol-inline-checkbox {" in css
     assert "@media (max-width: 1080px)" in css

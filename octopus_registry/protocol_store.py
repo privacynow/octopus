@@ -1695,6 +1695,51 @@ class ProtocolPostgresAdapter:
                 definition_json=RegistryJsonRecord.model_validate(blank_document),
             )
 
+    def delete_protocol(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolMutationRecord:
+        if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
+            return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft delete requires author access.")
+        with self._connect() as conn, write_tx(conn):
+            row = self._protocol_row(conn, protocol_id)
+            visibility = self._protocol_visibility_status(row, access=access, include_drafts=True)
+            if visibility == "missing" or row is None:
+                return ProtocolMutationRecord(ok=False, status="not_found", message="Protocol not found.")
+            if visibility == "not_visible":
+                return ProtocolMutationRecord(ok=False, status="not_visible", message="Protocol is not visible to this actor.")
+            if str(row.get("current_version_id", "") or "").strip():
+                return ProtocolMutationRecord(ok=False, status="invalid_action", message="Published protocols must be archived instead of deleted.")
+            if str(row.get("lifecycle_state", "") or "").strip() != "draft":
+                return ProtocolMutationRecord(ok=False, status="invalid_action", message="Only unpublished draft protocols can be discarded.")
+            run_count_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT COUNT(*) AS run_count FROM {SCHEMA}.protocol_runs WHERE protocol_id = %s",
+                (protocol_id,),
+            ) or {"run_count": 0}
+            if int(run_count_row.get("run_count", 0) or 0) > 0:
+                return ProtocolMutationRecord(ok=False, status="invalid_action", message="Protocols with existing runs cannot be discarded.")
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"DELETE FROM {SCHEMA}.protocol_definitions WHERE protocol_id = %s RETURNING *",
+                    (protocol_id,),
+                )
+                deleted_row = db_cur.fetchone()
+        if deleted_row is None:
+            raise RuntimeError("Failed to delete protocol draft")
+        return ProtocolMutationRecord(
+            ok=True,
+            status="deleted",
+            message="Protocol draft discarded.",
+            protocol=self._protocol_record_from_row(deleted_row),
+            draft_definition_json=RegistryJsonRecord.model_validate(deleted_row.get("draft_definition_json") or {}),
+            draft_document=None,
+            version=None,
+            validation=validate_protocol_document(deleted_row.get("draft_definition_json") or {}),
+        )
+
     def validate_protocol(
         self,
         protocol_id: str,

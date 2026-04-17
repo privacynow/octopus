@@ -829,6 +829,21 @@ def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_
     assert cloned.validation.ok is True
 
 
+def test_registry_store_delete_protocol_discards_unpublished_draft(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "blank"}),
+        access=operator_access(),
+    )
+
+    deleted = store.delete_protocol(created.protocol.protocol_id, access=operator_access())
+
+    assert deleted.ok is True
+    assert deleted.status == "deleted"
+    listed = store.list_protocols(access=operator_access(), limit=50)
+    assert all(item.protocol_id != created.protocol.protocol_id for item in listed)
+
+
 def test_registry_store_create_run_returns_not_visible_for_foreign_org(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     published = published_protocol(store)

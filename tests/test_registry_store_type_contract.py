@@ -75,6 +75,7 @@ def test_registry_store_protocol_delegates_match_adapter_signatures() -> None:
         "diff_protocol_draft",
         "save_protocol_draft",
         "create_protocol_draft",
+        "delete_protocol",
         "validate_protocol",
         "publish_protocol",
         "archive_protocol",

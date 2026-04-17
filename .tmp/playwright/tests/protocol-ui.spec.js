@@ -89,16 +89,18 @@ test.describe('protocol routes live', () => {
     await expect(displayNameInput).toHaveAttribute('placeholder', 'Name your workflow');
     await expect(slugInput).toHaveAttribute('placeholder', /Short URL-friendly name/);
 
-    await page.getByRole('button', { name: 'Add first participant' }).click();
+    await page.getByRole('button', { name: 'Add first participant' }).first().click();
     await expect(page.getByText('Participant details')).toBeVisible();
     await expect(page.getByText('New participant')).toBeVisible();
 
     await page.locator('.settings-row', { hasText: 'Display name' }).locator('input').fill('Planner');
     await page.locator('.settings-row', { hasText: 'Display name' }).locator('input').press('Tab');
-    await page.getByRole('button', { name: 'Add first stage' }).click();
-    await expect(page.getByText('Stage details')).toBeVisible();
-    await expect(page.getByText('New stage')).toBeVisible();
     await expect(page.getByText('Workflow stages')).toBeVisible();
+    await page.getByRole('button', { name: 'Add stage', exact: true }).click();
+    const stageNode = page.locator('.protocol-stage-node').filter({ hasText: 'New stage' }).first();
+    await expect(stageNode).toBeVisible();
+    await stageNode.click();
+    await expect(page.getByText('Stage details')).toBeVisible();
 
     await page.getByRole('tab', { name: /^Review/ }).click();
     await expect(page.getByText('Review & publish')).toBeVisible();

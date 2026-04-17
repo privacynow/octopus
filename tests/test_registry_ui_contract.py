@@ -135,6 +135,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Add stage" in workspace
     assert "Raw editor has unsynced errors." in workspace
     assert "Choose a published protocol in Author before starting a run." in workspace
+    assert "Select a protocol from Definitions to inspect or edit it, or start a new draft." in workspace
     assert "No protocol issues detected for this run." in workspace
     assert "No blocked runs, lease issues, contract failures, or expired timeouts are visible right now." in workspace
 
@@ -151,6 +152,9 @@ def test_protocol_workspace_reuses_shared_agent_and_refresh_patterns() -> None:
     assert "let runLauncherEntryAgentId = UI.readQueryParam('entry_agent_id', '');" in workspace
     assert "UI.createAgentManagementDropdown(" in workspace
     assert "return UI.filterProtocolRunAgents(agents || []);" in workspace
+    assert "function _defaultProtocolSelection(protocolList = protocols) {" in workspace
+    assert "if (currentView !== 'operate') {" in workspace
+    assert "return '';" in workspace
     assert "function _managedAgents()" not in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ rerender: true }), 600);" in workspace
     assert "entry_agent_id: runLauncherEntryAgentId," in workspace

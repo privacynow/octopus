@@ -219,7 +219,7 @@ function renderProtocolWorkspace(container) {
 
     const problemInput = document.createElement('textarea');
     problemInput.className = 'guidance-textarea protocol-launcher-problem';
-    problemInput.rows = 5;
+    problemInput.rows = 3;
     problemInput.placeholder = 'Problem statement';
     problemInput.value = runLauncherProblemStatement;
     problemInput.addEventListener('input', () => {
@@ -1413,6 +1413,18 @@ function renderProtocolWorkspace(container) {
         );
     }
 
+    function _defaultProtocolSelection(protocolList = protocols) {
+        const availableProtocols = Array.isArray(protocolList) ? protocolList : [];
+        if (!availableProtocols.length) {
+            return '';
+        }
+        if (currentView !== 'operate') {
+            return '';
+        }
+        const published = availableProtocols.find((item) => String(item.lifecycle_state || '') === 'published');
+        return String((published || availableProtocols[0] || {}).protocol_id || '');
+    }
+
     function _runDeepLink(run, view = 'operate') {
         const token = String(run?.protocol_run_id || '').trim();
         if (!token) {
@@ -1626,11 +1638,18 @@ function renderProtocolWorkspace(container) {
         editorTitle.textContent = currentProtocolId ? 'Protocol detail' : 'Protocol editor';
         editorPanel.appendChild(editorTitle);
 
-        if (!currentProtocolId && !protocols.length && !draft.definition_text) {
+        if (!currentProtocolId) {
             const empty = document.createElement('div');
             empty.className = 'protocol-first-run';
-            empty.appendChild(UI.renderEmptyState('Create a draft from the template, validate it, publish it, then switch to Operate to start a run.', false));
+            empty.appendChild(UI.renderEmptyState(
+                protocols.length
+                    ? 'Select a protocol from Definitions to inspect or edit it, or start a new draft.'
+                    : 'Create a draft from the template, validate it, publish it, then switch to Operate to start a run.',
+                false,
+            ));
             editorPanel.appendChild(empty);
+
+            return editorPanel;
         }
 
         const slugInput = document.createElement('input');
@@ -2190,12 +2209,12 @@ function renderProtocolWorkspace(container) {
         const previousProtocolId = currentProtocolId;
         protocols = nextProtocols;
         if (currentProtocolId && !protocols.some((item) => item.protocol_id === currentProtocolId)) {
-            currentProtocolId = protocols[0]?.protocol_id || '';
+            currentProtocolId = _defaultProtocolSelection(protocols);
         }
-        if (!currentProtocolId && protocols.length) {
-            currentProtocolId = protocols[0].protocol_id;
+        if (!currentProtocolId) {
+            currentProtocolId = _defaultProtocolSelection(protocols);
         }
-        if (previousProtocolId !== currentProtocolId && currentProtocolId) {
+        if (previousProtocolId !== currentProtocolId) {
             await loadProtocolDetail();
             return;
         }
@@ -2262,7 +2281,20 @@ function renderProtocolWorkspace(container) {
         if (!currentProtocolId) {
             currentProtocol = null;
             _clearStructuredDrafts();
-            if (!draft.definition_text) {
+            if (!protocols.length) {
+                if (!draft.definition_text) {
+                    draft = {
+                        protocol_id: '',
+                        slug: '',
+                        display_name: '',
+                        description: '',
+                        definition_text: '',
+                        document_json: null,
+                        parse_error: '',
+                    };
+                }
+                await _refreshDraftTextForCurrentFormat();
+            } else {
                 draft = {
                     protocol_id: '',
                     slug: '',
@@ -2273,7 +2305,6 @@ function renderProtocolWorkspace(container) {
                     parse_error: '',
                 };
             }
-            await _refreshDraftTextForCurrentFormat();
             _writeState();
             renderAuthorSurface();
             renderLauncherStrip();

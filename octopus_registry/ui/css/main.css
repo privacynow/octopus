@@ -2037,10 +2037,17 @@ select {
 .protocol-launcher-fields {
     display: grid;
     gap: var(--space-3);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
 }
 
 .protocol-launcher-problem {
-    min-height: 160px;
+    min-height: 112px;
+}
+
+.protocol-launcher-fields > .btn {
+    justify-self: end;
+    align-self: start;
 }
 
 .editor-shell {
@@ -2455,6 +2462,10 @@ select {
     .dashboard-board,
     .task-board,
     .task-board-conversation {
+        grid-template-columns: 1fr;
+    }
+
+    .protocol-launcher-fields {
         grid-template-columns: 1fr;
     }
 

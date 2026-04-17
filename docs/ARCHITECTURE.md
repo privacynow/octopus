@@ -135,7 +135,7 @@ objects:
 - runs are persisted in `agent_registry`
 - lifecycle decisions are evaluated by `octopus_sdk/protocols/engine.py`
   (`ProtocolRunEngine`) and persisted through one canonical registry applier
-  in the Postgres store
+  in `octopus_registry/protocol_store.py`
 - stage execution is dispatched through the existing routed-task/runtime path
 - work-stage completion is enforced through protocol control lines plus runtime-reported artifact observations
 - operator actions are versioned, idempotent registry mutations over the same
@@ -356,7 +356,9 @@ The registry store is Postgres-only.
 
 - `store_base.py` defines the protocol and shared validation helpers
 - `store_shared/` contains domain-sliced SQL helpers used by the Postgres store
-- `store_postgres.py` owns the live registry persistence implementation
+- `store_postgres.py` owns the live registry persistence implementation and
+  delegates protocol-specific persistence/orchestration to
+  `protocol_store.py`
 
 The registry database lives in the shared deployment Postgres instance under
 the `agent_registry` schema.

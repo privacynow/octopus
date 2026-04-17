@@ -165,11 +165,15 @@ The current shipped model is:
   read path
 - sweep expired protocol-stage timeouts through the registry maintenance loop
   so timeout handling uses the same canonical run-state applier as task results
+  and so maintenance-triggered state changes are pushed back into the UI over the
+  same protocol invalidation topics
 - refresh protocol UI state through registry realtime invalidation topics
   instead of maintaining a separate browser-side protocol state machine
 - expose protocol issue summaries for blocked runs, invalid contracts, expired
   timeouts, and stuck leases through the control plane instead of ad hoc
   transport-specific inspection
+- surface protocol operational metrics in the registry summary path, including
+  started/completed runs, intervention rate, and mean completion/runtime slices
 
 The first built-in protocol is `software-engineering`, which models planning,
 review, architecture, implementation, review, and acceptance over durable repo

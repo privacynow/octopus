@@ -155,7 +155,18 @@ async def _registry_lifespan(app: FastAPI):
     async def _protocol_maintenance_loop() -> None:
         while not stop_event.is_set():
             try:
-                await asyncio.to_thread(get_store().run_protocol_maintenance)
+                result = await asyncio.to_thread(get_store().run_protocol_maintenance)
+                swept_count = int(getattr(result, "swept_count", 0) or 0)
+                if swept_count:
+                    topics = {"protocols", "summary"}
+                    for run_id in getattr(result, "affected_run_ids", ()) or ():
+                        normalized = str(run_id or "").strip()
+                        if normalized:
+                            topics.add(f"protocol-run:{normalized}")
+                    await _broadcast_invalidations(
+                        topics=topics,
+                        reason="protocol.run.timeout",
+                    )
             except Exception:
                 log.warning("Protocol maintenance sweep failed", exc_info=True)
             try:

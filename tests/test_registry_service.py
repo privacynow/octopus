@@ -1264,8 +1264,10 @@ def test_protocol_issues_route_returns_issue_rows(monkeypatch, tmp_path: Path):
     client = TestClient(app)
 
     class _Store:
-        def list_protocol_issues(self, *, access, limit=25, cursor=0, issue_kind=""):
+        def list_protocol_issues(self, *, access, limit=25, cursor=0, issue_kind="", protocol_run_id="", protocol_id=""):
             assert issue_kind == "blocked_run"
+            assert protocol_run_id == ""
+            assert protocol_id == ""
             return [
                 {
                     "issue_kind": "blocked_run",
@@ -1300,6 +1302,33 @@ def test_protocol_issues_route_returns_issue_rows(monkeypatch, tmp_path: Path):
     assert response.status_code == 200
     payload = response.json()
     assert payload["issues"][0]["protocol_run_id"] == "run-1"
+
+
+def test_protocol_issues_route_accepts_protocol_filters(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_protocol_issues(self, *, access, limit=25, cursor=0, issue_kind="", protocol_run_id="", protocol_id=""):
+            assert issue_kind == ""
+            assert protocol_run_id == "run-9"
+            assert protocol_id == "protocol-9"
+            return []
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/issues?protocol_run_id=run-9&protocol_id=protocol-9")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    assert response.json()["issues"] == []
 
 
 def test_registry_http_module_stays_under_guard_threshold():
@@ -1705,6 +1734,11 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
         "pending": 1,
         "failed_24h": 0,
     }
+    assert payload["protocols"]["runs_started_24h"] == 0
+    assert payload["protocols"]["runs_completed_24h"] == 0
+    assert payload["protocols"]["operator_interventions_24h"] == 0
+    assert payload["protocols"]["completion_rate_24h"] == 0.0
+    assert payload["protocols"]["mean_completion_seconds_24h"] == 0.0
     assert payload["usage_24h"] == {
         "prompt_tokens": 14,
         "completion_tokens": 9,

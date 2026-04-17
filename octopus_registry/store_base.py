@@ -25,6 +25,7 @@ from octopus_sdk.protocols import (
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
     ProtocolIssueRecord,
+    ProtocolMaintenanceResultRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
@@ -711,6 +712,8 @@ class AbstractRegistryStore(Protocol):
         limit: int = 25,
         cursor: int = 0,
         issue_kind: str = "",
+        protocol_run_id: str = "",
+        protocol_id: str = "",
     ) -> list[ProtocolIssueRecord]:
         """Return protocol support/admin issues for visible runs."""
 
@@ -770,7 +773,7 @@ class AbstractRegistryStore(Protocol):
     ) -> ProtocolRunMutationRecord:
         """Apply one idempotent operator action to a protocol run."""
 
-    def run_protocol_maintenance(self, *, now: str = "") -> int:
+    def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
         """Sweep protocol maintenance work such as overdue timeouts."""
 
     # ------------------------------------------------------------------

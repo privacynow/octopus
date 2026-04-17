@@ -284,6 +284,8 @@ function renderDashboard(container) {
                     `${summary.protocols?.runs_blocked || 0} blocked`,
                     `${summary.protocols?.runs_contract_invalid || 0} invalid contracts`,
                     `${summary.protocols?.overdue_timeouts || 0} overdue timeouts`,
+                    `${Math.round(Number(summary.protocols?.completion_rate_24h || 0) * 100)}% completion · 24h`,
+                    `${summary.protocols?.operator_interventions_24h || 0} interventions · 24h`,
                 ].join(' · '),
                 href: '/ui/protocols',
             },

@@ -706,7 +706,7 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, contract-invalid blocking, and timeout evaluation live in `octopus_sdk/protocol_engine.py`. Timeout sweep now has a dedicated registry maintenance loop and still reuses the same canonical applier for synthetic timeout events. |
 | **P5** Full API + auth + export | **partial** | Sub-resources, export, actions with `Idempotency-Key` / `If-Match`, definition archive, `created_after`, and `NOT_VISIBLE` handling are now part of the shipped surface. Remaining work is broader contract coverage and documentation hardening. |
 | **P5a** Thin UI | **partial** | `octopus_registry/ui/js/api.js` + `protocol-workspace.js` call core endpoints—complete only relative to whatever P5 ships. |
-| **P6** Realtime + metrics + admin views | **partial** | Protocol run invalidation topics now refresh run detail from the canonical registry path on create, operator action, and protocol-stage completion. Registry summary includes protocol issue counts and the control plane exposes typed protocol issue listings for blocked runs, contract failures, expired timeouts, and stuck leases. Named protocol events and deeper metrics instrumentation remain open. |
+| **P6** Realtime + metrics + admin views | **partial** | Protocol run invalidation topics now refresh run detail from the canonical registry path on create, operator action, protocol-stage completion, and maintenance-driven timeout sweeps. Registry summary includes protocol issue counts plus protocol run operational metrics, and the control plane exposes typed protocol issue listings for blocked runs, contract failures, expired timeouts, and stuck leases. Named protocol events and deeper metrics instrumentation remain open. |
 | **P7** Full UI | **missing** | Depends on P5/P6; designer/operator UX per §11 not fully product-complete. |
 | **P8** Telegram parity | **partial** | Protocol commands exist in `app/runtime/telegram_ingress.py` (e.g. create/act flows)—parity with §11.2 not fully verified here. |
 | **P9** Security + audit + retention | **partial** | `retention_until`, compliance hooks in store; §10 redaction/pen-test **not** verified as complete. |
@@ -737,7 +737,7 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | List filter `created_after` | §7.1 | **Implemented** in protocol list API. |
 | `registry_template` gated “off” | §2.3 | **Implemented** through registry config; DB-builtins remain seeded but not globally visible unless enabled. |
 | Waiver mode B | §5.3b | **Closed by product decision:** Mode A only for this release. |
-| Timeout without task result | §6.4 | **Implemented** via timeout sweep on registry heartbeat/poll traffic through the same protocol applier. |
+| Timeout without task result | §6.4 | **Implemented** via the dedicated registry maintenance loop through the same protocol applier, with post-commit invalidations on affected protocol run topics. |
 | Older schema migrators | §8.3 | Migration framework is present; continue hardening when schema version increments beyond `1`. |
 | Engine-only unit tests | §3.4, §13 | **Implemented** in `tests/test_protocol_engine.py`; continue expanding the table-driven matrix under §13. |
 | Protocol OpenAPI contract tests | §7.6 | Still targeted/smoke-level in `tests/test_registry_service.py`; no golden protocol contract suite yet. |

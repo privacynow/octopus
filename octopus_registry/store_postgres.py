@@ -34,6 +34,7 @@ from octopus_sdk.protocols import (
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolIssueRecord,
+    ProtocolMaintenanceResultRecord,
     ProtocolRunExportRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
@@ -419,7 +420,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def heartbeat(self, agent_token: str, payload: AgentHeartbeatRequest) -> HealthSummary:
         with self._connect() as conn, _write_tx(conn):
-            result = shared_heartbeat(
+            return shared_heartbeat(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 token_row=self._token_row,
@@ -431,8 +432,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 agent_token=agent_token,
                 payload=payload,
             )
-            self._run_protocol_maintenance_in_tx(conn, now=utcnow_iso())
-            return result
 
     def get_routing_skill_override(self, skill_name: str) -> bool | None:
         normalized = skill_name.strip().lower()
@@ -1776,7 +1775,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             now=now,
         )
 
-    def _sweep_protocol_timeouts_in_tx(self, conn, *, now: str) -> int:
+    def _sweep_protocol_timeouts_in_tx(self, conn, *, now: str) -> ProtocolMaintenanceResultRecord:
         rows = _POSTGRES_STORE_DIALECT.fetchall(
             conn,
             f"""
@@ -1792,7 +1791,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             """,
             (now,),
         )
-        swept = 0
+        affected_run_ids: list[str] = []
         for row in rows:
             stage_execution_id = str(row.get("protocol_stage_execution_id", "") or "")
             run_id = str(row.get("protocol_run_id", "") or "")
@@ -1826,16 +1825,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 actor_ref=str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
                 now=now,
             )
-            swept += 1
-        return swept
+            affected_run_ids.append(run_id)
+        return ProtocolMaintenanceResultRecord(
+            swept_count=len(affected_run_ids),
+            affected_run_ids=sorted(set(item for item in affected_run_ids if item)),
+        )
 
-    def _run_protocol_maintenance_in_tx(self, conn, *, now: str) -> int:
-        swept = self._sweep_protocol_timeouts_in_tx(conn, now=now)
-        if swept:
-            log.info("protocol maintenance swept_timeouts=%s at=%s", swept, now)
-        return swept
+    def _run_protocol_maintenance_in_tx(self, conn, *, now: str) -> ProtocolMaintenanceResultRecord:
+        result = self._sweep_protocol_timeouts_in_tx(conn, now=now)
+        if result.swept_count:
+            log.info("protocol maintenance swept_timeouts=%s at=%s", result.swept_count, now)
+        return result
 
-    def run_protocol_maintenance(self, *, now: str = "") -> int:
+    def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
         maintenance_now = str(now or utcnow_iso())
         with self._connect() as conn, _write_tx(conn):
             return self._run_protocol_maintenance_in_tx(conn, now=maintenance_now)
@@ -1857,7 +1859,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            result = shared_poll(
+            return shared_poll(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 agent_row=row,
@@ -1867,8 +1869,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 registry_epoch=self._registry_epoch(conn),
                 task_snapshot_row=self._task_snapshot__row,
             )
-            self._run_protocol_maintenance_in_tx(conn, now=now)
-            return result
 
     def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         now = utcnow_iso()
@@ -2651,8 +2651,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
         limit: int = 25,
         cursor: int = 0,
         issue_kind: str = "",
+        protocol_run_id: str = "",
+        protocol_id: str = "",
     ) -> list[ProtocolIssueRecord]:
         normalized_kind = str(issue_kind or "").strip().lower()
+        normalized_run_id = str(protocol_run_id or "").strip()
+        normalized_protocol_id = str(protocol_id or "").strip()
         now = utcnow_iso()
         with self._connect() as conn:
             rows = _POSTGRES_STORE_DIALECT.fetchall(
@@ -2695,6 +2699,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     continue
                 for issue in self._protocol_issues_for_row(row, now=now):
                     if normalized_kind and issue.issue_kind != normalized_kind:
+                        continue
+                    if normalized_run_id and issue.protocol_run_id != normalized_run_id:
+                        continue
+                    if normalized_protocol_id and issue.protocol_id != normalized_protocol_id:
                         continue
                     issues.append(issue)
         return issues[cursor:cursor + limit]
@@ -3009,16 +3017,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         message="Idempotency key was already used for a different protocol action.",
                     )
                 return ProtocolRunMutationRecord.model_validate(existing_idempotency.get("response_json", {}))
-            run_row = self._assert_protocol_run_visible(
-                _POSTGRES_STORE_DIALECT.fetchone(
-                    conn,
-                    f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
-                    (run_id,),
-                ),
-                access=access,
+            raw_run_row = _POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+                (run_id,),
             )
-            if run_row is None:
+            run_visibility = self._protocol_run_visibility_status(raw_run_row, access=access)
+            if run_visibility == "missing":
                 return ProtocolRunMutationRecord(ok=False, status="not_found", message="Protocol run not found.")
+            if run_visibility == "not_visible":
+                return ProtocolRunMutationRecord(ok=False, status="not_visible", message="Protocol run is not visible to this actor.")
+            run_row = dict(raw_run_row or {})
             current_version = int(run_row.get("version", 1) or 1)
             if expected_version is not None and current_version != int(expected_version):
                 return ProtocolRunMutationRecord(

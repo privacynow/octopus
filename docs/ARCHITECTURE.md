@@ -141,9 +141,15 @@ objects:
   served from the registry database as the runtime/control-plane source of truth
 - stage timeout enforcement uses a registry maintenance loop and the same
   canonical applier; it does not depend on receiving a late routed-task result
+- the registry maintenance loop emits post-applier protocol invalidations so the
+  browser and operator tooling observe the same protocol truth the GET/timeline
+  APIs expose
 - protocol support/admin visibility is exposed through registry-backed issue
   queries for blocked runs, invalid contracts, expired timeouts, and stuck
   leases; the dashboard and protocol workspace consume those control-plane reads
+- protocol operational metrics are projected through the canonical summary path;
+  the dashboard reads them from registry summary data instead of computing a
+  browser-local protocol health model
 - transport clients such as Telegram invoke and observe protocol runs, but they
   do not own protocol state or state-machine rules
 - `protocol-stage:` routed-task results intentionally short-circuit delegation

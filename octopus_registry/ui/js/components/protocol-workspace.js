@@ -13,6 +13,7 @@ function renderProtocolWorkspace(container) {
     let currentRunId = UI.readQueryParam('run_id', '');
     let currentProtocol = null;
     let currentRun = null;
+    let currentIssues = [];
     let defaultTemplate = null;
     let draft = {
         protocol_id: '',
@@ -490,6 +491,20 @@ function renderProtocolWorkspace(container) {
             }));
             UI.reconcileChildren(transitionList, transitionRows.length ? transitionRows : [UI.renderEmptyState('No transitions yet.', true)]);
             runDetailPanel.appendChild(transitionList);
+
+            const issueTitle = document.createElement('div');
+            issueTitle.className = 'editor-section-title';
+            issueTitle.textContent = 'Support issues';
+            runDetailPanel.appendChild(issueTitle);
+
+            const issueList = document.createElement('div');
+            const issueRows = (currentIssues || []).map((item) => UI.renderListRow({
+                label: `${item.issue_kind.replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
+                sublabel: item.issue_detail || item.updated_at || '',
+                badgeText: item.stage_key || '',
+            }));
+            UI.reconcileChildren(issueList, issueRows.length ? issueRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)]);
+            runDetailPanel.appendChild(issueList);
         }
 
         UI.reconcileChildren(contentEl, [leftPanel, detailPanel, runPanel, runDetailPanel]);
@@ -534,11 +549,17 @@ function renderProtocolWorkspace(container) {
     async function loadRunDetail() {
         if (!currentRunId) {
             currentRun = null;
+            currentIssues = [];
             _writeState();
             renderWorkspace();
             return;
         }
-        currentRun = await API.getProtocolRun(currentRunId);
+        const [runDetail, issues] = await Promise.all([
+            API.getProtocolRun(currentRunId),
+            API.listProtocolIssues({ protocol_run_id: currentRunId, limit: 50 }),
+        ]);
+        currentRun = runDetail;
+        currentIssues = issues || [];
         _writeState();
         renderWorkspace();
     }
@@ -577,6 +598,7 @@ function renderProtocolWorkspace(container) {
     cleanups.add(() => {
         currentProtocol = null;
         currentRun = null;
+        currentIssues = [];
     });
 
     UI.subscribeWithRefresh(cleanups, 'protocols', () => refreshWorkspace(), 350);

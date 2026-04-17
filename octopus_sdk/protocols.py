@@ -498,6 +498,11 @@ class ProtocolIssueRecord(RegistryRecordModel):
     updated_at: str = ""
 
 
+class ProtocolMaintenanceResultRecord(RegistryRecordModel):
+    swept_count: int = 0
+    affected_run_ids: list[str] = Field(default_factory=list)
+
+
 class ProtocolStageDecisionRecord(RegistryRecordModel):
     decision: str = ""
     summary: str = ""

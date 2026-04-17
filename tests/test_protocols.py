@@ -168,9 +168,11 @@ def test_registry_store_protocol_timeout_sweeps_without_task_result(postgres_reg
             )
         conn.commit()
 
-    store.poll(enroll.agent_token, cursor=0, limit=5)
+    maintenance = store.run_protocol_maintenance()
 
     refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert maintenance.swept_count == 1
+    assert created.run.protocol_run_id in maintenance.affected_run_ids
     assert refreshed.run.status == "failed"
     assert refreshed.run.blocked_code == ""
     assert refreshed.run.termination_summary == ""
@@ -212,9 +214,10 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
     )
     assert any(item.protocol_run_id == created.run.protocol_run_id for item in timeout_issues)
 
-    store.run_protocol_maintenance()
+    maintenance = store.run_protocol_maintenance()
 
     refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert maintenance.swept_count == 1
     assert refreshed.run.status == "failed"
 
     blocked_enroll = store.enroll(agent_card(bot_key="m2"))
@@ -259,6 +262,12 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
         issue_kind="blocked_run",
     )
     assert any(item.protocol_run_id == blocked_created.run.protocol_run_id for item in blocked_issues)
+    filtered_issues = store.list_protocol_issues(
+        access=operator_access(),
+        protocol_run_id=blocked_created.run.protocol_run_id,
+    )
+    assert filtered_issues
+    assert all(item.protocol_run_id == blocked_created.run.protocol_run_id for item in filtered_issues)
 
 
 def test_registry_store_uses_database_for_builtin_protocol_template(postgres_registry_truncated: str) -> None:

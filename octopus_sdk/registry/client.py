@@ -363,11 +363,19 @@ class RegistryClient:
         cursor: int = 0,
         limit: int = 25,
         issue_kind: str = "",
+        protocol_run_id: str = "",
+        protocol_id: str = "",
     ) -> list[ProtocolIssueRecord]:
         result = await self._request(
             "GET",
             "/v1/protocol-runs/issues",
-            params={"cursor": cursor, "limit": limit, "issue_kind": issue_kind},
+            params={
+                "cursor": cursor,
+                "limit": limit,
+                "issue_kind": issue_kind,
+                "protocol_run_id": protocol_run_id,
+                "protocol_id": protocol_id,
+            },
         )
         rows = result.get("issues", result)
         return [ProtocolIssueRecord.model_validate(item) for item in rows]

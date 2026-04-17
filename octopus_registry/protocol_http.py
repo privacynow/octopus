@@ -241,6 +241,8 @@ def build_protocol_router(
         cursor: int = Query(default=0, ge=0),
         limit: int = Query(default=25, ge=1, le=100),
         issue_kind: str = Query(default=""),
+        protocol_run_id: str = Query(default=""),
+        protocol_id: str = Query(default=""),
         auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
@@ -249,6 +251,8 @@ def build_protocol_router(
             limit=limit,
             cursor=cursor,
             issue_kind=issue_kind,
+            protocol_run_id=protocol_run_id,
+            protocol_id=protocol_id,
         )
         return _json_payload(_paginated_response("issues", issues, cursor, limit))
 

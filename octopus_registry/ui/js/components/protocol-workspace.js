@@ -1963,8 +1963,11 @@ function renderProtocolWorkspace(container) {
     }
 
     function renderAuthorRoute() {
+        if (authorBoard.firstChild !== listColumnEl || authorBoard.childNodes.length !== 2) {
+            authorBoard.replaceChildren(listColumnEl, editorColumnEl);
+        }
         if (contentEl.firstChild !== authorBoard || contentEl.childNodes.length !== 1) {
-            UI.reconcileChildren(contentEl, [authorBoard]);
+            contentEl.replaceChildren(authorBoard);
         }
         UI.memoizedRender(
             listColumnEl,

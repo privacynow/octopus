@@ -887,7 +887,7 @@ function renderProtocolWorkspace(container) {
         definitionPanel.appendChild(definitionSearch);
 
         const definitionActions = document.createElement('div');
-        definitionActions.className = 'editor-actions protocol-sticky-actions';
+        definitionActions.className = 'editor-actions';
 
         const newButton = document.createElement('button');
         newButton.type = 'button';

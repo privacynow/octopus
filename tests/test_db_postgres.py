@@ -58,8 +58,8 @@ def test_run_init_is_noop_on_current_db(postgres_truncated):
     assert errors == []
 
 
-def test_run_init_seeds_builtin_protocols(postgres_base_url, request):
-    """DB init seeds builtin protocol definitions through the canonical init path."""
+def test_run_init_does_not_seed_builtin_protocols_into_authored_definitions(postgres_base_url, request):
+    """DB init leaves builtin protocol examples out of authored protocol rows."""
     from app.db.postgres import get_connection
     from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
 
@@ -82,7 +82,7 @@ def test_run_init_seeds_builtin_protocols(postgres_base_url, request):
             )
             row = cur.fetchone()
 
-    assert row == ("software-engineering", "published")
+    assert row is None
 
 
 def test_run_init_restores_missing_additive_schema_objects(postgres_truncated):

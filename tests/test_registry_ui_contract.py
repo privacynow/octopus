@@ -136,20 +136,21 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
-    assert "Workflow summary" in workspace
+    assert "Workflow overview" in workspace
     assert "Workflow map" in workspace
     assert "Review & publish" in workspace
     assert "Advanced raw editor" in workspace
     assert "Protocol basics" in workspace
-    assert "Blank protocol" in workspace
-    assert "Import JSON or YAML" in workspace
+    assert "Start blank" in workspace
+    assert "Import definition" in workspace
     assert "Add participant" in workspace
     assert "Add artifact" in workspace
     assert "Add stage" in workspace
     assert "Raw editor has unsynced errors." in workspace
-    assert "Start from a blank workflow, choose a reusable template, or import a definition." in workspace
-    assert "Built-in examples" in workspace
-    assert "Go to Participants" in workspace
+    assert "Choose a blank workflow, browse the Gallery for starter examples, or import an existing definition." in workspace
+    assert "Browse Gallery" in workspace
+    assert "Build the first workflow path" in workspace
+    assert "Add first participant" in workspace
     assert "validation_mode: 'draft'" in workspace
     assert "Select a run to inspect state, timeline, artifacts, and operator actions." in workspace
     assert "No protocol issues detected for this run." in workspace
@@ -177,15 +178,17 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "renderLauncherStrip" not in workspace
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'agents'" not in workspace
-    assert "UI.readQueryParam('protocol_section', 'overview')" in workspace
+    assert "UI.readQueryParam('protocol_view', 'design')" in workspace
     assert "API.getProtocolTemplate('software-engineering')" not in workspace
     assert "loadDefaultTemplate" not in workspace
     assert "const structuredInputDrafts = new Map();" in workspace
     assert "_revealEditorSurface()" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols(), 350);" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
-    assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" in app_js
-    assert "route === '/protocols' && path.startsWith('/ui/protocol-runs')" in router_js
+    assert "Router.register('/ui/gallery', renderGallery);" in app_js
+    assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
+    assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
+    assert "path.startsWith('/ui/protocol-runs')" not in router_js
 
 
 def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:
@@ -225,10 +228,11 @@ def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
         repo_root / "octopus_registry" / "ui" / "index.html"
     ).read_text(encoding="utf-8")
 
-    assert "href: '/ui/protocol-runs'" in dashboard
+    assert "href: '/ui/runs'" in dashboard
     assert "href: '/ui/protocols'" in dashboard
-    assert "`/ui/protocol-runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`" in dashboard
-    assert "'/ui/protocol-runs?issue_kind=all'" in dashboard
+    assert "`/ui/runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`" in dashboard
+    assert "'/ui/runs?issue_kind=all'" in dashboard
+    assert 'href="/ui/gallery"' in index_html
     assert 'href="/ui/protocols"' in index_html
 
 

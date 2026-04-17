@@ -2217,9 +2217,44 @@ select {
     align-items: start;
 }
 
+.protocol-design-workspace {
+    display: grid;
+    gap: var(--space-3);
+}
+
 .protocol-inspector-panel {
     position: static;
     align-self: start;
+}
+
+.protocol-design-card,
+.protocol-first-run-card {
+    border-color: color-mix(in srgb, var(--accent) 10%, var(--border));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 92%, var(--bg)) 0%, var(--bg-secondary) 100%);
+}
+
+.protocol-design-card.is-selected,
+.protocol-stage-node.is-selected,
+.protocol-stage-preview-node.is-selected {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+    box-shadow: var(--shadow-soft);
+}
+
+.protocol-template-highlights {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.protocol-template-highlight {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--bg);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
 }
 
 .protocol-template-grid {
@@ -2259,6 +2294,10 @@ select {
 
 .protocol-stage-flow-compact {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.protocol-entity-flow {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .protocol-stage-flow-preview {

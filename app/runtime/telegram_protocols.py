@@ -46,7 +46,7 @@ def protocol_run_url(runtime: TelegramRuntime, run_id: str, *, registry_url: str
         base = str(getattr(registry, "url", "") or "").strip() if registry is not None else ""
     if not base:
         return ""
-    return f"{base.rstrip('/')}/ui/protocol-runs?run_id={quote(str(run_id or '').strip())}"
+    return f"{base.rstrip('/')}/ui/runs?run_id={quote(str(run_id or '').strip())}"
 
 
 def protocol_action_requires_confirmation(action: str) -> bool:

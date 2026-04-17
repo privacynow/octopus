@@ -14,6 +14,7 @@ from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolDraftCreateRecord,
     ProtocolStageDefinitionRecord,
+    canonical_protocol_document,
     parse_protocol_stage_decision,
     protocol_document_to_text,
     protocol_review_edge_key,
@@ -559,10 +560,15 @@ def test_registry_store_loads_legacy_published_protocol_versions_via_in_memory_m
             )
         conn.commit()
 
-    template = store.get_protocol_template("mini-protocol", access=operator_access())
-    assert template.schema_version == 1
-    assert template.stage("planning").strict_completion is False
-    assert template.stage("planning").timeout_seconds == 0
+    version = store.get_protocol_version(
+        published.protocol.protocol_id,
+        published.version.protocol_definition_version_id,
+        access=operator_access(),
+    )
+    migrated = canonical_protocol_document(version.definition_json)
+    assert migrated.schema_version == 1
+    assert migrated.stage("planning").strict_completion is False
+    assert migrated.stage("planning").timeout_seconds == 0
 
     enroll = store.enroll(agent_card(bot_key="m1"))
     created = store.create_protocol_run(
@@ -710,7 +716,7 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
     assert all(item.protocol_run_id == blocked_created.run.protocol_run_id for item in filtered_issues)
 
 
-def test_registry_store_uses_database_for_builtin_protocol_template(postgres_registry_truncated: str) -> None:
+def test_registry_store_sources_builtin_protocol_templates_from_code_not_authored_rows(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -725,31 +731,11 @@ def test_registry_store_uses_database_for_builtin_protocol_template(postgres_reg
                 """,
             )
             row = cur.fetchone()
-            assert row is not None
-            cur.execute(
-                """
-                UPDATE agent_registry.protocol_definition_versions
-                SET definition_json = %s
-                WHERE protocol_definition_version_id = %s
-                """,
-                (
-                    Jsonb(
-                        {
-                            **protocol_document(),
-                            "metadata": {
-                                "slug": "software-engineering",
-                                "display_name": "DB Seeded Protocol",
-                                "description": "Database-backed template.",
-                            },
-                        }
-                    ),
-                    row[0],
-                ),
-            )
-        conn.commit()
+            assert row is None
 
     template = store.get_protocol_template("software-engineering", access=operator_access())
-    assert template.display_name == "DB Seeded Protocol"
+    assert template.slug == "software-engineering"
+    assert template.display_name
 
 
 def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres_registry_truncated: str) -> None:
@@ -764,7 +750,7 @@ def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres
 
     assert manifest.templates
     assert any(item.slug == "software-engineering" for item in manifest.templates)
-    assert "overview" in manifest.sections
+    assert "design" in manifest.sections
     assert "advanced" in manifest.sections
     assert "review" in manifest.stage_kind_options
 
@@ -781,7 +767,8 @@ def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_st
     assert created.protocol is not None
     assert created.protocol.lifecycle_state == "draft"
     assert created.protocol.slug
-    assert created.draft_definition_json["metadata"]["slug"] == created.protocol.slug
+    assert created.draft_definition_json["metadata"]["slug"] == ""
+    assert created.draft_definition_json["metadata"]["display_name"] == ""
     assert created.draft_definition_json["stages"] == []
     assert created.validation is not None
     assert created.validation.mode == "draft"

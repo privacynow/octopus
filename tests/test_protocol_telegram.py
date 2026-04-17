@@ -71,7 +71,7 @@ def _run_detail(*, run_id="run-1", status="running", version=2, stage_key="plann
 def test_protocol_run_url_targets_protocol_runs_route():
     runtime = SimpleNamespace(config=SimpleNamespace(agent_registries=[]))
     url = telegram_protocols.protocol_run_url(runtime, "run-1", registry_url="http://registry.local")
-    assert url == "http://registry.local/ui/protocol-runs?run_id=run-1"
+    assert url == "http://registry.local/ui/runs?run_id=run-1"
 
 
 async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypatch):

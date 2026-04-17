@@ -165,8 +165,6 @@ const Router = (() => {
             let isActive = false;
             if (route === '/' && (path === '/ui' || path === '/ui/')) {
                 isActive = true;
-            } else if (route === '/protocols' && path.startsWith('/ui/protocol-runs')) {
-                isActive = true;
             } else if (route && route !== '/' && path.startsWith('/ui' + route)) {
                 isActive = true;
             }

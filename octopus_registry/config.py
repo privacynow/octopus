@@ -46,6 +46,8 @@ def registry_allows_http() -> bool:
 
 def registry_protocol_templates_enabled() -> bool:
     value = os.environ.get("REGISTRY_PROTOCOL_TEMPLATES_ENABLED", "").strip().lower()
+    if not value:
+        return True
     return value in {"1", "true", "yes", "on"}
 
 

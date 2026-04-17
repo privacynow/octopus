@@ -213,6 +213,8 @@ const API = (() => {
         // Protocols
         listProtocols: (opts = {}) =>
             request('GET', '/v1/protocols', { params: opts }),
+        listProtocolTemplates: () =>
+            request('GET', '/v1/protocol-templates'),
         getProtocolAuthoringManifest: () =>
             request('GET', '/v1/protocol-authoring/manifest'),
         getProtocolTemplate: (slug) =>

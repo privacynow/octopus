@@ -51,11 +51,7 @@ PROTOCOL_STAGE_KIND_OPTIONS: tuple[ProtocolStageKind, ...] = ("work", "review", 
 PROTOCOL_ARTIFACT_KIND_OPTIONS: tuple[ProtocolArtifactKind, ...] = ("workspace_file", "control_plane_text")
 PROTOCOL_SELECTOR_KIND_OPTIONS: tuple[str, ...] = ("agent", "skill", "role")
 PROTOCOL_AUTHORING_SECTION_OPTIONS: tuple[str, ...] = (
-    "overview",
-    "participants",
-    "stages",
-    "artifacts",
-    "policies",
+    "design",
     "review",
     "advanced",
 )

@@ -57,6 +57,7 @@ from octopus_sdk.protocols import (
     protocol_review_edge_counts,
     validate_protocol_document,
 )
+from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import utcnow_iso
 
@@ -1304,6 +1305,11 @@ class ProtocolPostgresAdapter:
         created_after: str = "",
         include_drafts: bool | None = None,
     ) -> list[ProtocolDefinitionRecord]:
+        builtin_slugs = {
+            str(item.slug or "").strip()
+            for item in builtin_protocol_template_summaries()
+            if str(item.slug or "").strip()
+        }
         clauses: list[str] = []
         params: list[object] = []
         if lifecycle_state:
@@ -1337,40 +1343,27 @@ class ProtocolPostgresAdapter:
             self._protocol_record_from_row(row)
             for row in rows
             if self._protocol_visible_to_access(row, access=access, include_drafts=include_drafts)
+            and str(row.get("visibility", "") or "") != "registry_template"
+            and str(row.get("slug", "") or "").strip() not in builtin_slugs
         ]
         return visible[cursor : cursor + limit]
 
     def get_protocol_template(self, slug: str, *, access: ProtocolAccessContextRecord) -> ProtocolDefinitionDocumentRecord:
-        with self._connect() as conn:
-            row = self._protocol_row_for_slug(conn, slug)
-            visibility = self._protocol_visibility_status(row, access=access, include_drafts=False)
-            if visibility == "not_visible":
-                raise PermissionError(slug)
-            if visibility != "visible" or row is None:
-                raise KeyError(slug)
-            version_row = None
-            current_version_id = str(row.get("current_version_id", "") or "")
-            if current_version_id:
-                version_row = self._protocol_version_row(conn, current_version_id)
-            if version_row is None:
-                version_row = self._latest_protocol_version_row(conn, str(row.get("protocol_id", "") or ""))
-            if version_row is None:
-                raise KeyError(slug)
-            return canonical_protocol_document(version_row.get("definition_json") or {})
+        del access
+        if not self._config.protocol_registry_templates_enabled:
+            raise KeyError(slug)
+        return builtin_protocol_document(slug)
 
     def list_protocol_templates(
         self,
         *,
         access: ProtocolAccessContextRecord,
     ) -> list[ProtocolTemplateSummaryRecord]:
-        summaries: list[ProtocolTemplateSummaryRecord] = []
-        with self._connect() as conn:
-            for item in builtin_protocol_template_summaries():
-                row = self._protocol_row_for_slug(conn, item.slug)
-                visibility = self._protocol_visibility_status(row, access=access, include_drafts=False)
-                if visibility == "visible":
-                    summaries.append(item)
-        return summaries
+        if not self._config.protocol_registry_templates_enabled:
+            return []
+        if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
+            return []
+        return list(builtin_protocol_template_summaries())
 
     def get_protocol_authoring_manifest(
         self,
@@ -1544,11 +1537,26 @@ class ProtocolPostgresAdapter:
         raw_hash = protocol_definition_content_hash(document) if document is not None else hashlib.sha256(
             json.dumps(raw_definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        normalized_slug = str(slug or (document.slug if document is not None else "")).strip() or f"protocol-{protocol_key[:8]}"
-        normalized_name = str(display_name or (document.display_name if document is not None else "") or normalized_slug).strip()
-        normalized_description = str(description or (document.description if document is not None else "") or "").strip()
         now = utcnow_iso()
         with self._connect() as conn, write_tx(conn):
+            existing_row = self._protocol_row(conn, protocol_key)
+            normalized_slug = str(
+                slug
+                or (document.slug if document is not None else "")
+                or (existing_row.get("slug", "") if existing_row is not None else "")
+            ).strip() or f"draft-{protocol_key[:8]}"
+            normalized_name = str(
+                display_name
+                or (document.display_name if document is not None else "")
+                or (existing_row.get("display_name", "") if existing_row is not None else "")
+                or ""
+            ).strip()
+            normalized_description = str(
+                description
+                or (document.description if document is not None else "")
+                or (existing_row.get("description", "") if existing_row is not None else "")
+                or ""
+            ).strip()
             existing_slug_row = self._protocol_row_for_slug(conn, normalized_slug)
             if existing_slug_row is not None and str(existing_slug_row.get("protocol_id", "") or "") != protocol_key:
                 return ProtocolMutationRecord(
@@ -1556,7 +1564,6 @@ class ProtocolPostgresAdapter:
                     status="duplicate_slug",
                     message=f"Protocol slug {normalized_slug!r} already exists.",
                 )
-            existing_row = self._protocol_row(conn, protocol_key)
             if existing_row is None:
                 with cur(conn) as db_cur:
                     db_cur.execute(
@@ -1686,18 +1693,18 @@ class ProtocolPostgresAdapter:
                     description=description,
                     definition_json=RegistryJsonRecord.model_validate(definition_json),
                 )
-            unique_slug = self._unique_protocol_slug(conn, str(payload.slug or "protocol").strip() or "protocol")
-            display_name = str(payload.display_name or "Untitled Protocol").strip()
+            internal_slug = self._unique_protocol_slug(conn, "draft")
+            display_name = str(payload.display_name or "").strip()
             description = str(payload.description or "").strip()
             blank_document = self._blank_protocol_document(
-                slug=str(payload.slug or unique_slug).strip(),
+                slug=str(payload.slug or "").strip(),
                 display_name=display_name,
                 description=description,
             )
             return self.save_protocol_draft(
                 access=access,
                 protocol_id="",
-                slug=str(payload.slug or unique_slug).strip(),
+                slug=internal_slug,
                 display_name=display_name,
                 description=description,
                 definition_json=RegistryJsonRecord.model_validate(blank_document),

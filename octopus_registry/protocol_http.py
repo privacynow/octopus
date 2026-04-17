@@ -123,6 +123,16 @@ def build_protocol_router(
             raise _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message="Protocol template not found.") from exc
         return _json_payload(document)
 
+    @router.get("/v1/protocol-templates")
+    def resource_list_protocol_templates(
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> list[dict[str, Any]]:
+        try:
+            return _json_payload(store.list_protocol_templates(access=protocol_access(auth)))
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+
     @router.get("/v1/protocol-authoring/manifest")
     def resource_get_protocol_authoring_manifest(
         auth: AuthContext = Depends(require_operator_session),

@@ -16,12 +16,8 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'expired_timeout', label: 'Expired timeouts' },
 ];
 
-const PROTOCOL_AUTHORING_SECTION_OPTIONS = [
-    { value: 'overview', label: 'Overview' },
-    { value: 'participants', label: 'Participants' },
-    { value: 'stages', label: 'Stages' },
-    { value: 'artifacts', label: 'Artifacts' },
-    { value: 'policies', label: 'Policies' },
+const PROTOCOL_AUTHORING_MODE_OPTIONS = [
+    { value: 'design', label: 'Design' },
     { value: 'review', label: 'Review' },
     { value: 'advanced', label: 'Advanced' },
 ];
@@ -131,7 +127,7 @@ function _protocolRunDeepLink(run, params = {}) {
         search.set('issue_kind', issueKind);
     }
     const suffix = search.toString();
-    return suffix ? `/ui/protocol-runs?${suffix}` : '/ui/protocol-runs';
+    return suffix ? `/ui/runs?${suffix}` : '/ui/runs';
 }
 
 function renderProtocolWorkspace(container) {
@@ -151,6 +147,7 @@ function renderProtocolWorkspace(container) {
     let protocolSearch = '';
     let protocolLifecycleFilter = '';
     let currentSection = '';
+    let selectedEntityKind = 'overview';
     let selectedParticipantKey = '';
     let selectedArtifactKey = '';
     let selectedStageKey = '';
@@ -188,19 +185,19 @@ function renderProtocolWorkspace(container) {
     authorBoard.appendChild(listColumnEl);
     authorBoard.appendChild(editorColumnEl);
 
-    const _validSectionValues = new Set(PROTOCOL_AUTHORING_SECTION_OPTIONS.map((item) => item.value));
+    const _validSectionValues = new Set(PROTOCOL_AUTHORING_MODE_OPTIONS.map((item) => item.value));
 
     function _normalizeAuthorSection(value) {
         const normalized = String(value || '').trim().toLowerCase();
-        return _validSectionValues.has(normalized) ? normalized : 'overview';
+        return _validSectionValues.has(normalized) ? normalized : 'design';
     }
 
     function _sectionLabel(value) {
-        return PROTOCOL_AUTHORING_SECTION_OPTIONS.find((item) => item.value === value)?.label || 'Overview';
+        return PROTOCOL_AUTHORING_MODE_OPTIONS.find((item) => item.value === value)?.label || 'Design';
     }
 
     function _readAuthorSection() {
-        return _normalizeAuthorSection(UI.readQueryParam('protocol_section', 'overview'));
+        return _normalizeAuthorSection(UI.readQueryParam('protocol_view', 'design'));
     }
 
     currentSection = _readAuthorSection();
@@ -208,7 +205,7 @@ function renderProtocolWorkspace(container) {
     function _writeState({ push = false } = {}) {
         UI.updateQueryParams({
             protocol_id: currentProtocolId || '',
-            protocol_section: currentProtocolId ? currentSection : '',
+            protocol_view: currentProtocolId ? currentSection : '',
             run_id: '',
             status: '',
             issue_kind: '',
@@ -221,7 +218,8 @@ function renderProtocolWorkspace(container) {
         currentProtocolId = '';
         currentProtocol = null;
         protocolDetailLoading = false;
-        currentSection = 'overview';
+        currentSection = 'design';
+        selectedEntityKind = 'overview';
         selectedParticipantKey = '';
         selectedArtifactKey = '';
         selectedStageKey = '';
@@ -242,6 +240,17 @@ function renderProtocolWorkspace(container) {
         requestAnimationFrame(() => {
             editorColumnEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
         });
+    }
+
+    function _selectDesignTarget(kind, key = '') {
+        selectedEntityKind = kind;
+        if (kind === 'participant') {
+            selectedParticipantKey = key || selectedParticipantKey;
+        } else if (kind === 'artifact') {
+            selectedArtifactKey = key || selectedArtifactKey;
+        } else if (kind === 'stage') {
+            selectedStageKey = key || selectedStageKey;
+        }
     }
 
     function _defaultProtocolDocument() {
@@ -453,8 +462,8 @@ function renderProtocolWorkspace(container) {
             mutator(working);
             await _commitDraftDocument(working);
         } catch (err) {
-            UI.reportError('Failed to update the structured protocol editor', err, {
-                context: 'Protocol structured editor update failed',
+            UI.reportError('Failed to update this workflow step', err, {
+                context: 'Protocol authoring change failed',
             });
         }
     }
@@ -468,6 +477,7 @@ function renderProtocolWorkspace(container) {
     function _applyDraftFromProtocol(detail) {
         currentProtocol = detail;
         _clearStructuredDrafts();
+        selectedEntityKind = 'overview';
         selectedParticipantKey = '';
         selectedArtifactKey = '';
         selectedStageKey = '';
@@ -476,11 +486,12 @@ function renderProtocolWorkspace(container) {
             ? detail.draft_definition_json
             : null;
         const draftDocument = rawDraftDocument || (detail && detail.draft_document) || _defaultProtocolDocument();
+        const metadata = draftDocument.metadata || {};
         draft = {
             protocol_id: detail?.protocol?.protocol_id || '',
-            slug: detail?.protocol?.slug || draftDocument.metadata?.slug || '',
-            display_name: detail?.protocol?.display_name || draftDocument.metadata?.display_name || '',
-            description: detail?.protocol?.description || draftDocument.metadata?.description || '',
+            slug: metadata.slug || detail?.protocol?.slug || '',
+            display_name: metadata.display_name || detail?.protocol?.display_name || '',
+            description: metadata.description || detail?.protocol?.description || '',
             definition_text: editorFormat === 'yaml'
                 ? ''
                 : JSON.stringify(draftDocument, null, 2),
@@ -680,6 +691,20 @@ function renderProtocolWorkspace(container) {
             .filter(Boolean);
     }
 
+    function _slugSuggestion(value) {
+        return String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+    }
+
+    function _draftTitle() {
+        return String(draft.display_name || '').trim()
+            || (currentProtocol?.protocol?.display_name || '').trim()
+            || 'New protocol draft';
+    }
+
 
     async function _downloadDraft(format) {
         const normalized = format === 'yaml' ? 'yaml' : 'json';
@@ -835,7 +860,8 @@ function renderProtocolWorkspace(container) {
         currentProtocolId = result.protocol?.protocol_id || '';
         currentProtocol = result;
         _applyDraftFromProtocol(result);
-        currentSection = 'overview';
+        currentSection = 'design';
+        selectedEntityKind = 'overview';
         _writeState({ push: true });
         await _refreshDraftTextForCurrentFormat();
         await loadProtocols();
@@ -922,19 +948,17 @@ function renderProtocolWorkspace(container) {
         return Boolean(document.participants?.length);
     }
 
-    function _sectionSummary(document) {
-        return PROTOCOL_AUTHORING_SECTION_OPTIONS.map((item) => {
-            const issues = _sectionIssues(item.value);
-            let count = 0;
-            if (item.value === 'participants') count = document.participants?.length || 0;
-            if (item.value === 'artifacts') count = document.artifacts?.length || 0;
-            if (item.value === 'stages') count = document.stages?.length || 0;
-            if (item.value === 'review') count = issues.length;
+    function _modeSummary(document) {
+        const designCount = (document.participants?.length || 0) + (document.stages?.length || 0) + (document.artifacts?.length || 0);
+        const reviewIssues = _sectionIssues('review').length;
+        return PROTOCOL_AUTHORING_MODE_OPTIONS.map((item) => {
+            const count = item.value === 'design' ? designCount : item.value === 'review' ? reviewIssues : 0;
+            const hasIssues = item.value === 'review' && reviewIssues > 0;
             return {
                 value: item.value,
                 label: item.label,
                 count,
-                hasIssues: issues.length > 0,
+                hasIssues,
             };
         });
     }
@@ -962,26 +986,25 @@ function renderProtocolWorkspace(container) {
     function _protocolCatalogGroups() {
         const filtered = _filteredProtocols();
         return {
-            authored: filtered.filter((item) => String(item.visibility || '') !== 'registry_template'),
-            builtin: filtered.filter((item) => String(item.visibility || '') === 'registry_template'),
+            authored: filtered,
         };
     }
 
-    function _protocolRows(items, { builtin = false } = {}) {
+    function _protocolRows(items) {
         return (items || []).map((item) => UI.renderListRow({
-            label: item.display_name || item.slug || item.protocol_id,
+            label: item.display_name || 'Untitled draft',
             sublabel: [
-                builtin ? 'Built-in example' : '',
                 item.description || '',
-                item.slug || item.protocol_id,
+                item.display_name ? (item.slug || '') : 'Name this workflow to make it easy to find later.',
                 item.updated_at ? `updated ${UI.relativeTime(item.updated_at)}` : '',
             ].filter(Boolean).join(' · '),
-            badgeText: builtin ? 'example' : (item.lifecycle_state || 'draft'),
+            badgeText: item.lifecycle_state || 'draft',
             className: item.protocol_id === currentProtocolId ? 'is-selected' : '',
             onClick: () => {
                 currentProtocolId = item.protocol_id;
                 currentProtocol = null;
-                currentSection = 'overview';
+                currentSection = 'design';
+                selectedEntityKind = 'overview';
                 protocolDetailLoading = true;
                 selectedParticipantKey = '';
                 selectedArtifactKey = '';
@@ -1086,7 +1109,8 @@ function renderProtocolWorkspace(container) {
                 currentProtocolId = result.protocol?.protocol_id || '';
                 currentProtocol = result;
                 _applyDraftFromProtocol(result);
-                currentSection = 'overview';
+                currentSection = 'design';
+                selectedEntityKind = 'overview';
                 editorFormat = formatValue;
                 await _refreshDraftTextForCurrentFormat();
                 await loadProtocols();
@@ -1115,7 +1139,7 @@ function renderProtocolWorkspace(container) {
 
         const definitionSearch = document.createElement('input');
         definitionSearch.className = 'search-input';
-        definitionSearch.placeholder = 'Search definitions and examples';
+        definitionSearch.placeholder = 'Search your protocol drafts and published workflows';
         definitionSearch.value = protocolSearch;
         definitionSearch.addEventListener('input', () => {
             protocolSearch = definitionSearch.value;
@@ -1147,12 +1171,20 @@ function renderProtocolWorkspace(container) {
         newButton.className = 'btn btn-primary';
         newButton.textContent = 'New protocol';
         newButton.addEventListener('click', () => {
-            _resetDraftState();
-            _writeState({ push: true });
-            renderAuthorRoute();
-            _revealEditorSurface();
+            void _createDraftFromSource({ source_kind: 'blank' }).catch((err) => {
+                UI.reportError('Failed to create a blank protocol draft', err, {
+                    context: 'Protocol draft create failed',
+                });
+            });
         });
         definitionActions.appendChild(newButton);
+
+        const galleryButton = document.createElement('button');
+        galleryButton.type = 'button';
+        galleryButton.className = 'btn';
+        galleryButton.textContent = 'Gallery';
+        galleryButton.addEventListener('click', () => Router.navigate('/ui/gallery'));
+        definitionActions.appendChild(galleryButton);
 
         const importButton = document.createElement('button');
         importButton.type = 'button';
@@ -1168,16 +1200,8 @@ function renderProtocolWorkspace(container) {
         catalogGroups.appendChild(_buildCatalogGroup(
             'Your definitions',
             _protocolRows(groups.authored),
-            'No authored protocols yet. Start a blank draft, use a starter template, or import an existing definition.',
+            'No authored protocols yet. Start blank, browse the Gallery, or import a definition.',
         ));
-        if (groups.builtin.length) {
-            catalogGroups.appendChild(_buildCatalogGroup(
-                'Built-in examples',
-                _protocolRows(groups.builtin, { builtin: true }),
-                'No built-in protocol examples are available in this registry.',
-                { tone: 'protocol-catalog-group-subtle' },
-            ));
-        }
         definitionPanel.appendChild(catalogGroups);
         return definitionPanel;
     }
@@ -1196,16 +1220,16 @@ function renderProtocolWorkspace(container) {
                 }
                 const previewNode = document.createElement('button');
                 previewNode.type = 'button';
-                previewNode.className = `protocol-stage-preview-node ${String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
+                previewNode.className = `protocol-stage-preview-node ${selectedEntityKind === 'stage' && String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
                 previewNode.addEventListener('click', () => {
-                    selectedStageKey = String(stage.stage_key || '');
-                    currentSection = 'stages';
+                    _selectDesignTarget('stage', String(stage.stage_key || ''));
+                    currentSection = 'design';
                     _writeState({ push: true });
                     renderAuthorRoute();
                     _revealEditorSurface();
                 });
                 const title = document.createElement('strong');
-                title.textContent = stage.display_name || stage.stage_key || 'Stage';
+                title.textContent = stage.display_name || 'New stage';
                 previewNode.appendChild(title);
                 const meta = document.createElement('span');
                 meta.className = 'protocol-stage-preview-meta';
@@ -1226,17 +1250,17 @@ function renderProtocolWorkspace(container) {
         stages.forEach((stage) => {
             const card = document.createElement('button');
             card.type = 'button';
-            card.className = `protocol-stage-node ${String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
+            card.className = `protocol-stage-node ${selectedEntityKind === 'stage' && String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
             card.addEventListener('click', () => {
-                selectedStageKey = String(stage.stage_key || '');
-                currentSection = 'stages';
+                _selectDesignTarget('stage', String(stage.stage_key || ''));
+                currentSection = 'design';
                 _writeState();
                 renderAuthorRoute();
                 _revealEditorSurface();
             });
 
             const title = document.createElement('strong');
-            title.textContent = stage.display_name || stage.stage_key || 'Stage';
+            title.textContent = stage.display_name || 'New stage';
             card.appendChild(title);
 
             const meta = document.createElement('div');
@@ -1286,20 +1310,13 @@ function renderProtocolWorkspace(container) {
 
         const title = document.createElement('div');
         title.className = 'editor-section-title';
-        title.textContent = 'New protocol';
+        title.textContent = 'Start authoring';
         panel.appendChild(title);
 
         const intro = document.createElement('p');
         intro.className = 'quiet-note';
-        intro.textContent = 'Start from a blank workflow, choose a reusable template, or import a definition. New and existing protocols use the same progressive editor.';
+        intro.textContent = 'Choose a blank workflow, browse the Gallery for starter examples, or import an existing definition. New and existing protocols open in the same design workspace.';
         panel.appendChild(intro);
-
-        const cards = document.createElement('div');
-        cards.className = 'protocol-template-grid';
-
-        const blankCard = document.createElement('section');
-        blankCard.className = 'protocol-template-card';
-        blankCard.innerHTML = '<strong>Blank protocol</strong><p>Start with an empty workflow and add participants, stages, artifacts, and policies step by step.</p>';
         const blankBtn = document.createElement('button');
         blankBtn.type = 'button';
         blankBtn.className = 'btn btn-primary';
@@ -1309,53 +1326,38 @@ function renderProtocolWorkspace(container) {
                 UI.reportError('Failed to create a blank protocol draft', err, {
                     context: 'Protocol draft create failed',
                 });
-            });
-        });
-        blankCard.appendChild(blankBtn);
-        cards.appendChild(blankCard);
-
-        _manifestTemplates().forEach((template) => {
-            const card = document.createElement('section');
-            card.className = 'protocol-template-card';
-            card.innerHTML = `<strong>${template.display_name || template.slug}</strong><p>${template.description || 'Reusable protocol template.'}</p>`;
-            const stats = document.createElement('div');
-            stats.className = 'protocol-template-meta';
-            stats.textContent = [
-                `${template.participant_count || 0} participants`,
-                `${template.stage_count || 0} stages`,
-                `${template.artifact_count || 0} artifacts`,
-            ].join(' · ');
-            card.appendChild(stats);
-            const useBtn = document.createElement('button');
-            useBtn.type = 'button';
-            useBtn.className = 'btn';
-            useBtn.textContent = 'Use template';
-            useBtn.addEventListener('click', () => {
-                void _createDraftFromSource({
-                    source_kind: 'template',
-                    template_slug: template.slug,
-                }).catch((err) => {
-                    UI.reportError('Failed to create a template-based protocol draft', err, {
-                        context: 'Protocol template draft create failed',
-                    });
                 });
             });
-            card.appendChild(useBtn);
-            cards.appendChild(card);
-        });
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        actions.appendChild(blankBtn);
 
-        const importCard = document.createElement('section');
-        importCard.className = 'protocol-template-card protocol-template-card-subtle';
-        importCard.innerHTML = '<strong>Import JSON or YAML</strong><p>Bring in an existing definition and continue editing it in the same authoring workflow.</p>';
+        const galleryBtn = document.createElement('button');
+        galleryBtn.type = 'button';
+        galleryBtn.className = 'btn';
+        galleryBtn.textContent = 'Browse Gallery';
+        galleryBtn.addEventListener('click', () => Router.navigate('/ui/gallery'));
+        actions.appendChild(galleryBtn);
+
         const importBtn = document.createElement('button');
         importBtn.type = 'button';
         importBtn.className = 'btn';
         importBtn.textContent = 'Import definition';
         importBtn.addEventListener('click', _openImportDialog);
-        importCard.appendChild(importBtn);
-        cards.appendChild(importCard);
+        actions.appendChild(importBtn);
+        panel.appendChild(actions);
 
-        panel.appendChild(cards);
+        if (_manifestTemplates().length) {
+            const highlights = document.createElement('div');
+            highlights.className = 'protocol-template-highlights';
+            _manifestTemplates().slice(0, 3).forEach((template) => {
+                const hint = document.createElement('div');
+                hint.className = 'protocol-template-highlight';
+                hint.textContent = `${template.display_name || template.slug} · ${template.stage_count || 0} stages`;
+                highlights.appendChild(hint);
+            });
+            panel.appendChild(highlights);
+        }
         return panel;
     }
 
@@ -1366,13 +1368,13 @@ function renderProtocolWorkspace(container) {
         const titleWrap = document.createElement('div');
         titleWrap.className = 'protocol-author-title';
         const title = document.createElement('h3');
-        title.textContent = draft.display_name || draft.slug || 'Untitled protocol';
+        title.textContent = _draftTitle();
         titleWrap.appendChild(title);
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = currentProtocol?.protocol
             ? [
-                currentProtocol.protocol.lifecycle_state || 'draft',
+                String(currentProtocol.protocol.lifecycle_state || 'draft').replace(/_/g, ' '),
                 currentProtocol.version ? `version ${currentProtocol.version.version || 0}` : '',
                 currentProtocol.protocol.current_version_id ? 'published version available' : 'not yet published',
                 draftSaveState === 'saving'
@@ -1383,7 +1385,7 @@ function renderProtocolWorkspace(container) {
                             ? 'save failed'
                             : 'saved',
             ].filter(Boolean).join(' · ')
-            : 'Edit the workflow progressively. Advanced raw JSON/YAML stays behind the Advanced section.';
+            : 'Map the workflow in Design, then use Review for validation and publishing.';
         titleWrap.appendChild(note);
         header.appendChild(titleWrap);
 
@@ -1424,6 +1426,7 @@ function renderProtocolWorkspace(container) {
         reviewButton.textContent = 'Review';
         reviewButton.addEventListener('click', () => {
             currentSection = 'review';
+            selectedEntityKind = 'review';
             _writeState({ push: true });
             renderAuthorRoute();
             _revealEditorSurface();
@@ -1433,8 +1436,8 @@ function renderProtocolWorkspace(container) {
         return header;
     }
 
-    function _buildSectionNav(protocolDocument) {
-        const options = _sectionSummary(protocolDocument).map((item) => ({
+    function _buildModeNav(protocolDocument) {
+        const options = _modeSummary(protocolDocument).map((item) => ({
             value: item.value,
             label: item.hasIssues
                 ? `${item.label}${item.count ? ` (${item.count})` : ''} !`
@@ -1446,11 +1449,18 @@ function renderProtocolWorkspace(container) {
             options,
             (value) => {
                 currentSection = _normalizeAuthorSection(value);
+                if (currentSection === 'design') {
+                    selectedEntityKind = selectedEntityKind === 'review' || selectedEntityKind === 'advanced'
+                        ? 'overview'
+                        : selectedEntityKind;
+                } else {
+                    selectedEntityKind = currentSection;
+                }
                 _writeState({ push: true });
                 renderAuthorRoute();
             },
             {
-                label: 'Protocol authoring section',
+                label: 'Protocol authoring mode',
                 value: currentSection,
             },
         ).element;
@@ -1463,10 +1473,16 @@ function renderProtocolWorkspace(container) {
         const nextSteps = _nextRequiredActionLabels();
 
         const summaryCard = document.createElement('section');
-        summaryCard.className = 'editor-panel protocol-panel';
+        summaryCard.className = `editor-panel protocol-panel protocol-design-card ${selectedEntityKind === 'overview' ? 'is-selected' : ''}`;
+        summaryCard.tabIndex = 0;
+        summaryCard.setAttribute('role', 'button');
+        summaryCard.addEventListener('click', () => {
+            _selectDesignTarget('overview');
+            renderAuthorRoute();
+        });
         const summaryTitle = document.createElement('div');
         summaryTitle.className = 'editor-section-title';
-        summaryTitle.textContent = 'Workflow summary';
+        summaryTitle.textContent = 'Workflow overview';
         summaryCard.appendChild(summaryTitle);
         summaryCard.appendChild(UI.renderMetadataGrid([
             { label: 'Participants', value: String(protocolDocument.participants?.length || 0) },
@@ -1526,31 +1542,48 @@ function renderProtocolWorkspace(container) {
         title.textContent = 'Protocol basics';
         inspector.appendChild(title);
 
+        const suggestedSlug = _slugSuggestion(draft.display_name || '');
+
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Slug',
             control: _textInput(draft.slug || '', (value) => {
                 draft.slug = value;
                 void _commitDraftDocument(_draftDocument());
-            }, { placeholder: 'protocol-slug', ariaLabel: 'Protocol slug', draftKey: 'meta:slug' }),
+            }, {
+                placeholder: suggestedSlug || 'Short URL-friendly name',
+                ariaLabel: 'Protocol slug',
+                draftKey: 'meta:slug',
+            }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Display name',
             control: _textInput(draft.display_name || '', (value) => {
                 draft.display_name = value;
                 void _commitDraftDocument(_draftDocument());
-            }, { placeholder: 'Display name', ariaLabel: 'Protocol display name', draftKey: 'meta:display_name' }),
+            }, {
+                placeholder: 'Name your workflow',
+                ariaLabel: 'Protocol display name',
+                draftKey: 'meta:display_name',
+            }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Description',
             control: _textAreaInput(draft.description || '', (value) => {
                 draft.description = value;
                 void _commitDraftDocument(_draftDocument());
-            }, { placeholder: 'Purpose and constraints', rows: 4, ariaLabel: 'Protocol description', draftKey: 'meta:description' }),
+            }, {
+                placeholder: 'What should this workflow help a team accomplish?',
+                rows: 4,
+                ariaLabel: 'Protocol description',
+                draftKey: 'meta:description',
+            }),
         }));
 
         const helper = document.createElement('p');
         helper.className = 'quiet-note';
-        helper.textContent = 'Use Overview to set the protocol identity, then work section by section instead of editing the full document at once.';
+        helper.textContent = draft.slug || !suggestedSlug
+            ? 'Start with a clear name and summary, then build the workflow path below.'
+            : `Suggested slug once you name it: ${suggestedSlug}`;
         inspector.appendChild(helper);
         return inspector;
     }
@@ -1576,11 +1609,11 @@ function renderProtocolWorkspace(container) {
                 const index = (next.participants || []).length + 1;
                 next.participants = [...(next.participants || []), {
                     participant_key: `participant_${index}`,
-                    display_name: `Participant ${index}`,
+                    display_name: '',
                     required_skills: [],
                     instructions: '',
                 }];
-                selectedParticipantKey = `participant_${index}`;
+                _selectDesignTarget('participant', `participant_${index}`);
             });
         });
         headerRow.appendChild(addButton);
@@ -1591,13 +1624,13 @@ function renderProtocolWorkspace(container) {
         (protocolDocument.participants || []).forEach((item) => {
             const card = document.createElement('button');
             card.type = 'button';
-            card.className = `protocol-stage-node ${String(item.participant_key || '') === selectedParticipantKey ? 'is-selected' : ''}`;
+            card.className = `protocol-stage-node ${selectedEntityKind === 'participant' && String(item.participant_key || '') === selectedParticipantKey ? 'is-selected' : ''}`;
             card.addEventListener('click', () => {
-                selectedParticipantKey = String(item.participant_key || '');
+                _selectDesignTarget('participant', String(item.participant_key || ''));
                 renderAuthorRoute();
             });
             const name = document.createElement('strong');
-            name.textContent = item.display_name || item.participant_key || 'Participant';
+            name.textContent = item.display_name || 'New participant';
             card.appendChild(name);
             const meta = document.createElement('div');
             meta.className = 'protocol-stage-node-meta';
@@ -1634,11 +1667,11 @@ function renderProtocolWorkspace(container) {
         }
         const index = (protocolDocument.participants || []).findIndex((item) => String(item.participant_key || '') === String(selected.participant_key || ''));
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Key',
+            label: 'Reference key',
             control: _textInput(selected.participant_key, (value) => void _applyStructuredChange((next) => {
                 next.participants[index].participant_key = value;
                 selectedParticipantKey = value;
-            }), { placeholder: 'participant_key', ariaLabel: 'Participant key', draftKey: `participant:${index}:participant_key` }),
+            }), { placeholder: 'participant-id', ariaLabel: 'Participant key', draftKey: `participant:${index}:participant_key` }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Display name',
@@ -1650,10 +1683,10 @@ function renderProtocolWorkspace(container) {
             label: 'Required skills',
             control: _textInput((selected.required_skills || []).join(', '), (value) => void _applyStructuredChange((next) => {
                 next.participants[index].required_skills = _commaList(value);
-            }), { placeholder: 'review, implementation', ariaLabel: 'Participant skills', draftKey: `participant:${index}:required_skills` }),
+            }), { placeholder: 'review, planning, implementation', ariaLabel: 'Participant skills', draftKey: `participant:${index}:required_skills` }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Selector kind',
+            label: 'Match by',
             control: _selectInput(
                 [{ value: '', label: 'None' }].concat(_manifestSelectorKindOptions().map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }))),
                 selected.selector?.kind || '',
@@ -1667,7 +1700,7 @@ function renderProtocolWorkspace(container) {
         }));
         if (selected.selector?.kind) {
             inspector.appendChild(UI.renderSettingsRow({
-                label: 'Selector value',
+                label: 'Match value',
                 control: _textInput(selected.selector?.value || '', (value) => void _applyStructuredChange((next) => {
                     next.participants[index].selector = Object.assign({}, next.participants[index].selector || {}, { value });
                 }), { placeholder: 'Selector value', ariaLabel: 'Participant selector value', draftKey: `participant:${index}:selector_value` }),
@@ -1712,13 +1745,13 @@ function renderProtocolWorkspace(container) {
                 const index = (next.artifacts || []).length + 1;
                 next.artifacts = [...(next.artifacts || []), {
                     artifact_key: `artifact_${index}`,
-                    display_name: `Artifact ${index}`,
+                    display_name: '',
                     description: '',
                     kind: 'workspace_file',
-                    path: `protocol/artifact-${index}.md`,
+                    path: '',
                     verify: true,
                 }];
-                selectedArtifactKey = `artifact_${index}`;
+                _selectDesignTarget('artifact', `artifact_${index}`);
             });
         });
         headerRow.appendChild(addButton);
@@ -1729,13 +1762,13 @@ function renderProtocolWorkspace(container) {
         (protocolDocument.artifacts || []).forEach((item) => {
             const card = document.createElement('button');
             card.type = 'button';
-            card.className = `protocol-stage-node ${String(item.artifact_key || '') === selectedArtifactKey ? 'is-selected' : ''}`;
+            card.className = `protocol-stage-node ${selectedEntityKind === 'artifact' && String(item.artifact_key || '') === selectedArtifactKey ? 'is-selected' : ''}`;
             card.addEventListener('click', () => {
-                selectedArtifactKey = String(item.artifact_key || '');
+                _selectDesignTarget('artifact', String(item.artifact_key || ''));
                 renderAuthorRoute();
             });
             const name = document.createElement('strong');
-            name.textContent = item.display_name || item.artifact_key || 'Artifact';
+            name.textContent = item.display_name || 'New artifact';
             card.appendChild(name);
             const meta = document.createElement('div');
             meta.className = 'protocol-stage-node-meta';
@@ -1772,11 +1805,11 @@ function renderProtocolWorkspace(container) {
         }
         const index = (protocolDocument.artifacts || []).findIndex((item) => String(item.artifact_key || '') === String(selected.artifact_key || ''));
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Key',
+            label: 'Reference key',
             control: _textInput(selected.artifact_key, (value) => void _applyStructuredChange((next) => {
                 next.artifacts[index].artifact_key = value;
                 selectedArtifactKey = value;
-            }), { placeholder: 'artifact_key', ariaLabel: 'Artifact key', draftKey: `artifact:${index}:artifact_key` }),
+            }), { placeholder: 'artifact-id', ariaLabel: 'Artifact key', draftKey: `artifact:${index}:artifact_key` }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Display name',
@@ -1848,20 +1881,20 @@ function renderProtocolWorkspace(container) {
                 const index = (next.stages || []).length + 1;
                 next.stages = [...(next.stages || []), {
                     stage_key: `stage_${index}`,
-                    display_name: `Stage ${index}`,
+                    display_name: '',
                     participant_key: String(next.participants?.[0]?.participant_key || ''),
                     stage_kind: 'work',
                     instructions: '',
                     inputs: [],
                     outputs: [],
-                    transitions: { completed: '__complete__' },
+                    transitions: { completed: '' },
                     write_capable: false,
                     max_rounds: 0,
                     strict_completion: false,
                     require_output_verification: null,
                     timeout_seconds: 0,
                 }];
-                selectedStageKey = `stage_${index}`;
+                _selectDesignTarget('stage', `stage_${index}`);
             });
         });
         headerRow.appendChild(addButton);
@@ -1876,11 +1909,18 @@ function renderProtocolWorkspace(container) {
             const jumpButton = document.createElement('button');
             jumpButton.type = 'button';
             jumpButton.className = 'btn';
-            jumpButton.textContent = 'Go to Participants';
+            jumpButton.textContent = 'Add first participant';
             jumpButton.addEventListener('click', () => {
-                currentSection = 'participants';
-                _writeState({ push: true });
-                renderAuthorRoute();
+                void _applyStructuredChange((next) => {
+                    const index = (next.participants || []).length + 1;
+                    next.participants = [...(next.participants || []), {
+                        participant_key: `participant_${index}`,
+                        display_name: '',
+                        required_skills: [],
+                        instructions: '',
+                    }];
+                    _selectDesignTarget('participant', `participant_${index}`);
+                });
             });
             panel.appendChild(jumpButton);
         }
@@ -1912,11 +1952,11 @@ function renderProtocolWorkspace(container) {
         const artifactOptions = (protocolDocument.artifacts || []).map((item) => String(item.artifact_key || '')).filter(Boolean);
 
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Key',
+            label: 'Reference key',
             control: _textInput(selected.stage_key, (value) => void _applyStructuredChange((next) => {
                 next.stages[index].stage_key = value;
                 selectedStageKey = value;
-            }), { placeholder: 'stage_key', ariaLabel: 'Stage key', draftKey: `stage:${index}:stage_key` }),
+            }), { placeholder: 'stage-id', ariaLabel: 'Stage key', draftKey: `stage:${index}:stage_key` }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Display name',
@@ -1972,22 +2012,22 @@ function renderProtocolWorkspace(container) {
                         context: 'Protocol stage transitions invalid',
                     });
                 }
-            }, { placeholder: '{"completed":"next_stage"}', rows: 5, ariaLabel: 'Stage transitions JSON', draftKey: `stage:${index}:transitions` }),
+            }, { placeholder: '{"completed":"approval"}', rows: 5, ariaLabel: 'Stage transitions JSON', draftKey: `stage:${index}:transitions` }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Write lease',
+            label: 'Exclusive writing',
             control: _checkboxInput(Boolean(selected.write_capable), 'Write-capable stage', (checked) => void _applyStructuredChange((next) => {
                 next.stages[index].write_capable = checked;
             }), { ariaLabel: 'Stage write capable', draftKey: `stage:${index}:write_capable` }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Strict completion',
+            label: 'Completion rule',
             control: _checkboxInput(Boolean(selected.strict_completion), 'Require protocol control lines', (checked) => void _applyStructuredChange((next) => {
                 next.stages[index].strict_completion = checked;
             }), { ariaLabel: 'Stage strict completion', draftKey: `stage:${index}:strict_completion` }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Output verification',
+            label: 'Output check',
             control: _selectInput(
                 [
                     { value: '', label: 'Inherit default' },
@@ -2006,7 +2046,7 @@ function renderProtocolWorkspace(container) {
             ),
         }));
         inspector.appendChild(UI.renderSettingsRow({
-            label: 'Max rounds',
+            label: 'Review rounds',
             control: _numberInput(selected.max_rounds || 0, (value) => void _applyStructuredChange((next) => {
                 next.stages[index].max_rounds = value;
             }), { min: 0, ariaLabel: 'Stage max rounds', draftKey: `stage:${index}:max_rounds` }),
@@ -2034,7 +2074,13 @@ function renderProtocolWorkspace(container) {
         main.className = 'protocol-author-main';
         main.dataset.key = 'protocol-author:policies:main';
         const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel';
+        panel.className = `editor-panel protocol-panel protocol-design-card ${selectedEntityKind === 'policy' ? 'is-selected' : ''}`;
+        panel.tabIndex = 0;
+        panel.setAttribute('role', 'button');
+        panel.addEventListener('click', () => {
+            _selectDesignTarget('policy');
+            renderAuthorRoute();
+        });
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Policies';
@@ -2072,6 +2118,101 @@ function renderProtocolWorkspace(container) {
             }), { min: 1, ariaLabel: 'Max review rounds', draftKey: 'policy:max_review_rounds' }),
         }));
         return inspector;
+    }
+
+    function _buildDesignCanvas(protocolDocument) {
+        const design = document.createElement('div');
+        design.className = 'protocol-design-workspace';
+        design.dataset.key = 'protocol-author:design:main';
+        const needsFirstParticipant = !(protocolDocument.participants || []).length;
+        const needsFirstStage = !(protocolDocument.stages || []).length;
+        if (needsFirstParticipant || needsFirstStage) {
+            const starter = document.createElement('section');
+            starter.className = 'editor-panel protocol-panel protocol-first-run-card';
+            const title = document.createElement('div');
+            title.className = 'editor-section-title';
+            title.textContent = 'Build the first workflow path';
+            starter.appendChild(title);
+            const note = document.createElement('p');
+            note.className = 'quiet-note';
+            note.textContent = needsFirstParticipant
+                ? 'Start by naming the people or roles that will take part in this workflow.'
+                : 'You have participants. Add the first stage and connect the workflow path.';
+            starter.appendChild(note);
+            const actions = document.createElement('div');
+            actions.className = 'editor-actions';
+            if (needsFirstParticipant) {
+                const addParticipant = document.createElement('button');
+                addParticipant.type = 'button';
+                addParticipant.className = 'btn btn-primary';
+                addParticipant.textContent = 'Add first participant';
+                addParticipant.addEventListener('click', () => {
+                    void _applyStructuredChange((next) => {
+                        const index = (next.participants || []).length + 1;
+                        next.participants = [...(next.participants || []), {
+                            participant_key: `participant_${index}`,
+                            display_name: '',
+                            required_skills: [],
+                            instructions: '',
+                        }];
+                        _selectDesignTarget('participant', `participant_${index}`);
+                    });
+                });
+                actions.appendChild(addParticipant);
+            }
+            if (!needsFirstParticipant && needsFirstStage) {
+                const addStage = document.createElement('button');
+                addStage.type = 'button';
+                addStage.className = 'btn btn-primary';
+                addStage.textContent = 'Add first stage';
+                addStage.addEventListener('click', () => {
+                    void _applyStructuredChange((next) => {
+                        const index = (next.stages || []).length + 1;
+                        next.stages = [...(next.stages || []), {
+                            stage_key: `stage_${index}`,
+                            display_name: '',
+                            participant_key: String(next.participants?.[0]?.participant_key || ''),
+                            stage_kind: 'work',
+                            instructions: '',
+                            inputs: [],
+                            outputs: [],
+                            transitions: { completed: '' },
+                            write_capable: false,
+                            max_rounds: 0,
+                            strict_completion: false,
+                            require_output_verification: null,
+                            timeout_seconds: 0,
+                        }];
+                        _selectDesignTarget('stage', `stage_${index}`);
+                    });
+                });
+                actions.appendChild(addStage);
+            }
+            starter.appendChild(actions);
+            design.appendChild(starter);
+        }
+        design.appendChild(_buildOverviewCanvas(protocolDocument));
+        design.appendChild(_buildParticipantsCanvas(protocolDocument));
+        design.appendChild(_buildStagesCanvas(protocolDocument));
+        design.appendChild(_buildArtifactsCanvas(protocolDocument));
+        design.appendChild(_buildPoliciesCanvas(protocolDocument));
+        return design;
+    }
+
+    function _buildDesignInspector(protocolDocument) {
+        if (selectedEntityKind === 'participant') {
+            return _buildParticipantsInspector(protocolDocument);
+        }
+        if (selectedEntityKind === 'artifact') {
+            return _buildArtifactsInspector(protocolDocument);
+        }
+        if (selectedEntityKind === 'stage') {
+            return _buildStagesInspector(protocolDocument);
+        }
+        if (selectedEntityKind === 'policy') {
+            return _buildPoliciesInspector(protocolDocument);
+        }
+        return _buildOverviewInspector(protocolDocument);
     }
 
     function _buildReviewCanvas(protocolDocument) {
@@ -2249,7 +2390,7 @@ function renderProtocolWorkspace(container) {
         note.className = 'quiet-note';
         note.textContent = draft.parse_error
             ? `Raw editor has unsynced errors. Structured sections are using the last valid draft: ${draft.parse_error}`
-            : 'Use the raw editor for bulk edits, import/export, or exact JSON/YAML control. The rest of the authoring flow stays section-based.';
+            : 'Use the raw editor for bulk edits, import/export, or exact JSON/YAML control. The guided design workspace remains the default.';
         panel.appendChild(note);
 
         const formatControl = UI.createSegmentedControl(
@@ -2339,33 +2480,21 @@ function renderProtocolWorkspace(container) {
         _setSelectedEntityDefaults(protocolDocument);
 
         editorPanel.appendChild(_buildAuthorHeader(protocolDocument));
-        editorPanel.appendChild(_buildSectionNav(protocolDocument));
+        editorPanel.appendChild(_buildModeNav(protocolDocument));
 
         const workspace = document.createElement('div');
         workspace.className = 'protocol-author-workspace';
         let main = null;
         let inspector = null;
-        if (currentSection === 'participants') {
-            main = _buildParticipantsCanvas(protocolDocument);
-            inspector = _buildParticipantsInspector(protocolDocument);
-        } else if (currentSection === 'stages') {
-            main = _buildStagesCanvas(protocolDocument);
-            inspector = _buildStagesInspector(protocolDocument);
-        } else if (currentSection === 'artifacts') {
-            main = _buildArtifactsCanvas(protocolDocument);
-            inspector = _buildArtifactsInspector(protocolDocument);
-        } else if (currentSection === 'policies') {
-            main = _buildPoliciesCanvas(protocolDocument);
-            inspector = _buildPoliciesInspector(protocolDocument);
-        } else if (currentSection === 'review') {
+        if (currentSection === 'review') {
             main = _buildReviewCanvas(protocolDocument);
             inspector = _buildReviewInspector();
         } else if (currentSection === 'advanced') {
             main = _buildAdvancedCanvas(protocolDocument);
             inspector = _buildAdvancedInspector();
         } else {
-            main = _buildOverviewCanvas(protocolDocument);
-            inspector = _buildOverviewInspector(protocolDocument);
+            main = _buildDesignCanvas(protocolDocument);
+            inspector = _buildDesignInspector(protocolDocument);
         }
         workspace.appendChild(main);
         workspace.appendChild(inspector);
@@ -2472,7 +2601,7 @@ function renderProtocolRuns(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Protocol runs</h2><p>Inspect live protocol execution, issue triage, artifacts, and operator actions without the authoring surface mixed in.</p>';
+    header.innerHTML = '<h2>Runs</h2><p>Inspect live workflow execution, issue triage, artifacts, and operator actions without the authoring surface mixed in.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');

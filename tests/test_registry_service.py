@@ -1230,6 +1230,7 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
 
     assert response.status_code == 200
     paths = response.json()["paths"]
+    assert "/v1/protocol-templates" in paths
     assert "/v1/protocols/parse" in paths
     assert "/v1/protocols/{protocol_id}/draft/export" in paths
     assert "/v1/protocols/{protocol_id}/diff" in paths
@@ -1428,7 +1429,7 @@ def test_protocol_authoring_manifest_route_returns_templates_and_section_metadat
                         "stage_kind_sequence": ["work", "review", "acceptance"],
                     }
                 ],
-                "sections": ["overview", "participants", "stages", "artifacts", "policies", "review", "advanced"],
+                "sections": ["design", "review", "advanced"],
                 "stage_kind_options": ["work", "review", "acceptance"],
                 "artifact_kind_options": ["workspace_file", "control_plane_text"],
                 "selector_kind_options": ["agent", "skill", "role"],
@@ -1467,7 +1468,7 @@ def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path:
                 protocol={
                     "protocol_id": "protocol-blank",
                     "slug": "protocol-blank",
-                    "display_name": "Untitled Protocol",
+                    "display_name": "",
                     "description": "",
                     "lifecycle_state": "draft",
                     "current_version_id": "",
@@ -1481,8 +1482,8 @@ def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path:
                 draft_definition_json={
                     "schema_version": 1,
                     "metadata": {
-                        "slug": "protocol-blank",
-                        "display_name": "Untitled Protocol",
+                        "slug": "",
+                        "display_name": "",
                         "description": "",
                     },
                     "participants": [],
@@ -1512,7 +1513,8 @@ def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path:
     assert response.status_code == 200
     payload = response.json()
     assert payload["protocol"]["protocol_id"] == "protocol-blank"
-    assert payload["draft_definition_json"]["metadata"]["slug"] == "protocol-blank"
+    assert payload["draft_definition_json"]["metadata"]["slug"] == ""
+    assert payload["draft_definition_json"]["metadata"]["display_name"] == ""
 
 
 def test_protocol_draft_create_route_rejects_template_without_slug(monkeypatch, tmp_path: Path):
@@ -1547,7 +1549,7 @@ def test_protocol_delete_route_discards_unpublished_draft(monkeypatch, tmp_path:
                 protocol={
                     "protocol_id": "protocol-blank",
                     "slug": "protocol-blank",
-                    "display_name": "Untitled Protocol",
+                    "display_name": "",
                     "description": "",
                     "lifecycle_state": "draft",
                     "current_version_id": "",
@@ -1561,8 +1563,8 @@ def test_protocol_delete_route_discards_unpublished_draft(monkeypatch, tmp_path:
                 draft_definition_json={
                     "schema_version": 1,
                     "metadata": {
-                        "slug": "protocol-blank",
-                        "display_name": "Untitled Protocol",
+                        "slug": "",
+                        "display_name": "",
                         "description": "",
                     },
                     "participants": [],

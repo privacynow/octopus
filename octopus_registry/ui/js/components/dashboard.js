@@ -287,7 +287,7 @@ function renderDashboard(container) {
                     `${Math.round(Number(summary.protocols?.completion_rate_24h || 0) * 100)}% completion · 24h`,
                     `${summary.protocols?.operator_interventions_24h || 0} interventions · 24h`,
                 ].join(' · '),
-                href: '/ui/protocol-runs',
+                href: '/ui/runs',
             },
             {
                 key: 'protocol-definitions',
@@ -475,14 +475,14 @@ function renderDashboard(container) {
             badge: item.issue_kind || 'issue',
             badgeClass: 'badge-blocked',
             href: item.protocol_run_id
-                ? `/ui/protocol-runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`
-                : '/ui/protocol-runs?issue_kind=all',
+                ? `/ui/runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`
+                : '/ui/runs?issue_kind=all',
         }));
         UI.memoizedRender(protocolIssuesHost, rowsState, () => [
             createSection(
                 'protocol-issues',
                 'Protocol issues',
-                '/ui/protocol-runs?issue_kind=all',
+                '/ui/runs?issue_kind=all',
                 issueRows,
                 'No protocol issues detected.',
             ),

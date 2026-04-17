@@ -1,4 +1,4 @@
-"""Canonical protocol bootstrap helpers for registry schema init."""
+"""Canonical protocol bootstrap helpers for DB init."""
 
 from __future__ import annotations
 

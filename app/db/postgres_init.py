@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.postgres_doctor import run_doctor
-from octopus_registry.protocol_bootstrap import ensure_builtin_protocols
+from app.db.protocol_bootstrap import ensure_builtin_protocols
 
 _INIT_SQL_PATH = Path(__file__).resolve().parent / "init.sql"
 _OCTOPUS_SCHEMAS = ("bot_runtime", "agent_registry", "bot_content", "bot_credentials")

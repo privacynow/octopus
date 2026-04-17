@@ -700,7 +700,7 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | Phase | Status | Evidence / gap |
 |-------|--------|----------------|
 | **P1** Engine extraction | **partial** | Named SDK engine now exists in `octopus_sdk/protocol_engine.py` (`ProtocolRunEngine`), with dedicated engine-only tests in `tests/test_protocol_engine.py`. Store still owns selector resolution, prompt rendering, and routed-task request construction inside `_dispatch_protocol_stage_in_tx`, so the full **§18.1 / §19.3** “load → engine → apply” seam is not complete yet. |
-| **P1b** §15 shell | **partial** | Builtin protocol seeding now runs through `app/db/postgres_init.py` via `octopus_registry/protocol_bootstrap.py`, and `RegistryPostgresStore` no longer seeds definitions in its constructor. Broader operational backfill / migration hardening remains open under P10. |
+| **P1b** §15 shell | **partial** | Builtin protocol seeding now runs through `app/db/postgres_init.py` via `app/db/protocol_bootstrap.py`, and `RegistryPostgresStore` no longer seeds definitions in its constructor. Broader operational backfill / migration hardening remains open under P10. |
 | **P2** Policies + DSL + migrators | **partial** | Leases + max rounds enforced in SDK; `schema_version` required on `ProtocolDefinitionDocumentRecord` (~199–212 `protocols.py`). Full **§8.3** in-memory migrators for older published versions **not** evidenced (strict version equality). |
 | **P3** Artifacts + verification | **partial** | Observations + `protocol_artifact_contract_error` on task result; **`PROTOCOL_WAIVER_MODE = "forbid"`** (~27, ~134 `protocols.py`) implements §5.3b **mode A** only—**mode B** (publisher-gated) **missing**. |
 | **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, contract-invalid blocking, and timeout evaluation live in `octopus_sdk/protocol_engine.py`. Timeout sweep exists for running stages without a result, but it is still piggybacked on registry heartbeat/poll traffic rather than a dedicated maintenance worker. |
@@ -724,7 +724,7 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | Export | `export_protocol_run` / `resource_export_protocol_run` ~1243+ `server.py` |
 | Waiver mode A | `ProtocolArtifactDefinitionRecord` validator ~130–136 `protocols.py` |
 | Transport avoids double continuation | `delivery_transport.py` `protocol-stage:` short-circuit ~531–532 |
-| Canonical builtin bootstrap | `app/db/postgres_init.py` + `octopus_registry/protocol_bootstrap.py` |
+| Canonical builtin bootstrap | `app/db/postgres_init.py` + `app/db/protocol_bootstrap.py` |
 | Protocol run invalidation on stage completion | `resource_routed_task_result` + `_protocol_run_id_from_task_record` `server.py` |
 
 ### 20.3 Gaps with file citations

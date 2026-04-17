@@ -2154,6 +2154,10 @@ select {
     gap: var(--space-3);
 }
 
+.protocol-author-board {
+    grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+}
+
 .protocol-author-header {
     display: flex;
     align-items: flex-start;
@@ -2168,7 +2172,7 @@ select {
 
 .protocol-author-workspace {
     display: grid;
-    grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
+    grid-template-columns: minmax(0, 0.92fr) minmax(320px, 0.88fr);
     gap: var(--space-3);
     align-items: start;
 }
@@ -2210,6 +2214,10 @@ select {
     gap: var(--space-3);
 }
 
+.protocol-stage-flow:not(.protocol-stage-flow-compact) {
+    grid-template-columns: 1fr;
+}
+
 .protocol-stage-flow-compact {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
@@ -2225,6 +2233,8 @@ select {
     text-align: left;
     box-shadow: var(--shadow-card);
     transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+    min-width: 0;
+    overflow: hidden;
 }
 
 .protocol-stage-node:hover {
@@ -2240,6 +2250,11 @@ select {
 .protocol-stage-node-meta {
     color: var(--text-muted);
     font-size: var(--text-sm);
+}
+
+.protocol-stage-node strong,
+.protocol-stage-node .quiet-note {
+    overflow-wrap: anywhere;
 }
 
 .protocol-advanced-panel .guidance-textarea {

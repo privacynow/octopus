@@ -2011,15 +2011,36 @@ select {
     gap: var(--space-3);
 }
 
-.protocol-workspace-shell {
+.protocol-route-shell {
     min-height: calc(100dvh - 12rem);
+    align-content: start;
 }
 
-.protocol-workspace-grid {
+.protocol-surface-panel {
+    align-content: start;
+}
+
+.protocol-surface-shell {
     display: grid;
-    grid-template-columns: minmax(240px, 0.9fr) minmax(360px, 1.3fr) minmax(280px, 1fr) minmax(320px, 1.2fr);
     gap: var(--space-3);
-    align-items: start;
+    min-width: 0;
+}
+
+.protocol-surface {
+    min-width: 0;
+}
+
+.protocol-launcher-panel {
+    align-content: start;
+}
+
+.protocol-launcher-fields {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.protocol-launcher-problem {
+    min-height: 160px;
 }
 
 .editor-shell {
@@ -2078,19 +2099,10 @@ select {
     min-height: 0;
 }
 
-.protocol-panel-list,
-.protocol-panel-runs,
-.protocol-panel-detail {
-    align-content: start;
-}
-
 .protocol-scroll {
     display: grid;
     gap: var(--space-2);
     min-height: 0;
-    max-height: min(36dvh, 460px);
-    overflow-y: auto;
-    padding-right: var(--space-1);
 }
 
 .protocol-sticky-actions {
@@ -2159,7 +2171,6 @@ select {
     font-size: var(--text-sm);
 }
 
-.protocol-run-launcher,
 .protocol-run-notes {
     display: grid;
     gap: var(--space-3);
@@ -2441,10 +2452,6 @@ select {
         padding: var(--space-5);
     }
 
-    .protocol-workspace-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
     .dashboard-board,
     .task-board,
     .task-board-conversation {
@@ -2526,14 +2533,6 @@ select {
     .conversation-panel {
         flex: 1 1 auto;
         min-height: 0;
-    }
-
-    .protocol-workspace-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .protocol-scroll {
-        max-height: none;
     }
 
     .protocol-sticky-actions {

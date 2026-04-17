@@ -287,14 +287,14 @@ function renderDashboard(container) {
                     `${Math.round(Number(summary.protocols?.completion_rate_24h || 0) * 100)}% completion · 24h`,
                     `${summary.protocols?.operator_interventions_24h || 0} interventions · 24h`,
                 ].join(' · '),
-                href: '/ui/protocols',
+                href: '/ui/protocols?view=operate',
             },
             {
                 key: 'protocol-definitions',
                 value: String(summary.protocols?.definitions_published || 0),
                 label: 'Published protocols',
                 detail: `${summary.protocols?.definitions_total || 0} total definitions`,
-                href: '/ui/protocols',
+                href: '/ui/protocols?view=author',
             },
             {
                 key: 'tokens-24h',
@@ -474,13 +474,13 @@ function renderDashboard(container) {
             ].filter(Boolean).join(' · '),
             badge: item.issue_kind || 'issue',
             badgeClass: 'badge-blocked',
-            href: item.protocol_run_id ? `/ui/protocols?run_id=${encodeURIComponent(item.protocol_run_id)}` : '/ui/protocols',
+            href: item.protocol_run_id ? `/ui/protocols?view=issues&run_id=${encodeURIComponent(item.protocol_run_id)}` : '/ui/protocols?view=issues',
         }));
         UI.memoizedRender(protocolIssuesHost, rowsState, () => [
             createSection(
                 'protocol-issues',
                 'Protocol issues',
-                '/ui/protocols',
+                '/ui/protocols?view=issues',
                 issueRows,
                 'No protocol issues detected.',
             ),

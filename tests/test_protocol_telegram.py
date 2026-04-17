@@ -68,6 +68,12 @@ def _run_detail(*, run_id="run-1", status="running", version=2, stage_key="plann
     )
 
 
+def test_protocol_run_url_targets_operate_view():
+    runtime = SimpleNamespace(config=SimpleNamespace(agent_registries=[]))
+    url = telegram_protocols.protocol_run_url(runtime, "run-1", registry_url="http://registry.local")
+    assert url == "http://registry.local/ui/protocols?view=operate&run_id=run-1"
+
+
 async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypatch):
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)

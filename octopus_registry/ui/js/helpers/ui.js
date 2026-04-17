@@ -908,6 +908,10 @@ window.UI = (() => {
         });
     }
 
+    function filterProtocolRunAgents(agents) {
+        return filterManagedAgents(agents);
+    }
+
     function buildConversationTypeBadge(value) {
         const conversationType = typeof value === 'string'
             ? value
@@ -1059,6 +1063,7 @@ window.UI = (() => {
         createTaskActionButtons,
         createAgentManagementDropdown,
         filterManagedAgents,
+        filterProtocolRunAgents,
         buildConversationTypeBadge,
         isBackgrounded,
         reconcileChildren,

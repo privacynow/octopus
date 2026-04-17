@@ -134,7 +134,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Add artifact" in workspace
     assert "Add stage" in workspace
     assert "Raw editor has unsynced errors." in workspace
-    assert "Only published protocol versions can start runs." in workspace
+    assert "Choose a published protocol in Author before starting a run." in workspace
     assert "No protocol issues detected for this run." in workspace
     assert "No blocked runs, lease issues, contract failures, or expired timeouts are visible right now." in workspace
 
@@ -145,14 +145,22 @@ def test_protocol_workspace_reuses_shared_agent_and_refresh_patterns() -> None:
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
 
+    assert "const WORKSPACE_VIEW_OPTIONS = [" in workspace
+    assert "let currentView = _readWorkspaceView();" in workspace
+    assert "const viewControl = UI.createSegmentedControl(" in workspace
     assert "let runLauncherEntryAgentId = UI.readQueryParam('entry_agent_id', '');" in workspace
     assert "UI.createAgentManagementDropdown(" in workspace
-    assert "UI.filterManagedAgents(agents || [])" in workspace
+    assert "return UI.filterProtocolRunAgents(agents || []);" in workspace
     assert "function _managedAgents()" not in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ rerender: true }), 600);" in workspace
     assert "entry_agent_id: runLauncherEntryAgentId," in workspace
-    assert "workspaceInput.value = runLauncherWorkspaceRef;" in workspace
-    assert "problemInput.value = runLauncherProblemStatement;" in workspace
+    assert "launcherPanel.hidden = currentView !== 'operate';" in workspace
+    assert "function renderAuthorSurface()" in workspace
+    assert "function renderOperateSurface()" in workspace
+    assert "function renderIssuesSurface()" in workspace
+    assert "function renderLauncherStrip()" in workspace
+    assert "_syncControlValue(workspaceInput, runLauncherWorkspaceRef);" in workspace
+    assert "_syncControlValue(problemInput, runLauncherProblemStatement);" in workspace
     assert "const structuredInputDrafts = new Map();" in workspace
 
 
@@ -162,19 +170,33 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
         repo_root / "octopus_registry" / "ui" / "css" / "main.css"
     ).read_text(encoding="utf-8")
 
-    assert ".protocol-workspace-grid {" in css
-    assert "grid-template-columns: minmax(240px, 0.9fr) minmax(360px, 1.3fr) minmax(280px, 1fr) minmax(320px, 1.2fr);" in css
+    assert ".protocol-route-shell {" in css
+    assert ".protocol-surface-shell {" in css
+    assert ".protocol-launcher-panel {" in css
+    assert ".protocol-launcher-fields {" in css
     assert ".protocol-scroll {" in css
-    assert "max-height: min(36dvh, 460px);" in css
+    assert ".protocol-workspace-grid {" not in css
+    assert "max-height: min(36dvh, 460px);" not in css
     assert ".protocol-structured-editor," in css
     assert ".protocol-structured-card {" in css
     assert ".protocol-inline-checkbox {" in css
     assert "@media (max-width: 1080px)" in css
-    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
+    assert ".dashboard-board," in css
     assert "@media (max-width: 900px)" in css
-    assert "grid-template-columns: 1fr;" in css
     assert ".protocol-sticky-actions {" in css
     assert "position: sticky;" in css
+
+
+def test_protocol_navigation_links_target_author_operate_and_issue_surfaces() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+
+    assert "href: '/ui/protocols?view=operate'" in dashboard
+    assert "href: '/ui/protocols?view=author'" in dashboard
+    assert "`/ui/protocols?view=issues&run_id=${encodeURIComponent(item.protocol_run_id)}`" in dashboard
+    assert "'/ui/protocols?view=issues'" in dashboard
 
 
 def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:

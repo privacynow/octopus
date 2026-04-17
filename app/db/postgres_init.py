@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from app.db.postgres_doctor import run_doctor
-from octopus_sdk.protocols.bootstrap import ensure_builtin_protocols
 
 _INIT_SQL_PATH = Path(__file__).resolve().parent / "init.sql"
 _OCTOPUS_SCHEMAS = ("bot_runtime", "agent_registry", "bot_content", "bot_credentials")
@@ -39,7 +38,6 @@ def run_init(conn: Any) -> list[str]:
     try:
         with conn.cursor() as cur:
             cur.execute(sql)
-        ensure_builtin_protocols(conn)
         errors = run_doctor(conn)
         if errors:
             conn.rollback()

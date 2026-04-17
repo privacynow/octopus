@@ -1013,7 +1013,7 @@ def test_sdk_client_list_protocol_runs_sends_entry_agent_and_origin_channel_filt
 
     with patch("httpx.AsyncClient.request", side_effect=mock_request):
         runs = asyncio.run(
-            client.list_protocol_runs(
+            client.list_runs(
                 entry_agent_id="agent-9",
                 origin_channel="telegram",
             )

@@ -223,7 +223,7 @@ async def notify_protocol_run_watches(
         session_changed = False
         for watch in list(watches):
             try:
-                detail = await client.get_protocol_run(watch.run_id)
+                detail = await client.get_run(watch.run_id)
             except RegistryClientError as exc:
                 if exc.error_code in {"PROTOCOL_NOT_VISIBLE", "PROTOCOL_RUN_NOT_FOUND"}:
                     if remove_protocol_run_watch(session, watch.run_id):

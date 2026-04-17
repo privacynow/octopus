@@ -444,7 +444,7 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         )
         return ProtocolDefinitionDiffRecord.model_validate(result)
 
-    async def list_protocol_runs(
+    async def list_runs(
         self,
         *,
         cursor: int = 0,
@@ -469,12 +469,14 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         rows = result.get("runs", result)
         return [ProtocolRunRecord.model_validate(item) for item in rows]
 
-    async def create_protocol_run(
+    async def invoke_protocol(
         self,
         payload: ProtocolRunCreateRecord | dict[str, object],
         *,
         idempotency_key: str = "",
+        origin: str = "",
     ) -> ProtocolRunMutationRecord:
+        del origin
         body = _validated_model(payload, ProtocolRunCreateRecord).model_dump(mode="json")
         result = await self._request(
             "POST",
@@ -484,17 +486,7 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         )
         return ProtocolRunMutationRecord.model_validate(result)
 
-    async def invoke_protocol(
-        self,
-        payload: ProtocolRunCreateRecord | dict[str, object],
-        *,
-        idempotency_key: str = "",
-        origin: str = "",
-    ) -> ProtocolRunMutationRecord:
-        del origin
-        return await self.create_protocol_run(payload, idempotency_key=idempotency_key)
-
-    async def list_protocol_issues(
+    async def list_run_issues(
         self,
         *,
         cursor: int = 0,
@@ -517,81 +509,28 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         rows = result.get("issues", result)
         return [ProtocolIssueRecord.model_validate(item) for item in rows]
 
-    async def list_runs(
-        self,
-        *,
-        cursor: int = 0,
-        limit: int = 25,
-        status: str = "",
-        protocol_id: str = "",
-        entry_agent_id: str = "",
-        origin_channel: str = "",
-    ) -> list[ProtocolRunRecord]:
-        return await self.list_protocol_runs(
-            cursor=cursor,
-            limit=limit,
-            status=status,
-            protocol_id=protocol_id,
-            entry_agent_id=entry_agent_id,
-            origin_channel=origin_channel,
-        )
-
-    async def list_run_issues(
-        self,
-        *,
-        cursor: int = 0,
-        limit: int = 25,
-        issue_kind: str = "",
-        protocol_run_id: str = "",
-        protocol_id: str = "",
-    ) -> list[ProtocolIssueRecord]:
-        return await self.list_protocol_issues(
-            cursor=cursor,
-            limit=limit,
-            issue_kind=issue_kind,
-            protocol_run_id=protocol_run_id,
-            protocol_id=protocol_id,
-        )
-
-    async def get_protocol_run(self, run_id: str) -> ProtocolRunDetailRecord:
+    async def get_run(self, run_id: str) -> ProtocolRunDetailRecord:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}")
         return ProtocolRunDetailRecord.model_validate(result)
 
-    async def get_run(self, run_id: str) -> ProtocolRunDetailRecord:
-        return await self.get_protocol_run(run_id)
-
-    async def get_protocol_run_participants(self, run_id: str) -> list[ProtocolRunParticipantRecord]:
+    async def list_run_participants(self, run_id: str) -> list[ProtocolRunParticipantRecord]:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/participants")
         rows = result.get("participants", result)
         return [ProtocolRunParticipantRecord.model_validate(item) for item in rows]
 
-    async def get_protocol_run_artifacts(self, run_id: str) -> list[ProtocolArtifactRecord]:
+    async def list_run_artifacts(self, run_id: str) -> list[ProtocolArtifactRecord]:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/artifacts")
         rows = result.get("artifacts", result)
         return [ProtocolArtifactRecord.model_validate(item) for item in rows]
 
-    async def list_run_artifacts(self, run_id: str) -> list[ProtocolArtifactRecord]:
-        return await self.get_protocol_run_artifacts(run_id)
-
-    async def get_protocol_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]:
+    async def list_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/timeline")
         rows = result.get("transitions", result)
         return [ProtocolTransitionRecord.model_validate(item) for item in rows]
 
-    async def list_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]:
-        return await self.get_protocol_run_timeline(run_id)
-
-    async def export_protocol_run(self, run_id: str) -> ProtocolRunExportRecord:
+    async def export_run(self, run_id: str) -> ProtocolRunExportRecord:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/export")
         return ProtocolRunExportRecord.model_validate(result)
-
-    async def export_run(self, run_id: str) -> ProtocolRunExportRecord:
-        return await self.export_protocol_run(run_id)
-
-    async def stream_run(self, run_id: str):
-        del run_id
-        if False:
-            yield None
 
     async def act_on_protocol_run(
         self,

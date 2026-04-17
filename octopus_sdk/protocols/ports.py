@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from .models import (
@@ -59,5 +58,3 @@ class ProtocolObservationPort(Protocol):
     async def list_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]: ...
 
     async def export_run(self, run_id: str) -> ProtocolRunExportRecord: ...
-
-    async def stream_run(self, run_id: str) -> AsyncIterator[object]: ...

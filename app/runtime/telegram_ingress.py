@@ -876,7 +876,7 @@ async def cmd_protocol(
             title=f"Telegram chat {event.chat_id}",
         )
         try:
-            result = await client.create_protocol_run(
+            result = await client.invoke_protocol(
                 {
                     "protocol_id": match.protocol_id,
                     "entry_agent_id": agent_id,
@@ -885,7 +885,8 @@ async def cmd_protocol(
                     "workspace_ref": str(session.project_id or ""),
                     "problem_statement": problem_statement,
                     "constraints_json": {},
-                }
+                },
+                origin="telegram",
             )
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to start the protocol run. {exc}")
@@ -921,7 +922,7 @@ async def cmd_protocol(
             return
         run_id = str(args[1] or "").strip()
         try:
-            detail = await client.get_protocol_run(run_id)
+            detail = await client.get_run(run_id)
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
             return
@@ -940,7 +941,7 @@ async def cmd_protocol(
         run_id = str(args[1] or "").strip()
         if sub == "watch":
             try:
-                detail = await client.get_protocol_run(run_id)
+                detail = await client.get_run(run_id)
             except RegistryClientError as exc:
                 await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
                 return
@@ -993,7 +994,7 @@ async def cmd_protocol(
                 await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
                 return
         try:
-            detail = await client.get_protocol_run(run_id)
+            detail = await client.get_run(run_id)
             result = await client.act_on_protocol_run(
                 run_id,
                 action=sub,

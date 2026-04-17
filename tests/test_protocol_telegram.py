@@ -87,7 +87,7 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
             async def create_conversation(self, **kwargs):
                 return SimpleNamespace(conversation_id="conv-1")
 
-            async def create_protocol_run(self, payload):
+            async def invoke_protocol(self, payload, *, origin="", idempotency_key=""):
                 assert payload["protocol_id"] == "protocol-1"
                 return SimpleNamespace(
                     run=SimpleNamespace(
@@ -135,7 +135,7 @@ async def test_protocol_cancel_requires_confirmation_before_mutation(monkeypatch
         calls: list[tuple[str, str]] = []
 
         class _Client:
-            async def get_protocol_run(self, run_id):
+            async def get_run(self, run_id):
                 return _run_detail(run_id=run_id, version=4)
 
             async def act_on_protocol_run(self, run_id, *, action, reason, expected_version=None):
@@ -202,7 +202,7 @@ async def test_protocol_status_reports_watch_state(monkeypatch):
         )
 
         class _Client:
-            async def get_protocol_run(self, run_id):
+            async def get_run(self, run_id):
                 return _run_detail(run_id=run_id, version=2, stage_key="planning")
 
         monkeypatch.setattr(
@@ -235,7 +235,7 @@ async def test_protocol_watch_and_unwatch_commands_toggle_persisted_watch(monkey
         setup_globals(cfg, prov)
 
         class _Client:
-            async def get_protocol_run(self, run_id):
+            async def get_run(self, run_id):
                 return _run_detail(run_id=run_id, version=3, stage_key="review")
 
         monkeypatch.setattr(
@@ -292,7 +292,7 @@ async def test_protocol_watch_loop_notifies_and_clears_terminal_runs(monkeypatch
         )
 
         class _Client:
-            async def get_protocol_run(self, run_id):
+            async def get_run(self, run_id):
                 return _run_detail(run_id=run_id, status="completed", version=2, stage_key="acceptance")
 
         monkeypatch.setattr(
@@ -335,7 +335,7 @@ async def test_protocol_watch_loop_debounces_non_terminal_updates(monkeypatch):
         )
 
         class _Client:
-            async def get_protocol_run(self, run_id):
+            async def get_run(self, run_id):
                 return _run_detail(run_id=run_id, status="running", version=2, stage_key="review")
 
         monkeypatch.setattr(

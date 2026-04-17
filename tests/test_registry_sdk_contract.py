@@ -837,3 +837,121 @@ def test_sdk_client_renew_enrollment_and_heartbeat_return_typed_models():
     assert heartbeat.agent.slug == "m1"
     assert calls[0][1].endswith("/v1/agents/register")
     assert calls[1][1].endswith("/v1/agents/heartbeat")
+
+
+def test_sdk_client_protocol_document_routes_use_typed_models():
+    from unittest.mock import patch
+
+    from octopus_sdk.registry.client import RegistryClient
+    from tests.support.protocol_support import protocol_document
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured: list[tuple[str, str, dict]] = []
+    document_payload = protocol_document()
+
+    async def mock_request(method, url, **kwargs):
+        request_url = str(url)
+        captured.append((method, request_url, kwargs))
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+            content = b"{}"
+
+            def json(self):
+                if "/v1/protocols/parse" in request_url:
+                    return {
+                        "format": "yaml",
+                        "text": "schema_version: 1\nmetadata:\n  slug: demo\n",
+                        "document": document_payload,
+                        "validation": {
+                            "ok": True,
+                            "errors": [],
+                            "content_hash": "hash-1",
+                        },
+                    }
+                if "/draft/export" in request_url:
+                    return {
+                        "format": "json",
+                        "text": "{\n  \"schema_version\": 1\n}",
+                        "document": document_payload,
+                        "validation": {
+                            "ok": True,
+                            "errors": [],
+                            "content_hash": "hash-1",
+                        },
+                    }
+                return {
+                    "protocol_id": "protocol-1",
+                    "protocol_definition_version_id": "version-1",
+                    "diff": "--- draft\n+++ published\n",
+                    "left_label": "draft",
+                    "right_label": "published",
+                }
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        parsed = asyncio.run(
+            client.parse_protocol_document_text(
+                definition_text="schema_version: 1\nmetadata:\n  slug: demo\n",
+                format="yaml",
+            )
+        )
+        exported = asyncio.run(client.export_protocol_draft("protocol-1", format="json"))
+        diff = asyncio.run(client.diff_protocol_draft("protocol-1", format="json"))
+
+    assert parsed.format == "yaml"
+    assert parsed.document is not None
+    assert parsed.document.slug == "mini-protocol"
+    assert exported.format == "json"
+    assert diff.protocol_id == "protocol-1"
+    assert captured[0][1].endswith("/v1/protocols/parse")
+    assert captured[1][1].endswith("/v1/protocols/protocol-1/draft/export")
+    assert captured[2][1].endswith("/v1/protocols/protocol-1/diff")
+
+
+def test_sdk_client_list_protocol_runs_sends_entry_agent_and_origin_channel_filters():
+    from unittest.mock import patch
+
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured = {}
+
+    async def mock_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+
+        class FakeResp:
+            status_code = 200
+            text = '{"runs":[]}'
+            content = text.encode()
+
+            def json(self):
+                return {"runs": []}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        runs = asyncio.run(
+            client.list_protocol_runs(
+                entry_agent_id="agent-9",
+                origin_channel="telegram",
+            )
+        )
+
+    assert runs == []
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/v1/protocol-runs")
+    assert captured["params"]["entry_agent_id"] == "agent-9"
+    assert captured["params"]["origin_channel"] == "telegram"

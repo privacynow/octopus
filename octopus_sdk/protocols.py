@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -10,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
+import yaml
 
 from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, TargetSelector, utcnow_iso
 
@@ -23,6 +25,7 @@ ProtocolResolutionOutcome = Literal["queued", "ok", "error"]
 ProtocolArtifactVerificationState = Literal["declared", "available", "verified", "missing", "waived"]
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
 ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
+ProtocolDocumentTextFormat = Literal["json", "yaml"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
@@ -332,6 +335,7 @@ class ProtocolRunRecord(RegistryRecordModel):
     entry_agent_id: str = ""
     entry_authority_ref: str = ""
     root_conversation_id: str = ""
+    root_external_conversation_ref: str = ""
     origin_channel: str = ""
     workspace_ref: str = ""
     repo_ref: str = ""
@@ -501,6 +505,21 @@ class ProtocolIssueRecord(RegistryRecordModel):
 class ProtocolMaintenanceResultRecord(RegistryRecordModel):
     swept_count: int = 0
     affected_run_ids: list[str] = Field(default_factory=list)
+
+
+class ProtocolTextDocumentRecord(RegistryRecordModel):
+    format: ProtocolDocumentTextFormat = "json"
+    text: str = ""
+    document: ProtocolDefinitionDocumentRecord | None = None
+    validation: ProtocolValidationResultRecord | None = None
+
+
+class ProtocolDefinitionDiffRecord(RegistryRecordModel):
+    protocol_id: str = ""
+    protocol_definition_version_id: str = ""
+    diff: str = ""
+    left_label: str = ""
+    right_label: str = ""
 
 
 class ProtocolStageDecisionRecord(RegistryRecordModel):
@@ -693,6 +712,60 @@ def validate_protocol_document(value: object) -> ProtocolValidationResultRecord:
         normalized_document=document,
         content_hash=protocol_definition_content_hash(document),
     )
+
+
+def normalize_protocol_document_format(value: object, *, default: ProtocolDocumentTextFormat = "json") -> ProtocolDocumentTextFormat:
+    token = str(value or "").strip().lower()
+    if not token:
+        return default
+    if token not in {"json", "yaml"}:
+        raise ValueError("Protocol document format must be json or yaml")
+    return token  # type: ignore[return-value]
+
+
+def protocol_document_from_text(text: str, *, format: ProtocolDocumentTextFormat = "json") -> ProtocolDefinitionDocumentRecord:
+    normalized = normalize_protocol_document_format(format)
+    source = str(text or "").strip()
+    if not source:
+        raise ValueError("Protocol document text must not be empty")
+    try:
+        loaded = json.loads(source) if normalized == "json" else yaml.safe_load(source)
+    except Exception as exc:
+        raise ValueError(f"Protocol {normalized} parse failed: {exc}") from exc
+    return canonical_protocol_document(loaded)
+
+
+def protocol_document_to_text(
+    value: object,
+    *,
+    format: ProtocolDocumentTextFormat = "json",
+) -> str:
+    normalized = normalize_protocol_document_format(format)
+    document = canonical_protocol_document(value)
+    payload = document.model_dump(mode="json")
+    if normalized == "yaml":
+        return str(yaml.safe_dump(payload, sort_keys=False, allow_unicode=False))
+    return json.dumps(payload, indent=2, sort_keys=False)
+
+
+def protocol_document_unified_diff(
+    left: object,
+    right: object,
+    *,
+    left_label: str = "draft",
+    right_label: str = "published",
+    format: ProtocolDocumentTextFormat = "json",
+) -> str:
+    left_text = protocol_document_to_text(left, format=format).splitlines()
+    right_text = protocol_document_to_text(right, format=format).splitlines()
+    diff = difflib.unified_diff(
+        left_text,
+        right_text,
+        fromfile=left_label,
+        tofile=right_label,
+        lineterm="",
+    )
+    return "\n".join(diff)
 
 
 def protocol_participant_session_key(run_id: str, participant_key: str) -> str:

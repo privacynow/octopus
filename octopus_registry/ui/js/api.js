@@ -219,6 +219,8 @@ const API = (() => {
             request('GET', `/v1/protocols/${encodeURIComponent(id)}`),
         getProtocolVersion: (protocolId, versionId) =>
             request('GET', `/v1/protocols/${encodeURIComponent(protocolId)}/versions/${encodeURIComponent(versionId)}`),
+        parseProtocolDocument: (body = {}) =>
+            request('POST', '/v1/protocols/parse', { body }),
         createProtocol: (body = {}) =>
             request('POST', '/v1/protocols', { body }),
         saveProtocolDraft: (id, body = {}) =>
@@ -229,6 +231,10 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
         archiveProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
+        exportProtocolDraft: (id, format = 'json') =>
+            request('GET', `/v1/protocols/${encodeURIComponent(id)}/draft/export`, { params: { format } }),
+        diffProtocolDraft: (id, format = 'json') =>
+            request('GET', `/v1/protocols/${encodeURIComponent(id)}/diff`, { params: { format } }),
         listProtocolRuns: (opts = {}) =>
             request('GET', '/v1/protocol-runs', { params: opts }),
         listProtocolIssues: (opts = {}) =>

@@ -2011,6 +2011,17 @@ select {
     gap: var(--space-3);
 }
 
+.protocol-workspace-shell {
+    min-height: calc(100dvh - 12rem);
+}
+
+.protocol-workspace-grid {
+    display: grid;
+    grid-template-columns: minmax(240px, 0.9fr) minmax(360px, 1.3fr) minmax(280px, 1fr) minmax(320px, 1.2fr);
+    gap: var(--space-3);
+    align-items: start;
+}
+
 .editor-shell {
     display: grid;
     gap: var(--space-3);
@@ -2061,6 +2072,74 @@ select {
 .quiet-note {
     color: var(--text-muted);
     font-size: var(--text-sm);
+}
+
+.protocol-panel {
+    min-height: 0;
+}
+
+.protocol-panel-list,
+.protocol-panel-runs,
+.protocol-panel-detail {
+    align-content: start;
+}
+
+.protocol-scroll {
+    display: grid;
+    gap: var(--space-2);
+    min-height: 0;
+    max-height: min(36dvh, 460px);
+    overflow-y: auto;
+    padding-right: var(--space-1);
+}
+
+.protocol-sticky-actions {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-block: var(--space-1);
+    background: linear-gradient(180deg, var(--bg-secondary) 70%, rgba(0, 0, 0, 0));
+}
+
+.protocol-validation-gutter {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--compact-card-padding);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+}
+
+.protocol-validation-gutter.is-valid {
+    border-color: color-mix(in srgb, var(--success) 28%, var(--border));
+}
+
+.protocol-validation-gutter.is-invalid {
+    border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
+}
+
+.protocol-validation-list {
+    margin: 0;
+    padding-left: 1.15rem;
+    display: grid;
+    gap: var(--space-1);
+}
+
+.protocol-run-launcher,
+.protocol-run-notes {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.protocol-run-summary-grid .metadata-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.protocol-first-run {
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    background: var(--bg);
 }
 
 .approval-list {
@@ -2328,6 +2407,10 @@ select {
         padding: var(--space-5);
     }
 
+    .protocol-workspace-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .dashboard-board,
     .task-board,
     .task-board-conversation {
@@ -2409,6 +2492,20 @@ select {
     .conversation-panel {
         flex: 1 1 auto;
         min-height: 0;
+    }
+
+    .protocol-workspace-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .protocol-scroll {
+        max-height: none;
+    }
+
+    .protocol-sticky-actions {
+        position: static;
+        padding-block: 0;
+        background: transparent;
     }
 
     .compose-box {

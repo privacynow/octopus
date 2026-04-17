@@ -28,6 +28,7 @@ from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolArtifactObservationRecord,
     ProtocolDefinitionDocumentRecord,
+    ProtocolDefinitionDiffRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
@@ -43,10 +44,15 @@ from octopus_sdk.protocols import (
     ProtocolTransitionRecord,
     ProtocolArtifactRecord,
     canonical_protocol_document,
+    normalize_protocol_document_format,
     protocol_retention_until,
     ProtocolStageTaskResultRecord,
+    protocol_document_from_text,
     protocol_definition_content_hash,
+    protocol_document_to_text,
+    protocol_document_unified_diff,
     protocol_participant_session_key,
+    ProtocolTextDocumentRecord,
     validate_protocol_document,
 )
 from psycopg.rows import dict_row
@@ -759,6 +765,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "entry_agent_id": row["entry_agent_id"],
                 "entry_authority_ref": row["entry_authority_ref"],
                 "root_conversation_id": row["root_conversation_id"],
+                "root_external_conversation_ref": row.get("root_external_conversation_ref", ""),
                 "origin_channel": row["origin_channel"],
                 "workspace_ref": row["workspace_ref"],
                 "repo_ref": row["repo_ref"],
@@ -1061,6 +1068,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
         if run_visibility == "not_visible":
             raise PermissionError("Protocol run is not visible to this actor.")
         run_row = dict(raw_run_row or {})
+        if str(run_row.get("root_conversation_id", "") or "").strip():
+            conversation_row = _POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT external_conversation_ref FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
+                (str(run_row.get("root_conversation_id", "") or ""),),
+            )
+            if conversation_row is not None:
+                run_row["root_external_conversation_ref"] = str(
+                    conversation_row.get("external_conversation_ref", "") or ""
+                )
         raw_definition_row = self._protocol_row(conn, str(run_row["protocol_id"] or ""))
         definition_visibility = self._protocol_visibility_status(
             raw_definition_row,
@@ -2281,6 +2298,103 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 raise KeyError(version_id)
             return self._protocol_version_from_row(version_row)
 
+    def parse_protocol_document_text(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        definition_text: str,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
+            raise PermissionError("Protocol draft writes require author access.")
+        normalized_format = normalize_protocol_document_format(format)
+        document = protocol_document_from_text(definition_text, format=normalized_format)
+        validation = validate_protocol_document(document)
+        return ProtocolTextDocumentRecord(
+            format=normalized_format,
+            text=protocol_document_to_text(document, format=normalized_format),
+            document=document,
+            validation=validation,
+        )
+
+    def export_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        include_drafts = any(
+            self._access_has_role(access, role)
+            for role in ("author", "publisher", "admin")
+        )
+        normalized_format = normalize_protocol_document_format(format)
+        with self._connect() as conn:
+            row = self._protocol_row(conn, protocol_id)
+            visibility = self._protocol_visibility_status(
+                row,
+                access=access,
+                include_drafts=include_drafts,
+            )
+            if visibility == "missing" or row is None:
+                raise KeyError(protocol_id)
+            if visibility == "not_visible":
+                raise PermissionError("Protocol is not visible to this actor.")
+            document = canonical_protocol_document(row.get("draft_definition_json") or {})
+            return ProtocolTextDocumentRecord(
+                format=normalized_format,
+                text=protocol_document_to_text(document, format=normalized_format),
+                document=document,
+                validation=validate_protocol_document(document),
+            )
+
+    def diff_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolDefinitionDiffRecord:
+        include_drafts = any(
+            self._access_has_role(access, role)
+            for role in ("author", "publisher", "admin")
+        )
+        normalized_format = normalize_protocol_document_format(format)
+        with self._connect() as conn:
+            row = self._protocol_row(conn, protocol_id)
+            visibility = self._protocol_visibility_status(
+                row,
+                access=access,
+                include_drafts=include_drafts,
+            )
+            if visibility == "missing" or row is None:
+                raise KeyError(protocol_id)
+            if visibility == "not_visible":
+                raise PermissionError("Protocol is not visible to this actor.")
+            draft_document = canonical_protocol_document(row.get("draft_definition_json") or {})
+            version_row = None
+            current_version_id = str(row.get("current_version_id", "") or "")
+            if current_version_id:
+                version_row = self._protocol_version_row(conn, current_version_id)
+            if version_row is None:
+                version_row = self._latest_protocol_version_row(conn, protocol_id)
+            if version_row is None:
+                raise KeyError(protocol_id)
+            published_document = canonical_protocol_document(version_row.get("definition_json") or {})
+            return ProtocolDefinitionDiffRecord(
+                protocol_id=str(protocol_id or ""),
+                protocol_definition_version_id=str(version_row.get("protocol_definition_version_id", "") or ""),
+                diff=protocol_document_unified_diff(
+                    draft_document,
+                    published_document,
+                    left_label="draft",
+                    right_label=f"published:v{int(version_row.get('version', 0) or 0)}",
+                    format=normalized_format,
+                ),
+                left_label="draft",
+                right_label=f"published:v{int(version_row.get('version', 0) or 0)}",
+            )
+
     def save_protocol_draft(
         self,
         *,
@@ -2507,24 +2621,34 @@ class RegistryPostgresStore(AbstractRegistryStore):
         cursor: int = 0,
         status: str = "",
         protocol_id: str = "",
+        entry_agent_id: str = "",
+        origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
         params: list[object] = []
         clauses: list[str] = []
         if status:
             params.append(status)
-            clauses.append("status = %s")
+            clauses.append("pr.status = %s")
         if protocol_id:
             params.append(protocol_id)
-            clauses.append("protocol_id = %s")
+            clauses.append("pr.protocol_id = %s")
+        if entry_agent_id:
+            params.append(entry_agent_id)
+            clauses.append("pr.entry_agent_id = %s")
+        if origin_channel:
+            params.append(origin_channel)
+            clauses.append("pr.origin_channel = %s")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = _POSTGRES_STORE_DIALECT.fetchall(
                 conn,
                 f"""
-                SELECT *
-                FROM {_SCHEMA}.protocol_runs
+                SELECT pr.*, coalesce(c.external_conversation_ref, '') AS root_external_conversation_ref
+                FROM {_SCHEMA}.protocol_runs pr
+                LEFT JOIN {_SCHEMA}.conversations c
+                  ON c.conversation_id = pr.root_conversation_id
                 {where}
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY pr.updated_at DESC, pr.created_at DESC
                 """,
                 tuple(params),
             )

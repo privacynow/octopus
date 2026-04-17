@@ -15,6 +15,7 @@ from .http_support import json_payload as _json_payload, paginated_response as _
 from .store_base import AbstractRegistryStore
 
 _InvalidationBroadcaster = Callable[..., Awaitable[None]]
+_TopicEventBroadcaster = Callable[..., Awaitable[None]]
 
 
 def build_protocol_router(
@@ -24,6 +25,7 @@ def build_protocol_router(
     require_operator_session: Callable[..., AuthContext],
     protocol_access: Callable[[AuthContext], ProtocolAccessContextRecord],
     broadcast_invalidations: _InvalidationBroadcaster,
+    broadcast_topic_event: _TopicEventBroadcaster,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -137,6 +139,61 @@ def build_protocol_router(
             raise _protocol_http_error(404, error_code="PROTOCOL_VERSION_NOT_FOUND", message="Protocol version not found.") from exc
         return _json_payload(version)
 
+    @router.post("/v1/protocols/parse")
+    async def resource_parse_protocol_document(
+        request: Request,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid protocol payload")
+        try:
+            parsed = store.parse_protocol_document_text(
+                access=protocol_access(auth),
+                definition_text=str(payload.get("definition_text", "") or ""),
+                format=str(payload.get("format", "") or "json"),
+            )
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        except ValueError as exc:
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=str(exc)) from exc
+        return _json_payload(parsed)
+
+    @router.get("/v1/protocols/{protocol_id}/draft/export")
+    def resource_export_protocol_draft(
+        protocol_id: str,
+        format: str = Query(default="json"),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            exported = store.export_protocol_draft(protocol_id, access=protocol_access(auth), format=format)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message="Protocol not found.") from exc
+        except ValueError as exc:
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID_FORMAT", message=str(exc)) from exc
+        return _json_payload(exported)
+
+    @router.get("/v1/protocols/{protocol_id}/diff")
+    def resource_diff_protocol_draft(
+        protocol_id: str,
+        format: str = Query(default="json"),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            diff = store.diff_protocol_draft(protocol_id, access=protocol_access(auth), format=format)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_VERSION_NOT_FOUND", message="Published protocol version not found.") from exc
+        except ValueError as exc:
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID_FORMAT", message=str(exc)) from exc
+        return _json_payload(diff)
+
     @router.post("/v1/protocols")
     async def resource_create_protocol(
         request: Request,
@@ -224,6 +281,8 @@ def build_protocol_router(
         limit: int = Query(default=25, ge=1, le=100),
         status: str = Query(default=""),
         protocol_id: str = Query(default=""),
+        entry_agent_id: str = Query(default=""),
+        origin_channel: str = Query(default=""),
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
@@ -233,6 +292,8 @@ def build_protocol_router(
             cursor=cursor,
             status=status,
             protocol_id=protocol_id,
+            entry_agent_id=entry_agent_id,
+            origin_channel=origin_channel,
         )
         return _json_payload(_paginated_response("runs", runs, cursor, limit))
 
@@ -274,6 +335,12 @@ def build_protocol_router(
         if result.run is not None:
             topics.add(f"protocol-run:{result.run.protocol_run_id}")
         await broadcast_invalidations(topics=topics, reason="protocol.run.created")
+        if result.run is not None:
+            await broadcast_topic_event(
+                run_id=result.run.protocol_run_id,
+                event_kind="protocol_run.updated",
+                reason="protocol.run.created",
+            )
         return _json_payload(result)
 
     @router.get("/v1/protocol-runs/{run_id}")
@@ -369,6 +436,11 @@ def build_protocol_router(
             raise _protocol_result_http_error(result)
         await broadcast_invalidations(
             topics=("protocols", "summary", f"protocol-run:{run_id}"),
+            reason=f"protocol.run.{action}",
+        )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_run.terminal" if str(result.run.status if result.run is not None else "") in {"completed", "failed", "cancelled"} else "protocol_run.updated",
             reason=f"protocol.run.{action}",
         )
         return _json_payload(result)

@@ -1195,6 +1195,161 @@ def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, 
     assert "/v1/protocol-runs/issues" in paths
 
 
+def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+    assert "/v1/protocols/parse" in paths
+    assert "/v1/protocols/{protocol_id}/draft/export" in paths
+    assert "/v1/protocols/{protocol_id}/diff" in paths
+    run_list_parameters = {
+        item["name"]
+        for item in paths["/v1/protocol-runs"]["get"].get("parameters", [])
+    }
+    assert "entry_agent_id" in run_list_parameters
+    assert "origin_channel" in run_list_parameters
+
+
+def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def parse_protocol_document_text(self, *, access, definition_text: str, format: str = "json"):
+            assert format == "yaml"
+            assert "schema_version: 1" in definition_text
+            return {
+                "format": "yaml",
+                "text": "schema_version: 1\nmetadata:\n  slug: demo\n",
+                "document": {
+                    "schema_version": 1,
+                    "metadata": {"slug": "demo"},
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                "validation": {
+                    "ok": True,
+                    "errors": [],
+                    "content_hash": "hash-1",
+                },
+            }
+
+        def export_protocol_draft(self, protocol_id: str, *, access, format: str = "json"):
+            assert protocol_id == "protocol-1"
+            assert format == "yaml"
+            return {
+                "format": "yaml",
+                "text": "schema_version: 1\nmetadata:\n  slug: demo\n",
+                "document": {
+                    "schema_version": 1,
+                    "metadata": {"slug": "demo"},
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                "validation": {
+                    "ok": True,
+                    "errors": [],
+                    "content_hash": "hash-1",
+                },
+            }
+
+        def diff_protocol_draft(self, protocol_id: str, *, access, format: str = "json"):
+            assert protocol_id == "protocol-1"
+            assert format == "json"
+            return {
+                "protocol_id": protocol_id,
+                "protocol_definition_version_id": "version-1",
+                "diff": "--- draft\n+++ published\n@@\n-description: next\n+description: current\n",
+                "left_label": "draft",
+                "right_label": "published",
+            }
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "publisher", "author"),
+    )
+    try:
+        parse_response = client.post(
+            "/v1/protocols/parse",
+            json={"definition_text": "schema_version: 1\nmetadata:\n  slug: demo\n", "format": "yaml"},
+        )
+        export_response = client.get("/v1/protocols/protocol-1/draft/export?format=yaml")
+        diff_response = client.get("/v1/protocols/protocol-1/diff?format=json")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert parse_response.status_code == 200
+    assert parse_response.json()["format"] == "yaml"
+    assert export_response.status_code == 200
+    assert export_response.json()["text"].startswith("schema_version: 1")
+    assert diff_response.status_code == 200
+    assert diff_response.json()["left_label"] == "draft"
+
+
+def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_protocol_runs(
+            self,
+            *,
+            access,
+            limit=25,
+            cursor=0,
+            status="",
+            protocol_id="",
+            entry_agent_id="",
+            origin_channel="",
+        ):
+            assert entry_agent_id == "agent-2"
+            assert origin_channel == "telegram"
+            return [
+                {
+                    "protocol_run_id": "run-2",
+                    "protocol_id": "protocol-1",
+                    "protocol_definition_version_id": "version-1",
+                    "entry_agent_id": "agent-2",
+                    "origin_channel": "telegram",
+                    "run_org_id": "local",
+                    "status": "running",
+                    "workspace_ref": "workspace-a",
+                    "problem_statement": "Build the thing.",
+                    "constraints_json": {},
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                }
+            ]
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs?entry_agent_id=agent-2&origin_channel=telegram")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runs"][0]["entry_agent_id"] == "agent-2"
+    assert payload["runs"][0]["origin_channel"] == "telegram"
+
+
 def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

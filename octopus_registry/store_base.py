@@ -21,11 +21,13 @@ from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolDefinitionDocumentRecord,
+    ProtocolDefinitionDiffRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
     ProtocolIssueRecord,
     ProtocolMaintenanceResultRecord,
+    ProtocolTextDocumentRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
@@ -702,8 +704,37 @@ class AbstractRegistryStore(Protocol):
         cursor: int = 0,
         status: str = "",
         protocol_id: str = "",
+        entry_agent_id: str = "",
+        origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
         """Return protocol runs in UI-ready form."""
+
+    def parse_protocol_document_text(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        definition_text: str,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        """Parse protocol text into a canonical validated document."""
+
+    def export_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        """Export the current protocol draft document as JSON or YAML text."""
+
+    def diff_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolDefinitionDiffRecord:
+        """Return a unified diff between the current draft and the latest published version."""
 
     def list_protocol_issues(
         self,

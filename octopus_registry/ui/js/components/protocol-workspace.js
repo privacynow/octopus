@@ -6,8 +6,25 @@ function renderProtocolWorkspace(container) {
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
     }
 
+    const ISSUE_KIND_OPTIONS = [
+        { value: '', label: 'All issues' },
+        { value: 'blocked_run', label: 'Blocked runs' },
+        { value: 'invalid_contract', label: 'Contract errors' },
+        { value: 'stuck_lease', label: 'Stuck leases' },
+        { value: 'expired_timeout', label: 'Expired timeouts' },
+    ];
+    const RUN_STATUS_OPTIONS = [
+        { value: '', label: 'All runs' },
+        { value: 'running', label: 'Running' },
+        { value: 'blocked', label: 'Blocked' },
+        { value: 'completed', label: 'Completed' },
+        { value: 'failed', label: 'Failed' },
+        { value: 'cancelled', label: 'Cancelled' },
+    ];
+
     let protocols = [];
     let runs = [];
+    let protocolIssues = [];
     let agents = [];
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
     let currentRunId = UI.readQueryParam('run_id', '');
@@ -15,6 +32,14 @@ function renderProtocolWorkspace(container) {
     let currentRun = null;
     let currentIssues = [];
     let defaultTemplate = null;
+    let lastRunEvent = null;
+    let editorFormat = 'json';
+    let protocolSearch = '';
+    let runSearch = '';
+    let issueKindFilter = '';
+    let runStatusFilter = '';
+    let timelineParticipantFilter = '';
+    let currentRunSubscription = null;
     let draft = {
         protocol_id: '',
         slug: '',
@@ -25,15 +50,15 @@ function renderProtocolWorkspace(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Protocols</h2><p>Define reusable multi-stage workflows, publish versioned protocol definitions, and launch protocol runs against a bot workspace.</p>';
+    header.innerHTML = '<h2>Protocols</h2><p>Define reusable, versioned workflows, publish them once, and operate live protocol runs from the same control plane.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');
-    shell.className = 'admin-shell';
+    shell.className = 'admin-shell protocol-workspace-shell';
     container.appendChild(shell);
 
     const contentEl = document.createElement('div');
-    contentEl.className = 'editor-shell';
+    contentEl.className = 'protocol-workspace-grid';
     shell.appendChild(contentEl);
 
     function _writeState() {
@@ -43,8 +68,34 @@ function renderProtocolWorkspace(container) {
         });
     }
 
+    function _downloadText(filename, text, contentType) {
+        const blob = new Blob([text], { type: contentType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 500);
+    }
+
+    async function _readFileText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.readAsText(file);
+        });
+    }
+
+    function _managedAgents() {
+        return (agents || []).filter((item) => ['connected', 'degraded'].includes(String(item.connectivity_state || '')));
+    }
+
     function _defaultProtocolDocument() {
         return defaultTemplate || {
+            schema_version: 1,
             metadata: {},
             participants: [],
             artifacts: [],
@@ -56,24 +107,81 @@ function renderProtocolWorkspace(container) {
         };
     }
 
+    async function _syncEditorFormat(nextFormat) {
+        const parsed = await API.parseProtocolDocument({
+            definition_text: draft.definition_text || '',
+            format: editorFormat,
+        });
+        editorFormat = nextFormat;
+        if (nextFormat === 'yaml') {
+            const exported = await API.parseProtocolDocument({
+                definition_text: JSON.stringify(parsed.document || {}, null, 2),
+                format: 'yaml',
+            });
+            draft.definition_text = String(exported.text || '');
+        } else {
+            draft.definition_text = JSON.stringify(parsed.document || {}, null, 2);
+        }
+    }
+
+    async function _parseDraftDocument() {
+        const result = await API.parseProtocolDocument({
+            definition_text: draft.definition_text || '',
+            format: editorFormat,
+        });
+        if (!result.document || !(result.validation && result.validation.ok)) {
+            throw new Error((result.validation && result.validation.errors && result.validation.errors.join(' · ')) || 'Protocol draft is invalid.');
+        }
+        return result.document;
+    }
+
     function _applyDraftFromProtocol(detail) {
+        currentProtocol = detail;
         const rawDraftDocument = detail && detail.draft_definition_json
             && Object.keys(detail.draft_definition_json).length
             ? detail.draft_definition_json
             : null;
-        const draftDocument = rawDraftDocument || (detail && detail.draft_document)
-            || _defaultProtocolDocument();
+        const draftDocument = rawDraftDocument || (detail && detail.draft_document) || _defaultProtocolDocument();
         draft = {
             protocol_id: detail?.protocol?.protocol_id || '',
             slug: detail?.protocol?.slug || draftDocument.metadata?.slug || '',
             display_name: detail?.protocol?.display_name || draftDocument.metadata?.display_name || '',
             description: detail?.protocol?.description || draftDocument.metadata?.description || '',
-            definition_text: JSON.stringify(draftDocument, null, 2),
+            definition_text: editorFormat === 'yaml'
+                ? ''
+                : JSON.stringify(draftDocument, null, 2),
         };
     }
 
+    async function _refreshDraftTextForCurrentFormat() {
+        if (!currentProtocol && !draft.definition_text) {
+            draft.definition_text = editorFormat === 'yaml'
+                ? String((await API.parseProtocolDocument({
+                    definition_text: JSON.stringify(_defaultProtocolDocument(), null, 2),
+                    format: 'yaml',
+                })).text || '')
+                : JSON.stringify(_defaultProtocolDocument(), null, 2);
+            return;
+        }
+        const source = currentProtocol?.draft_document || currentProtocol?.draft_definition_json || _defaultProtocolDocument();
+        const parsed = await API.parseProtocolDocument({
+            definition_text: JSON.stringify(source, null, 2),
+            format: editorFormat,
+        });
+        draft.definition_text = String(parsed.text || '');
+    }
+
     function _protocolRows() {
-        return protocols.map((item) => UI.renderListRow({
+        const filtered = (protocols || []).filter((item) => {
+            const haystack = [
+                item.display_name || '',
+                item.slug || '',
+                item.protocol_id || '',
+                item.description || '',
+            ].join(' ').toLowerCase();
+            return !protocolSearch || haystack.includes(protocolSearch.toLowerCase());
+        });
+        return filtered.map((item) => UI.renderListRow({
             label: item.display_name || item.slug || item.protocol_id,
             sublabel: item.description || item.slug || item.protocol_id,
             badgeText: item.lifecycle_state || 'draft',
@@ -87,7 +195,19 @@ function renderProtocolWorkspace(container) {
     }
 
     function _runRows() {
-        return runs.map((item) => UI.renderListRow({
+        const filtered = (runs || []).filter((item) => {
+            if (runStatusFilter && String(item.status || '') !== runStatusFilter) {
+                return false;
+            }
+            const haystack = [
+                item.problem_statement || '',
+                item.protocol_run_id || '',
+                item.current_stage_key || '',
+                item.status || '',
+            ].join(' ').toLowerCase();
+            return !runSearch || haystack.includes(runSearch.toLowerCase());
+        });
+        return filtered.map((item) => UI.renderListRow({
             label: item.current_stage_key
                 ? `${item.current_stage_key} · ${item.status}`
                 : (item.status || 'queued'),
@@ -101,21 +221,363 @@ function renderProtocolWorkspace(container) {
         }));
     }
 
-    function _managedAgents() {
-        return (agents || []).filter((item) => ['connected', 'degraded'].includes(String(item.connectivity_state || '')));
+    function _issueRows() {
+        return (protocolIssues || []).map((item) => UI.renderListRow({
+            label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.protocol_display_name || item.protocol_id || 'Protocol issue'}`,
+            sublabel: [
+                item.stage_key ? `stage ${item.stage_key}` : '',
+                item.issue_detail || item.issue_code || '',
+            ].filter(Boolean).join(' · '),
+            badgeText: item.issue_code || item.stage_key || '',
+            className: item.protocol_run_id === currentRunId ? 'is-selected' : '',
+            onClick: () => {
+                currentRunId = item.protocol_run_id;
+                void loadRunDetail();
+            },
+        }));
+    }
+
+    function _runDeepLink(run) {
+        const token = String(run?.protocol_run_id || '').trim();
+        if (!token) {
+            return '/ui/protocols';
+        }
+        return `/ui/protocols?run_id=${encodeURIComponent(token)}`;
+    }
+
+    function _artifactLabel(item) {
+        const parts = [];
+        if (item.workspace_path || item.location) {
+            parts.push(String(item.workspace_path || item.location || ''));
+        }
+        if (item.content_hash) {
+            parts.push(`sha256 ${String(item.content_hash).slice(0, 12)}`);
+        }
+        if (Number.isFinite(Number(item.size_bytes || 0)) && Number(item.size_bytes || 0) > 0) {
+            parts.push(`${Number(item.size_bytes || 0).toLocaleString()} bytes`);
+        }
+        return parts.join(' · ');
+    }
+
+    function _transitionParticipantKey(transition, stageById) {
+        const toStage = stageById.get(String(transition.to_stage_execution_id || ''));
+        if (toStage && toStage.participant_key) {
+            return String(toStage.participant_key || '');
+        }
+        const fromStage = stageById.get(String(transition.from_stage_execution_id || ''));
+        return fromStage ? String(fromStage.participant_key || '') : '';
+    }
+
+    function _filteredTimelineData() {
+        if (!currentRun) {
+            return {
+                stageRows: [],
+                transitionRows: [],
+                participantOptions: [],
+            };
+        }
+        const stageById = new Map((currentRun.stage_executions || []).map((item) => [String(item.protocol_stage_execution_id || ''), item]));
+        const participantOptions = Array.from(
+            new Map((currentRun.participants || []).map((item) => [
+                String(item.participant_key || ''),
+                item.display_name || item.participant_key || '',
+            ])).entries(),
+        ).map(([value, label]) => ({ value, label }));
+        const stageRows = (currentRun.stage_executions || []).filter((item) =>
+            !timelineParticipantFilter || String(item.participant_key || '') === timelineParticipantFilter,
+        );
+        const transitionRows = (currentRun.transitions || []).filter((item) =>
+            !timelineParticipantFilter || _transitionParticipantKey(item, stageById) === timelineParticipantFilter,
+        );
+        return { stageRows, transitionRows, participantOptions };
+    }
+
+    function _renderValidationGutter(parent) {
+        const validation = currentProtocol?.validation;
+        if (!validation) {
+            return;
+        }
+        const gutter = document.createElement('section');
+        gutter.className = `protocol-validation-gutter ${validation.ok ? 'is-valid' : 'is-invalid'}`;
+        gutter.setAttribute('role', validation.ok ? 'status' : 'alert');
+        const title = document.createElement('strong');
+        title.textContent = validation.ok ? 'Validation passed' : 'Validation issues';
+        gutter.appendChild(title);
+        const summary = document.createElement('div');
+        summary.className = 'quiet-note';
+        summary.textContent = validation.ok
+            ? `Draft valid. Content hash: ${validation.content_hash || 'n/a'}`
+            : `${validation.errors.length} issue(s) found.`;
+        gutter.appendChild(summary);
+        if (!validation.ok && validation.errors.length) {
+            const list = document.createElement('ul');
+            list.className = 'protocol-validation-list';
+            validation.errors.forEach((item) => {
+                const li = document.createElement('li');
+                li.textContent = item;
+                list.appendChild(li);
+            });
+            gutter.appendChild(list);
+        }
+        parent.appendChild(gutter);
+    }
+
+    function _openImportDialog() {
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
+
+        const formatControl = UI.createSegmentedControl(
+            [
+                { value: 'json', label: 'JSON' },
+                { value: 'yaml', label: 'YAML' },
+            ],
+            (value) => {
+                formatValue = value || 'json';
+            },
+            { label: 'Import format', value: 'yaml' },
+        );
+        let formatValue = 'yaml';
+        form.appendChild(formatControl.element);
+
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.className = 'input';
+        fileInput.accept = '.json,.yaml,.yml,application/json,text/yaml,text/x-yaml';
+        form.appendChild(fileInput);
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'guidance-textarea';
+        textarea.rows = 12;
+        textarea.placeholder = 'Paste protocol JSON or YAML here';
+        form.appendChild(textarea);
+
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'Import uses the same canonical validator as save/publish. JSON and YAML both normalize to the shared protocol document model.';
+        form.appendChild(note);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const importBtn = document.createElement('button');
+        importBtn.type = 'button';
+        importBtn.className = 'btn btn-primary';
+        importBtn.textContent = 'Import';
+        const view = UI.showDialog('Import protocol definition', form, {
+            actions: [cancelBtn, importBtn],
+            maxWidth: '760px',
+            initialFocus: textarea,
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        importBtn.addEventListener('click', async () => {
+            importBtn.disabled = true;
+            try {
+                let definitionText = String(textarea.value || '').trim();
+                const file = fileInput.files && fileInput.files[0];
+                if (!definitionText && file) {
+                    definitionText = await _readFileText(file);
+                }
+                if (!definitionText) {
+                    textarea.focus();
+                    return;
+                }
+                const parsed = await API.parseProtocolDocument({
+                    definition_text: definitionText,
+                    format: formatValue,
+                });
+                const document = parsed.document || _defaultProtocolDocument();
+                draft.slug = document.metadata?.slug || draft.slug || '';
+                draft.display_name = document.metadata?.display_name || draft.display_name || '';
+                draft.description = document.metadata?.description || draft.description || '';
+                editorFormat = formatValue;
+                draft.definition_text = String(parsed.text || definitionText);
+                currentProtocol = null;
+                currentProtocolId = '';
+                currentRunId = '';
+                currentRun = null;
+                lastRunEvent = null;
+                _writeState();
+                renderWorkspace();
+                view.close();
+                UI.notify('Protocol definition imported into the editor.', 'success');
+            } catch (err) {
+                UI.reportError('Failed to import the protocol definition', err, {
+                    context: 'Protocol import failed',
+                });
+            }
+            importBtn.disabled = false;
+        });
+    }
+
+    async function _downloadDraft(format) {
+        const normalized = format === 'yaml' ? 'yaml' : 'json';
+        try {
+            let exported;
+            if (currentProtocolId) {
+                exported = await API.exportProtocolDraft(currentProtocolId, normalized);
+            } else {
+                exported = await API.parseProtocolDocument({
+                    definition_text: draft.definition_text || '',
+                    format: normalized,
+                });
+            }
+            _downloadText(
+                `${UI.safeFilename(draft.slug || currentProtocol?.protocol?.slug || 'protocol')}.${normalized === 'yaml' ? 'yaml' : 'json'}`,
+                String(exported.text || ''),
+                normalized === 'yaml' ? 'text/yaml' : 'application/json',
+            );
+        } catch (err) {
+            UI.reportError('Failed to export the protocol draft', err, {
+                context: 'Protocol draft export failed',
+            });
+        }
+    }
+
+    async function _downloadRunExport() {
+        if (!currentRun) {
+            return;
+        }
+        try {
+            const exported = await API.exportProtocolRun(currentRun.run.protocol_run_id);
+            _downloadText(
+                `${UI.safeFilename(currentRun.definition?.slug || currentRun.run.protocol_run_id || 'protocol-run')}.protocol-run.json`,
+                JSON.stringify(exported, null, 2),
+                'application/json',
+            );
+        } catch (err) {
+            UI.reportError('Failed to export the protocol run', err, {
+                context: 'Protocol run export failed',
+            });
+        }
+    }
+
+    async function _showDraftDiff() {
+        if (!currentProtocolId) {
+            UI.notify('Create and publish the protocol before requesting a diff.', 'warning');
+            return;
+        }
+        try {
+            const result = await API.diffProtocolDraft(currentProtocolId, editorFormat);
+            UI.showTextDialog(
+                `Protocol diff · ${draft.display_name || draft.slug || currentProtocolId}`,
+                result.diff || 'No differences.',
+                { maxWidth: '960px' },
+            );
+        } catch (err) {
+            UI.reportError('Failed to generate the protocol diff', err, {
+                context: 'Protocol diff failed',
+            });
+        }
+    }
+
+    function _openRunActionDialog(spec) {
+        if (!currentRun) {
+            return;
+        }
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
+
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = spec.note;
+        form.appendChild(note);
+
+        const reasonInput = document.createElement('textarea');
+        reasonInput.className = 'guidance-textarea';
+        reasonInput.rows = 6;
+        reasonInput.placeholder = 'Short reason recorded in the protocol audit trail';
+        form.appendChild(reasonInput);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = spec.action === 'cancel' ? 'btn' : 'btn btn-primary';
+        confirmBtn.textContent = spec.confirmLabel;
+        const view = UI.showDialog(spec.title, form, {
+            actions: [cancelBtn, confirmBtn],
+            role: 'alertdialog',
+            initialFocus: reasonInput,
+            maxWidth: '680px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        confirmBtn.addEventListener('click', async () => {
+            const reason = String(reasonInput.value || '').trim();
+            if (spec.requireReason && !reason) {
+                reasonInput.focus();
+                return;
+            }
+            confirmBtn.disabled = true;
+            try {
+                await API.actOnProtocolRun(
+                    currentRun.run.protocol_run_id,
+                    spec.action,
+                    { reason },
+                    {
+                        expectedVersion: currentRun.run.version || 1,
+                        idempotencyKey: (window.crypto && typeof window.crypto.randomUUID === 'function')
+                            ? window.crypto.randomUUID().replace(/-/g, '')
+                            : `${Date.now()}${Math.random().toString(16).slice(2)}`,
+                    },
+                );
+                view.close();
+                await loadRuns();
+                await loadRunDetail();
+                UI.notify(spec.successMessage, 'success');
+            } catch (err) {
+                if (String(err && err.message || '').includes('409:')) {
+                    await loadRunDetail();
+                    UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning');
+                } else {
+                    UI.reportError(`Failed to ${spec.action.replace('-', ' ')} the protocol run`, err, {
+                        context: 'Protocol run action failed',
+                    });
+                }
+            }
+            confirmBtn.disabled = false;
+        });
+    }
+
+    function _bindRunSubscription() {
+        if (currentRunSubscription) {
+            currentRunSubscription();
+            currentRunSubscription = null;
+        }
+        if (!currentRunId || typeof WS === 'undefined' || !WS || typeof WS.subscribe !== 'function') {
+            return;
+        }
+        currentRunSubscription = WS.subscribe(`protocol-run:${currentRunId}`, (msg) => {
+            if (msg && msg.type === 'event' && msg.data && msg.data.event_kind) {
+                lastRunEvent = msg.data;
+            }
+            void loadRunDetail({ soft: true });
+        });
     }
 
     function renderWorkspace() {
-        const leftPanel = document.createElement('section');
-        leftPanel.className = 'editor-panel';
+        const definitionPanel = document.createElement('section');
+        definitionPanel.className = 'editor-panel protocol-panel protocol-panel-list';
 
-        const leftTitle = document.createElement('div');
-        leftTitle.className = 'editor-section-title';
-        leftTitle.textContent = 'Definitions';
-        leftPanel.appendChild(leftTitle);
+        const definitionTitle = document.createElement('div');
+        definitionTitle.className = 'editor-section-title';
+        definitionTitle.textContent = 'Definitions';
+        definitionPanel.appendChild(definitionTitle);
 
-        const leftActions = document.createElement('div');
-        leftActions.className = 'editor-actions';
+        const definitionSearch = document.createElement('input');
+        definitionSearch.className = 'search-input';
+        definitionSearch.placeholder = 'Search definitions';
+        definitionSearch.value = protocolSearch;
+        definitionSearch.addEventListener('input', () => {
+            protocolSearch = definitionSearch.value;
+            renderWorkspace();
+        });
+        definitionPanel.appendChild(definitionSearch);
+
+        const definitionActions = document.createElement('div');
+        definitionActions.className = 'editor-actions protocol-sticky-actions';
         const newButton = document.createElement('button');
         newButton.type = 'button';
         newButton.className = 'btn btn-primary';
@@ -125,51 +587,88 @@ function renderProtocolWorkspace(container) {
                 if (!defaultTemplate) {
                     defaultTemplate = await API.getProtocolTemplate('software-engineering');
                 }
+                editorFormat = 'json';
+                currentProtocolId = '';
+                currentProtocol = null;
+                currentRunId = '';
+                currentRun = null;
+                lastRunEvent = null;
+                draft = {
+                    protocol_id: '',
+                    slug: defaultTemplate.metadata?.slug || '',
+                    display_name: defaultTemplate.metadata?.display_name || '',
+                    description: defaultTemplate.metadata?.description || '',
+                    definition_text: JSON.stringify(defaultTemplate, null, 2),
+                };
+                _writeState();
+                renderWorkspace();
             } catch (err) {
-                UI.reportError('Failed to load the protocol template', err, {
+                UI.reportError('Failed to load the default protocol template', err, {
                     context: 'Protocol template load failed',
                 });
-                return;
             }
-            currentProtocolId = '';
-            currentProtocol = null;
-            currentRunId = '';
-            currentRun = null;
-            _applyDraftFromProtocol(null);
-            _writeState();
-            renderWorkspace();
         });
-        leftActions.appendChild(newButton);
-        leftPanel.appendChild(leftActions);
+        definitionActions.appendChild(newButton);
 
-        const listWrap = document.createElement('div');
-        if (protocols.length) {
-            UI.reconcileChildren(listWrap, _protocolRows());
-        } else {
-            listWrap.appendChild(UI.renderEmptyState('No protocols yet. Start with the software engineering template.', true));
+        const importButton = document.createElement('button');
+        importButton.type = 'button';
+        importButton.className = 'btn';
+        importButton.textContent = 'Import';
+        importButton.addEventListener('click', _openImportDialog);
+        definitionActions.appendChild(importButton);
+        definitionPanel.appendChild(definitionActions);
+
+        const definitionList = document.createElement('div');
+        definitionList.className = 'protocol-scroll';
+        const definitionRows = _protocolRows();
+        UI.reconcileChildren(
+            definitionList,
+            definitionRows.length
+                ? definitionRows
+                : [UI.renderEmptyState('No protocols yet. Start from the software engineering template or import one.', true)],
+        );
+        definitionPanel.appendChild(definitionList);
+
+        const issueTitle = document.createElement('div');
+        issueTitle.className = 'editor-section-title';
+        issueTitle.textContent = 'Support issues';
+        definitionPanel.appendChild(issueTitle);
+
+        const issueFilterControl = UI.createSegmentedControl(
+            ISSUE_KIND_OPTIONS,
+            (value) => {
+                issueKindFilter = value || '';
+                void loadIssues();
+            },
+            { label: 'Issue filter', value: issueKindFilter || '' },
+        );
+        definitionPanel.appendChild(issueFilterControl.element);
+
+        const issueList = document.createElement('div');
+        issueList.className = 'protocol-scroll';
+        const issueRows = _issueRows();
+        UI.reconcileChildren(
+            issueList,
+            issueRows.length
+                ? issueRows
+                : [UI.renderEmptyState('No blocked runs, lease issues, contract failures, or expired timeouts are visible right now.', true)],
+        );
+        definitionPanel.appendChild(issueList);
+
+        const editorPanel = document.createElement('section');
+        editorPanel.className = 'editor-panel protocol-panel protocol-panel-editor';
+
+        const editorTitle = document.createElement('div');
+        editorTitle.className = 'editor-section-title';
+        editorTitle.textContent = currentProtocolId ? 'Protocol detail' : 'Protocol editor';
+        editorPanel.appendChild(editorTitle);
+
+        if (!currentProtocolId && !protocols.length && !draft.definition_text) {
+            const empty = document.createElement('div');
+            empty.className = 'protocol-first-run';
+            empty.appendChild(UI.renderEmptyState('First run: create a draft from the template, validate it, publish it, then start a run against a connected bot.', false));
+            editorPanel.appendChild(empty);
         }
-        leftPanel.appendChild(listWrap);
-
-        const runTitle = document.createElement('div');
-        runTitle.className = 'editor-section-title';
-        runTitle.textContent = 'Recent runs';
-        leftPanel.appendChild(runTitle);
-
-        const runWrap = document.createElement('div');
-        if (runs.length) {
-            UI.reconcileChildren(runWrap, _runRows());
-        } else {
-            runWrap.appendChild(UI.renderEmptyState('No protocol runs yet.', true));
-        }
-        leftPanel.appendChild(runWrap);
-
-        const detailPanel = document.createElement('section');
-        detailPanel.className = 'editor-panel';
-
-        const detailTitle = document.createElement('div');
-        detailTitle.className = 'editor-section-title';
-        detailTitle.textContent = currentProtocolId ? 'Protocol detail' : 'New protocol';
-        detailPanel.appendChild(detailTitle);
 
         const slugInput = document.createElement('input');
         slugInput.className = 'search-input';
@@ -178,7 +677,7 @@ function renderProtocolWorkspace(container) {
         slugInput.addEventListener('input', () => {
             draft.slug = slugInput.value;
         });
-        detailPanel.appendChild(UI.renderSettingsRow({ label: 'Slug', control: slugInput }));
+        editorPanel.appendChild(UI.renderSettingsRow({ label: 'Slug', control: slugInput }));
 
         const nameInput = document.createElement('input');
         nameInput.className = 'search-input';
@@ -187,7 +686,7 @@ function renderProtocolWorkspace(container) {
         nameInput.addEventListener('input', () => {
             draft.display_name = nameInput.value;
         });
-        detailPanel.appendChild(UI.renderSettingsRow({ label: 'Display name', control: nameInput }));
+        editorPanel.appendChild(UI.renderSettingsRow({ label: 'Display name', control: nameInput }));
 
         const descriptionInput = document.createElement('input');
         descriptionInput.className = 'search-input';
@@ -196,67 +695,68 @@ function renderProtocolWorkspace(container) {
         descriptionInput.addEventListener('input', () => {
             draft.description = descriptionInput.value;
         });
-        detailPanel.appendChild(UI.renderSettingsRow({ label: 'Description', control: descriptionInput }));
+        editorPanel.appendChild(UI.renderSettingsRow({ label: 'Description', control: descriptionInput }));
 
-        const definitionLabel = document.createElement('div');
-        definitionLabel.className = 'editor-section-title';
-        definitionLabel.textContent = 'Definition JSON';
-        detailPanel.appendChild(definitionLabel);
+        const metaNote = document.createElement('div');
+        metaNote.className = 'quiet-note';
+        metaNote.textContent = currentProtocol?.protocol
+            ? [
+                currentProtocol.protocol.lifecycle_state || 'draft',
+                currentProtocol.version ? `version ${currentProtocol.version.version || 0}` : '',
+                currentProtocol.protocol.current_version_id ? 'published version available' : 'not yet published',
+              ].filter(Boolean).join(' · ')
+            : 'Draft metadata becomes the protocol catalog row once saved.';
+        editorPanel.appendChild(metaNote);
+
+        const formatControl = UI.createSegmentedControl(
+            [
+                { value: 'json', label: 'JSON' },
+                { value: 'yaml', label: 'YAML' },
+            ],
+            (value) => {
+                void _syncEditorFormat(value || 'json').then(renderWorkspace).catch((err) => {
+                    UI.reportError('Failed to switch the protocol editor format', err, {
+                        context: 'Protocol editor format switch failed',
+                    });
+                });
+            },
+            { label: 'Editor format', value: editorFormat },
+        );
+        editorPanel.appendChild(formatControl.element);
+
+        _renderValidationGutter(editorPanel);
 
         const definitionInput = document.createElement('textarea');
         definitionInput.className = 'guidance-textarea';
-        definitionInput.value = draft.definition_text || JSON.stringify(_defaultProtocolDocument(), null, 2);
+        definitionInput.value = draft.definition_text || '';
         definitionInput.addEventListener('input', () => {
             draft.definition_text = definitionInput.value;
         });
-        detailPanel.appendChild(definitionInput);
+        editorPanel.appendChild(definitionInput);
 
-        if (currentProtocol?.validation) {
-            const validation = currentProtocol.validation;
-            const note = document.createElement('div');
-            note.className = 'quiet-note';
-            if (validation.ok) {
-                note.textContent = `Draft valid. Content hash: ${validation.content_hash || 'n/a'}`;
-            } else {
-                note.textContent = validation.errors.join(' · ') || 'Draft invalid.';
-            }
-            detailPanel.appendChild(note);
-        }
-
-        const actions = document.createElement('div');
-        actions.className = 'editor-actions';
+        const editorActions = document.createElement('div');
+        editorActions.className = 'editor-actions protocol-sticky-actions';
 
         const saveButton = document.createElement('button');
         saveButton.type = 'button';
         saveButton.className = 'btn btn-primary';
         saveButton.textContent = currentProtocolId ? 'Save draft' : 'Create protocol';
         saveButton.addEventListener('click', async () => {
-            let parsed;
             try {
-                parsed = JSON.parse(draft.definition_text || '{}');
-            } catch (err) {
-                UI.reportError('Protocol definition must be valid JSON before saving', err, {
-                    context: 'Protocol draft JSON parse failed',
-                });
-                return;
-            }
-            try {
+                const parsed = await _parseDraftDocument();
+                const payload = {
+                    slug: draft.slug,
+                    display_name: draft.display_name,
+                    description: draft.description,
+                    definition_json: parsed,
+                };
                 const result = currentProtocolId
-                    ? await API.saveProtocolDraft(currentProtocolId, {
-                        slug: draft.slug,
-                        display_name: draft.display_name,
-                        description: draft.description,
-                        definition_json: parsed,
-                    })
-                    : await API.createProtocol({
-                        slug: draft.slug,
-                        display_name: draft.display_name,
-                        description: draft.description,
-                        definition_json: parsed,
-                    });
+                    ? await API.saveProtocolDraft(currentProtocolId, payload)
+                    : await API.createProtocol(payload);
                 currentProtocolId = result.protocol?.protocol_id || currentProtocolId;
                 currentProtocol = result;
                 _applyDraftFromProtocol(result);
+                await _refreshDraftTextForCurrentFormat();
                 await loadProtocols();
                 await loadProtocolDetail();
                 UI.notify('Protocol draft saved.', 'success');
@@ -266,7 +766,7 @@ function renderProtocolWorkspace(container) {
                 });
             }
         });
-        actions.appendChild(saveButton);
+        editorActions.appendChild(saveButton);
 
         if (currentProtocolId) {
             const validateButton = document.createElement('button');
@@ -277,6 +777,7 @@ function renderProtocolWorkspace(container) {
                 try {
                     currentProtocol = await API.validateProtocol(currentProtocolId);
                     _applyDraftFromProtocol(currentProtocol);
+                    await _refreshDraftTextForCurrentFormat();
                     renderWorkspace();
                     UI.notify(
                         currentProtocol.validation?.ok ? 'Protocol validated.' : 'Protocol validation found issues.',
@@ -288,7 +789,16 @@ function renderProtocolWorkspace(container) {
                     });
                 }
             });
-            actions.appendChild(validateButton);
+            editorActions.appendChild(validateButton);
+
+            const diffButton = document.createElement('button');
+            diffButton.type = 'button';
+            diffButton.className = 'btn';
+            diffButton.textContent = 'Diff';
+            diffButton.addEventListener('click', () => {
+                void _showDraftDiff();
+            });
+            editorActions.appendChild(diffButton);
 
             const publishButton = document.createElement('button');
             publishButton.type = 'button';
@@ -298,6 +808,7 @@ function renderProtocolWorkspace(container) {
                 try {
                     currentProtocol = await API.publishProtocol(currentProtocolId);
                     _applyDraftFromProtocol(currentProtocol);
+                    await _refreshDraftTextForCurrentFormat();
                     await loadProtocols();
                     renderWorkspace();
                     UI.notify('Protocol published.', 'success');
@@ -307,23 +818,90 @@ function renderProtocolWorkspace(container) {
                     });
                 }
             });
-            actions.appendChild(publishButton);
+            editorActions.appendChild(publishButton);
+
+            const archiveButton = document.createElement('button');
+            archiveButton.type = 'button';
+            archiveButton.className = 'btn';
+            archiveButton.textContent = 'Archive';
+            archiveButton.disabled = String(currentProtocol?.protocol?.lifecycle_state || '') === 'archived';
+            archiveButton.addEventListener('click', () => {
+                UI.showConfirm(
+                    'Archive protocol',
+                    'Archive this protocol definition? Published versions remain immutable, but the definition will no longer be offered for new runs.',
+                    async () => {
+                        try {
+                            currentProtocol = await API.archiveProtocol(currentProtocolId);
+                            _applyDraftFromProtocol(currentProtocol);
+                            await _refreshDraftTextForCurrentFormat();
+                            await loadProtocols();
+                            renderWorkspace();
+                            UI.notify('Protocol archived.', 'success');
+                        } catch (err) {
+                            UI.reportError('Failed to archive the protocol', err, {
+                                context: 'Protocol archive failed',
+                            });
+                        }
+                    },
+                );
+            });
+            editorActions.appendChild(archiveButton);
         }
 
-        detailPanel.appendChild(actions);
+        const exportJsonBtn = document.createElement('button');
+        exportJsonBtn.type = 'button';
+        exportJsonBtn.className = 'btn';
+        exportJsonBtn.textContent = 'Export JSON';
+        exportJsonBtn.addEventListener('click', () => {
+            void _downloadDraft('json');
+        });
+        editorActions.appendChild(exportJsonBtn);
+
+        const exportYamlBtn = document.createElement('button');
+        exportYamlBtn.type = 'button';
+        exportYamlBtn.className = 'btn';
+        exportYamlBtn.textContent = 'Export YAML';
+        exportYamlBtn.addEventListener('click', () => {
+            void _downloadDraft('yaml');
+        });
+        editorActions.appendChild(exportYamlBtn);
+
+        editorPanel.appendChild(editorActions);
 
         const runPanel = document.createElement('section');
-        runPanel.className = 'editor-panel';
+        runPanel.className = 'editor-panel protocol-panel protocol-panel-runs';
 
-        const runTitleLabel = document.createElement('div');
-        runTitleLabel.className = 'editor-section-title';
-        runTitleLabel.textContent = 'Run protocol';
-        runPanel.appendChild(runTitleLabel);
+        const runTitle = document.createElement('div');
+        runTitle.className = 'editor-section-title';
+        runTitle.textContent = 'Runs';
+        runPanel.appendChild(runTitle);
 
+        const runStatusControl = UI.createSegmentedControl(
+            RUN_STATUS_OPTIONS,
+            (value) => {
+                runStatusFilter = value || '';
+                renderWorkspace();
+            },
+            { label: 'Run status filter', value: runStatusFilter || '' },
+        );
+        runPanel.appendChild(runStatusControl.element);
+
+        const runSearchInput = document.createElement('input');
+        runSearchInput.className = 'search-input';
+        runSearchInput.placeholder = 'Search runs';
+        runSearchInput.value = runSearch;
+        runSearchInput.addEventListener('input', () => {
+            runSearch = runSearchInput.value;
+            renderWorkspace();
+        });
+        runPanel.appendChild(runSearchInput);
+
+        const runLauncher = document.createElement('div');
+        runLauncher.className = 'protocol-run-launcher';
         const runNote = document.createElement('div');
         runNote.className = 'quiet-note';
         runNote.textContent = 'Only published protocol versions can start runs.';
-        runPanel.appendChild(runNote);
+        runLauncher.appendChild(runNote);
 
         const agentDropdown = UI.createAgentManagementDropdown(
             _managedAgents(),
@@ -331,18 +909,18 @@ function renderProtocolWorkspace(container) {
             () => {},
             { label: 'Target bot' },
         );
-        runPanel.appendChild(UI.renderSettingsRow({ label: 'Target bot', control: agentDropdown.element }));
+        runLauncher.appendChild(UI.renderSettingsRow({ label: 'Target bot', control: agentDropdown.element }));
 
         const workspaceInput = document.createElement('input');
         workspaceInput.className = 'search-input';
         workspaceInput.placeholder = 'Project name or workspace id';
-        runPanel.appendChild(UI.renderSettingsRow({ label: 'Workspace', control: workspaceInput }));
+        runLauncher.appendChild(UI.renderSettingsRow({ label: 'Workspace', control: workspaceInput }));
 
         const problemInput = document.createElement('textarea');
         problemInput.className = 'guidance-textarea';
         problemInput.rows = 8;
         problemInput.placeholder = 'Problem statement';
-        runPanel.appendChild(problemInput);
+        runLauncher.appendChild(problemInput);
 
         const startRunButton = document.createElement('button');
         startRunButton.type = 'button';
@@ -367,8 +945,13 @@ function renderProtocolWorkspace(container) {
                     workspace_ref: workspaceInput.value,
                     problem_statement: problemInput.value,
                     constraints_json: {},
+                }, {
+                    idempotencyKey: (window.crypto && typeof window.crypto.randomUUID === 'function')
+                        ? window.crypto.randomUUID().replace(/-/g, '')
+                        : `${Date.now()}${Math.random().toString(16).slice(2)}`,
                 });
                 currentRunId = result.run?.protocol_run_id || '';
+                lastRunEvent = null;
                 await loadRuns();
                 await loadRunDetail();
                 UI.notify('Protocol run started.', 'success');
@@ -378,83 +961,163 @@ function renderProtocolWorkspace(container) {
                 });
             }
         });
-        runPanel.appendChild(startRunButton);
+        runLauncher.appendChild(startRunButton);
+        runPanel.appendChild(runLauncher);
 
-        const runDetailPanel = document.createElement('section');
-        runDetailPanel.className = 'editor-panel';
+        const runList = document.createElement('div');
+        runList.className = 'protocol-scroll';
+        const runRows = _runRows();
+        UI.reconcileChildren(
+            runList,
+            runRows.length ? runRows : [UI.renderEmptyState('No protocol runs match the current filter.', true)],
+        );
+        runPanel.appendChild(runList);
 
-        const runDetailTitle = document.createElement('div');
-        runDetailTitle.className = 'editor-section-title';
-        runDetailTitle.textContent = 'Run detail';
-        runDetailPanel.appendChild(runDetailTitle);
+        const detailPanel = document.createElement('section');
+        detailPanel.className = 'editor-panel protocol-panel protocol-panel-detail';
+
+        const detailTitle = document.createElement('div');
+        detailTitle.className = 'editor-section-title';
+        detailTitle.textContent = 'Run detail';
+        detailPanel.appendChild(detailTitle);
 
         if (!currentRun) {
-            runDetailPanel.appendChild(UI.renderEmptyState('Select a run to inspect its stages and transitions.', true));
+            detailPanel.appendChild(UI.renderEmptyState('Select a run to inspect its state, timeline, artifacts, and operator actions.', true));
         } else {
-            const summary = document.createElement('div');
-            summary.className = 'quiet-note';
-            summary.textContent = `Status: ${currentRun.run.status} · Version: ${currentRun.run.version || 1} · Current stage: ${currentRun.run.current_stage_key || 'n/a'} · Workspace: ${currentRun.run.workspace_ref || 'default'}`;
-            runDetailPanel.appendChild(summary);
+            const summaryGrid = document.createElement('div');
+            summaryGrid.className = 'protocol-run-summary-grid';
+            UI.reconcileChildren(summaryGrid, [
+                UI.renderMetadataGrid([
+                    { label: 'Run id', value: currentRun.run.protocol_run_id },
+                    { label: 'Status', value: currentRun.run.status },
+                    { label: 'Version', value: String(currentRun.run.version || 1) },
+                    { label: 'Current stage', value: currentRun.run.current_stage_key || 'n/a' },
+                    { label: 'Workspace', value: currentRun.run.workspace_ref || 'default' },
+                    { label: 'Root conversation', value: currentRun.run.root_conversation_id || 'n/a' },
+                ]),
+            ]);
+            detailPanel.appendChild(summaryGrid);
 
+            const detailNotes = document.createElement('div');
+            detailNotes.className = 'protocol-run-notes';
             if (currentRun.run.termination_summary || currentRun.run.blocked_detail) {
                 const outcomeNote = document.createElement('div');
                 outcomeNote.className = 'quiet-note';
                 outcomeNote.textContent = currentRun.run.termination_summary || currentRun.run.blocked_detail;
-                runDetailPanel.appendChild(outcomeNote);
+                detailNotes.appendChild(outcomeNote);
+            }
+            if (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(currentRun.run.protocol_run_id || '')) {
+                const liveNote = document.createElement('div');
+                liveNote.className = 'quiet-note';
+                liveNote.textContent = `Live update: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')} · ${lastRunEvent.reason || ''}`;
+                detailNotes.appendChild(liveNote);
+            }
+            if (detailNotes.childNodes.length) {
+                detailPanel.appendChild(detailNotes);
             }
 
-            const runActions = document.createElement('div');
-            runActions.className = 'editor-actions';
-            const actionSpecs = [
-                { action: 'cancel', label: 'Cancel', enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
-                { action: 'retry', label: 'Retry', enabled: ['blocked', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
-                { action: 'accept', label: 'Accept', enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
-                { action: 'send-back', label: 'Send back', enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
-            ];
-            actionSpecs.forEach((spec) => {
+            const runActionBar = document.createElement('div');
+            runActionBar.className = 'editor-actions protocol-sticky-actions';
+            [
+                {
+                    action: 'retry',
+                    label: 'Retry',
+                    note: 'Retry creates a new execution of the current stage using the same protocol definition and workspace context.',
+                    confirmLabel: 'Retry run',
+                    successMessage: 'Protocol run retry submitted.',
+                    requireReason: false,
+                    enabled: ['blocked', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')),
+                },
+                {
+                    action: 'accept',
+                    label: 'Accept',
+                    note: 'Accept forces the current review or acceptance stage forward using the reason you provide as audit context.',
+                    confirmLabel: 'Accept run',
+                    successMessage: 'Protocol run accepted.',
+                    requireReason: false,
+                    enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')),
+                },
+                {
+                    action: 'send-back',
+                    label: 'Send back',
+                    note: 'Send back forces a revise decision and requires a short reason that explains what needs to change.',
+                    confirmLabel: 'Send back',
+                    successMessage: 'Protocol run sent back.',
+                    requireReason: true,
+                    enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')),
+                },
+                {
+                    action: 'cancel',
+                    label: 'Cancel',
+                    note: 'Cancel is destructive for the current run lifecycle and requires a short audit reason.',
+                    confirmLabel: 'Cancel run',
+                    successMessage: 'Protocol run cancelled.',
+                    requireReason: true,
+                    enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')),
+                },
+            ].forEach((spec) => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = spec.action === 'cancel' ? 'btn' : 'btn btn-primary';
                 btn.textContent = spec.label;
                 btn.disabled = !spec.enabled;
-                btn.addEventListener('click', async () => {
-                    const reason = window.prompt(`${spec.label} reason`, '');
-                    if (reason === null) {
-                        return;
-                    }
-                    try {
-                        await API.actOnProtocolRun(
-                            currentRun.run.protocol_run_id,
-                            spec.action,
-                            { reason: reason.trim() },
-                            { expectedVersion: currentRun.run.version || 1 },
-                        );
-                        await loadRuns();
-                        await loadRunDetail();
-                        UI.notify(`Protocol run ${spec.label.toLowerCase()} applied.`, 'success');
-                    } catch (err) {
-                        UI.reportError(`Failed to ${spec.label.toLowerCase()} the protocol run`, err, {
-                            context: 'Protocol run action failed',
-                        });
-                    }
-                });
-                runActions.appendChild(btn);
+                btn.addEventListener('click', () => _openRunActionDialog({
+                    title: spec.label,
+                    action: spec.action,
+                    note: spec.note,
+                    confirmLabel: spec.confirmLabel,
+                    successMessage: spec.successMessage,
+                    requireReason: spec.requireReason,
+                }));
+                runActionBar.appendChild(btn);
             });
-            runDetailPanel.appendChild(runActions);
+            const exportRunButton = document.createElement('button');
+            exportRunButton.type = 'button';
+            exportRunButton.className = 'btn';
+            exportRunButton.textContent = 'Export run';
+            exportRunButton.addEventListener('click', () => {
+                void _downloadRunExport();
+            });
+            runActionBar.appendChild(exportRunButton);
+
+            const openButton = document.createElement('a');
+            openButton.className = 'btn';
+            openButton.href = _runDeepLink(currentRun.run);
+            openButton.textContent = 'Open route';
+            runActionBar.appendChild(openButton);
+            detailPanel.appendChild(runActionBar);
+
+            const { stageRows, transitionRows, participantOptions } = _filteredTimelineData();
+            const participantControl = UI.createSegmentedControl(
+                [{ value: '', label: 'All participants' }, ...participantOptions],
+                (value) => {
+                    timelineParticipantFilter = value || '';
+                    renderWorkspace();
+                },
+                { label: 'Timeline participant filter', value: timelineParticipantFilter || '' },
+            );
+            detailPanel.appendChild(participantControl.element);
+
+            const stageTitle = document.createElement('div');
+            stageTitle.className = 'editor-section-title';
+            stageTitle.textContent = 'Stage executions';
+            detailPanel.appendChild(stageTitle);
 
             const stageList = document.createElement('div');
-            const stageRows = (currentRun.stage_executions || []).map((item) => UI.renderListRow({
+            const stageNodes = stageRows.map((item) => UI.renderListRow({
                 label: `${item.stage_key} · ${item.status}`,
-                sublabel: item.decision_summary || item.failure_detail || item.routed_task_id || '',
+                sublabel: [item.participant_key, item.decision_summary || item.failure_detail || item.routed_task_id || '']
+                    .filter(Boolean)
+                    .join(' · '),
                 badgeText: item.decision || '',
             }));
-            UI.reconcileChildren(stageList, stageRows.length ? stageRows : [UI.renderEmptyState('No stage executions yet.', true)]);
-            runDetailPanel.appendChild(stageList);
+            UI.reconcileChildren(stageList, stageNodes.length ? stageNodes : [UI.renderEmptyState('No stage executions match this participant filter.', true)]);
+            detailPanel.appendChild(stageList);
 
             const participantTitle = document.createElement('div');
             participantTitle.className = 'editor-section-title';
             participantTitle.textContent = 'Participants';
-            runDetailPanel.appendChild(participantTitle);
+            detailPanel.appendChild(participantTitle);
 
             const participantList = document.createElement('div');
             const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
@@ -463,55 +1126,61 @@ function renderProtocolWorkspace(container) {
                 badgeText: item.resolution_outcome || '',
             }));
             UI.reconcileChildren(participantList, participantRows.length ? participantRows : [UI.renderEmptyState('No participants resolved yet.', true)]);
-            runDetailPanel.appendChild(participantList);
+            detailPanel.appendChild(participantList);
 
             const artifactTitle = document.createElement('div');
             artifactTitle.className = 'editor-section-title';
             artifactTitle.textContent = 'Artifacts';
-            runDetailPanel.appendChild(artifactTitle);
+            detailPanel.appendChild(artifactTitle);
 
             const artifactList = document.createElement('div');
             const artifactRows = (currentRun.artifacts || []).map((item) => UI.renderListRow({
                 label: `${item.artifact_key} · ${item.verification_state || item.state || 'declared'}`,
-                sublabel: item.workspace_path || item.location || '',
-                badgeText: item.content_hash ? item.content_hash.slice(0, 8) : '',
+                sublabel: _artifactLabel(item),
+                badgeText: item.exists ? 'present' : 'missing',
+                badgeClass: item.exists ? 'badge-connected' : 'badge-blocked',
             }));
             UI.reconcileChildren(artifactList, artifactRows.length ? artifactRows : [UI.renderEmptyState('No artifacts recorded yet.', true)]);
-            runDetailPanel.appendChild(artifactList);
+            detailPanel.appendChild(artifactList);
 
             const transitionTitle = document.createElement('div');
             transitionTitle.className = 'editor-section-title';
             transitionTitle.textContent = 'Transitions';
-            runDetailPanel.appendChild(transitionTitle);
+            detailPanel.appendChild(transitionTitle);
 
             const transitionList = document.createElement('div');
-            const transitionRows = (currentRun.transitions || []).map((item) => UI.renderListRow({
+            transitionList.setAttribute('aria-live', 'polite');
+            const transitionNodes = transitionRows.map((item) => UI.renderListRow({
                 label: `${item.transition_kind} · ${item.decision || 'n/a'}`,
-                sublabel: item.reason || item.actor_ref || '',
+                sublabel: [item.reason || item.actor_ref || '', item.error_code || ''].filter(Boolean).join(' · '),
+                badgeText: String(item.metadata_json?.target_agent_id || ''),
             }));
-            UI.reconcileChildren(transitionList, transitionRows.length ? transitionRows : [UI.renderEmptyState('No transitions yet.', true)]);
-            runDetailPanel.appendChild(transitionList);
+            UI.reconcileChildren(transitionList, transitionNodes.length ? transitionNodes : [UI.renderEmptyState('No transitions match this participant filter.', true)]);
+            detailPanel.appendChild(transitionList);
 
-            const issueTitle = document.createElement('div');
-            issueTitle.className = 'editor-section-title';
-            issueTitle.textContent = 'Support issues';
-            runDetailPanel.appendChild(issueTitle);
+            const issueDetailTitle = document.createElement('div');
+            issueDetailTitle.className = 'editor-section-title';
+            issueDetailTitle.textContent = 'Support issues';
+            detailPanel.appendChild(issueDetailTitle);
 
-            const issueList = document.createElement('div');
-            const issueRows = (currentIssues || []).map((item) => UI.renderListRow({
-                label: `${item.issue_kind.replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
+            const issueDetailList = document.createElement('div');
+            const issueDetailRows = (currentIssues || []).map((item) => UI.renderListRow({
+                label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
                 sublabel: item.issue_detail || item.updated_at || '',
                 badgeText: item.stage_key || '',
             }));
-            UI.reconcileChildren(issueList, issueRows.length ? issueRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)]);
-            runDetailPanel.appendChild(issueList);
+            UI.reconcileChildren(issueDetailList, issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)]);
+            detailPanel.appendChild(issueDetailList);
         }
 
-        UI.reconcileChildren(contentEl, [leftPanel, detailPanel, runPanel, runDetailPanel]);
+        UI.reconcileChildren(contentEl, [definitionPanel, editorPanel, runPanel, detailPanel]);
     }
 
     async function loadProtocols() {
         protocols = await API.listProtocols({ limit: 100 });
+        if (currentProtocolId && !protocols.some((item) => item.protocol_id === currentProtocolId)) {
+            currentProtocolId = protocols[0]?.protocol_id || '';
+        }
         if (!currentProtocolId && protocols.length) {
             currentProtocolId = protocols[0].protocol_id;
         }
@@ -519,8 +1188,22 @@ function renderProtocolWorkspace(container) {
     }
 
     async function loadRuns() {
-        const response = await API.listProtocolRuns({ limit: 25 });
+        const response = await API.listProtocolRuns({ limit: 50 });
         runs = response.runs || response || [];
+        if (currentRunId && !runs.some((item) => item.protocol_run_id === currentRunId)) {
+            currentRunId = '';
+            currentRun = null;
+            currentIssues = [];
+        }
+    }
+
+    async function loadIssues() {
+        const response = await API.listProtocolIssues({
+            limit: 50,
+            issue_kind: issueKindFilter,
+        });
+        protocolIssues = response.issues || response || [];
+        renderWorkspace();
     }
 
     async function loadDefaultTemplate() {
@@ -535,43 +1218,67 @@ function renderProtocolWorkspace(container) {
     async function loadProtocolDetail() {
         if (!currentProtocolId) {
             currentProtocol = null;
-            _applyDraftFromProtocol(null);
+            if (!draft.definition_text) {
+                draft = {
+                    protocol_id: '',
+                    slug: '',
+                    display_name: '',
+                    description: '',
+                    definition_text: '',
+                };
+            }
+            await _refreshDraftTextForCurrentFormat();
             _writeState();
             renderWorkspace();
             return;
         }
         currentProtocol = await API.getProtocol(currentProtocolId);
         _applyDraftFromProtocol(currentProtocol);
+        await _refreshDraftTextForCurrentFormat();
         _writeState();
         renderWorkspace();
     }
 
-    async function loadRunDetail() {
+    async function loadRunDetail({ soft = false } = {}) {
         if (!currentRunId) {
             currentRun = null;
             currentIssues = [];
+            lastRunEvent = null;
             _writeState();
+            _bindRunSubscription();
             renderWorkspace();
             return;
         }
-        const [runDetail, issues] = await Promise.all([
-            API.getProtocolRun(currentRunId),
-            API.listProtocolIssues({ protocol_run_id: currentRunId, limit: 50 }),
-        ]);
-        currentRun = runDetail;
-        currentIssues = issues || [];
-        _writeState();
-        renderWorkspace();
+        try {
+            const [runDetail, issues] = await Promise.all([
+                API.getProtocolRun(currentRunId),
+                API.listProtocolIssues({ protocol_run_id: currentRunId, limit: 50 }),
+            ]);
+            currentRun = runDetail;
+            currentIssues = issues.issues || issues || [];
+            _writeState();
+            _bindRunSubscription();
+            renderWorkspace();
+        } catch (err) {
+            if (soft && currentRun) {
+                UI.reportError('Failed to refresh the protocol run detail', err, {
+                    context: 'Protocol run detail refresh failed',
+                });
+                return;
+            }
+            throw err;
+        }
     }
 
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
             await Promise.all([loadProtocols(), loadRuns(), loadAgents(), loadDefaultTemplate()]);
+            await loadIssues();
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {
-                _applyDraftFromProtocol(null);
+                await _refreshDraftTextForCurrentFormat();
                 renderWorkspace();
             }
             if (currentRunId) {
@@ -583,25 +1290,31 @@ function renderProtocolWorkspace(container) {
     }
 
     async function refreshWorkspace() {
-        await Promise.all([loadProtocols(), loadRuns()]);
+        await Promise.all([loadProtocols(), loadRuns(), loadIssues()]);
         if (currentProtocolId) {
             await loadProtocolDetail();
         } else {
-            _applyDraftFromProtocol(null);
+            await _refreshDraftTextForCurrentFormat();
             renderWorkspace();
         }
         if (currentRunId) {
-            await loadRunDetail();
+            await loadRunDetail({ soft: true });
         }
     }
 
     cleanups.add(() => {
+        if (currentRunSubscription) {
+            currentRunSubscription();
+            currentRunSubscription = null;
+        }
         currentProtocol = null;
         currentRun = null;
         currentIssues = [];
+        protocolIssues = [];
     });
 
     UI.subscribeWithRefresh(cleanups, 'protocols', () => refreshWorkspace(), 350);
+    UI.subscribeWithRefresh(cleanups, 'summary', () => loadIssues(), 400);
 
     void bootstrap();
 }

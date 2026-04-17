@@ -89,6 +89,7 @@ from .ingress import (
 from .authority import StoreBackedRegistryAuthority
 from .backend import get_registry_authority, get_registry_store
 from .protocol_http import build_protocol_router
+from .protocol_runtime import broadcast_protocol_run_event, internal_protocol_access
 from .store_base import (
     AbstractRegistryStore,
     RoutingSkillDisabledError,
@@ -167,6 +168,16 @@ async def _registry_lifespan(app: FastAPI):
                         topics=topics,
                         reason="protocol.run.timeout",
                     )
+                    for run_id in getattr(result, "affected_run_ids", ()) or ():
+                        normalized = str(run_id or "").strip()
+                        if normalized:
+                            await broadcast_protocol_run_event(
+                                get_store(),
+                                _ws_manager,
+                                run_id=normalized,
+                                event_kind="protocol_run.terminal",
+                                reason="protocol.run.timeout",
+                            )
             except Exception:
                 log.warning("Protocol maintenance sweep failed", exc_info=True)
             try:
@@ -267,6 +278,13 @@ app.include_router(
         require_operator_session=require_operator_session,
         protocol_access=_protocol_access,
         broadcast_invalidations=_broadcast_invalidations,
+        broadcast_topic_event=lambda *, run_id, event_kind, reason: broadcast_protocol_run_event(
+            get_store(),
+            _ws_manager,
+            run_id=run_id,
+            event_kind=event_kind,
+            reason=reason,
+        ),
     )
 )
 register_ui_routes(app, security_headers=_REGISTRY_UI_SECURITY_HEADERS)
@@ -508,6 +526,7 @@ async def routed_task_result(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         result = authority.report_routed_result_for_agent(
@@ -541,6 +560,25 @@ async def routed_task_result(
         agent_id=agent_id,
         routed_task_id=routed_task_id,
     )
+    if protocol_run_id:
+        event_kind = "protocol_run.updated"
+        try:
+            detail = store.get_protocol_run(protocol_run_id, access=internal_protocol_access())
+        except Exception:
+            detail = None
+        if detail is not None:
+            if str(detail.run.status or "") in {"completed", "failed", "cancelled"}:
+                event_kind = "protocol_run.terminal"
+            elif str(detail.run.current_stage_key or ""):
+                event_kind = "protocol_run.stage_changed"
+        await broadcast_protocol_run_event(
+            store,
+            _ws_manager,
+            run_id=protocol_run_id,
+            event_kind=event_kind,
+            reason=reason,
+            routed_task_id=routed_task_id,
+        )
     return result.model_dump(mode="json")
 
 

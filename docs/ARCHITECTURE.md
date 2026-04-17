@@ -144,6 +144,9 @@ objects:
 - the registry maintenance loop emits post-applier protocol invalidations so the
   browser and operator tooling observe the same protocol truth the GET/timeline
   APIs expose
+- protocol draft parsing, JSON/YAML export, and draft-vs-published diff use the
+  shared SDK document helpers in `octopus_sdk/protocols.py`; the registry UI and
+  API do not maintain a second protocol text conversion path
 - protocol support/admin visibility is exposed through registry-backed issue
   queries for blocked runs, invalid contracts, expired timeouts, and stuck
   leases; the dashboard and protocol workspace consume those control-plane reads
@@ -319,6 +322,16 @@ Protocol run invalidations are emitted from the canonical registry path on run
 create, operator actions, and protocol-stage routed-task completion. The
 browser reacts to those invalidations; it does not infer protocol advancement
 locally from task rows.
+
+The same `protocol-run:{id}` topic also carries named `event` envelopes for
+post-applier protocol lifecycle updates:
+
+- `protocol_run.updated`
+- `protocol_run.stage_changed`
+- `protocol_run.terminal`
+
+Those payloads are built in `octopus_registry/protocol_runtime.py` from the same
+registry-backed run detail projection used by `GET /v1/protocol-runs/{id}`.
 
 Four envelope types (defined in `octopus_sdk/realtime.py`):
 `RealtimeEventEnvelope`, `RealtimeHeartbeatEnvelope`,

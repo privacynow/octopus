@@ -8,6 +8,7 @@ from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolStageDefinitionRecord,
     parse_protocol_stage_decision,
+    protocol_document_to_text,
     validate_protocol_document,
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
@@ -361,3 +362,103 @@ def test_registry_store_archive_protocol_marks_definition_archived(postgres_regi
     assert archived.ok is True
     assert archived.protocol is not None
     assert archived.protocol.lifecycle_state == "archived"
+
+
+def test_registry_store_protocol_text_routes_round_trip_json_yaml_and_diff(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    published = published_protocol(store)
+    protocol_id = published.protocol.protocol_id
+
+    parsed = store.parse_protocol_document_text(
+        access=operator_access(),
+        definition_text=protocol_document_to_text(protocol_document(), format="yaml"),
+        format="yaml",
+    )
+    assert parsed.format == "yaml"
+    assert parsed.validation is not None
+    assert parsed.validation.ok is True
+    assert parsed.document is not None
+    assert parsed.text.strip().startswith("schema_version:")
+
+    exported = store.export_protocol_draft(
+        protocol_id,
+        access=operator_access(),
+        format="yaml",
+    )
+    assert exported.format == "yaml"
+    assert "display_name: Mini Protocol" in exported.text
+
+    saved = store.save_protocol_draft(
+        access=operator_access(),
+        protocol_id=protocol_id,
+        slug="mini-protocol",
+        display_name="Mini Protocol",
+        description="Updated draft description",
+        definition_json=RegistryJsonRecord.model_validate(
+            {
+                **protocol_document(),
+                "metadata": {
+                    **protocol_document()["metadata"],
+                    "description": "Updated draft description",
+                },
+            }
+        ),
+    )
+    assert saved.ok is True
+
+    diff = store.diff_protocol_draft(
+        protocol_id,
+        access=operator_access(),
+        format="json",
+    )
+    assert diff.protocol_id == protocol_id
+    assert diff.protocol_definition_version_id == published.version.protocol_definition_version_id
+    assert "--- draft" in diff.diff
+    assert "+++ published" in diff.diff
+    assert "Updated draft description" in diff.diff
+
+
+def test_registry_store_list_protocol_runs_filters_by_entry_agent_and_origin_channel(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    m1 = store.enroll(agent_card(bot_key="m1"))
+    m2 = store.enroll(agent_card(bot_key="m2"))
+    published = published_protocol(store)
+
+    registry_run = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": m1.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "workspace-registry",
+            "problem_statement": "Registry initiated run.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    telegram_run = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": m2.agent_id,
+            "origin_channel": "telegram",
+            "workspace_ref": "workspace-telegram",
+            "problem_statement": "Telegram initiated run.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+
+    assert registry_run.ok is True
+    assert telegram_run.ok is True
+
+    filtered = store.list_protocol_runs(
+        access=operator_access(),
+        entry_agent_id=m2.agent_id,
+        origin_channel="telegram",
+        limit=10,
+    )
+    assert len(filtered) == 1
+    assert filtered[0].protocol_run_id == telegram_run.run.protocol_run_id
+    assert filtered[0].entry_agent_id == m2.agent_id
+    assert filtered[0].origin_channel == "telegram"

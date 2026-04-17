@@ -152,6 +152,8 @@ plane and executed through the shared SDK/runtime path.
 The current shipped model is:
 
 - define and edit protocol definitions in the registry UI
+- import, validate, diff, and export protocol drafts as JSON or YAML through the
+  same shared SDK protocol-document contract the registry API uses
 - validate and publish immutable protocol versions
 - archive published protocol definitions when operators retire them
 - start protocol runs from the registry UI or from Telegram
@@ -169,6 +171,9 @@ The current shipped model is:
   same protocol invalidation topics
 - refresh protocol UI state through registry realtime invalidation topics
   instead of maintaining a separate browser-side protocol state machine
+- emit named protocol run realtime events (`protocol_run.updated`,
+  `protocol_run.stage_changed`, `protocol_run.terminal`) on the same
+  `protocol-run:{id}` topic after the canonical registry applier commits
 - expose protocol issue summaries for blocked runs, invalid contracts, expired
   timeouts, and stuck leases through the control plane instead of ad hoc
   transport-specific inspection

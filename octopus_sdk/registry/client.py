@@ -14,11 +14,13 @@ from pydantic import BaseModel
 
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.protocols import (
+    ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
     ProtocolIssueRecord,
+    ProtocolTextDocumentRecord,
     ProtocolRunExportRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
@@ -326,6 +328,45 @@ class RegistryClient:
         result = await self._request("POST", f"/v1/protocols/{protocol_id}/archive", json={})
         return ProtocolMutationRecord.model_validate(result)
 
+    async def parse_protocol_document_text(
+        self,
+        *,
+        definition_text: str,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        result = await self._request(
+            "POST",
+            "/v1/protocols/parse",
+            json={"definition_text": definition_text, "format": format},
+        )
+        return ProtocolTextDocumentRecord.model_validate(result)
+
+    async def export_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        result = await self._request(
+            "GET",
+            f"/v1/protocols/{protocol_id}/draft/export",
+            params={"format": format},
+        )
+        return ProtocolTextDocumentRecord.model_validate(result)
+
+    async def diff_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        format: str = "json",
+    ) -> ProtocolDefinitionDiffRecord:
+        result = await self._request(
+            "GET",
+            f"/v1/protocols/{protocol_id}/diff",
+            params={"format": format},
+        )
+        return ProtocolDefinitionDiffRecord.model_validate(result)
+
     async def list_protocol_runs(
         self,
         *,
@@ -333,11 +374,20 @@ class RegistryClient:
         limit: int = 25,
         status: str = "",
         protocol_id: str = "",
+        entry_agent_id: str = "",
+        origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
         result = await self._request(
             "GET",
             "/v1/protocol-runs",
-            params={"cursor": cursor, "limit": limit, "status": status, "protocol_id": protocol_id},
+            params={
+                "cursor": cursor,
+                "limit": limit,
+                "status": status,
+                "protocol_id": protocol_id,
+                "entry_agent_id": entry_agent_id,
+                "origin_channel": origin_channel,
+            },
         )
         rows = result.get("runs", result)
         return [ProtocolRunRecord.model_validate(item) for item in rows]

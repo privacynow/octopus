@@ -256,6 +256,7 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert detail.run.current_stage_key == "review"
     review_stage = detail.stage_executions[0]
+    assert detail.run.current_stage_execution_id == review_stage.protocol_stage_execution_id
     assert review_stage.stage_key == "review"
     assert review_stage.status == "running"
 

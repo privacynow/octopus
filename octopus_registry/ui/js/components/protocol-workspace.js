@@ -933,10 +933,10 @@ function renderProtocolWorkspace(container) {
         return definitionPanel;
     }
 
-    function _buildStageFlow(document, { compact = false } = {}) {
+    function _buildStageFlow(protocolDocument, { compact = false } = {}) {
         const flow = document.createElement('div');
         flow.className = compact ? 'protocol-stage-flow protocol-stage-flow-compact' : 'protocol-stage-flow';
-        (document.stages || []).forEach((stage) => {
+        (protocolDocument.stages || []).forEach((stage) => {
             const card = document.createElement('button');
             card.type = 'button';
             card.className = `protocol-stage-node ${String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
@@ -970,25 +970,25 @@ function renderProtocolWorkspace(container) {
             }
             flow.appendChild(card);
         });
-        if (!(document.stages || []).length) {
+        if (!(protocolDocument.stages || []).length) {
             flow.appendChild(UI.renderEmptyState('No stages defined yet.', true));
         }
         return flow;
     }
 
-    function _selectedParticipant(document) {
-        _setSelectedEntityDefaults(document);
-        return (document.participants || []).find((item) => String(item.participant_key || '') === selectedParticipantKey) || null;
+    function _selectedParticipant(protocolDocument) {
+        _setSelectedEntityDefaults(protocolDocument);
+        return (protocolDocument.participants || []).find((item) => String(item.participant_key || '') === selectedParticipantKey) || null;
     }
 
-    function _selectedArtifact(document) {
-        _setSelectedEntityDefaults(document);
-        return (document.artifacts || []).find((item) => String(item.artifact_key || '') === selectedArtifactKey) || null;
+    function _selectedArtifact(protocolDocument) {
+        _setSelectedEntityDefaults(protocolDocument);
+        return (protocolDocument.artifacts || []).find((item) => String(item.artifact_key || '') === selectedArtifactKey) || null;
     }
 
-    function _selectedStage(document) {
-        _setSelectedEntityDefaults(document);
-        return (document.stages || []).find((item) => String(item.stage_key || '') === selectedStageKey) || null;
+    function _selectedStage(protocolDocument) {
+        _setSelectedEntityDefaults(protocolDocument);
+        return (protocolDocument.stages || []).find((item) => String(item.stage_key || '') === selectedStageKey) || null;
     }
 
     function _buildStarterPanel() {
@@ -1070,7 +1070,7 @@ function renderProtocolWorkspace(container) {
         return panel;
     }
 
-    function _buildAuthorHeader(document) {
+    function _buildAuthorHeader(protocolDocument) {
         const header = document.createElement('div');
         header.className = 'protocol-author-header';
 
@@ -1136,8 +1136,8 @@ function renderProtocolWorkspace(container) {
         return header;
     }
 
-    function _buildSectionNav(document) {
-        const options = _sectionSummary(document).map((item) => ({
+    function _buildSectionNav(protocolDocument) {
+        const options = _sectionSummary(protocolDocument).map((item) => ({
             value: item.value,
             label: item.hasIssues
                 ? `${item.label}${item.count ? ` (${item.count})` : ''} !`
@@ -1159,7 +1159,7 @@ function renderProtocolWorkspace(container) {
         ).element;
     }
 
-    function _buildOverviewCanvas(document) {
+    function _buildOverviewCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
 
@@ -1170,9 +1170,9 @@ function renderProtocolWorkspace(container) {
         summaryTitle.textContent = 'Workflow summary';
         summaryCard.appendChild(summaryTitle);
         summaryCard.appendChild(UI.renderMetadataGrid([
-            { label: 'Participants', value: String(document.participants?.length || 0) },
-            { label: 'Stages', value: String(document.stages?.length || 0) },
-            { label: 'Artifacts', value: String(document.artifacts?.length || 0) },
+            { label: 'Participants', value: String(protocolDocument.participants?.length || 0) },
+            { label: 'Stages', value: String(protocolDocument.stages?.length || 0) },
+            { label: 'Artifacts', value: String(protocolDocument.artifacts?.length || 0) },
             { label: 'Section', value: _sectionLabel(currentSection) },
         ], { compact: true }));
         const summaryNote = document.createElement('p');
@@ -1187,12 +1187,12 @@ function renderProtocolWorkspace(container) {
         flowTitle.className = 'editor-section-title';
         flowTitle.textContent = 'Workflow map';
         flowCard.appendChild(flowTitle);
-        flowCard.appendChild(_buildStageFlow(document, { compact: true }));
+        flowCard.appendChild(_buildStageFlow(protocolDocument, { compact: true }));
         main.appendChild(flowCard);
         return main;
     }
 
-    function _buildOverviewInspector(document) {
+    function _buildOverviewInspector(protocolDocument) {
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
         const title = document.createElement('div');
@@ -1229,7 +1229,7 @@ function renderProtocolWorkspace(container) {
         return inspector;
     }
 
-    function _buildParticipantsCanvas(document) {
+    function _buildParticipantsCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
         const panel = document.createElement('section');
@@ -1261,7 +1261,7 @@ function renderProtocolWorkspace(container) {
 
         const list = document.createElement('div');
         list.className = 'protocol-stage-flow protocol-entity-flow';
-        (document.participants || []).forEach((item) => {
+        (protocolDocument.participants || []).forEach((item) => {
             const card = document.createElement('button');
             card.type = 'button';
             card.className = `protocol-stage-node ${String(item.participant_key || '') === selectedParticipantKey ? 'is-selected' : ''}`;
@@ -1284,7 +1284,7 @@ function renderProtocolWorkspace(container) {
             }
             list.appendChild(card);
         });
-        if (!(document.participants || []).length) {
+        if (!(protocolDocument.participants || []).length) {
             list.appendChild(UI.renderEmptyState('No participants defined yet.', true));
         }
         panel.appendChild(list);
@@ -1292,8 +1292,8 @@ function renderProtocolWorkspace(container) {
         return main;
     }
 
-    function _buildParticipantsInspector(document) {
-        const selected = _selectedParticipant(document);
+    function _buildParticipantsInspector(protocolDocument) {
+        const selected = _selectedParticipant(protocolDocument);
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
         const title = document.createElement('div');
@@ -1304,7 +1304,7 @@ function renderProtocolWorkspace(container) {
             inspector.appendChild(UI.renderEmptyState('Select a participant to edit it.', true));
             return inspector;
         }
-        const index = (document.participants || []).findIndex((item) => String(item.participant_key || '') === String(selected.participant_key || ''));
+        const index = (protocolDocument.participants || []).findIndex((item) => String(item.participant_key || '') === String(selected.participant_key || ''));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Key',
             control: _textInput(selected.participant_key, (value) => void _applyStructuredChange((next) => {
@@ -1363,7 +1363,7 @@ function renderProtocolWorkspace(container) {
         return inspector;
     }
 
-    function _buildArtifactsCanvas(document) {
+    function _buildArtifactsCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
         const panel = document.createElement('section');
@@ -1397,7 +1397,7 @@ function renderProtocolWorkspace(container) {
 
         const list = document.createElement('div');
         list.className = 'protocol-stage-flow protocol-entity-flow';
-        (document.artifacts || []).forEach((item) => {
+        (protocolDocument.artifacts || []).forEach((item) => {
             const card = document.createElement('button');
             card.type = 'button';
             card.className = `protocol-stage-node ${String(item.artifact_key || '') === selectedArtifactKey ? 'is-selected' : ''}`;
@@ -1420,7 +1420,7 @@ function renderProtocolWorkspace(container) {
             }
             list.appendChild(card);
         });
-        if (!(document.artifacts || []).length) {
+        if (!(protocolDocument.artifacts || []).length) {
             list.appendChild(UI.renderEmptyState('No artifacts defined yet.', true));
         }
         panel.appendChild(list);
@@ -1428,8 +1428,8 @@ function renderProtocolWorkspace(container) {
         return main;
     }
 
-    function _buildArtifactsInspector(document) {
-        const selected = _selectedArtifact(document);
+    function _buildArtifactsInspector(protocolDocument) {
+        const selected = _selectedArtifact(protocolDocument);
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
         const title = document.createElement('div');
@@ -1440,7 +1440,7 @@ function renderProtocolWorkspace(container) {
             inspector.appendChild(UI.renderEmptyState('Select an artifact to edit it.', true));
             return inspector;
         }
-        const index = (document.artifacts || []).findIndex((item) => String(item.artifact_key || '') === String(selected.artifact_key || ''));
+        const index = (protocolDocument.artifacts || []).findIndex((item) => String(item.artifact_key || '') === String(selected.artifact_key || ''));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Key',
             control: _textInput(selected.artifact_key, (value) => void _applyStructuredChange((next) => {
@@ -1495,7 +1495,7 @@ function renderProtocolWorkspace(container) {
         return inspector;
     }
 
-    function _buildStagesCanvas(document) {
+    function _buildStagesCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
         const panel = document.createElement('section');
@@ -1533,13 +1533,13 @@ function renderProtocolWorkspace(container) {
         });
         headerRow.appendChild(addButton);
         panel.appendChild(headerRow);
-        panel.appendChild(_buildStageFlow(document));
+        panel.appendChild(_buildStageFlow(protocolDocument));
         main.appendChild(panel);
         return main;
     }
 
-    function _buildStagesInspector(document) {
-        const selected = _selectedStage(document);
+    function _buildStagesInspector(protocolDocument) {
+        const selected = _selectedStage(protocolDocument);
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
         const title = document.createElement('div');
@@ -1550,14 +1550,14 @@ function renderProtocolWorkspace(container) {
             inspector.appendChild(UI.renderEmptyState('Select a stage to edit it.', true));
             return inspector;
         }
-        const index = (document.stages || []).findIndex((item) => String(item.stage_key || '') === String(selected.stage_key || ''));
+        const index = (protocolDocument.stages || []).findIndex((item) => String(item.stage_key || '') === String(selected.stage_key || ''));
         const participantOptions = [{ value: '', label: 'Select participant' }].concat(
-            (document.participants || []).map((item) => ({
+            (protocolDocument.participants || []).map((item) => ({
                 value: String(item.participant_key || ''),
                 label: item.display_name || item.participant_key || '',
             })),
         );
-        const artifactOptions = (document.artifacts || []).map((item) => String(item.artifact_key || '')).filter(Boolean);
+        const artifactOptions = (protocolDocument.artifacts || []).map((item) => String(item.artifact_key || '')).filter(Boolean);
 
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Key',
@@ -1677,7 +1677,7 @@ function renderProtocolWorkspace(container) {
         return inspector;
     }
 
-    function _buildPoliciesCanvas(document) {
+    function _buildPoliciesCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
         const panel = document.createElement('section');
@@ -1691,14 +1691,14 @@ function renderProtocolWorkspace(container) {
         note.textContent = 'Policies define how strict the workflow is about write ownership and review loops. Keep them lightweight unless the workflow needs stronger controls.';
         panel.appendChild(note);
         panel.appendChild(UI.renderMetadataGrid([
-            { label: 'Single active writer', value: document.policies?.single_active_writer !== false ? 'Enabled' : 'Disabled' },
-            { label: 'Max review rounds', value: String(document.policies?.max_review_rounds || 5) },
+            { label: 'Single active writer', value: protocolDocument.policies?.single_active_writer !== false ? 'Enabled' : 'Disabled' },
+            { label: 'Max review rounds', value: String(protocolDocument.policies?.max_review_rounds || 5) },
         ], { compact: true }));
         main.appendChild(panel);
         return main;
     }
 
-    function _buildPoliciesInspector(document) {
+    function _buildPoliciesInspector(protocolDocument) {
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
         const title = document.createElement('div');
@@ -1707,20 +1707,20 @@ function renderProtocolWorkspace(container) {
         inspector.appendChild(title);
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Single active writer',
-            control: _checkboxInput(Boolean(document.policies?.single_active_writer !== false), 'Enforce one write lease at a time', (checked) => void _applyStructuredChange((next) => {
+            control: _checkboxInput(Boolean(protocolDocument.policies?.single_active_writer !== false), 'Enforce one write lease at a time', (checked) => void _applyStructuredChange((next) => {
                 next.policies.single_active_writer = checked;
             }), { ariaLabel: 'Single active writer', draftKey: 'policy:single_active_writer' }),
         }));
         inspector.appendChild(UI.renderSettingsRow({
             label: 'Max review rounds',
-            control: _numberInput(document.policies?.max_review_rounds || 5, (value) => void _applyStructuredChange((next) => {
+            control: _numberInput(protocolDocument.policies?.max_review_rounds || 5, (value) => void _applyStructuredChange((next) => {
                 next.policies.max_review_rounds = Math.max(value, 1);
             }), { min: 1, ariaLabel: 'Max review rounds', draftKey: 'policy:max_review_rounds' }),
         }));
         return inspector;
     }
 
-    function _buildReviewCanvas(document) {
+    function _buildReviewCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
         const panel = document.createElement('section');
@@ -1736,7 +1736,7 @@ function renderProtocolWorkspace(container) {
             ? 'The draft validates. Review the workflow map and publish when ready.'
             : 'Fix the issues called out here or in the relevant sections before publishing.';
         panel.appendChild(nextSteps);
-        panel.appendChild(_buildStageFlow(document, { compact: true }));
+        panel.appendChild(_buildStageFlow(protocolDocument, { compact: true }));
         main.appendChild(panel);
         return main;
     }
@@ -1924,37 +1924,37 @@ function renderProtocolWorkspace(container) {
             return editorPanel;
         }
 
-        const document = _draftDocument();
-        _setSelectedEntityDefaults(document);
+        const protocolDocument = _draftDocument();
+        _setSelectedEntityDefaults(protocolDocument);
 
-        editorPanel.appendChild(_buildAuthorHeader(document));
-        editorPanel.appendChild(_buildSectionNav(document));
+        editorPanel.appendChild(_buildAuthorHeader(protocolDocument));
+        editorPanel.appendChild(_buildSectionNav(protocolDocument));
 
         const workspace = document.createElement('div');
         workspace.className = 'protocol-author-workspace';
         let main = null;
         let inspector = null;
         if (currentSection === 'participants') {
-            main = _buildParticipantsCanvas(document);
-            inspector = _buildParticipantsInspector(document);
+            main = _buildParticipantsCanvas(protocolDocument);
+            inspector = _buildParticipantsInspector(protocolDocument);
         } else if (currentSection === 'stages') {
-            main = _buildStagesCanvas(document);
-            inspector = _buildStagesInspector(document);
+            main = _buildStagesCanvas(protocolDocument);
+            inspector = _buildStagesInspector(protocolDocument);
         } else if (currentSection === 'artifacts') {
-            main = _buildArtifactsCanvas(document);
-            inspector = _buildArtifactsInspector(document);
+            main = _buildArtifactsCanvas(protocolDocument);
+            inspector = _buildArtifactsInspector(protocolDocument);
         } else if (currentSection === 'policies') {
-            main = _buildPoliciesCanvas(document);
-            inspector = _buildPoliciesInspector(document);
+            main = _buildPoliciesCanvas(protocolDocument);
+            inspector = _buildPoliciesInspector(protocolDocument);
         } else if (currentSection === 'review') {
-            main = _buildReviewCanvas(document);
+            main = _buildReviewCanvas(protocolDocument);
             inspector = _buildReviewInspector();
         } else if (currentSection === 'advanced') {
-            main = _buildAdvancedCanvas(document);
+            main = _buildAdvancedCanvas(protocolDocument);
             inspector = _buildAdvancedInspector();
         } else {
-            main = _buildOverviewCanvas(document);
-            inspector = _buildOverviewInspector(document);
+            main = _buildOverviewCanvas(protocolDocument);
+            inspector = _buildOverviewInspector(protocolDocument);
         }
         workspace.appendChild(main);
         workspace.appendChild(inspector);

@@ -1282,6 +1282,7 @@ function renderProtocolWorkspace(container) {
     function _buildStarterPanel() {
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel protocol-starter-panel';
+        panel.dataset.key = 'protocol-author:starter';
 
         const title = document.createElement('div');
         title.className = 'editor-section-title';
@@ -1458,6 +1459,7 @@ function renderProtocolWorkspace(container) {
     function _buildOverviewCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        main.dataset.key = 'protocol-author:overview:main';
         const nextSteps = _nextRequiredActionLabels();
 
         const summaryCard = document.createElement('section');
@@ -1518,6 +1520,7 @@ function renderProtocolWorkspace(container) {
     function _buildOverviewInspector(protocolDocument) {
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
+        inspector.dataset.key = 'protocol-author:overview:inspector';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Protocol basics';
@@ -1555,6 +1558,7 @@ function renderProtocolWorkspace(container) {
     function _buildParticipantsCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        main.dataset.key = 'protocol-author:participants:main';
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel';
         const headerRow = document.createElement('div');
@@ -1619,6 +1623,7 @@ function renderProtocolWorkspace(container) {
         const selected = _selectedParticipant(protocolDocument);
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
+        inspector.dataset.key = 'protocol-author:participants:inspector';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Participant details';
@@ -1689,6 +1694,7 @@ function renderProtocolWorkspace(container) {
     function _buildArtifactsCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        main.dataset.key = 'protocol-author:artifacts:main';
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel';
         const headerRow = document.createElement('div');
@@ -1755,6 +1761,7 @@ function renderProtocolWorkspace(container) {
         const selected = _selectedArtifact(protocolDocument);
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
+        inspector.dataset.key = 'protocol-author:artifacts:inspector';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Artifact details';
@@ -1821,6 +1828,7 @@ function renderProtocolWorkspace(container) {
     function _buildStagesCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        main.dataset.key = 'protocol-author:stages:main';
         const canAddStages = _canAddStages(protocolDocument);
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel';
@@ -1885,6 +1893,7 @@ function renderProtocolWorkspace(container) {
         const selected = _selectedStage(protocolDocument);
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
+        inspector.dataset.key = 'protocol-author:stages:inspector';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Stage details';
@@ -2023,6 +2032,7 @@ function renderProtocolWorkspace(container) {
     function _buildPoliciesCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        main.dataset.key = 'protocol-author:policies:main';
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel';
         const title = document.createElement('div');
@@ -2044,6 +2054,7 @@ function renderProtocolWorkspace(container) {
     function _buildPoliciesInspector(protocolDocument) {
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
+        inspector.dataset.key = 'protocol-author:policies:inspector';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Policy details';
@@ -2066,6 +2077,7 @@ function renderProtocolWorkspace(container) {
     function _buildReviewCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        main.dataset.key = 'protocol-author:review:main';
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel';
         const title = document.createElement('div');
@@ -2087,6 +2099,7 @@ function renderProtocolWorkspace(container) {
     function _buildReviewInspector() {
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
+        inspector.dataset.key = 'protocol-author:review:inspector';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Actions';
@@ -2226,6 +2239,7 @@ function renderProtocolWorkspace(container) {
     function _buildAdvancedCanvas() {
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel protocol-advanced-panel';
+        panel.dataset.key = 'protocol-author:advanced:main';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Advanced raw editor';
@@ -2275,6 +2289,7 @@ function renderProtocolWorkspace(container) {
     function _buildAdvancedInspector() {
         const inspector = document.createElement('section');
         inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
+        inspector.dataset.key = 'protocol-author:advanced:inspector';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Advanced actions';
@@ -2306,6 +2321,9 @@ function renderProtocolWorkspace(container) {
     function _buildEditorPanel() {
         const editorPanel = document.createElement('section');
         editorPanel.className = 'editor-panel protocol-panel protocol-editor-panel';
+        editorPanel.dataset.key = currentProtocolId
+            ? `protocol-author:${currentProtocolId}:${currentSection}`
+            : 'protocol-author:starter';
 
         if (protocolDetailLoading && currentProtocolId) {
             editorPanel.appendChild(UI.renderEmptyState('Loading protocol detail…', true));

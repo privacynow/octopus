@@ -1621,6 +1621,8 @@ function renderProtocolWorkspace(container) {
 
     function _detailsEl() {
         const doc = draft.document;
+        const participantCount = Array.isArray(doc.participants) ? doc.participants.length : 0;
+        const stageCount = Array.isArray(doc.stages) ? doc.stages.length : 0;
         const readOnly = editorMode.kind === 'rehearse';
         const applyReadOnly = (schema) => (!readOnly
             ? schema
@@ -1744,6 +1746,9 @@ function renderProtocolWorkspace(container) {
             return wrap;
         }
 
+        if ((selection.sectionKey === 'overview' || !selection.nodeKey) && !participantCount && !stageCount) {
+            return null;
+        }
         if (selection.sectionKey === 'overview' || !selection.nodeKey) {
             return Kit.detailsPanel({
                 target: {
@@ -1916,6 +1921,9 @@ function renderProtocolWorkspace(container) {
                     ),
                 },
             });
+        }
+        if ((draft.document.stages || []).length === 0) {
+            return normalized.length ? Kit.validationSurface({ issues: normalized, layout: 'summary' }) : null;
         }
         const validation = currentProtocol?.validation;
         if (!validation && !normalized.length) return null;

@@ -1089,7 +1089,7 @@ window.Kit = (() => {
             : currentMode === 'rehearse'
                 ? 'Viewing live rehearsal state on the published workflow.'
                 : dictValue('protocol.workflow.drag_hint', 'Select a role, step, or transition to edit it. Drag steps to reorder their default sequence.');
-        if (!firstRun?.active || currentMode === 'connect' || actions.length) {
+        if (!firstRun?.active || currentMode === 'connect' || currentMode === 'rehearse') {
             const toolbar = document.createElement('div');
             toolbar.className = 'kit-workflow-toolbar';
             const hint = document.createElement('div');

@@ -192,6 +192,7 @@ function renderProtocolWorkspace(container) {
     let documentHistory = { undo: [], redo: [] };
     let workflowView = { kind: 'focus', segmentId: '' };
     let workflowViewport = { overview: 'fit', focus: 1, full: 'fit' };
+    let workflowViewExplicit = false;
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
     let draft = {
@@ -224,17 +225,25 @@ function renderProtocolWorkspace(container) {
     function _readWorkflowView(doc = draft.document, protocolId = currentProtocolId) {
         const storageKey = _workflowViewStorageKey(protocolId);
         const fallback = _defaultWorkflowView(doc);
-        if (!storageKey) return fallback;
+        if (!storageKey) {
+            workflowViewExplicit = false;
+            return fallback;
+        }
         try {
             const raw = window.localStorage.getItem(storageKey);
-            if (!raw) return fallback;
+            if (!raw) {
+                workflowViewExplicit = false;
+                return fallback;
+            }
             const parsed = JSON.parse(raw);
             const kind = String(parsed?.kind || fallback.kind);
+            workflowViewExplicit = true;
             return {
                 kind: kind === 'overview' || kind === 'full' ? kind : 'focus',
                 segmentId: String(parsed?.segmentId || ''),
             };
         } catch (_err) {
+            workflowViewExplicit = false;
             return fallback;
         }
     }
@@ -287,6 +296,7 @@ function renderProtocolWorkspace(container) {
         if (!Object.prototype.hasOwnProperty.call(workflowViewport, workflowView.kind)) {
             _setWorkflowViewport(workflowView.kind, _defaultWorkflowZoom(workflowView.kind));
         }
+        workflowViewExplicit = true;
         if (persist) _persistWorkflowView();
         if (renderNow) render();
     }
@@ -819,7 +829,7 @@ function renderProtocolWorkspace(container) {
         if (next.kind === 'focus' && !next.segmentId) {
             next.segmentId = projection.segments[0]?.id || '';
         }
-        if (next.kind === 'full' && segmentCount >= 4) {
+        if (next.kind === 'full' && segmentCount >= 4 && !workflowViewExplicit) {
             next = { kind: 'overview', segmentId: '' };
         }
         if (next.kind !== 'focus') {
@@ -839,6 +849,7 @@ function renderProtocolWorkspace(container) {
         const nextSegmentId = String(segmentId || '');
         if (!nextSegmentId || !projection.segmentsById.has(nextSegmentId)) return;
         workflowView = { kind: 'focus', segmentId: nextSegmentId };
+        workflowViewExplicit = true;
         _persistWorkflowView();
         if (!preserveSelection) {
             selection = _focusSegmentSelection(projection, nextSegmentId);
@@ -1104,6 +1115,7 @@ function renderProtocolWorkspace(container) {
         selection = { sectionKey: 'overview', nodeKey: '' };
         saveState = { state: 'idle', lastSavedAt: '', error: '' };
         workflowView = _defaultWorkflowView(draft.document);
+        workflowViewExplicit = false;
         _resetEditorMode();
     }
 

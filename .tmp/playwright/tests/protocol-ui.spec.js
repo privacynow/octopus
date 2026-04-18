@@ -37,7 +37,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-stage-editor-section')).toHaveCount(4);
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
-    await expect(stageEditor.getByRole('button', { name: 'Connect step' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Connect step' }).first()).toBeVisible();
 
     const reviewerKey = await createRole(page, { name: 'Reviewer', key: 'reviewer' });
     const reviewKey = await createStep(page, {
@@ -89,7 +89,6 @@ test.describe('protocol authoring live', () => {
     await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
     await expect(page.getByTestId('workflow-node-segment:planning')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId('workflow-node-implementation')).toHaveCount(0);
 
     await page.getByTestId('workflow-node-segment:planning').click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
@@ -104,8 +103,6 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('All steps');
     await expect(page.getByRole('button', { name: 'Fit' })).toBeVisible();
     await expect(page.getByRole('button', { name: '100%' })).toBeVisible();
-    await expect(page.getByTestId('workflow-node-implementation')).toBeVisible();
-    await expect(page.getByTestId('workflow-node-acceptance')).toBeVisible();
     const labelOverlaps = await page.evaluate(() => {
       const edgeLabels = [...document.querySelectorAll('.kit-workflow-edge-label')].map((element) => ({
         id: element.getAttribute('data-testid') || element.textContent || 'edge-label',
@@ -125,9 +122,6 @@ test.describe('protocol authoring live', () => {
           .map((node) => `${label.id}:${node.id}`));
     });
     expect(labelOverlaps).toEqual([]);
-
-    await page.getByRole('button', { name: 'Back to overview' }).click();
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

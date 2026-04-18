@@ -147,9 +147,9 @@ async function createStep(page, { name, key = '', ownerRole = '', stageKind = ''
 
 async function connectStep(page, sourceStageKey, targetNodeId) {
   await page.getByTestId(`workflow-node-${sourceStageKey}`).click();
-  const stageEditor = page.locator('.kit-stage-editor-grid');
-  await expect(stageEditor.getByRole('button', { name: 'Connect step' })).toBeVisible();
-  await stageEditor.getByRole('button', { name: 'Connect step' }).click();
+  const connectButton = page.getByRole('button', { name: 'Connect step' }).first();
+  await expect(connectButton).toBeVisible();
+  await connectButton.click();
   await expect(page.getByRole('button', { name: 'Cancel transition' })).toBeVisible();
   await page.getByTestId(`workflow-node-${targetNodeId}`).click();
 }

@@ -1528,21 +1528,16 @@ function renderProtocolWorkspace(container) {
                 label: 'New protocol',
                 onClick: () => void _createBlankDraft(),
             },
+            secondaryAction: {
+                label: Kit.dict.label('protocol.catalog.gallery'),
+                onClick: () => Router.navigate('/ui/gallery'),
+            },
         });
     }
 
     function render() {
         if (!currentProtocolId) {
-            const catalog = _catalogEl();
-            const galleryCta = document.createElement('div');
-            galleryCta.className = 'kit-catalog-tertiary';
-            const galleryButton = document.createElement('button');
-            galleryButton.type = 'button';
-            galleryButton.className = 'btn';
-            galleryButton.textContent = 'Browse template gallery';
-            galleryButton.addEventListener('click', () => Router.navigate('/ui/gallery'));
-            galleryCta.appendChild(galleryButton);
-            UI.reconcileChildren(contentEl, [catalog, galleryCta]);
+            UI.reconcileChildren(contentEl, [_catalogEl()]);
             _lifecycleHeaderRef = null;
             return;
         }

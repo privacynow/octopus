@@ -165,6 +165,10 @@ window.Kit = (() => {
         'protocol.canvas.empty.body': 'Start by adding the first participant — a person or agent who will work on this.',
         'protocol.catalog.empty.title': 'No protocols yet',
         'protocol.catalog.empty.body': 'Create one from a template in the Gallery, or start from a blank draft.',
+        'protocol.catalog.title': 'Workflow definitions',
+        'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
+        'protocol.catalog.search': 'Search protocols',
+        'protocol.catalog.gallery': 'Browse template gallery',
         'protocol.firstrun.participant': 'Add the first participant.',
         'protocol.firstrun.stage': 'Add the first stage to what this participant does.',
         'protocol.firstrun.transition': 'Connect stages to say what happens when each finishes.',
@@ -689,11 +693,51 @@ window.Kit = (() => {
         lifecycleFilter = 'all',
         search = '',
         createAction = null,
+        secondaryAction = null,
     } = {}) {
         const container = document.createElement('section');
         container.className = 'kit-authored-catalog';
 
         const state = { lifecycleFilter, search };
+        const hero = document.createElement('div');
+        hero.className = 'kit-catalog-hero';
+
+        const heroCopy = document.createElement('div');
+        heroCopy.className = 'kit-catalog-hero-copy';
+        const heroTitle = document.createElement('h3');
+        heroTitle.className = 'kit-catalog-hero-title';
+        heroTitle.textContent = dict.label(`${surfaceKey}.catalog.title`, 'Definitions');
+        heroCopy.appendChild(heroTitle);
+        const heroBody = document.createElement('p');
+        heroBody.className = 'kit-catalog-hero-body';
+        heroBody.textContent = dict.label(`${surfaceKey}.catalog.subtitle`, 'Manage reusable records here.');
+        heroCopy.appendChild(heroBody);
+        hero.appendChild(heroCopy);
+
+        const heroMetrics = document.createElement('div');
+        heroMetrics.className = 'kit-catalog-hero-metrics';
+        const draftCount = records.filter((item) => String(item.lifecycle_state || 'draft') === 'draft').length;
+        const publishedCount = records.filter((item) => String(item.lifecycle_state || '') === 'published').length;
+        [
+            { label: dict.label(`${surfaceKey}.lifecycle.draft`), value: draftCount },
+            { label: dict.label(`${surfaceKey}.lifecycle.published`), value: publishedCount },
+            { label: dict.label(`${surfaceKey}.lifecycle.filter.all`), value: records.length },
+        ].forEach((metric) => {
+            const chip = document.createElement('div');
+            chip.className = 'kit-catalog-hero-metric';
+            const value = document.createElement('strong');
+            value.className = 'kit-catalog-hero-metric-value';
+            value.textContent = String(metric.value);
+            chip.appendChild(value);
+            const label = document.createElement('span');
+            label.className = 'kit-catalog-hero-metric-label';
+            label.textContent = String(metric.label || '');
+            chip.appendChild(label);
+            heroMetrics.appendChild(chip);
+        });
+        hero.appendChild(heroMetrics);
+        container.appendChild(hero);
+
         const controls = document.createElement('div');
         controls.className = 'kit-catalog-controls';
 
@@ -725,13 +769,22 @@ window.Kit = (() => {
         const searchBox = document.createElement('input');
         searchBox.type = 'search';
         searchBox.className = 'kit-catalog-search';
-        searchBox.placeholder = 'Search…';
+        searchBox.placeholder = dict.label(`${surfaceKey}.catalog.search`, 'Search…');
         searchBox.value = state.search;
         searchBox.addEventListener('input', () => {
             state.search = searchBox.value;
             renderList();
         });
         controls.appendChild(searchBox);
+
+        if (secondaryAction && typeof secondaryAction.onClick === 'function') {
+            const secondaryBtn = document.createElement('button');
+            secondaryBtn.type = 'button';
+            secondaryBtn.className = 'btn';
+            secondaryBtn.textContent = String(secondaryAction.label || 'Browse');
+            secondaryBtn.addEventListener('click', secondaryAction.onClick);
+            controls.appendChild(secondaryBtn);
+        }
 
         if (createAction && typeof createAction.onClick === 'function') {
             const btn = document.createElement('button');
@@ -765,10 +818,39 @@ window.Kit = (() => {
             const filtered = records.filter(_matches);
             listEl.innerHTML = '';
             if (!filtered.length) {
-                const empty = UI.renderEmptyState(
-                    dict.emptyState(`${surfaceKey}.catalog.empty.body`, 'Nothing here yet.'),
-                );
-                listEl.appendChild(empty);
+                const emptyCard = document.createElement('li');
+                emptyCard.className = 'kit-catalog-item kit-catalog-item-empty';
+                const emptyShell = document.createElement('div');
+                emptyShell.className = 'kit-catalog-empty';
+                const emptyTitle = document.createElement('h4');
+                emptyTitle.className = 'kit-catalog-empty-title';
+                emptyTitle.textContent = dict.label(`${surfaceKey}.catalog.empty.title`, 'Nothing here yet');
+                emptyShell.appendChild(emptyTitle);
+                const emptyBody = document.createElement('p');
+                emptyBody.className = 'kit-catalog-empty-body';
+                emptyBody.textContent = dict.emptyState(`${surfaceKey}.catalog.empty.body`, 'Nothing here yet.');
+                emptyShell.appendChild(emptyBody);
+                const emptyActions = document.createElement('div');
+                emptyActions.className = 'kit-catalog-empty-actions';
+                if (createAction && typeof createAction.onClick === 'function') {
+                    const createBtn = document.createElement('button');
+                    createBtn.type = 'button';
+                    createBtn.className = 'btn btn-primary';
+                    createBtn.textContent = String(createAction.label || 'Create');
+                    createBtn.addEventListener('click', createAction.onClick);
+                    emptyActions.appendChild(createBtn);
+                }
+                if (secondaryAction && typeof secondaryAction.onClick === 'function') {
+                    const browseBtn = document.createElement('button');
+                    browseBtn.type = 'button';
+                    browseBtn.className = 'btn';
+                    browseBtn.textContent = String(secondaryAction.label || 'Browse');
+                    browseBtn.addEventListener('click', secondaryAction.onClick);
+                    emptyActions.appendChild(browseBtn);
+                }
+                emptyShell.appendChild(emptyActions);
+                emptyCard.appendChild(emptyShell);
+                listEl.appendChild(emptyCard);
                 return;
             }
             filtered.forEach((record) => {
@@ -779,14 +861,49 @@ window.Kit = (() => {
                 chip.className = `badge kit-lifecycle-chip kit-lifecycle-chip-${lifecycle}`;
                 chip.textContent = dict.label(`${surfaceKey}.lifecycle.${lifecycle}`);
 
-                const row = UI.renderListRow({
-                    label: String(record.display_name || record.slug || record.id || 'Untitled'),
-                    sublabel: String(record.description || record.slug || ''),
-                    badgeText: '',
-                    onClick: onOpen ? () => onOpen(record) : undefined,
-                    trailing: chip,
-                });
-                li.appendChild(row);
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'kit-catalog-card';
+                if (typeof onOpen === 'function') {
+                    button.addEventListener('click', () => onOpen(record));
+                }
+
+                const top = document.createElement('div');
+                top.className = 'kit-catalog-card-top';
+                const titleBlock = document.createElement('div');
+                titleBlock.className = 'kit-catalog-card-copy';
+                const title = document.createElement('div');
+                title.className = 'kit-catalog-card-title';
+                title.textContent = String(record.display_name || record.slug || record.id || 'Untitled');
+                titleBlock.appendChild(title);
+                const slug = document.createElement('div');
+                slug.className = 'kit-catalog-card-slug';
+                slug.textContent = String(record.slug || '');
+                titleBlock.appendChild(slug);
+                top.appendChild(titleBlock);
+                top.appendChild(chip);
+                button.appendChild(top);
+
+                const description = document.createElement('p');
+                description.className = 'kit-catalog-card-body';
+                description.textContent = String(record.description || 'Open this protocol to edit stages, transitions, and rehearsal flow.');
+                button.appendChild(description);
+
+                const meta = document.createElement('div');
+                meta.className = 'kit-catalog-card-meta';
+                const updated = document.createElement('span');
+                updated.className = 'kit-catalog-card-meta-item';
+                updated.textContent = record.updated_at ? `Updated ${UI.relativeTime(record.updated_at)}` : 'Updated just now';
+                meta.appendChild(updated);
+                if (record.current_version_id) {
+                    const published = document.createElement('span');
+                    published.className = 'kit-catalog-card-meta-item';
+                    published.textContent = 'Versioned';
+                    meta.appendChild(published);
+                }
+                button.appendChild(meta);
+
+                li.appendChild(button);
                 listEl.appendChild(li);
             });
         }

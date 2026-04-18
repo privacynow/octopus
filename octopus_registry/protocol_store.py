@@ -389,6 +389,22 @@ class ProtocolPostgresAdapter:
             },
         }
 
+    @staticmethod
+    def _with_protocol_metadata(
+        document: Mapping[str, object] | None,
+        *,
+        slug: str,
+        display_name: str,
+        description: str,
+    ) -> dict[str, object]:
+        payload = dict(document or {})
+        metadata = dict(payload.get("metadata") or {})
+        metadata["slug"] = str(slug or "").strip()
+        metadata["display_name"] = str(display_name or "").strip()
+        metadata["description"] = str(description or "").strip()
+        payload["metadata"] = metadata
+        return payload
+
     def _assert_protocol_run_visible(
         self,
         row: Mapping[str, object] | None,
@@ -1537,11 +1553,7 @@ class ProtocolPostgresAdapter:
             return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
         protocol_key = str(protocol_id or uuid.uuid4().hex).strip()
         raw_definition = definition_json.as_dict()
-        validation = validate_protocol_document(raw_definition, mode="draft")
         document = self._strict_protocol_document(raw_definition)
-        raw_hash = protocol_definition_content_hash(document) if document is not None else hashlib.sha256(
-            json.dumps(raw_definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
         now = utcnow_iso()
         with self._connect() as conn, write_tx(conn):
             existing_row = self._protocol_row(conn, protocol_key)
@@ -1577,6 +1589,17 @@ class ProtocolPostgresAdapter:
                 or (existing_row.get("description", "") if existing_row is not None else "")
                 or ""
             ).strip()
+            raw_definition = self._with_protocol_metadata(
+                raw_definition,
+                slug=slug,
+                display_name=display_name,
+                description=description,
+            )
+            validation = validate_protocol_document(raw_definition, mode="draft")
+            document = self._strict_protocol_document(raw_definition)
+            raw_hash = protocol_definition_content_hash(document) if document is not None else hashlib.sha256(
+                json.dumps(raw_definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
             existing_slug_row = self._protocol_row_for_slug(conn, normalized_slug)
             if existing_slug_row is not None and str(existing_slug_row.get("protocol_id", "") or "") != protocol_key:
                 return ProtocolMutationRecord(
@@ -1673,13 +1696,12 @@ class ProtocolPostgresAdapter:
                 unique_slug = self._unique_protocol_slug(conn, f"{base_slug}-draft")
                 display_name = str(payload.display_name or f"{template.display_name} Draft").strip()
                 description = str(payload.description or template.description or "").strip()
-                definition_json = template.model_dump(mode="json")
-                definition_json["metadata"] = {
-                    **dict(definition_json.get("metadata") or {}),
-                    "slug": str(payload.slug or unique_slug).strip(),
-                    "display_name": display_name,
-                    "description": description,
-                }
+                definition_json = self._with_protocol_metadata(
+                    template.model_dump(mode="json"),
+                    slug=str(payload.slug or unique_slug).strip(),
+                    display_name=display_name,
+                    description=description,
+                )
                 return self.save_protocol_draft(
                     access=access,
                     protocol_id="",
@@ -1700,13 +1722,12 @@ class ProtocolPostgresAdapter:
                 source_description = str(source_metadata.get("description", "") or loaded.protocol.description or "").strip()
                 display_name = str(payload.display_name or f"{source_display_name} Draft").strip()
                 description = str(payload.description or source_description or "").strip()
-                definition_json = source_document
-                definition_json["metadata"] = {
-                    **dict(definition_json.get("metadata") or {}),
-                    "slug": str(payload.slug or unique_slug).strip(),
-                    "display_name": display_name,
-                    "description": description,
-                }
+                definition_json = self._with_protocol_metadata(
+                    source_document,
+                    slug=str(payload.slug or unique_slug).strip(),
+                    display_name=display_name,
+                    description=description,
+                )
                 return self.save_protocol_draft(
                     access=access,
                     protocol_id="",
@@ -1715,7 +1736,6 @@ class ProtocolPostgresAdapter:
                     description=description,
                     definition_json=RegistryJsonRecord.model_validate(definition_json),
                 )
-            internal_slug = self._unique_protocol_slug(conn, "draft")
             display_name = str(payload.display_name or "").strip()
             description = str(payload.description or "").strip()
             blank_document = self._blank_protocol_document(
@@ -1726,7 +1746,7 @@ class ProtocolPostgresAdapter:
             return self.save_protocol_draft(
                 access=access,
                 protocol_id="",
-                slug=internal_slug,
+                slug=str(payload.slug or "").strip(),
                 display_name=display_name,
                 description=description,
                 definition_json=RegistryJsonRecord.model_validate(blank_document),

@@ -20,11 +20,11 @@ window.Kit = (() => {
         // Protocol — record fields
         'protocol.display_name.label': 'Name',
         'protocol.display_name.help': 'Human-readable name for this protocol. You can change it later.',
-        'protocol.display_name.placeholder': 'e.g. Pull request review',
+        'protocol.display_name.placeholder': 'Name this workflow',
 
         'protocol.slug.label': 'URL slug',
         'protocol.slug.help': 'Short identifier used in URLs. Auto-suggested from the name once you enter one.',
-        'protocol.slug.placeholder': 'pull-request-review',
+        'protocol.slug.placeholder': 'URL slug appears after you name it',
 
         'protocol.description.label': 'Description',
         'protocol.description.help': 'Optional. What this protocol is for and when to use it.',
@@ -908,6 +908,16 @@ window.Kit = (() => {
     } = {}) {
         const root = document.createElement('section');
         root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
+        root.dataset.key = [
+            'workflow-canvas',
+            mode,
+            lanes.map((lane) => String(lane.key || '')).join(','),
+            nodes.map((node) => String(node.id || '')).join(','),
+            edges.map((edge) => String(edge.id || '')).join(','),
+            String(firstRun?.body || ''),
+            String(connectState?.fromStageKey || ''),
+            String(connectState?.decision || ''),
+        ].join('|');
         root.tabIndex = 0;
 
         if (firstRun && firstRun.active) {

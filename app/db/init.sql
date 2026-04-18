@@ -182,10 +182,15 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     updated_at TEXT NOT NULL,
     last_heartbeat_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.agents
+    ADD COLUMN IF NOT EXISTS trust_tier TEXT NOT NULL DEFAULT 'community',
+    ADD COLUMN IF NOT EXISTS soft_deleted_at TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_registry_agents_state
     ON agent_registry.agents (connectivity_state);
 CREATE INDEX IF NOT EXISTS idx_registry_agents_name
     ON agent_registry.agents ((lower(display_name)));
+CREATE INDEX IF NOT EXISTS idx_registry_agents_soft_deleted
+    ON agent_registry.agents (soft_deleted_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_bot_key
     ON agent_registry.agents (bot_key)
     WHERE bot_key <> '';

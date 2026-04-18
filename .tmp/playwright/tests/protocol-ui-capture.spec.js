@@ -38,8 +38,10 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await connectStep(page, planKey, reviewKey);
   await connectStep(page, reviewKey, '__complete__');
-  await expect(page.getByTestId('workflow-edge-plan::completed')).toBeVisible();
-  await expect(page.getByTestId('workflow-edge-review::accept')).toBeVisible();
+  await page.getByTestId(`workflow-node-${planKey}`).click();
+  await expect(page.getByTestId('stage-route-plan::completed')).toBeVisible();
+  await page.getByTestId(`workflow-node-${reviewKey}`).click();
+  await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
 
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-graph-page.png', fullPage: true });
   await page.locator('.kit-workflow-shell').screenshot({

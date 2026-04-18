@@ -49,10 +49,12 @@ test.describe('protocol authoring live', () => {
     });
 
     await connectStep(page, planKey, reviewKey);
-    await expect(page.getByTestId('workflow-edge-plan::completed')).toBeVisible();
+    await page.getByTestId(`workflow-node-${planKey}`).click();
+    await expect(page.getByTestId('stage-route-plan::completed')).toBeVisible();
 
     await connectStep(page, reviewKey, '__complete__');
-    await expect(page.getByTestId('workflow-edge-review::accept')).toBeVisible();
+    await page.getByTestId(`workflow-node-${reviewKey}`).click();
+    await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Cancel transition' })).toHaveCount(0);
     await page.getByTestId('workflow-node-review').click();
     await expect(details.getByLabel('Name')).toHaveValue('Review');

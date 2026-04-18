@@ -444,7 +444,7 @@ function renderProtocolWorkspace(container) {
     function _defaultWorkflowView(doc = draft.document) {
         const stageCount = Array.isArray(doc?.stages) ? doc.stages.length : 0;
         return {
-            kind: stageCount >= 10 ? 'overview' : stageCount >= 6 ? 'full' : 'focus',
+            kind: stageCount >= 8 ? 'overview' : stageCount >= 6 ? 'full' : 'focus',
             segmentId: '',
         };
     }

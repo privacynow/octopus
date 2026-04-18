@@ -73,7 +73,7 @@ test('capture protocol authoring states', async ({ page }) => {
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`/ui/protocols?protocol_id=${new URL(page.url()).searchParams.get('protocol_id')}`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Back to phases' }).click();
   await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png', fullPage: true });
   await page.getByTestId('workflow-node-segment:planning').click();

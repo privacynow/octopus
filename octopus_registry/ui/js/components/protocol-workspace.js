@@ -819,6 +819,9 @@ function renderProtocolWorkspace(container) {
         if (next.kind === 'focus' && !next.segmentId) {
             next.segmentId = projection.segments[0]?.id || '';
         }
+        if (next.kind === 'full' && segmentCount >= 4) {
+            next = { kind: 'overview', segmentId: '' };
+        }
         if (next.kind !== 'focus') {
             next.segmentId = next.kind === 'full' ? '' : next.segmentId;
         }

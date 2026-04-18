@@ -119,8 +119,9 @@ async function createStep(page, { name, key = '', ownerRole = '', stageKind = ''
   await expect(stageEditor).toBeVisible();
   await stageEditor.getByLabel('Name').fill(name);
   if (key) {
-    const advancedToggle = page.locator('.kit-stage-editor-section.is-collapsible .kit-stage-editor-summary').first();
-    if (await advancedToggle.count()) await advancedToggle.click();
+    await page.locator('details.kit-stage-editor-section.is-collapsible').first().evaluate((element) => {
+      element.open = true;
+    });
     await stageEditor.getByLabel('Key').fill(key);
   }
   if (ownerRole) {

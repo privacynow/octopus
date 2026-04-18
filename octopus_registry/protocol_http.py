@@ -413,8 +413,22 @@ def build_protocol_router(
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
+        request_payload = payload
+        if payload.is_rehearsal and not str(payload.entry_agent_id or "").strip():
+            rehearsal_manager = get_rehearsal_manager()
+            rehearsal_agent_id = str(rehearsal_manager.agent_id or "").strip()
+            if not rehearsal_agent_id:
+                rehearsal_agent_id, _ = rehearsal_manager.ensure_agent()
+                rehearsal_agent_id = str(rehearsal_agent_id or "").strip()
+            if not rehearsal_agent_id:
+                raise _protocol_http_error(
+                    503,
+                    error_code="PROTOCOL_REHEARSAL_UNAVAILABLE",
+                    message="Rehearsal participant is unavailable right now.",
+                )
+            request_payload = payload.model_copy(update={"entry_agent_id": rehearsal_agent_id})
         result = store.create_protocol_run(
-            payload,
+            request_payload,
             access=protocol_access(auth),
             idempotency_key=str(idempotency_key or "").strip(),
         )

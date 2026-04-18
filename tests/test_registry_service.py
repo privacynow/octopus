@@ -33,7 +33,7 @@ from app.runtime_health import (
 )
 from app.storage import default_session, ensure_data_dirs, load_session, save_session, session_exists
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
-from octopus_sdk.protocols import ProtocolMutationRecord, ProtocolRunMutationRecord
+from octopus_sdk.protocols import ProtocolMutationRecord, ProtocolRunMutationRecord, ProtocolRunRecord
 from octopus_sdk.registry.management import (
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
@@ -1763,6 +1763,73 @@ def test_protocol_run_create_route_returns_invalid_for_missing_entry_agent(monke
     assert response.status_code == 400
     assert response.json()["detail"]["error_code"] == "PROTOCOL_INVALID"
     assert "entry_agent_id is required" in response.json()["detail"]["message"]
+
+
+def test_protocol_run_create_route_uses_rehearsal_manager_agent_when_rehearsing(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def create_protocol_run(self, payload, *, access, idempotency_key=""):
+            assert payload.is_rehearsal is True
+            assert payload.entry_agent_id == "agent-rehearsal"
+            return ProtocolRunMutationRecord(
+                ok=True,
+                status="created",
+                run=ProtocolRunRecord(
+                    protocol_run_id="run-rehearsal",
+                    protocol_id="protocol-1",
+                    protocol_definition_version_id="version-1",
+                    entry_agent_id="agent-rehearsal",
+                    entry_authority_ref="rehearsal",
+                    origin_channel="registry",
+                    workspace_ref="workspace-a",
+                    problem_statement="Dry run the thing.",
+                    constraints_json={},
+                    run_org_id="local",
+                    status="queued",
+                    created_at="2026-04-17T00:00:00+00:00",
+                    updated_at="2026-04-17T00:00:00+00:00",
+                    is_rehearsal=True,
+                ),
+            )
+
+    class _RehearsalManager:
+        agent_id = ""
+
+        def ensure_agent(self):
+            return ("agent-rehearsal", "token-rehearsal")
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    previous_manager = getattr(registry_server, "_rehearsal_manager", None)
+    registry_server._rehearsal_manager = _RehearsalManager()
+    try:
+        response = client.post(
+            "/v1/protocol-runs",
+            json={
+                "protocol_id": "protocol-1",
+                "entry_agent_id": "",
+                "origin_channel": "registry",
+                "workspace_ref": "workspace-a",
+                "problem_statement": "Dry run the thing.",
+                "constraints_json": {},
+                "is_rehearsal": True,
+            },
+        )
+    finally:
+        registry_server._rehearsal_manager = previous_manager
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run"]["entry_agent_id"] == "agent-rehearsal"
+    assert payload["run"]["is_rehearsal"] is True
 
 
 def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):

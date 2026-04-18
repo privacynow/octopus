@@ -1621,9 +1621,12 @@ window.Kit = (() => {
                 if (edge.showLabel === false || !String(edge.label || '').trim()) {
                     return;
                 }
-                const reserved = placeLabel(String(edge.label || ''), labelCandidates);
+                let reserved = placeLabel(String(edge.label || ''), labelCandidates);
                 if (!reserved) {
-                    return;
+                    if (isFull || isOverview || !labelCandidates.length) {
+                        return;
+                    }
+                    reserved = labelCandidates[0];
                 }
                 const label = document.createElement('button');
                 label.type = 'button';
@@ -1659,7 +1662,6 @@ window.Kit = (() => {
                 graphFrame.style.width = `${graphWidth * zoomValue}px`;
                 graphFrame.style.height = `${graphHeight * zoomValue}px`;
                 controls.dataset.zoom = nextZoom === 'fit' ? 'fit' : String(zoomValue);
-                zoomReset.textContent = `${Math.round(zoomValue * 100)}%`;
                 if (notify && typeof onViewportChange === 'function') {
                     onViewportChange(nextZoom === 'fit' ? 'fit' : zoomValue);
                 }

@@ -2016,7 +2016,7 @@ function renderProtocolWorkspace(container) {
         const focusOffset = hasPredecessors ? 1 : 0;
         const maxStageColumn = Math.max(0, ...Array.from(stageColumns.values(), (value) => Number(value || 0)));
         const contextSuccessorColumn = focusOffset + maxStageColumn + 1;
-        const terminalColumn = contextSuccessorColumn + (successorSegments.length ? 1 : 0);
+        const terminalColumn = contextSuccessorColumn + (successorSegments.length ? 0 : 1);
 
         const nodes = [
             ...predecessorSegments.map((item) => ({

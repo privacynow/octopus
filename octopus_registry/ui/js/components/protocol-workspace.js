@@ -116,6 +116,15 @@ function _protocolDecisionLabel(value) {
     return Kit.dict.label(`protocol.stage.decision.${key}`, value);
 }
 
+function _titleCaseWords(value) {
+    return String(value || '')
+        .trim()
+        .split(/[\s_-]+/)
+        .filter(Boolean)
+        .map((item) => item.charAt(0).toUpperCase() + item.slice(1))
+        .join(' ');
+}
+
 /*
  * Protocol authoring workspace — kit-driven surface.
  *
@@ -138,6 +147,7 @@ function renderProtocolWorkspace(container) {
     let currentProtocol = null;
     let protocolDetailLoading = false;
     let draftRevision = 0;
+    let connectedAgents = [];
     let draftConflict = null;
     let selectorPreview = {
         participantKey: '',
@@ -688,6 +698,19 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    function _nextAvailableKey(items, field, preferred, currentKey = '') {
+        const normalized = _slugSuggestion(preferred) || String(field || '').replace(/_key$/, '');
+        const current = String(currentKey || '').trim();
+        const seen = new Set((items || []).map((item) => String(item?.[field] || '').trim()).filter(Boolean));
+        if (current) seen.delete(current);
+        if (!seen.has(normalized)) return normalized;
+        let index = 2;
+        while (seen.has(`${normalized}_${index}`)) {
+            index += 1;
+        }
+        return `${normalized}_${index}`;
+    }
+
     function _commitDocument(nextDoc, { nextSelection = selection, pushHistory = true } = {}) {
         if (pushHistory) _pushHistory();
         draft.document = nextDoc;
@@ -736,6 +759,47 @@ function renderProtocolWorkspace(container) {
         _commitDocument(doc, {
             nextSelection: { sectionKey: plural, nodeKey: String(nextNodeKey || '') },
         });
+    }
+
+    async function _applyParticipantSuggestion(participantKey, suggestion) {
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.participants || [])];
+        const idx = items.findIndex((item) => String(item.participant_key || '') === String(participantKey || ''));
+        if (idx < 0) return;
+
+        const next = { ...items[idx] };
+        const selectorKind = String(suggestion?.selectorKind || '').trim();
+        const selectorValue = String(suggestion?.selectorValue || '').trim();
+        const selector = _selectorFromFields(selectorKind, selectorValue);
+        if (!selector) return;
+
+        next.selector = selector;
+        if (!String(next.display_name || '').trim()) {
+            next.display_name = String(suggestion?.displayName || suggestion?.label || '').trim();
+        }
+
+        let nextParticipantKey = String(participantKey || '').trim();
+        if (!nextParticipantKey || /^participant_\d+$/i.test(nextParticipantKey)) {
+            const preferredKey = String(suggestion?.preferredKey || suggestion?.displayName || suggestion?.label || 'participant').trim();
+            const rewritten = _nextAvailableKey(items, 'participant_key', preferredKey, nextParticipantKey);
+            next.participant_key = rewritten;
+            _rewriteKeyReferences(doc, 'participant', nextParticipantKey, rewritten);
+            nextParticipantKey = rewritten;
+        }
+
+        items[idx] = next;
+        doc.participants = items;
+        selectorPreview = {
+            participantKey: nextParticipantKey,
+            query: _selectorString(selector),
+            candidates: [],
+            busy: false,
+            message: '',
+        };
+        _commitDocument(doc, {
+            nextSelection: { sectionKey: 'participants', nodeKey: nextParticipantKey },
+        });
+        await _resolveSelectorPreview(nextParticipantKey, _selectorString(selector));
     }
 
     function _addNode(sectionKey) {
@@ -902,6 +966,70 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    function _participantSelectorSuggestions(target) {
+        if (!target) return [];
+        const suggestions = [];
+        const seen = new Set();
+        const pushSuggestion = (entry) => {
+            const value = String(entry?.value || '').trim();
+            if (!value || seen.has(value)) return;
+            seen.add(value);
+            suggestions.push(entry);
+        };
+        (connectedAgents || []).slice(0, 6).forEach((agent) => {
+            const agentSlug = String(agent?.slug || '').trim();
+            const selectorValue = String(agent?.selector || (agentSlug ? `@${agentSlug}` : '')).trim();
+            if (!selectorValue) return;
+            pushSuggestion({
+                label: String(agent.display_name || agentSlug || selectorValue),
+                value: selectorValue,
+                selectorKind: 'agent',
+                selectorValue: agentSlug,
+                displayName: String(agent.display_name || agentSlug || 'Assigned agent'),
+                preferredKey: agentSlug || _slugSuggestion(agent.display_name || ''),
+            });
+        });
+        const roleMap = new Map();
+        (connectedAgents || []).forEach((agent) => {
+            const role = String(agent?.role || '').trim();
+            if (!role || roleMap.has(role)) return;
+            roleMap.set(role, agent);
+        });
+        Array.from(roleMap.entries()).slice(0, 4).forEach(([role, agent]) => {
+            const roleSelector = String(agent?.role_selector || '').trim();
+            if (!roleSelector) return;
+            pushSuggestion({
+                label: `Any ${_titleCaseWords(role)}`,
+                value: roleSelector,
+                selectorKind: 'role',
+                selectorValue: role,
+                displayName: _titleCaseWords(role),
+                preferredKey: _slugSuggestion(role),
+            });
+        });
+        if (!suggestions.length) {
+            [
+                {
+                    label: 'Anyone with planning',
+                    value: '@skill:planning',
+                    selectorKind: 'skill',
+                    selectorValue: 'planning',
+                    displayName: 'Planner',
+                    preferredKey: 'planner',
+                },
+                {
+                    label: 'Any reviewer',
+                    value: '@role:reviewer',
+                    selectorKind: 'role',
+                    selectorValue: 'reviewer',
+                    displayName: 'Reviewer',
+                    preferredKey: 'reviewer',
+                },
+            ].forEach(pushSuggestion);
+        }
+        return suggestions;
+    }
+
     // -------------------------------------------------------------------
     // Rendering
     // -------------------------------------------------------------------
@@ -967,6 +1095,11 @@ function renderProtocolWorkspace(container) {
 
     function _workflowData() {
         const doc = draft.document;
+        const stageCounts = new Map();
+        (doc.stages || []).forEach((item) => {
+            const key = String(item.participant_key || '').trim();
+            stageCounts.set(key, Number(stageCounts.get(key) || 0) + 1);
+        });
         const participantMap = new Map((doc.participants || []).map((item) => [
             String(item.participant_key || ''),
             String(item.display_name || item.participant_key || ''),
@@ -976,9 +1109,15 @@ function renderProtocolWorkspace(container) {
             ...(doc.participants || []).map((item) => ({
                 key: String(item.participant_key || ''),
                 label: String(item.display_name || item.participant_key || 'Participant'),
+                sublabel: _selectorString(item.selector || null)
+                    || `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} stage${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
                 empty: Kit.dict.label('protocol.stages.firstrun'),
             })),
-            { key: '__outcomes__', label: Kit.dict.label('protocol.workflow.outcomes') },
+            {
+                key: '__outcomes__',
+                label: Kit.dict.label('protocol.workflow.outcomes'),
+                sublabel: Kit.dict.label('protocol.workflow.outcomes_hint'),
+            },
         ];
         const nodes = [
             ...(doc.stages || []).map((item, index) => ({
@@ -988,10 +1127,16 @@ function renderProtocolWorkspace(container) {
                 column: index,
                 label: String(item.display_name || item.stage_key || 'New stage'),
                 sublabel: [
-                    Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
-                    participantMap.get(String(item.participant_key || '')) || '',
-                    (item.outputs || []).length ? `${(item.outputs || []).length} artifact${(item.outputs || []).length === 1 ? '' : 's'}` : '',
+                    (item.inputs || []).length ? `Reads ${(item.inputs || []).length}` : '',
+                    (item.outputs || []).length ? `Writes ${(item.outputs || []).length}` : '',
+                    String(item.instructions || '').trim() ? 'Instructions ready' : '',
                 ].filter(Boolean).join(' · '),
+                badges: [
+                    {
+                        tone: String(item.stage_kind || 'work'),
+                        label: Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
+                    },
+                ],
             })),
             ...PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
                 id: item.key,
@@ -999,7 +1144,7 @@ function renderProtocolWorkspace(container) {
                 laneKey: '__outcomes__',
                 column: stageCount + index,
                 label: item.label,
-                sublabel: item.key,
+                sublabel: 'Workflow stops here',
                 isTerminal: true,
             })),
         ];
@@ -1136,8 +1281,6 @@ function renderProtocolWorkspace(container) {
         if (selection.sectionKey === 'overview' || !selection.nodeKey) {
             return Kit.detailsPanel({
                 target: {
-                    display_name: draft.display_name,
-                    slug: draft.slug,
                     description: draft.description,
                     single_active_writer: Boolean(doc.policies?.single_active_writer ?? true),
                     max_review_rounds: Number(doc.policies?.max_review_rounds || 5) || 5,
@@ -1145,8 +1288,6 @@ function renderProtocolWorkspace(container) {
                 surfaceKey: 'protocol',
                 onCommit: _commitOverview,
                 schema: [
-                    { key: 'display_name', kind: 'text', required: true },
-                    { key: 'slug', kind: 'text' },
                     { key: 'description', kind: 'textarea', rows: 4 },
                     { key: 'single_active_writer', kind: 'checkbox', labelKey: 'protocol.policy.single_active_writer.label', helpKey: 'protocol.policy.single_active_writer.help' },
                     { key: 'max_review_rounds', kind: 'text', labelKey: 'protocol.policy.max_review_rounds.label', helpKey: 'protocol.policy.max_review_rounds.help' },
@@ -1194,6 +1335,8 @@ function renderProtocolWorkspace(container) {
                 message: selection.nodeKey === selectorPreview.participantKey
                     ? selectorPreview.message
                     : Kit.dict.label('protocol.participant.selector_hint'),
+                suggestions: _participantSelectorSuggestions(target),
+                onSuggestionSelect: (value) => { void _applyParticipantSuggestion(selection.nodeKey, value); },
                 onResolve: (value) => { void _resolveSelectorPreview(selection.nodeKey, value); },
             }));
             return wrap;
@@ -1429,6 +1572,18 @@ function renderProtocolWorkspace(container) {
         authoringManifest = await API.getProtocolAuthoringManifest();
     }
 
+    async function loadConnectedAgents({ quiet = true } = {}) {
+        try {
+            const data = await API.listAgents({ state: 'connected', limit: 24 });
+            connectedAgents = Array.isArray(data?.agents) ? data.agents : (Array.isArray(data) ? data : []);
+        } catch (err) {
+            connectedAgents = [];
+            if (!quiet) {
+                UI.reportError('Failed to load connected agents', err);
+            }
+        }
+    }
+
     async function loadProtocolDetail() {
         if (!currentProtocolId) {
             currentProtocol = null;
@@ -1449,7 +1604,7 @@ function renderProtocolWorkspace(container) {
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
-            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringManifest()]);
+            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringManifest(), loadConnectedAgents({ quiet: true })]);
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {

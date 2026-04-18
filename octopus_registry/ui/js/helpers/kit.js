@@ -171,7 +171,9 @@ window.Kit = (() => {
         'protocol.workflow.outcomes': 'Outcomes',
         'protocol.workflow.artifacts': 'Artifacts',
         'protocol.workflow.narrow.empty': 'No stages yet.',
-        'protocol.workflow.drag_hint': 'Drag stages to reorder them in the workflow.',
+        'protocol.workflow.drag_hint': 'Select a step to edit it, or drag it to reorganize the workflow.',
+        'protocol.workflow.lane_hint': 'Roles in this workflow',
+        'protocol.workflow.outcomes_hint': 'How the workflow can finish',
 
         // Draft state chip
         'draftchip.idle': 'Saved',
@@ -263,6 +265,7 @@ window.Kit = (() => {
         'agents.selector.result_title': 'Candidates',
         'agents.selector.candidate_badge_current': 'current agent',
         'agents.selector.candidate_subtitle_template': '{role} · {slug}',
+        'agents.selector.quick_picks': 'Quick picks',
 
         // Skills / guidance — enough for stub adoption; expanded on migration
         'skill.lifecycle.draft': 'Draft',
@@ -1074,29 +1077,102 @@ window.Kit = (() => {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
 
+            const laneHeight = 148;
+            const laneGap = 28;
+            const columnWidth = 292;
+            const columnGap = 88;
+            const nodeWidth = 252;
+            const stageHeight = 120;
+            const terminalHeight = 94;
+            const leftPad = 48;
+            const rightPad = 72;
+            const bottomPad = 40;
+            const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
+            const backEdges = edges.filter((edge) => {
+                const fromNode = nodes.find((node) => String(node.id || '') === String(edge.from || ''));
+                const toNode = nodes.find((node) => String(node.id || '') === String(edge.to || ''));
+                return toNode && fromNode && Number(toNode.column || 0) <= Number(fromNode.column || 0);
+            });
+            const routeHeadroom = backEdges.length ? 28 + (backEdges.length * 26) : 28;
+            const topPad = 28 + routeHeadroom;
+            const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
+            const graphWidth = leftPad + rightPad + ((maxColumn + 1) * columnWidth) + (Math.max(0, maxColumn) * columnGap);
+            const graphHeight = topPad + bottomPad + (Math.max(1, lanes.length) * laneHeight) + (Math.max(0, lanes.length - 1) * laneGap);
+
+            const layout = new Map();
+            nodes.forEach((node) => {
+                const row = Math.max(0, laneIndex.get(String(node.laneKey || '')) || 0);
+                const height = node.isTerminal ? terminalHeight : stageHeight;
+                const x = leftPad + (Number(node.column || 0) * (columnWidth + columnGap));
+                const y = topPad + (row * (laneHeight + laneGap)) + Math.max(0, Math.floor((laneHeight - height) / 2));
+                layout.set(String(node.id || ''), {
+                    x,
+                    y,
+                    width: nodeWidth,
+                    height,
+                    row,
+                    column: Number(node.column || 0),
+                });
+            });
+
             const laneRail = document.createElement('div');
             laneRail.className = 'kit-workflow-lanes';
+            laneRail.style.setProperty('--workflow-lane-height', `${laneHeight}px`);
+            laneRail.style.setProperty('--workflow-lane-gap', `${laneGap}px`);
+            laneRail.style.paddingTop = `${topPad}px`;
             lanes.forEach((lane) => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = `kit-workflow-lane${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
                 btn.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
-                btn.textContent = String(lane.label || lane.key || '');
-                if (typeof onSelect === 'function') {
+                if (typeof onSelect === 'function' && String(lane.key || '') !== '__outcomes__') {
                     btn.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
                 }
+
+                const title = document.createElement('div');
+                title.className = 'kit-workflow-lane-title';
+                title.textContent = String(lane.label || lane.key || '');
+                btn.appendChild(title);
+
+                const sub = document.createElement('div');
+                sub.className = 'kit-workflow-lane-subtitle';
+                sub.textContent = String(
+                    lane.sublabel
+                    || (String(lane.key || '') === '__outcomes__'
+                        ? dictValue('protocol.workflow.outcomes_hint', 'How the workflow can finish')
+                        : dictValue('protocol.workflow.lane_hint', 'Roles in this workflow'))
+                );
+                btn.appendChild(sub);
                 laneRail.appendChild(btn);
             });
-            root.appendChild(laneRail);
+            shell.appendChild(laneRail);
+
+            const viewport = document.createElement('div');
+            viewport.className = 'kit-workflow-viewport';
 
             const graph = document.createElement('div');
             graph.className = 'kit-workflow-graph';
-            graph.style.setProperty('--workflow-columns', String(Math.max(1, ...nodes.map((node) => Number(node.column || 0) + 1))));
+            graph.style.width = `${graphWidth}px`;
+            graph.style.height = `${graphHeight}px`;
+            graph.style.setProperty('--workflow-columns', String(Math.max(1, maxColumn + 1)));
             graph.style.setProperty('--workflow-rows', String(Math.max(1, lanes.length)));
+
+            const bandsLayer = document.createElement('div');
+            bandsLayer.className = 'kit-workflow-band-layer';
+            lanes.forEach((lane) => {
+                const band = document.createElement('div');
+                band.className = `kit-workflow-band${String(lane.key || '') === '__outcomes__' ? ' is-outcomes' : ''}`;
+                const row = Math.max(0, laneIndex.get(String(lane.key || '')) || 0);
+                band.style.top = `${topPad + (row * (laneHeight + laneGap))}px`;
+                band.style.height = `${laneHeight}px`;
+                bandsLayer.appendChild(band);
+            });
+            graph.appendChild(bandsLayer);
 
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.setAttribute('class', 'kit-workflow-edges');
             svg.setAttribute('aria-hidden', 'true');
+            svg.setAttribute('viewBox', `0 0 ${graphWidth} ${graphHeight}`);
             graph.appendChild(svg);
 
             const labelsLayer = document.createElement('div');
@@ -1108,18 +1184,28 @@ window.Kit = (() => {
             graph.appendChild(nodesLayer);
 
             let draggedNodeId = '';
-            const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
-
             nodes.forEach((node) => {
+                const nodeLayout = layout.get(String(node.id || ''));
+                if (!nodeLayout) return;
+                const canConnect = !node.isTerminal && typeof onBeginConnect === 'function';
+                const isConnectSource = String(connectState?.fromStageKey || '') === String(node.id || '');
+                const isConnectTarget = Boolean(connectState?.fromStageKey)
+                    && String(connectState.fromStageKey || '') !== String(node.id || '')
+                    && (node.kind === 'stage' || node.kind === 'terminal');
+
                 const wrap = document.createElement('div');
                 wrap.className = [
                     'kit-workflow-node-wrap',
                     selection?.kind === node.kind && selection?.id === node.id ? 'is-selected' : '',
                     node.isTerminal ? 'is-terminal' : '',
+                    isConnectSource ? 'is-connect-source' : '',
+                    isConnectTarget ? 'is-connect-target' : '',
                 ].filter(Boolean).join(' ');
                 wrap.dataset.nodeId = String(node.id || '');
-                wrap.style.gridColumn = String(Number(node.column || 0) + 1);
-                wrap.style.gridRow = String((laneIndex.get(String(node.laneKey || '')) || 0) + 1);
+                wrap.style.left = `${nodeLayout.x}px`;
+                wrap.style.top = `${nodeLayout.y}px`;
+                wrap.style.width = `${nodeLayout.width}px`;
+                wrap.style.height = `${nodeLayout.height}px`;
 
                 const btn = document.createElement('button');
                 btn.type = 'button';
@@ -1148,6 +1234,19 @@ window.Kit = (() => {
                     btn.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
                 }
 
+                if (Array.isArray(node.badges) && node.badges.length) {
+                    const badgeRow = document.createElement('div');
+                    badgeRow.className = 'kit-workflow-node-badges';
+                    node.badges.forEach((badge) => {
+                        if (!badge) return;
+                        const chip = document.createElement('span');
+                        chip.className = `kit-workflow-node-badge${badge.tone ? ` is-${badge.tone}` : ''}`;
+                        chip.textContent = String(badge.label || '');
+                        badgeRow.appendChild(chip);
+                    });
+                    btn.appendChild(badgeRow);
+                }
+
                 const label = document.createElement('div');
                 label.className = 'kit-workflow-node-label';
                 label.textContent = String(node.label || node.id || '');
@@ -1172,7 +1271,7 @@ window.Kit = (() => {
 
                 wrap.appendChild(btn);
 
-                if (!node.isTerminal && typeof onBeginConnect === 'function') {
+                if (canConnect) {
                     const connect = document.createElement('button');
                     connect.type = 'button';
                     connect.className = 'kit-workflow-node-connect';
@@ -1188,46 +1287,83 @@ window.Kit = (() => {
                 nodesLayer.appendChild(wrap);
             });
 
-            function drawEdges() {
-                svg.innerHTML = '';
-                labelsLayer.innerHTML = '';
-                const graphRect = graph.getBoundingClientRect();
-                svg.setAttribute('viewBox', `0 0 ${Math.max(1, graphRect.width)} ${Math.max(1, graphRect.height)}`);
-                edges.forEach((edge) => {
-                    const fromEl = nodesLayer.querySelector(`[data-node-id=\"${CSS.escape(String(edge.from || ''))}\"]`);
-                    const toEl = nodesLayer.querySelector(`[data-node-id=\"${CSS.escape(String(edge.to || ''))}\"]`);
-                    if (!fromEl || !toEl) return;
-                    const fromRect = fromEl.getBoundingClientRect();
-                    const toRect = toEl.getBoundingClientRect();
-                    const x1 = fromRect.right - graphRect.left;
-                    const y1 = fromRect.top - graphRect.top + (fromRect.height / 2);
-                    const x2 = toRect.left - graphRect.left;
-                    const y2 = toRect.top - graphRect.top + (toRect.height / 2);
-                    const dx = Math.max(36, Math.abs(x2 - x1) / 2);
+            const backEdgeOrder = new Map();
+            edges.forEach((edge) => {
+                const fromLayout = layout.get(String(edge.from || ''));
+                const toLayout = layout.get(String(edge.to || ''));
+                if (fromLayout && toLayout && toLayout.column <= fromLayout.column) {
+                    backEdgeOrder.set(String(edge.id || ''), backEdgeOrder.size);
+                }
+            });
 
-                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                    path.setAttribute('class', `kit-workflow-edge-path${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`);
-                    path.setAttribute('d', `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
-                    svg.appendChild(path);
+            edges.forEach((edge) => {
+                const fromLayout = layout.get(String(edge.from || ''));
+                const toLayout = layout.get(String(edge.to || ''));
+                if (!fromLayout || !toLayout) return;
 
-                    const label = document.createElement('button');
-                    label.type = 'button';
-                    label.className = `kit-workflow-edge-label${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`;
-                    label.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
-                    label.textContent = String(edge.label || '');
-                    label.style.left = `${((x1 + x2) / 2)}px`;
-                    label.style.top = `${((y1 + y2) / 2)}px`;
-                    if (typeof onSelect === 'function') {
-                        label.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
+                const fromX = fromLayout.x + fromLayout.width;
+                const fromY = fromLayout.y + (fromLayout.height / 2);
+                const toX = toLayout.x;
+                const toY = toLayout.y + (toLayout.height / 2);
+                const selected = selection?.kind === 'transition' && selection?.id === edge.id;
+                const isBackEdge = toLayout.column <= fromLayout.column;
+
+                let pathData = '';
+                let labelX = 0;
+                let labelY = 0;
+
+                if (isBackEdge) {
+                    const bandIndex = Number(backEdgeOrder.get(String(edge.id || '')) || 0);
+                    const trackY = 22 + (bandIndex * 26);
+                    const exitX = fromX + 28;
+                    const entryX = Math.max(leftPad - 8, toX - 28);
+                    pathData = [
+                        `M ${fromX} ${fromY}`,
+                        `L ${exitX} ${fromY}`,
+                        `L ${exitX} ${trackY}`,
+                        `L ${entryX} ${trackY}`,
+                        `L ${entryX} ${toY}`,
+                        `L ${toX} ${toY}`,
+                    ].join(' ');
+                    labelX = entryX + ((exitX - entryX) / 2);
+                    labelY = trackY;
+                } else {
+                    const bendX = fromX + Math.max(44, Math.floor((toX - fromX) / 2));
+                    pathData = [
+                        `M ${fromX} ${fromY}`,
+                        `L ${bendX} ${fromY}`,
+                        `L ${bendX} ${toY}`,
+                        `L ${toX} ${toY}`,
+                    ].join(' ');
+                    if (Math.abs(fromY - toY) < 8) {
+                        labelX = fromX + ((toX - fromX) / 2);
+                        labelY = fromY - 18;
+                    } else {
+                        labelX = bendX + 12;
+                        labelY = fromY + ((toY - fromY) / 2);
                     }
-                    labelsLayer.appendChild(label);
-                });
-            }
+                }
 
-            requestAnimationFrame(drawEdges);
-            setTimeout(drawEdges, 40);
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('class', `kit-workflow-edge-path${selected ? ' is-selected' : ''}`);
+                path.setAttribute('d', pathData);
+                svg.appendChild(path);
 
-            shell.appendChild(graph);
+                const label = document.createElement('button');
+                label.type = 'button';
+                label.className = `kit-workflow-edge-label${selected ? ' is-selected' : ''}`;
+                label.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
+                label.textContent = String(edge.label || '');
+                label.style.left = `${labelX}px`;
+                label.style.top = `${labelY}px`;
+                if (typeof onSelect === 'function') {
+                    label.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
+                }
+                labelsLayer.appendChild(label);
+            });
+
+            viewport.appendChild(graph);
+            shell.appendChild(viewport);
             root.appendChild(shell);
         }
 
@@ -1752,6 +1888,8 @@ window.Kit = (() => {
         busy = false,
         message = '',
         currentAgentId = '',
+        suggestions = [],
+        onSuggestionSelect = null,
     } = {}) {
         const root = document.createElement('section');
         root.className = 'kit-selector-preview';
@@ -1796,6 +1934,40 @@ window.Kit = (() => {
         }
         form.appendChild(resolveBtn);
         root.appendChild(form);
+
+        const quickPicks = Array.isArray(suggestions) ? suggestions.filter(Boolean) : [];
+        if (quickPicks.length) {
+            const picker = document.createElement('div');
+            picker.className = 'kit-selector-preview-suggestions';
+            const pickerLabel = document.createElement('div');
+            pickerLabel.className = 'detail-label';
+            pickerLabel.textContent = dictValue('agents.selector.quick_picks', 'Quick picks');
+            picker.appendChild(pickerLabel);
+
+            const chips = document.createElement('div');
+            chips.className = 'chip-row';
+            quickPicks.forEach((suggestion) => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'quickstart-chip';
+                chip.textContent = String(suggestion.label || suggestion.value || '');
+                chip.addEventListener('click', () => {
+                    const value = String(suggestion.value || '').trim();
+                    if (!value) return;
+                    input.value = value;
+                    if (typeof onSuggestionSelect === 'function') {
+                        onSuggestionSelect(suggestion);
+                        return;
+                    }
+                    if (typeof onResolve === 'function') {
+                        onResolve(value);
+                    }
+                });
+                chips.appendChild(chip);
+            });
+            picker.appendChild(chips);
+            root.appendChild(picker);
+        }
 
         if (message) {
             const note = document.createElement('div');

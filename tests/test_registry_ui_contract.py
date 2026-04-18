@@ -136,6 +136,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Kit.validationSurface(" in workspace
     assert "Kit.rehearsalPanel(" in workspace
     assert "Kit.selectorResolutionPreview(" in workspace
+    assert "API.listAgents({ state: 'connected', limit: 24 })" in workspace
 
     # Rehearsal API the workspace drives
     assert "API.listRehearsalSessions(" in workspace
@@ -159,8 +160,12 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_reloadServerDraftConflict" in workspace
     assert "_overwriteServerDraftConflict" in workspace
     assert "_rewriteKeyReferences(" in workspace
+    assert "inputs: (stage.inputs || []).map" in workspace
+    assert "outputs: (stage.outputs || []).map" in workspace
     assert "_stageTransitionId(" in workspace
     assert "_transitionEntries(" in workspace
+    assert "_applyParticipantSuggestion(" in workspace
+    assert "suggestions: _participantSelectorSuggestions(target)" in workspace
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace

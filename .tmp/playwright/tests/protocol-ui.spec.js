@@ -111,6 +111,8 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Add the first participant');
     await page.getByRole('button', { name: /Add participant/i }).first().click();
     await expect(page.getByTestId('workflow-lane-participant_1')).toBeVisible();
+    await expect(page.locator('.kit-selector-preview-suggestions')).toBeVisible();
+    await expect(page.locator('.kit-selector-preview-suggestions .quickstart-chip').first()).toBeVisible();
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
@@ -176,22 +178,68 @@ test.describe('protocol authoring live', () => {
 
     await page.getByRole('button', { name: /Add participant/i }).first().click();
     const participantPanel = page.locator('.kit-details-panel').first();
-    await participantPanel.getByLabel('Name').fill('Planner');
-    await participantPanel.getByLabel('Name').blur();
-    await participantPanel.getByLabel('Assignment rule').selectOption('agent');
-    await participantPanel.getByLabel('Rule value').fill('m1');
-    await participantPanel.getByLabel('Rule value').blur();
-    await page.getByRole('button', { name: 'Resolve' }).click();
+    await expect(page.locator('.kit-selector-preview-suggestions .quickstart-chip').first()).toBeVisible();
+    await page.locator('.kit-selector-preview-suggestions .quickstart-chip').first().click();
     await expect(page.locator('.kit-selector-preview')).toBeVisible();
+    await expect(participantPanel.getByLabel('Name')).not.toHaveValue('');
+    await participantPanel.getByLabel('Key').fill('planner');
+    await participantPanel.getByLabel('Key').blur();
 
     await page.getByRole('button', { name: /Add stage/i }).first().click();
     await page.getByTestId('workflow-node-stage_1').click();
     const stagePanel = page.locator('.kit-details-panel').first();
     await stagePanel.getByLabel('Name').fill('Plan');
     await stagePanel.getByLabel('Name').blur();
+    await stagePanel.getByLabel('Key').fill('plan');
+    await stagePanel.getByLabel('Key').blur();
+
+    await page.getByRole('button', { name: /Add stage/i }).first().click();
+    await page.getByTestId('workflow-node-stage_2').click();
+    await stagePanel.getByLabel('Name').fill('Review');
+    await stagePanel.getByLabel('Name').blur();
+    await stagePanel.getByLabel('Key').fill('review');
+    await stagePanel.getByLabel('Key').blur();
+
+    await page.getByTestId('workflow-node-plan').click();
+    await stagePanel.getByRole('button', { name: 'Add transition' }).click();
+    await page.getByTestId('workflow-node-review').click();
+    await expect(page.getByTestId('workflow-edge-plan::completed')).toBeVisible();
+
+    await page.getByTestId('workflow-node-review').click();
     await stagePanel.getByRole('button', { name: 'Add transition' }).click();
     await page.getByTestId('workflow-node-__complete__').click();
-    await expect(page.getByTestId('workflow-edge-stage_1::completed')).toBeVisible();
+    await expect(page.getByTestId('workflow-edge-review::completed')).toBeVisible();
+
+    const graphMetrics = await page.locator('.kit-workflow-graph').evaluate((graph) => {
+      const nodes = Array.from(graph.querySelectorAll('.kit-workflow-node-wrap')).map((node) => {
+        const rect = node.getBoundingClientRect();
+        return {
+          id: String(node.getAttribute('data-node-id') || ''),
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+        };
+      });
+      const overlaps = [];
+      for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const horizontal = Math.min(nodes[i].right, nodes[j].right) - Math.max(nodes[i].left, nodes[j].left);
+          const vertical = Math.min(nodes[i].bottom, nodes[j].bottom) - Math.max(nodes[i].top, nodes[j].top);
+          if (horizontal > 6 && vertical > 6) {
+            overlaps.push([nodes[i].id, nodes[j].id]);
+          }
+        }
+      }
+      return {
+        width: graph.scrollWidth,
+        height: graph.scrollHeight,
+        overlaps,
+      };
+    });
+    expect(graphMetrics.width).toBeGreaterThan(1200);
+    expect(graphMetrics.height).toBeGreaterThan(420);
+    expect(graphMetrics.overlaps).toEqual([]);
     await waitForSaved(page);
 
     await page.getByRole('button', { name: 'Validate' }).click();

@@ -70,6 +70,8 @@ def test_kit_dictionary_covers_protocol_authoring_strings() -> None:
         "protocol.participant.selector_value.label",
         "protocol.canvas.empty.title",
         "protocol.catalog.empty.title",
+        "protocol.workflow.lane_hint",
+        "protocol.workflow.outcomes_hint",
         "draftchip.idle",
         "draftchip.editing",
         "draftchip.saving",
@@ -113,6 +115,7 @@ def test_kit_dictionary_covers_protocol_authoring_strings() -> None:
         "agents.selector.run",
         "agents.selector.empty",
         "agents.selector.no_matches",
+        "agents.selector.quick_picks",
     ]
     for key in required_keys:
         assert f"'{key}'" in kit, f"kit dictionary missing {key}"
@@ -158,7 +161,9 @@ def test_main_css_carries_kit_primitive_classes() -> None:
         ".kit-authored-catalog",
         ".kit-catalog-filter-chip",
         ".kit-workflow-canvas",
+        ".kit-workflow-viewport",
         ".kit-workflow-graph",
+        ".kit-workflow-band",
         ".kit-workflow-node",
         ".kit-workflow-edge-label",
         ".kit-workflow-accessory",
@@ -175,6 +180,7 @@ def test_main_css_carries_kit_primitive_classes() -> None:
         ".kit-agent-summary",
         ".kit-selector-preview",
         ".kit-selector-preview-form",
+        ".kit-selector-preview-suggestions",
         ".kit-selector-preview-row",
     ):
         assert cls in css, f"main.css missing kit class {cls}"

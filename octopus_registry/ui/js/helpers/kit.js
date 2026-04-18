@@ -1040,7 +1040,7 @@ window.Kit = (() => {
         viewState = null,
     } = {}) {
         const root = document.createElement('section');
-        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
+        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode} kit-workflow-view-${String(viewState?.kind || 'focus')}`;
         root.dataset.key = [
             'workflow-canvas',
             mode,
@@ -1091,9 +1091,7 @@ window.Kit = (() => {
             ? dictValue('protocol.transition.connecting', 'Connecting this step. Click the next step or finish outcome.')
             : currentMode === 'rehearse'
                 ? 'Viewing live rehearsal state on the published workflow.'
-                : viewState?.kind === 'overview'
-                    ? String(viewState?.subtitle || 'Overview of the workflow. Click a phase to open its local flow.')
-                    : String(viewState?.subtitle || dictValue('protocol.workflow.drag_hint', 'Select a role, step, or transition to edit it. Drag steps to reorder their default sequence.'));
+                : '';
         if (viewState?.title || viewState?.subtitle) {
             const viewBar = document.createElement('div');
             viewBar.className = 'kit-workflow-viewbar';
@@ -1112,10 +1110,12 @@ window.Kit = (() => {
         if (!firstRun?.active || currentMode === 'connect' || currentMode === 'rehearse') {
             const toolbar = document.createElement('div');
             toolbar.className = 'kit-workflow-toolbar';
-            const hint = document.createElement('div');
-            hint.className = 'kit-workflow-toolbar-hint';
-            hint.textContent = toolbarHint;
-            toolbar.appendChild(hint);
+            if (toolbarHint) {
+                const hint = document.createElement('div');
+                hint.className = 'kit-workflow-toolbar-hint';
+                hint.textContent = toolbarHint;
+                toolbar.appendChild(hint);
+            }
             if (currentMode === 'connect' && typeof onCancelConnect === 'function') {
                 const cancelBtn = document.createElement('button');
                 cancelBtn.type = 'button';
@@ -1283,16 +1283,16 @@ window.Kit = (() => {
                 shell.appendChild(laneStrip);
             }
 
-            const laneHeight = isOverview ? 104 : 126;
+            const laneHeight = isOverview ? 92 : 126;
             const laneGap = isOverview ? 16 : 18;
-            const columnWidth = isOverview ? 160 : 228;
-            const columnGap = isOverview ? 18 : 40;
-            const nodeWidth = isOverview ? 144 : 212;
-            const stageHeight = isOverview ? 96 : 110;
+            const columnWidth = isOverview ? 152 : 228;
+            const columnGap = isOverview ? 16 : 40;
+            const nodeWidth = isOverview ? 136 : 212;
+            const stageHeight = isOverview ? 84 : 110;
             const terminalHeight = 88;
-            const leftPad = isOverview ? 24 : 132;
-            const rightPad = isOverview ? 24 : 40;
-            const bottomPad = isOverview ? 24 : 36;
+            const leftPad = isOverview ? 18 : 132;
+            const rightPad = isOverview ? 18 : 40;
+            const bottomPad = isOverview ? 20 : 36;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
                 if (Number.isFinite(Number(node.row))) return Number(node.row);

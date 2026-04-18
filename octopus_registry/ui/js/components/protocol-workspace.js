@@ -228,8 +228,9 @@ function renderProtocolWorkspace(container) {
             const raw = window.localStorage.getItem(storageKey);
             if (!raw) return fallback;
             const parsed = JSON.parse(raw);
+            const kind = String(parsed?.kind || fallback.kind);
             return {
-                kind: String(parsed?.kind || fallback.kind) === 'overview' ? 'overview' : 'focus',
+                kind: kind === 'overview' || kind === 'full' ? kind : 'focus',
                 segmentId: String(parsed?.segmentId || ''),
             };
         } catch (_err) {
@@ -241,8 +242,9 @@ function renderProtocolWorkspace(container) {
         const storageKey = _workflowViewStorageKey(protocolId);
         if (!storageKey) return;
         try {
+            const kind = String(workflowView.kind || 'focus');
             window.localStorage.setItem(storageKey, JSON.stringify({
-                kind: String(workflowView.kind || 'focus') === 'overview' ? 'overview' : 'focus',
+                kind: kind === 'overview' || kind === 'full' ? kind : 'focus',
                 segmentId: String(workflowView.segmentId || ''),
             }));
         } catch (_err) {
@@ -256,7 +258,7 @@ function renderProtocolWorkspace(container) {
             segmentId: '',
             ...(next || {}),
         };
-        workflowView.kind = workflowView.kind === 'overview' ? 'overview' : 'focus';
+        workflowView.kind = workflowView.kind === 'overview' || workflowView.kind === 'full' ? workflowView.kind : 'focus';
         workflowView.segmentId = String(workflowView.segmentId || '');
         if (workflowView.kind === 'overview') {
             selection = { sectionKey: 'overview', nodeKey: '' };
@@ -428,6 +430,16 @@ function renderProtocolWorkspace(container) {
         return String(participant?.display_name || participant?.participant_key || participantKey || 'Role').trim();
     }
 
+    function _segmentRoleSummary(roleLabels) {
+        const labels = Array.isArray(roleLabels)
+            ? roleLabels.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+        if (!labels.length) return 'Unassigned role';
+        if (labels.length === 1) return labels[0];
+        if (labels.length === 2) return `${labels[0]} + ${labels[1]}`;
+        return `${labels[0]} + ${labels.length - 1} more roles`;
+    }
+
     function _segmentId(stageKey) {
         return `segment:${String(stageKey || '').trim()}`;
     }
@@ -578,6 +590,8 @@ function renderProtocolWorkspace(container) {
             const roleKeys = Array.from(new Set(segmentStages.map((item) => String(item.participant_key || '')).filter(Boolean)));
             const roleLabels = roleKeys.map((key) => _participantDisplayName(key, doc));
             const primaryStage = segmentStages.find((item) => String(item.stage_kind || 'work') === 'work') || segmentStages[0] || stage;
+            const stepSummary = `${stageKeys.length} step${stageKeys.length === 1 ? '' : 's'}`;
+            const roleSummary = _segmentRoleSummary(roleLabels);
             const segment = {
                 id: _segmentId(stageKeys[0]),
                 startStageKey: stageKeys[0],
@@ -587,14 +601,13 @@ function renderProtocolWorkspace(container) {
                 roleKeys,
                 primaryParticipantKey: String(primaryStage?.participant_key || segmentStages[0]?.participant_key || ''),
                 label: String(primaryStage?.display_name || primaryStage?.stage_key || stageKeys[0] || 'Step'),
-                sublabel: [
-                    `${stageKeys.length} step${stageKeys.length === 1 ? '' : 's'}`,
-                    roleLabels.join(' + '),
-                ].filter(Boolean).join(' · '),
+                sublabel: roleSummary,
+                stepSummary,
+                roleSummary,
                 badges: [
                     {
                         tone: 'phase',
-                        label: `${stageKeys.length} step${stageKeys.length === 1 ? '' : 's'}`,
+                        label: stepSummary,
                     },
                 ],
                 outgoingEdges: [],
@@ -691,7 +704,7 @@ function renderProtocolWorkspace(container) {
             return { kind: defaultView.kind, segmentId: '' };
         }
         let next = {
-            kind: workflowView.kind === 'overview' ? 'overview' : 'focus',
+            kind: workflowView.kind === 'overview' || workflowView.kind === 'full' ? workflowView.kind : 'focus',
             segmentId: String(workflowView.segmentId || ''),
         };
         const selectedSegmentId = currentSelection.sectionKey === 'stages'
@@ -699,9 +712,7 @@ function renderProtocolWorkspace(container) {
             : currentSelection.sectionKey === 'transitions'
                 ? projection.stageToSegment.get(String(currentSelection.nodeKey || '').split('::')[0] || '') || ''
                 : '';
-        if (selectedSegmentId) {
-            next = { kind: 'focus', segmentId: selectedSegmentId };
-        }
+        if (selectedSegmentId && next.kind === 'focus') next.segmentId = selectedSegmentId;
         if (next.kind === 'focus' && !projection.segmentsById.has(next.segmentId)) {
             next.segmentId = selectedSegmentId || projection.segments[0]?.id || '';
         }
@@ -710,6 +721,9 @@ function renderProtocolWorkspace(container) {
         }
         if (next.kind === 'focus' && !next.segmentId) {
             next.segmentId = projection.segments[0]?.id || '';
+        }
+        if (next.kind !== 'focus') {
+            next.segmentId = next.kind === 'full' ? '' : next.segmentId;
         }
         return next;
     }
@@ -1803,11 +1817,22 @@ function renderProtocolWorkspace(container) {
     function _baseToolbarActions(progress, resolvedView, projection) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
         const selectedStage = _selectionStage(draft.document);
+        const showExpandedMap = projection.segments.length > 1 && progress.stageCount >= 6;
         return [
             ...(resolvedView.kind === 'focus' && projection.segments.length > 1 ? [{
                 label: 'Back to overview',
                 tone: 'btn-small',
                 onClick: () => _setWorkflowView({ kind: 'overview', segmentId: resolvedView.segmentId }),
+            }] : []),
+            ...(showExpandedMap && resolvedView.kind !== 'full' ? [{
+                label: 'All steps',
+                tone: 'btn-small',
+                onClick: () => _setWorkflowView({ kind: 'full', segmentId: '' }),
+            }] : []),
+            ...(showExpandedMap && resolvedView.kind === 'full' ? [{
+                label: 'Back to overview',
+                tone: 'btn-small',
+                onClick: () => _setWorkflowView({ kind: 'overview', segmentId: '' }),
             }] : []),
             {
                 label: Kit.dict.label('protocol.participants.add'),
@@ -1852,12 +1877,12 @@ function renderProtocolWorkspace(container) {
                 row: Number(segment.row || 0),
                 column: Number(segment.column || 0),
                 label: segment.label,
-                sublabel: [
-                    segment.sublabel,
-                    terminalCount ? `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` : '',
-                ].filter(Boolean).join(' · '),
+                sublabel: segment.roleSummary,
                 badges: terminalCount
-                    ? [...segment.badges, { tone: 'context', label: 'Can finish' }]
+                    ? [
+                        ...segment.badges,
+                        { tone: 'context', label: `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` },
+                    ]
                     : segment.badges,
             };
         });
@@ -1885,7 +1910,7 @@ function renderProtocolWorkspace(container) {
             viewState: {
                 kind: 'overview',
                 title: 'Workflow overview',
-                subtitle: 'Click a phase to open its local flow.',
+                subtitle: 'Map the major phases first. Open a phase for local step editing or switch to All steps.',
                 canReturn: false,
             },
         };
@@ -1958,9 +1983,9 @@ function renderProtocolWorkspace(container) {
                 hint: Kit.dict.label('protocol.workflow.outcomes_hint'),
             } : null,
             viewState: {
-                kind: 'focus',
-                title: 'Workflow',
-                subtitle: 'Select a role, step, or transition to edit it.',
+                kind: 'full',
+                title: 'All steps',
+                subtitle: 'Expanded map of every step in the workflow.',
                 canReturn: false,
             },
         };
@@ -2124,7 +2149,7 @@ function renderProtocolWorkspace(container) {
             viewState: {
                 kind: 'focus',
                 title: segment.label,
-                subtitle: `${segment.sublabel}. Select a step to edit it; use Back to overview for the larger map.`,
+                subtitle: `${segment.stepSummary} · ${segment.roleSummary}. Select a step to edit it; use Back to overview for the larger map.`,
                 canReturn: projection.segments.length > 1,
             },
         };
@@ -2143,7 +2168,9 @@ function renderProtocolWorkspace(container) {
             ...(
                 resolvedView.kind === 'overview'
                     ? _overviewWorkflowData(projection, progress, resolvedView)
-                    : _focusWorkflowData(projection, progress, resolvedView)
+                    : resolvedView.kind === 'full'
+                        ? _fullGraphWorkflowData(projection, progress, resolvedView)
+                        : _focusWorkflowData(projection, progress, resolvedView)
             ),
         };
     }
@@ -2237,6 +2264,104 @@ function renderProtocolWorkspace(container) {
         });
     }
 
+    function _stageEditorSection(title, panel, { wide = false } = {}) {
+        const section = document.createElement('section');
+        section.className = `kit-stage-editor-section${wide ? ' is-wide' : ''}`;
+        const heading = document.createElement('h4');
+        heading.className = 'kit-stage-editor-title';
+        heading.textContent = String(title || '');
+        section.appendChild(heading);
+        section.appendChild(panel);
+        return section;
+    }
+
+    function _stageEditorShell({
+        target,
+        readOnly = false,
+        participantOptions = [],
+        kindOptions = [],
+        artifactOptions = [],
+        onCommit = null,
+        connectAction = null,
+        createAction = null,
+        cancelAction = null,
+    } = {}) {
+        const applyReadOnly = (schema) => (!readOnly
+            ? schema
+            : schema.map((field) => ({
+                ...field,
+                disabled: field.kind === 'checkbox' || field.kind === 'select' ? true : field.disabled,
+                readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
+            })));
+        const shell = document.createElement('div');
+        shell.className = 'kit-stage-editor-grid';
+
+        const summaryActions = [];
+        if (createAction) {
+            summaryActions.push({ label: 'Create step', tone: 'btn-primary', onClick: createAction });
+        }
+        if (cancelAction) {
+            summaryActions.push({ label: 'Cancel', onClick: cancelAction });
+        }
+        const summaryPanel = Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.stage',
+            onCommit,
+            schema: applyReadOnly([
+                { key: 'display_name', kind: 'text', required: true },
+                { key: 'participant_key', kind: 'select', options: participantOptions },
+                { key: 'stage_kind', kind: 'select', options: kindOptions },
+            ]),
+            actions: summaryActions,
+        });
+        shell.appendChild(_stageEditorSection('Step basics', summaryPanel));
+
+        const instructionsPanel = Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.stage',
+            onCommit,
+            schema: applyReadOnly([
+                { key: 'instructions', kind: 'textarea', rows: 6 },
+            ]),
+        });
+        shell.appendChild(_stageEditorSection('Instructions', instructionsPanel, { wide: true }));
+
+        const artifactsPanel = Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.stage',
+            onCommit,
+            schema: applyReadOnly([
+                { key: 'inputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.inputs.label', helpKey: 'protocol.stage.inputs.help' },
+                { key: 'outputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.outputs.label', helpKey: 'protocol.stage.outputs.help' },
+            ]),
+        });
+        shell.appendChild(_stageEditorSection('Artifacts', artifactsPanel, { wide: true }));
+
+        const advancedActions = [];
+        if (connectAction) {
+            advancedActions.push({
+                label: Kit.dict.label('protocol.stage.connect'),
+                onClick: connectAction,
+            });
+        }
+        if (cancelAction) {
+            advancedActions.push({ label: 'Cancel', onClick: cancelAction });
+        }
+        const advancedPanel = Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.stage',
+            onCommit,
+            schema: applyReadOnly([
+                { key: 'stage_key', kind: 'text' },
+                { key: 'max_rounds', kind: 'text' },
+                { key: 'timeout_seconds', kind: 'text' },
+            ]),
+            actions: advancedActions,
+        });
+        shell.appendChild(_stageEditorSection('Advanced', advancedPanel));
+        return shell;
+    }
+
     function _detailsEl() {
         const doc = draft.document;
         const participantCount = Array.isArray(doc.participants) ? doc.participants.length : 0;
@@ -2316,25 +2441,14 @@ function renderProtocolWorkspace(container) {
         }
 
         if (editorMode.kind === 'insert-stage') {
-            return Kit.detailsPanel({
+            return _stageEditorShell({
                 target: pendingStage,
-                surfaceKey: 'protocol.stage',
+                participantOptions,
+                kindOptions,
+                artifactOptions,
                 onCommit: _commitPendingStageField,
-                schema: [
-                    { key: 'display_name', kind: 'text', required: true },
-                    { key: 'stage_key', kind: 'text' },
-                    { key: 'participant_key', kind: 'select', options: participantOptions },
-                    { key: 'stage_kind', kind: 'select', options: kindOptions },
-                    { key: 'inputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.inputs.label', helpKey: 'protocol.stage.inputs.help' },
-                    { key: 'outputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.outputs.label', helpKey: 'protocol.stage.outputs.help' },
-                    { key: 'instructions', kind: 'textarea', rows: 4 },
-                    { key: 'max_rounds', kind: 'text' },
-                    { key: 'timeout_seconds', kind: 'text' },
-                ],
-                actions: [
-                    { label: 'Create step', tone: 'btn-primary', onClick: _confirmStageInsert },
-                    { label: 'Cancel', onClick: _cancelStageInsert },
-                ],
+                createAction: _confirmStageInsert,
+                cancelAction: _cancelStageInsert,
             });
         }
 
@@ -2431,27 +2545,16 @@ function renderProtocolWorkspace(container) {
         if (selection.sectionKey === 'stages') {
             const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
             if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            return Kit.detailsPanel({
+            return _stageEditorShell({
                 target,
-                surfaceKey: 'protocol.stage',
-                onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
-                schema: applyReadOnly([
-                    { key: 'display_name', kind: 'text', required: true },
-                    { key: 'stage_key', kind: 'text' },
-                    { key: 'participant_key', kind: 'select', options: participantOptions },
-                    { key: 'stage_kind', kind: 'select', options: kindOptions },
-                    { key: 'inputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.inputs.label', helpKey: 'protocol.stage.inputs.help' },
-                    { key: 'outputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.outputs.label', helpKey: 'protocol.stage.outputs.help' },
-                    { key: 'instructions', kind: 'textarea', rows: 4 },
-                    { key: 'max_rounds', kind: 'text' },
-                    { key: 'timeout_seconds', kind: 'text' },
-                ]),
-                actions: readOnly ? [] : [
-                    {
-                        label: Kit.dict.label('protocol.stage.connect'),
-                        onClick: () => _startConnectMode(selection.nodeKey),
-                    },
-                ],
+                readOnly,
+                participantOptions,
+                kindOptions,
+                artifactOptions,
+                onCommit: readOnly
+                    ? null
+                    : (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
+                connectAction: readOnly ? null : () => _startConnectMode(selection.nodeKey),
             });
         }
         if (selection.sectionKey === 'transitions') {

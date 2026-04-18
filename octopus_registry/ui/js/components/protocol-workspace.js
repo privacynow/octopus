@@ -977,15 +977,23 @@ function renderProtocolWorkspace(container) {
             suggestions.push(entry);
         };
         (connectedAgents || []).slice(0, 6).forEach((agent) => {
-            const agentSlug = String(agent?.slug || '').trim();
-            const selectorValue = String(agent?.selector || (agentSlug ? `@${agentSlug}` : '')).trim();
-            if (!selectorValue) return;
+            const selectorValue = String(agent?.selector || '').trim();
+            const selectorRef = selectorValue.startsWith('@') ? selectorValue.slice(1) : selectorValue;
+            const normalizedSelector = selectorRef.startsWith('agent:') ? selectorRef.slice('agent:'.length) : selectorRef;
+            const agentSlug = String(agent?.slug || normalizedSelector || '').trim();
+            const displayName = String(
+                agent.display_name
+                || (agentSlug ? _titleCaseWords(agentSlug) : '')
+                || 'Assigned agent'
+            ).trim();
+            const selectorQuery = selectorValue || (agentSlug ? `@${agentSlug}` : '');
+            if (!selectorQuery) return;
             pushSuggestion({
-                label: String(agent.display_name || agentSlug || selectorValue),
-                value: selectorValue,
+                label: displayName,
+                value: selectorQuery,
                 selectorKind: 'agent',
                 selectorValue: agentSlug,
-                displayName: String(agent.display_name || agentSlug || 'Assigned agent'),
+                displayName,
                 preferredKey: agentSlug || _slugSuggestion(agent.display_name || ''),
             });
         });

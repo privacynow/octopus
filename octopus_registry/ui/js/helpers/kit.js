@@ -1057,6 +1057,9 @@ window.Kit = (() => {
             String(editorMode?.decision || ''),
         ].join('|');
         root.tabIndex = 0;
+        const currentView = String(viewState?.kind || 'focus');
+        const isProcess = currentView === 'process';
+        const isFull = currentView === 'full';
 
         if (firstRun && firstRun.active) {
             const card = document.createElement('div');
@@ -1099,7 +1102,7 @@ window.Kit = (() => {
             viewBar.className = 'kit-workflow-viewbar';
             const title = document.createElement('strong');
             title.className = 'kit-workflow-viewbar-title';
-            title.textContent = String(viewState?.title || (viewState?.kind === 'overview' ? 'Workflow overview' : 'Workflow'));
+            title.textContent = String(viewState?.title || (isProcess ? 'Workflow phases' : 'Workflow'));
             viewBar.appendChild(title);
             if (viewState?.subtitle) {
                 const subtitle = document.createElement('span');
@@ -1189,6 +1192,71 @@ window.Kit = (() => {
 
         if (!nodes.length && !lanes.length) {
             // True blank-first-run state: no fake graph, no decorative lanes.
+        } else if (isProcess) {
+            const ordered = _orderedNodes();
+            const process = document.createElement('div');
+            process.className = 'kit-workflow-process';
+            ordered.forEach((node, index) => {
+                const card = document.createElement('button');
+                card.type = 'button';
+                card.className = `kit-workflow-process-card${selection?.kind === 'segment' && selection?.id === node.id ? ' is-selected' : ''}`;
+                card.dataset.testid = `workflow-node-${String(node.id || '')}`;
+                card.dataset.nodeId = String(node.id || '');
+                if (typeof onSelect === 'function') {
+                    card.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
+                }
+
+                const top = document.createElement('div');
+                top.className = 'kit-workflow-process-card-top';
+
+                const order = document.createElement('span');
+                order.className = 'kit-workflow-process-order';
+                order.textContent = String(index + 1).padStart(2, '0');
+                top.appendChild(order);
+
+                const badges = (Array.isArray(node.badges) ? node.badges : []).slice(0, 2);
+                if (badges.length) {
+                    const badgeRow = document.createElement('div');
+                    badgeRow.className = 'kit-workflow-process-badges';
+                    badges.forEach((badge) => {
+                        const chip = document.createElement('span');
+                        chip.className = `kit-workflow-node-badge${badge?.tone ? ` is-${badge.tone}` : ''}`;
+                        chip.textContent = String(badge?.label || '');
+                        badgeRow.appendChild(chip);
+                    });
+                    top.appendChild(badgeRow);
+                }
+                card.appendChild(top);
+
+                const label = document.createElement('div');
+                label.className = 'kit-workflow-process-label';
+                label.textContent = String(node.label || node.id || '');
+                card.appendChild(label);
+
+                if (node.sublabel) {
+                    const sub = document.createElement('div');
+                    sub.className = 'kit-workflow-process-sublabel';
+                    sub.textContent = String(node.sublabel || '');
+                    card.appendChild(sub);
+                }
+
+                if (node.preview) {
+                    const preview = document.createElement('div');
+                    preview.className = 'kit-workflow-process-preview';
+                    preview.textContent = String(node.preview || '');
+                    card.appendChild(preview);
+                }
+
+                if (node.footnote) {
+                    const foot = document.createElement('div');
+                    foot.className = 'kit-workflow-process-footnote';
+                    foot.textContent = String(node.footnote || '');
+                    card.appendChild(foot);
+                }
+
+                process.appendChild(card);
+            });
+            root.appendChild(process);
         } else if (mode === 'narrow') {
             const list = document.createElement('div');
             list.className = 'kit-workflow-narrow';
@@ -1266,23 +1334,20 @@ window.Kit = (() => {
         } else {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
-            const currentView = String(viewState?.kind || 'focus');
-            const isOverview = currentView === 'overview';
-            const isFull = currentView === 'full';
-            const denseMode = isOverview || isFull || nodes.length >= 8;
+            const denseMode = isFull || nodes.length >= 8;
 
             const controls = document.createElement('div');
             controls.className = 'kit-workflow-controls';
             const viewport = document.createElement('div');
             viewport.className = 'kit-workflow-viewport';
 
-            const rowHeight = isOverview ? 72 : isFull ? 80 : denseMode ? 88 : 108;
-            const rowGap = isOverview ? 10 : isFull ? 10 : denseMode ? 12 : 18;
-            const nodeWidth = isOverview ? 160 : isFull ? 176 : denseMode ? 188 : 208;
-            const stageHeight = isOverview ? 72 : isFull ? 80 : denseMode ? 90 : 108;
-            const terminalHeight = isOverview ? 58 : isFull ? 64 : denseMode ? 72 : 84;
-            const columnGap = isOverview ? 16 : isFull ? 18 : denseMode ? 24 : 38;
-            const leftPad = isOverview ? 24 : lanes.length ? (isFull ? 110 : 126) : 24;
+            const rowHeight = isFull ? 80 : denseMode ? 88 : 108;
+            const rowGap = isFull ? 10 : denseMode ? 12 : 18;
+            const nodeWidth = isFull ? 176 : denseMode ? 188 : 208;
+            const stageHeight = isFull ? 80 : denseMode ? 90 : 108;
+            const terminalHeight = isFull ? 64 : denseMode ? 72 : 84;
+            const columnGap = isFull ? 18 : denseMode ? 24 : 38;
+            const leftPad = lanes.length ? (isFull ? 110 : 126) : 24;
             const rightPad = isFull ? 18 : denseMode ? 24 : 36;
             const bottomPad = 24;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
@@ -1518,7 +1583,7 @@ window.Kit = (() => {
             const labelBoxes = [];
             function estimateLabelBox(text, x, y) {
                 const width = Math.min(isFull ? 128 : 176, Math.max(48, (String(text || '').length * 7) + 28));
-                const height = isOverview ? 22 : 24;
+                const height = 24;
                 return {
                     width,
                     height,
@@ -1623,7 +1688,7 @@ window.Kit = (() => {
                 }
                 let reserved = placeLabel(String(edge.label || ''), labelCandidates);
                 if (!reserved) {
-                    if (isFull || isOverview || !labelCandidates.length) {
+                    if (isFull || !labelCandidates.length) {
                         return;
                     }
                     reserved = labelCandidates[0];
@@ -1643,9 +1708,9 @@ window.Kit = (() => {
 
             const defaultZoom = Object.prototype.hasOwnProperty.call(viewportState || {}, 'zoom')
                 ? viewportState.zoom
-                : (isOverview || isFull ? 'fit' : 1);
-            const minZoom = isFull ? 0.32 : isOverview ? 0.42 : 0.55;
-            const maxZoom = isOverview ? 1 : isFull ? 1.15 : 1.5;
+                : (isFull ? 'fit' : 1);
+            const minZoom = isFull ? 0.32 : 0.55;
+            const maxZoom = isFull ? 1.15 : 1.5;
             function resolvedZoomValue() {
                 return Math.max(minZoom, Math.min(maxZoom, Number(graph.dataset.zoomResolved || 1) || 1));
             }

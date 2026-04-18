@@ -176,7 +176,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "suggestions: _participantSelectorSuggestions(target)" in workspace
     assert "_currentWorkflowMode()" in workspace
     assert "let workflowView = { kind: 'focus'" in workspace
-    assert "let workflowViewport = { overview: 'fit', focus: 1, full: 'fit' }" in workspace
+    assert "let workflowViewport = { process: 'fit', focus: 1, full: 'fit' }" in workspace
     assert "_workflowViewportValue(" in workspace
     assert "_buildWorkflowProjection(" in workspace
     assert "_normalizeWorkflowView(" in workspace
@@ -283,8 +283,9 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".kit-authoring-workspace" in css
     assert ".kit-workflow-canvas" in css
     assert ".kit-workflow-graph" in css
-    assert ".kit-workflow-lane-strip" in css
-    assert ".kit-workflow-lane-pill" in css
+    assert ".kit-workflow-process" in css
+    assert ".kit-workflow-process-card" in css
+    assert ".kit-workflow-process-label" in css
     assert ".kit-workflow-controls" in css
     assert ".kit-workflow-lane-guide-label" in css
     assert ".kit-workflow-lane-guide-sublabel" in css

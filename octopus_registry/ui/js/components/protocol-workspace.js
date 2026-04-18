@@ -191,7 +191,7 @@ function renderProtocolWorkspace(container) {
     };
     let documentHistory = { undo: [], redo: [] };
     let workflowView = { kind: 'focus', segmentId: '' };
-    let workflowViewport = { overview: 'fit', focus: 1, full: 'fit' };
+    let workflowViewport = { process: 'fit', focus: 1, full: 'fit' };
     let workflowViewExplicit = false;
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
@@ -239,7 +239,7 @@ function renderProtocolWorkspace(container) {
             const kind = String(parsed?.kind || fallback.kind);
             workflowViewExplicit = true;
             return {
-                kind: kind === 'overview' || kind === 'full' ? kind : 'focus',
+                kind: kind === 'process' || kind === 'full' ? kind : 'focus',
                 segmentId: String(parsed?.segmentId || ''),
             };
         } catch (_err) {
@@ -254,7 +254,7 @@ function renderProtocolWorkspace(container) {
         try {
             const kind = String(workflowView.kind || 'focus');
             window.localStorage.setItem(storageKey, JSON.stringify({
-                kind: kind === 'overview' || kind === 'full' ? kind : 'focus',
+                kind: kind === 'process' || kind === 'full' ? kind : 'focus',
                 segmentId: String(workflowView.segmentId || ''),
             }));
         } catch (_err) {
@@ -288,9 +288,9 @@ function renderProtocolWorkspace(container) {
             segmentId: '',
             ...(next || {}),
         };
-        workflowView.kind = workflowView.kind === 'overview' || workflowView.kind === 'full' ? workflowView.kind : 'focus';
+        workflowView.kind = workflowView.kind === 'process' || workflowView.kind === 'full' ? workflowView.kind : 'focus';
         workflowView.segmentId = String(workflowView.segmentId || '');
-        if (workflowView.kind === 'overview') {
+        if (workflowView.kind === 'process') {
             selection = { sectionKey: 'overview', nodeKey: '' };
         }
         if (!Object.prototype.hasOwnProperty.call(workflowViewport, workflowView.kind)) {
@@ -454,7 +454,7 @@ function renderProtocolWorkspace(container) {
     function _defaultWorkflowView(doc = draft.document) {
         const stageCount = Array.isArray(doc?.stages) ? doc.stages.length : 0;
         return {
-            kind: stageCount >= 8 ? 'overview' : stageCount >= 6 ? 'full' : 'focus',
+            kind: stageCount >= 6 ? 'process' : stageCount > 0 ? 'full' : 'focus',
             segmentId: '',
         };
     }
@@ -811,7 +811,7 @@ function renderProtocolWorkspace(container) {
             return { kind: defaultView.kind, segmentId: '' };
         }
         let next = {
-            kind: workflowView.kind === 'overview' || workflowView.kind === 'full' ? workflowView.kind : 'focus',
+            kind: workflowView.kind === 'process' || workflowView.kind === 'full' ? workflowView.kind : 'focus',
             segmentId: String(workflowView.segmentId || ''),
         };
         const selectedSegmentId = currentSelection.sectionKey === 'stages'
@@ -823,14 +823,14 @@ function renderProtocolWorkspace(container) {
         if (next.kind === 'focus' && !projection.segmentsById.has(next.segmentId)) {
             next.segmentId = selectedSegmentId || projection.segments[0]?.id || '';
         }
-        if (next.kind === 'overview' && segmentCount < 3 && defaultView.kind !== 'overview') {
-            next = { kind: 'focus', segmentId: next.segmentId || projection.segments[0]?.id || '' };
+        if (next.kind === 'process' && segmentCount < 2) {
+            next = { kind: defaultView.kind === 'focus' ? 'focus' : 'full', segmentId: '' };
         }
         if (next.kind === 'focus' && !next.segmentId) {
             next.segmentId = projection.segments[0]?.id || '';
         }
         if (next.kind === 'full' && segmentCount >= 4 && !workflowViewExplicit) {
-            next = { kind: 'overview', segmentId: '' };
+            next = { kind: 'process', segmentId: '' };
         }
         if (next.kind !== 'focus') {
             next.segmentId = next.kind === 'full' ? '' : next.segmentId;
@@ -864,7 +864,7 @@ function renderProtocolWorkspace(container) {
         draftConflict = null;
         documentHistory = { undo: [], redo: [] };
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
-        workflowViewport = { overview: 'fit', focus: 1, full: 'fit' };
+        workflowViewport = { process: 'fit', focus: 1, full: 'fit' };
         if (previousProtocolId && previousProtocolId !== String(detail?.protocol?.protocol_id || '')) {
             _stopRehearsalPolling();
             rehearsal.runId = '';
@@ -1895,7 +1895,7 @@ function renderProtocolWorkspace(container) {
         const transitionCount = Object.keys(sourceStage?.transitions || {}).length;
         const defaultDecision = _defaultDecisionForStageKind(sourceStage?.stage_kind || 'work');
         const isTerminal = PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === targetKey);
-        if (viewKind === 'overview') {
+        if (viewKind === 'process') {
             return false;
         }
         if (viewKind === 'focus') {
@@ -1959,15 +1959,40 @@ function renderProtocolWorkspace(container) {
                 : null;
     }
 
+    function _segmentStagePreview(segment) {
+        const names = (segment?.stages || [])
+            .map((item) => String(item.display_name || item.stage_key || '').trim())
+            .filter(Boolean);
+        if (names.length <= 3) {
+            return names.join(' -> ');
+        }
+        return `${names.slice(0, 3).join(' -> ')} + ${names.length - 3} more`;
+    }
+
+    function _segmentProcessFootnote(segment) {
+        const segmentTargets = (segment?.outgoingEdges || []).filter((edge) => edge.targetKind === 'segment').length;
+        const terminalTargets = (segment?.outgoingEdges || []).filter((edge) => edge.targetKind === 'terminal').length;
+        if (segmentTargets > 1) {
+            return `${segmentTargets} next paths`;
+        }
+        if (segmentTargets === 1 && terminalTargets) {
+            return `${terminalTargets} finish path${terminalTargets === 1 ? '' : 's'} available`;
+        }
+        if (terminalTargets > 0) {
+            return `${terminalTargets} finish path${terminalTargets === 1 ? '' : 's'}`;
+        }
+        return 'Open section';
+    }
+
     function _baseToolbarActions(progress, resolvedView, projection) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
         const selectedStage = _selectionStage(draft.document);
         const showExpandedMap = projection.segments.length > 1 && progress.stageCount >= 6;
         return [
             ...(resolvedView.kind === 'focus' && projection.segments.length > 1 ? [{
-                label: 'Back to overview',
+                label: 'Back to phases',
                 tone: 'btn-small',
-                onClick: () => _setWorkflowView({ kind: 'overview', segmentId: resolvedView.segmentId }),
+                onClick: () => _setWorkflowView({ kind: 'process', segmentId: resolvedView.segmentId }),
             }] : []),
             ...(showExpandedMap && resolvedView.kind !== 'full' ? [{
                 label: 'All steps',
@@ -1975,9 +2000,9 @@ function renderProtocolWorkspace(container) {
                 onClick: () => _setWorkflowView({ kind: 'full', segmentId: '' }),
             }] : []),
             ...(showExpandedMap && resolvedView.kind === 'full' ? [{
-                label: 'Back to overview',
+                label: 'Back to phases',
                 tone: 'btn-small',
-                onClick: () => _setWorkflowView({ kind: 'overview', segmentId: '' }),
+                onClick: () => _setWorkflowView({ kind: 'process', segmentId: '' }),
             }] : []),
             {
                 label: Kit.dict.label('protocol.participants.add'),
@@ -2012,7 +2037,7 @@ function renderProtocolWorkspace(container) {
         ];
     }
 
-    function _overviewWorkflowData(projection, progress, resolvedView) {
+    function _processWorkflowData(projection, progress, resolvedView) {
         const nodes = projection.segments.map((segment) => {
             const terminalCount = segment.outgoingEdges.filter((edge) => edge.targetKind === 'terminal').length;
             return {
@@ -2022,38 +2047,28 @@ function renderProtocolWorkspace(container) {
                 row: Number(segment.row || 0),
                 column: Number(segment.column || 0),
                 label: segment.label,
-                sublabel: segment.stepSummary,
-                badges: terminalCount
-                    ? [{ tone: 'context', label: `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` }]
-                    : [],
+                sublabel: segment.roleSummary,
+                preview: _segmentStagePreview(segment),
+                footnote: _segmentProcessFootnote(segment),
+                badges: [
+                    { tone: 'phase', label: segment.stepSummary },
+                    ...(terminalCount ? [{ tone: 'context', label: `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` }] : []),
+                ],
             };
-        });
-        const edges = [];
-        projection.segments.forEach((segment) => {
-            segment.outgoingEdges.forEach((edge) => {
-                if (edge.targetKind !== 'segment') return;
-                edges.push({
-                    id: `overview::${edge.id}`,
-                    from: segment.id,
-                    to: edge.targetKey,
-                    label: edge.label,
-                    showLabel: false,
-                });
-            });
         });
         return {
             lanes: [],
             nodes,
-            edges,
+            edges: [],
             toolbarActions: _baseToolbarActions(progress, resolvedView, projection),
             accessorySections: _artifactAccessorySections(),
             firstRun: _firstRunState(progress),
             laneLabels: {},
             outcomes: null,
             viewState: {
-                kind: 'overview',
-                title: 'Workflow overview',
-                subtitle: 'Map the major phases first. Open a phase for local step editing or switch to All steps.',
+                kind: 'process',
+                title: 'Workflow phases',
+                subtitle: 'Review the major phases first. Open a phase for local step editing or switch to All steps.',
                 canReturn: false,
             },
         };
@@ -2143,7 +2158,7 @@ function renderProtocolWorkspace(container) {
         }
         const segment = projection.segmentsById.get(resolvedView.segmentId) || projection.segments[0];
         if (!segment) {
-            return _overviewWorkflowData(projection, progress, { kind: 'overview', segmentId: '' });
+            return _processWorkflowData(projection, progress, { kind: 'process', segmentId: '' });
         }
         const topology = projection.topology;
         const stageKeys = segment.stageKeys;
@@ -2287,7 +2302,7 @@ function renderProtocolWorkspace(container) {
             viewState: {
                 kind: 'focus',
                 title: segment.label,
-                subtitle: `${segment.stepSummary} · ${segment.roleSummary}. Select a step to edit it; use Back to overview for the larger map.`,
+                subtitle: `${segment.stepSummary} · ${segment.roleSummary}. Select a step to edit it; use Back to phases for the larger map.`,
                 canReturn: projection.segments.length > 1,
             },
         };
@@ -2304,8 +2319,8 @@ function renderProtocolWorkspace(container) {
         return {
             projection,
             ...(
-                resolvedView.kind === 'overview'
-                    ? _overviewWorkflowData(projection, progress, resolvedView)
+                resolvedView.kind === 'process'
+                    ? _processWorkflowData(projection, progress, resolvedView)
                     : resolvedView.kind === 'full'
                         ? _fullGraphWorkflowData(projection, progress, resolvedView)
                         : _focusWorkflowData(projection, progress, resolvedView)
@@ -2371,13 +2386,6 @@ function renderProtocolWorkspace(container) {
                 } else if (kind === 'artifact') {
                     selection = { sectionKey: 'artifacts', nodeKey: id };
                 } else if (kind === 'transition') {
-                    if (workflow.viewState.kind === 'overview') {
-                        const overviewSource = String(id || '').replace(/^overview::/, '').split('::')[0] || '';
-                        if (overviewSource && workflow.projection.segmentsById.has(overviewSource)) {
-                            _setFocusSegment(workflow.projection, overviewSource);
-                        }
-                        return;
-                    }
                     selection = { sectionKey: 'transitions', nodeKey: id };
                 } else if (kind === 'stage') {
                     selection = { sectionKey: 'stages', nodeKey: id };

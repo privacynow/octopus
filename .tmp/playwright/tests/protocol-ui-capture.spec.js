@@ -52,9 +52,9 @@ test('capture protocol authoring states', async ({ page }) => {
   const templateCard = page.locator('.protocol-template-card').filter({ hasText: 'Software Engineering' }).first();
   await expect(templateCard).toBeVisible();
   await templateCard.getByRole('button', { name: 'Use template' }).click();
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-page.png', fullPage: true });
-  await page.locator('.kit-workflow-shell').screenshot({
+  await page.locator('.kit-workflow-process').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-focus.png',
   });
 
@@ -71,6 +71,14 @@ test('capture protocol authoring states', async ({ page }) => {
   await page.locator('.kit-workflow-shell').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-graph.png',
   });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/ui/protocols?protocol_id=${new URL(page.url()).searchParams.get('protocol_id')}`, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
+  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png', fullPage: true });
+  await page.getByTestId('workflow-node-segment:planning').click();
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
+  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png', fullPage: true });
 
   await discardDraft(page);
 });

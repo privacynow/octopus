@@ -394,6 +394,7 @@ window.Kit = (() => {
 
         const lifecycleState = String(record.lifecycle_state || 'draft');
         const chipBadge = document.createElement('span');
+        chipBadge.dataset.key = 'lifecycle-state';
         chipBadge.className = `badge kit-lifecycle-chip kit-lifecycle-chip-${lifecycleState}`;
         chipBadge.textContent = dict.label(`${surfaceKey}.lifecycle.${lifecycleState}`);
         actionRow.appendChild(chipBadge);
@@ -411,6 +412,7 @@ window.Kit = (() => {
             if (permissions[permissionKey] === false) return;
             const btn = document.createElement('button');
             btn.type = 'button';
+            btn.dataset.key = `lifecycle-action-${key}`;
             btn.className = ['btn', tone].filter(Boolean).join(' ');
             btn.dataset.kitAction = key;
             btn.textContent = dict.label(`${surfaceKey}.action.${key}`);

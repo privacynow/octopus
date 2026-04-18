@@ -23,6 +23,21 @@ function protocolIdFromUrl(urlText) {
   return value;
 }
 
+function attachErrorCapture(page, { ignoreConsole = [] } = {}) {
+  const consoleErrors = [];
+  const pageErrors = [];
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    if (ignoreConsole.some((pattern) => pattern.test(text))) return;
+    consoleErrors.push(text);
+  });
+  page.on('pageerror', (err) => {
+    pageErrors.push(String(err));
+  });
+  return { consoleErrors, pageErrors };
+}
+
 async function login(page) {
   const password = registryUiToken();
   if (!password) {
@@ -77,14 +92,7 @@ async function discardDraft(page) {
 
 test.describe('protocol authoring live', () => {
   test('gallery blank draft uses clean URL and empty first-run fields', async ({ page }) => {
-    const consoleErrors = [];
-    const pageErrors = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text());
-    });
-    page.on('pageerror', (err) => {
-      pageErrors.push(String(err));
-    });
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
     await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
@@ -110,13 +118,8 @@ test.describe('protocol authoring live', () => {
   });
 
   test('draft conflicts surface reload-first resolution and block lifecycle actions', async ({ page }) => {
-    const consoleErrors = [];
-    const pageErrors = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text());
-    });
-    page.on('pageerror', (err) => {
-      pageErrors.push(String(err));
+    const { consoleErrors, pageErrors } = attachErrorCapture(page, {
+      ignoreConsole: [/409 \(Conflict\)/],
     });
 
     await login(page);
@@ -158,14 +161,7 @@ test.describe('protocol authoring live', () => {
   });
 
   test('blank protocol authoring supports graph flow, publish, and rehearse overlay', async ({ page }) => {
-    const consoleErrors = [];
-    const pageErrors = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text());
-    });
-    page.on('pageerror', (err) => {
-      pageErrors.push(String(err));
-    });
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
     await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });

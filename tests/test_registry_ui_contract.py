@@ -159,6 +159,14 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "state: 'conflict'" in workspace
     assert "_reloadServerDraftConflict" in workspace
     assert "_overwriteServerDraftConflict" in workspace
+    assert "let editorMode = { kind: 'idle'" in workspace
+    assert "_startRoleInsert(" in workspace
+    assert "_confirmRoleInsert(" in workspace
+    assert "_startStageInsert(" in workspace
+    assert "_confirmStageInsert(" in workspace
+    assert "_startConnectMode(" in workspace
+    assert "_cancelTransitionConnect(" in workspace
+    assert "_commitConnectField(" in workspace
     assert "_rewriteKeyReferences(" in workspace
     assert "inputs: (stage.inputs || []).map" in workspace
     assert "outputs: (stage.outputs || []).map" in workspace
@@ -166,6 +174,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_transitionEntries(" in workspace
     assert "_applyParticipantSuggestion(" in workspace
     assert "suggestions: _participantSelectorSuggestions(target)" in workspace
+    assert "_currentWorkflowMode()" in workspace
+    assert "window.addEventListener('resize', onResize);" in workspace
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
@@ -199,6 +209,10 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
         "_buildStarterPanel(",
         "_buildAuthorHeader(",
         "_buildDefinitionPanel(",
+        "_addNode(",
+        "connectState",
+        "_addParticipantFromSuggestion(",
+        "_saveNew(",
         "PROTOCOL_AUTHORING_MODE_OPTIONS",
         "PROTOCOL_CATALOG_STATUS_OPTIONS",
         "single_active_writer: true",
@@ -264,7 +278,13 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".kit-authoring-workspace" in css
     assert ".kit-workflow-canvas" in css
     assert ".kit-workflow-graph" in css
+    assert ".kit-workflow-lane-strip" in css
+    assert ".kit-workflow-lane-pill" in css
+    assert ".kit-workflow-band-label" in css
+    assert ".kit-workflow-band-sublabel" in css
     assert ".kit-workflow-node" in css
+    assert ".kit-workflow-node-wrap {" in css
+    assert "position: absolute;" in css
     assert ".kit-details-panel" in css
     assert ".kit-validation" in css
     assert ".kit-authored-catalog" in css
@@ -300,6 +320,7 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
         ".protocol-stage-preview-arrow {",
         ".protocol-stage-node {",
         ".protocol-stage-node-meta {",
+        ".kit-workflow-node-connect",
         ".protocol-advanced-panel ",
         ".protocol-structured-textarea {",
         ".protocol-inline-checkbox {",

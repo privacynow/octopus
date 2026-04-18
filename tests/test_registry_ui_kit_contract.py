@@ -161,10 +161,15 @@ def test_main_css_carries_kit_primitive_classes() -> None:
         ".kit-authored-catalog",
         ".kit-catalog-filter-chip",
         ".kit-workflow-canvas",
+        ".kit-workflow-lane-strip",
+        ".kit-workflow-lane-pill",
         ".kit-workflow-viewport",
         ".kit-workflow-graph",
         ".kit-workflow-band",
+        ".kit-workflow-band-label",
+        ".kit-workflow-band-sublabel",
         ".kit-workflow-node",
+        ".kit-workflow-node-wrap",
         ".kit-workflow-edge-label",
         ".kit-workflow-accessory",
         ".kit-rehearsal-panel",
@@ -188,6 +193,7 @@ def test_main_css_carries_kit_primitive_classes() -> None:
     # Responsive behaviour is a kit invariant, not a page-specific concern.
     assert "@media (max-width: 720px)" in css
     assert ".kit-lifecycle-header-top" in css
+    assert "position: absolute;" in css
 
 
 def test_kit_draft_chip_states_are_exhaustive() -> None:

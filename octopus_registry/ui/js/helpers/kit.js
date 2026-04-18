@@ -64,18 +64,18 @@ window.Kit = (() => {
         'protocol.stage.decision.fail': 'Reject',
 
         // Details — participants
-        'protocol.participants.section': 'Participants',
-        'protocol.participants.firstrun': 'Add the first participant — a person or agent who will work on this.',
-        'protocol.participants.add': '+ Add participant',
+        'protocol.participants.section': 'Roles',
+        'protocol.participants.firstrun': 'Add the first role in the workflow.',
+        'protocol.participants.add': '+ Add role',
         'protocol.participant.display_name.label': 'Name',
-        'protocol.participant.display_name.help': 'Who (or what agent) takes part in this stage?',
+        'protocol.participant.display_name.help': 'Name the reusable role that owns one or more steps.',
         'protocol.participant.display_name.placeholder': 'e.g. Reviewer',
         'protocol.participant.participant_key.label': 'Key',
-        'protocol.participant.participant_key.help': 'Short identifier used when other stages reference this participant.',
+        'protocol.participant.participant_key.help': 'Internal reference for this role. It is usually generated from the name.',
         'protocol.participant.participant_key.placeholder': 'reviewer',
         'protocol.participant.instructions.label': 'Instructions',
-        'protocol.participant.instructions.help': 'What this participant is expected to do across the workflow.',
-        'protocol.participant.instructions.placeholder': 'Instructions shared with this participant…',
+        'protocol.participant.instructions.help': 'Guidance shared across every step this role owns.',
+        'protocol.participant.instructions.placeholder': 'Instructions shared with this role…',
         'protocol.participant.selector_kind.label': 'Assignment rule',
         'protocol.participant.selector_kind.help': 'How this protocol should find someone for this role at runtime.',
         'protocol.participant.selector_kind.placeholder': 'Choose how to match this participant…',
@@ -89,17 +89,17 @@ window.Kit = (() => {
         'protocol.participant.selector_hint': 'Build a rule first, then preview who currently matches it.',
 
         // Details — stages
-        'protocol.stages.section': 'Stages',
-        'protocol.stages.firstrun': 'Add the first stage — what happens, and who owns it.',
-        'protocol.stages.add': '+ Add stage',
+        'protocol.stages.section': 'Steps',
+        'protocol.stages.firstrun': 'Add the first step in the workflow.',
+        'protocol.stages.add': '+ Add step',
         'protocol.stage.display_name.label': 'Name',
         'protocol.stage.display_name.placeholder': 'e.g. Planning',
         'protocol.stage.display_name.help': 'Name of this step in the workflow.',
         'protocol.stage.stage_key.label': 'Key',
         'protocol.stage.stage_key.placeholder': 'planning',
-        'protocol.stage.stage_key.help': 'Short identifier used in transitions.',
-        'protocol.stage.participant_key.label': 'Assigned participant',
-        'protocol.stage.participant_key.help': 'Which participant runs this stage.',
+        'protocol.stage.stage_key.help': 'Internal reference for this step. It is usually generated from the name.',
+        'protocol.stage.participant_key.label': 'Owning role',
+        'protocol.stage.participant_key.help': 'Which role owns this step.',
         'protocol.stage.stage_kind.label': 'Stage type',
         'protocol.stage.stage_kind.help': 'Work produces output; review evaluates output; acceptance signs off.',
         'protocol.stage.instructions.label': 'Instructions',
@@ -115,8 +115,8 @@ window.Kit = (() => {
         'protocol.stage.inputs.help': 'Artifacts this stage needs before it starts.',
         'protocol.stage.outputs.label': 'Writes artifacts',
         'protocol.stage.outputs.help': 'Artifacts this stage produces or updates.',
-        'protocol.stage.connect': 'Add transition',
-        'protocol.stage.connect_help': 'Pick what should happen after this stage, then click the next stage or outcome.',
+        'protocol.stage.connect': 'Connect step',
+        'protocol.stage.connect_help': 'Choose what should happen after this step, then click the next step or outcome.',
 
         // Details — artifacts
         'protocol.artifacts.section': 'Artifacts',
@@ -161,17 +161,17 @@ window.Kit = (() => {
         'protocol.details.transition.empty': 'Select a transition to edit what happens next.',
 
         // Empty / first-run / onboarding
-        'protocol.canvas.empty.title': 'Design your workflow',
-        'protocol.canvas.empty.body': 'Start by adding the first role in the workflow, then define what that role does.',
+        'protocol.canvas.empty.title': 'Start the workflow',
+        'protocol.canvas.empty.body': 'Add the first role in the workflow, then define the first step it owns.',
         'protocol.catalog.empty.title': 'No protocols yet',
         'protocol.catalog.empty.body': 'Create one from a template in the Gallery, or start from a blank draft.',
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',
         'protocol.catalog.gallery': 'Browse template gallery',
-        'protocol.firstrun.participant': 'Add the first participant.',
-        'protocol.firstrun.stage': 'Add the first stage to what this participant does.',
-        'protocol.firstrun.transition': 'Connect stages to say what happens when each finishes.',
+        'protocol.firstrun.participant': 'Add the first role.',
+        'protocol.firstrun.stage': 'Add the first step for that role.',
+        'protocol.firstrun.transition': 'Connect the step to the next step or an outcome.',
         'protocol.workflow.outcomes': 'Outcomes',
         'protocol.workflow.artifacts': 'Artifacts',
         'protocol.workflow.narrow.empty': 'No stages yet.',
@@ -1031,10 +1031,12 @@ window.Kit = (() => {
         onMutate = null,
         firstRun = null,
         mode = 'graph',
-        connectState = null,
+        editorMode = null,
         accessorySections = [],
         toolbarActions = [],
         nodeStates = {},
+        laneLabels = {},
+        outcomes = null,
     } = {}) {
         const root = document.createElement('section');
         root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
@@ -1045,8 +1047,9 @@ window.Kit = (() => {
             nodes.map((node) => String(node.id || '')).join(','),
             edges.map((edge) => String(edge.id || '')).join(','),
             String(firstRun?.body || ''),
-            String(connectState?.fromStageKey || ''),
-            String(connectState?.decision || ''),
+            String(editorMode?.kind || ''),
+            String(editorMode?.sourceStageKey || ''),
+            String(editorMode?.decision || ''),
         ].join('|');
         root.tabIndex = 0;
 
@@ -1064,26 +1067,6 @@ window.Kit = (() => {
             body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Start by adding the first participant.'));
             card.appendChild(body);
 
-            const steps = Array.isArray(firstRun.steps) ? firstRun.steps.filter(Boolean) : [];
-            if (steps.length) {
-                const list = document.createElement('ol');
-                list.className = 'kit-workflow-first-run-steps';
-                steps.forEach((step) => {
-                    const item = document.createElement('li');
-                    item.className = `kit-workflow-first-run-step${step.state ? ` is-${String(step.state)}` : ''}`;
-                    const badge = document.createElement('span');
-                    badge.className = 'kit-workflow-first-run-step-badge';
-                    badge.textContent = step.state === 'complete' ? 'Done' : step.state === 'active' ? 'Now' : 'Later';
-                    item.appendChild(badge);
-                    const text = document.createElement('span');
-                    text.className = 'kit-workflow-first-run-step-text';
-                    text.textContent = String(step.label || '');
-                    item.appendChild(text);
-                    list.appendChild(item);
-                });
-                card.appendChild(list);
-            }
-
             const actions = document.createElement('div');
             actions.className = 'kit-workflow-first-run-actions';
             (Array.isArray(firstRun.actions) ? firstRun.actions : []).forEach((action) => {
@@ -1096,47 +1079,24 @@ window.Kit = (() => {
                 actions.appendChild(btn);
             });
             card.appendChild(actions);
-
-            const suggestions = Array.isArray(firstRun.suggestions) ? firstRun.suggestions.filter(Boolean) : [];
-            if (suggestions.length) {
-                const title = document.createElement('div');
-                title.className = 'kit-workflow-first-run-suggestions-title';
-                title.textContent = 'Quick starts';
-                card.appendChild(title);
-                const row = document.createElement('div');
-                row.className = 'kit-workflow-first-run-suggestions';
-                suggestions.forEach((suggestion) => {
-                    if (!suggestion || typeof suggestion.onClick !== 'function') return;
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = ['btn', suggestion.tone || 'btn-small'].filter(Boolean).join(' ');
-                    btn.textContent = String(suggestion.label || '');
-                    btn.addEventListener('click', suggestion.onClick);
-                    row.appendChild(btn);
-                });
-                card.appendChild(row);
-            }
-
-            if (firstRun.footnote) {
-                const note = document.createElement('p');
-                note.className = 'kit-workflow-first-run-note';
-                note.textContent = String(firstRun.footnote || '');
-                card.appendChild(note);
-            }
             root.appendChild(card);
         }
 
         const actions = Array.isArray(toolbarActions) ? toolbarActions.filter(Boolean) : [];
-        if (!firstRun?.active || connectState?.fromStageKey || actions.length) {
+        const currentMode = String(editorMode?.kind || 'idle');
+        const toolbarHint = currentMode === 'connect'
+            ? dictValue('protocol.transition.connecting', 'Connecting this step. Click the next step or finish outcome.')
+            : currentMode === 'rehearse'
+                ? 'Viewing live rehearsal state on the published workflow.'
+                : dictValue('protocol.workflow.drag_hint', 'Select a role, step, or transition to edit it. Drag steps to reorder their default sequence.');
+        if (!firstRun?.active || currentMode === 'connect' || actions.length) {
             const toolbar = document.createElement('div');
             toolbar.className = 'kit-workflow-toolbar';
             const hint = document.createElement('div');
             hint.className = 'kit-workflow-toolbar-hint';
-            hint.textContent = connectState?.fromStageKey
-                ? dictValue('protocol.transition.connecting', 'Click the next stage or outcome to finish this transition.')
-                : dictValue('protocol.workflow.drag_hint', 'Drag stages to reorder them in the workflow.');
+            hint.textContent = toolbarHint;
             toolbar.appendChild(hint);
-            if (connectState?.fromStageKey && typeof onCancelConnect === 'function') {
+            if (currentMode === 'connect' && typeof onCancelConnect === 'function') {
                 const cancelBtn = document.createElement('button');
                 cancelBtn.type = 'button';
                 cancelBtn.className = 'btn btn-small';
@@ -1190,6 +1150,11 @@ window.Kit = (() => {
                 onMutate({ type: event.shiftKey ? 'redo' : 'undo' });
                 return;
             }
+            if (event.key === 'Escape' && currentMode === 'connect' && typeof onCancelConnect === 'function') {
+                event.preventDefault();
+                onCancelConnect();
+                return;
+            }
             if (event.target && !root.contains(event.target)) return;
             if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
                 event.preventDefault();
@@ -1208,7 +1173,19 @@ window.Kit = (() => {
             if (!nodes.length) {
                 list.appendChild(UI.renderEmptyState(dictValue('protocol.workflow.narrow.empty', 'No stages yet.')));
             } else {
-                lanes.forEach((lane) => {
+                const narrowGroups = [
+                    ...lanes.map((lane) => ({
+                        key: String(lane.key || ''),
+                        label: String(lane.label || lane.key || ''),
+                        items: nodes.filter((node) => String(node.laneKey || '') === String(lane.key || '')),
+                    })),
+                    ...(outcomes ? [{
+                        key: '__outcomes__',
+                        label: String(outcomes.label || 'Outcomes'),
+                        items: nodes.filter((node) => node.isTerminal),
+                    }] : []),
+                ];
+                narrowGroups.forEach((lane) => {
                     const laneBlock = document.createElement('section');
                     laneBlock.className = 'kit-workflow-narrow-lane';
                     const laneHeader = document.createElement('button');
@@ -1216,12 +1193,12 @@ window.Kit = (() => {
                     laneHeader.className = `kit-workflow-lane${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
                     laneHeader.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
                     laneHeader.textContent = String(lane.label || lane.key || '');
-                    if (typeof onSelect === 'function') {
+                    if (typeof onSelect === 'function' && lane.key !== '__outcomes__') {
                         laneHeader.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
                     }
                     laneBlock.appendChild(laneHeader);
 
-                    const laneNodes = nodes.filter((node) => String(node.laneKey || '') === String(lane.key || ''));
+                    const laneNodes = Array.isArray(lane.items) ? lane.items : [];
                     laneNodes.sort((a, b) => Number(a.column || 0) - Number(b.column || 0));
                     if (!laneNodes.length) {
                         laneBlock.appendChild(UI.renderEmptyState(String(lane.empty || 'No stages yet.')));
@@ -1262,17 +1239,39 @@ window.Kit = (() => {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
 
-            const laneHeight = 148;
-            const laneGap = 28;
-            const columnWidth = 292;
-            const columnGap = 88;
-            const nodeWidth = 252;
-            const stageHeight = 120;
-            const terminalHeight = 94;
-            const leftPad = 48;
-            const rightPad = 72;
-            const bottomPad = 40;
+            if (lanes.length) {
+                const laneStrip = document.createElement('div');
+                laneStrip.className = 'kit-workflow-lane-strip';
+                lanes.forEach((lane) => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = `kit-workflow-lane-pill${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
+                    btn.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
+                    btn.textContent = String(lane.label || lane.key || '');
+                    if (typeof onSelect === 'function') {
+                        btn.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
+                    }
+                    laneStrip.appendChild(btn);
+                });
+                shell.appendChild(laneStrip);
+            }
+
+            const laneHeight = 132;
+            const laneGap = 20;
+            const columnWidth = 280;
+            const columnGap = 72;
+            const nodeWidth = 236;
+            const stageHeight = 110;
+            const terminalHeight = 88;
+            const leftPad = 164;
+            const rightPad = 56;
+            const bottomPad = 36;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
+            const nodeRow = (node) => {
+                if (Number.isFinite(Number(node.row))) return Number(node.row);
+                const laneRow = laneIndex.get(String(node.laneKey || ''));
+                return Number.isFinite(Number(laneRow)) ? Number(laneRow) : 0;
+            };
             const backEdges = edges.filter((edge) => {
                 const fromNode = nodes.find((node) => String(node.id || '') === String(edge.from || ''));
                 const toNode = nodes.find((node) => String(node.id || '') === String(edge.to || ''));
@@ -1281,12 +1280,13 @@ window.Kit = (() => {
             const routeHeadroom = backEdges.length ? 28 + (backEdges.length * 26) : 28;
             const topPad = 28 + routeHeadroom;
             const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
+            const maxRow = Math.max(0, ...nodes.map((node) => nodeRow(node)));
             const graphWidth = leftPad + rightPad + ((maxColumn + 1) * columnWidth) + (Math.max(0, maxColumn) * columnGap);
-            const graphHeight = topPad + bottomPad + (Math.max(1, lanes.length) * laneHeight) + (Math.max(0, lanes.length - 1) * laneGap);
+            const graphHeight = topPad + bottomPad + ((maxRow + 1) * laneHeight) + (Math.max(0, maxRow) * laneGap);
 
             const layout = new Map();
             nodes.forEach((node) => {
-                const row = Math.max(0, laneIndex.get(String(node.laneKey || '')) || 0);
+                const row = Math.max(0, nodeRow(node));
                 const height = node.isTerminal ? terminalHeight : stageHeight;
                 const x = leftPad + (Number(node.column || 0) * (columnWidth + columnGap));
                 const y = topPad + (row * (laneHeight + laneGap)) + Math.max(0, Math.floor((laneHeight - height) / 2));
@@ -1300,38 +1300,6 @@ window.Kit = (() => {
                 });
             });
 
-            const laneRail = document.createElement('div');
-            laneRail.className = 'kit-workflow-lanes';
-            laneRail.style.setProperty('--workflow-lane-height', `${laneHeight}px`);
-            laneRail.style.setProperty('--workflow-lane-gap', `${laneGap}px`);
-            laneRail.style.paddingTop = `${topPad}px`;
-            lanes.forEach((lane) => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = `kit-workflow-lane${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
-                btn.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
-                if (typeof onSelect === 'function' && String(lane.key || '') !== '__outcomes__') {
-                    btn.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
-                }
-
-                const title = document.createElement('div');
-                title.className = 'kit-workflow-lane-title';
-                title.textContent = String(lane.label || lane.key || '');
-                btn.appendChild(title);
-
-                const sub = document.createElement('div');
-                sub.className = 'kit-workflow-lane-subtitle';
-                sub.textContent = String(
-                    lane.sublabel
-                    || (String(lane.key || '') === '__outcomes__'
-                        ? dictValue('protocol.workflow.outcomes_hint', 'How the workflow can finish')
-                        : dictValue('protocol.workflow.lane_hint', 'Roles in this workflow'))
-                );
-                btn.appendChild(sub);
-                laneRail.appendChild(btn);
-            });
-            shell.appendChild(laneRail);
-
             const viewport = document.createElement('div');
             viewport.className = 'kit-workflow-viewport';
 
@@ -1340,18 +1308,50 @@ window.Kit = (() => {
             graph.style.width = `${graphWidth}px`;
             graph.style.height = `${graphHeight}px`;
             graph.style.setProperty('--workflow-columns', String(Math.max(1, maxColumn + 1)));
-            graph.style.setProperty('--workflow-rows', String(Math.max(1, lanes.length)));
+            graph.style.setProperty('--workflow-rows', String(Math.max(1, maxRow + 1)));
 
             const bandsLayer = document.createElement('div');
             bandsLayer.className = 'kit-workflow-band-layer';
             lanes.forEach((lane) => {
                 const band = document.createElement('div');
-                band.className = `kit-workflow-band${String(lane.key || '') === '__outcomes__' ? ' is-outcomes' : ''}`;
-                const row = Math.max(0, laneIndex.get(String(lane.key || '')) || 0);
+                band.className = 'kit-workflow-band';
+                const laneMeta = laneLabels[String(lane.key || '')] || {};
+                const row = Math.max(0, Number(laneMeta.row || laneIndex.get(String(lane.key || '')) || 0));
                 band.style.top = `${topPad + (row * (laneHeight + laneGap))}px`;
                 band.style.height = `${laneHeight}px`;
+                const label = document.createElement('button');
+                label.type = 'button';
+                label.className = `kit-workflow-band-label${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
+                label.textContent = String(laneMeta.label || lane.label || lane.key || '');
+                if (typeof onSelect === 'function') {
+                    label.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
+                }
+                band.appendChild(label);
+                if (laneMeta.sublabel) {
+                    const sub = document.createElement('div');
+                    sub.className = 'kit-workflow-band-sublabel';
+                    sub.textContent = String(laneMeta.sublabel || '');
+                    band.appendChild(sub);
+                }
                 bandsLayer.appendChild(band);
             });
+            if (outcomes && Number(outcomes.count || 0) > 0) {
+                const band = document.createElement('div');
+                band.className = 'kit-workflow-band is-outcomes';
+                band.style.top = `${topPad + (Number(outcomes.startRow || 0) * (laneHeight + laneGap))}px`;
+                band.style.height = `${(Number(outcomes.count || 0) * laneHeight) + (Math.max(0, Number(outcomes.count || 0) - 1) * laneGap)}px`;
+                const label = document.createElement('div');
+                label.className = 'kit-workflow-band-label is-static';
+                label.textContent = String(outcomes.label || 'Outcomes');
+                band.appendChild(label);
+                if (outcomes.hint) {
+                    const sub = document.createElement('div');
+                    sub.className = 'kit-workflow-band-sublabel';
+                    sub.textContent = String(outcomes.hint || '');
+                    band.appendChild(sub);
+                }
+                bandsLayer.appendChild(band);
+            }
             graph.appendChild(bandsLayer);
 
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1372,10 +1372,9 @@ window.Kit = (() => {
             nodes.forEach((node) => {
                 const nodeLayout = layout.get(String(node.id || ''));
                 if (!nodeLayout) return;
-                const canConnect = !node.isTerminal && typeof onBeginConnect === 'function';
-                const isConnectSource = String(connectState?.fromStageKey || '') === String(node.id || '');
-                const isConnectTarget = Boolean(connectState?.fromStageKey)
-                    && String(connectState.fromStageKey || '') !== String(node.id || '')
+                const isConnectSource = String(editorMode?.sourceStageKey || '') === String(node.id || '');
+                const isConnectTarget = currentMode === 'connect'
+                    && String(editorMode?.sourceStageKey || '') !== String(node.id || '')
                     && (node.kind === 'stage' || node.kind === 'terminal');
 
                 const wrap = document.createElement('div');
@@ -1455,19 +1454,6 @@ window.Kit = (() => {
                 }
 
                 wrap.appendChild(btn);
-
-                if (canConnect) {
-                    const connect = document.createElement('button');
-                    connect.type = 'button';
-                    connect.className = 'kit-workflow-node-connect';
-                    connect.textContent = dictValue('protocol.stage.connect', 'Add transition');
-                    connect.addEventListener('click', (event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onBeginConnect(node.id);
-                    });
-                    wrap.appendChild(connect);
-                }
 
                 nodesLayer.appendChild(wrap);
             });

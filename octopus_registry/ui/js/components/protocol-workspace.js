@@ -110,6 +110,20 @@ function _selectorFromFields(kind, value) {
     return { kind: selectorKind, value: selectorValue };
 }
 
+function _selectorFieldsFromString(value) {
+    const text = String(value || '').trim();
+    if (!text) return { kind: '', value: '' };
+    const normalized = text.startsWith('@') ? text.slice(1) : text;
+    const divider = normalized.indexOf(':');
+    if (divider < 0) {
+        return { kind: 'agent', value: normalized };
+    }
+    return {
+        kind: normalized.slice(0, divider).trim(),
+        value: normalized.slice(divider + 1).trim(),
+    };
+}
+
 function _protocolDecisionLabel(value) {
     const key = String(value || '').trim().toLowerCase();
     if (!key) return '';
@@ -156,7 +170,25 @@ function renderProtocolWorkspace(container) {
         busy: false,
         message: '',
     };
-    let connectState = { fromStageKey: '', decision: '' };
+    let editorMode = { kind: 'idle', sourceStageKey: '', decision: '' };
+    let pendingRole = {
+        display_name: '',
+        participant_key: '',
+        selector_kind: '',
+        selector_value: '',
+        instructions: '',
+    };
+    let pendingStage = {
+        display_name: '',
+        stage_key: '',
+        participant_key: '',
+        stage_kind: 'work',
+        instructions: '',
+        inputs: [],
+        outputs: [],
+        max_rounds: 0,
+        timeout_seconds: 0,
+    };
     let documentHistory = { undo: [], redo: [] };
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
@@ -212,6 +244,96 @@ function renderProtocolWorkspace(container) {
         };
     }
 
+    function _blankRoleDraft(seed = {}) {
+        return {
+            display_name: '',
+            participant_key: '',
+            selector_kind: '',
+            selector_value: '',
+            instructions: '',
+            ...seed,
+        };
+    }
+
+    function _blankStageDraft(participantKey = '', seed = {}) {
+        return {
+            display_name: '',
+            stage_key: '',
+            participant_key: String(participantKey || ''),
+            stage_kind: 'work',
+            instructions: '',
+            inputs: [],
+            outputs: [],
+            max_rounds: 0,
+            timeout_seconds: 0,
+            ...seed,
+        };
+    }
+
+    function _baseEditorModeKind() {
+        return rehearsal.runId ? 'rehearse' : 'idle';
+    }
+
+    function _setEditorMode(next) {
+        editorMode = {
+            kind: _baseEditorModeKind(),
+            sourceStageKey: '',
+            decision: '',
+            ...(next || {}),
+        };
+        render();
+    }
+
+    function _resetEditorMode() {
+        editorMode = { kind: _baseEditorModeKind(), sourceStageKey: '', decision: '' };
+        pendingRole = _blankRoleDraft();
+        pendingStage = _blankStageDraft(_defaultStageParticipantKey());
+    }
+
+    function _defaultDecisionForStageKind(stageKind) {
+        return String(stageKind || '') === 'work' ? 'completed' : 'accept';
+    }
+
+    function _decisionOptionsForStage(stage, currentDecision = '') {
+        const stageKind = String(stage?.stage_kind || 'work');
+        const defaults = stageKind === 'work'
+            ? ['completed']
+            : stageKind === 'acceptance'
+                ? ['accept', 'fail']
+                : ['accept', 'revise', 'fail'];
+        const current = String(currentDecision || '').trim().toLowerCase();
+        const values = Array.from(new Set([
+            ...defaults,
+            ...Object.keys(stage?.transitions || {}).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean),
+            current,
+        ].filter(Boolean)));
+        return values.map((value) => ({
+            value,
+            label: _protocolDecisionLabel(value),
+        }));
+    }
+
+    function _selectionStage(doc = draft.document) {
+        if (selection.sectionKey !== 'stages' || !selection.nodeKey) return null;
+        return (doc.stages || []).find((item) => String(item.stage_key || '') === String(selection.nodeKey || '')) || null;
+    }
+
+    function _defaultStageParticipantKey(doc = draft.document) {
+        if (selection.sectionKey === 'participants' && selection.nodeKey) {
+            return String(selection.nodeKey || '');
+        }
+        const selectedStage = _selectionStage(doc);
+        if (selectedStage?.participant_key) {
+            return String(selectedStage.participant_key || '');
+        }
+        return String(doc.participants?.[0]?.participant_key || '');
+    }
+
+    function _stageLaneRow(participantKey, doc = draft.document) {
+        const laneIndex = (doc.participants || []).findIndex((item) => String(item.participant_key || '') === String(participantKey || ''));
+        return laneIndex >= 0 ? laneIndex : 0;
+    }
+
     function _cloneDoc(doc) {
         return JSON.parse(JSON.stringify(doc || _blankDocument()));
     }
@@ -243,12 +365,19 @@ function renderProtocolWorkspace(container) {
     }
 
     function _applyServerDetail(detail) {
+        const previousProtocolId = String(currentProtocol?.protocol?.protocol_id || '');
         currentProtocol = detail;
         draftRevision = Number(detail?.protocol?.draft_revision || 0) || 0;
         draftConflict = null;
-        connectState = { fromStageKey: '', decision: '' };
         documentHistory = { undo: [], redo: [] };
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        if (previousProtocolId && previousProtocolId !== String(detail?.protocol?.protocol_id || '')) {
+            _stopRehearsalPolling();
+            rehearsal.runId = '';
+            rehearsal.sessions = [];
+            rehearsal.scenarios = [];
+            rehearsal.runDetail = null;
+        }
         const docFromServer = (detail && detail.draft_definition_json && Object.keys(detail.draft_definition_json).length)
             ? detail.draft_definition_json
             : (detail && detail.draft_document) || _blankDocument();
@@ -265,6 +394,7 @@ function renderProtocolWorkspace(container) {
         };
         saveState = { state: 'idle', lastSavedAt: detail?.protocol?.updated_at || '', error: '' };
         selection = _repairSelection(selection, draft.document);
+        _resetEditorMode();
     }
 
     function _repairSelection(current, doc) {
@@ -407,10 +537,8 @@ function renderProtocolWorkspace(container) {
 
     async function _validateNow() {
         if (_blockConflictAction('Validate')) return;
-        if (!currentProtocolId) {
-            await _saveNew();
-            if (!currentProtocolId) return;
-        } else if (saveState.state === 'editing' || saveState.state === 'saving') {
+        if (!currentProtocolId) return;
+        if (saveState.state === 'editing' || saveState.state === 'saving') {
             const saved = await _autosave();
             if (!saved) return;
         }
@@ -428,10 +556,8 @@ function renderProtocolWorkspace(container) {
 
     async function _publishNow() {
         if (_blockConflictAction('Publish')) return;
-        if (!currentProtocolId) {
-            await _saveNew();
-            if (!currentProtocolId) return;
-        } else if (saveState.state === 'editing' || saveState.state === 'saving') {
+        if (!currentProtocolId) return;
+        if (saveState.state === 'editing' || saveState.state === 'saving') {
             const saved = await _autosave();
             if (!saved) return;
         }
@@ -483,29 +609,17 @@ function renderProtocolWorkspace(container) {
         protocolDetailLoading = false;
         draftRevision = 0;
         draftConflict = null;
-        connectState = { fromStageKey: '', decision: '' };
+        _stopRehearsalPolling();
+        rehearsal.runId = '';
+        rehearsal.sessions = [];
+        rehearsal.scenarios = [];
+        rehearsal.runDetail = null;
         documentHistory = { undo: [], redo: [] };
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
         draft = { slug: '', display_name: '', description: '', document: _blankDocument() };
         selection = { sectionKey: 'overview', nodeKey: '' };
         saveState = { state: 'idle', lastSavedAt: '', error: '' };
-    }
-
-    async function _saveNew() {
-        saveState = { state: 'saving', lastSavedAt: '', error: '' };
-        _syncLifecycleChip();
-        const result = await API.createProtocol({
-            slug: draft.slug,
-            display_name: draft.display_name,
-            description: draft.description,
-            definition_json: _docFromDraft(),
-        });
-        currentProtocolId = result.protocol?.protocol_id || '';
-        _applyServerDetail(result);
-        _writeState({ push: true });
-        await loadProtocols({ quiet: true });
-        render();
-        UI.notify('Protocol draft saved.', 'success');
+        _resetEditorMode();
     }
 
     async function _createBlankDraft() {
@@ -572,6 +686,7 @@ function renderProtocolWorkspace(container) {
             UI.notify('Rehearsal could not be started.', 'error');
             return;
         }
+        editorMode = { kind: 'rehearse', sourceStageKey: '', decision: '' };
         UI.notify('Rehearsal started — dry run, external transports gated.', 'success');
         render();
         await _refreshRehearsalSessions();
@@ -650,7 +765,7 @@ function renderProtocolWorkspace(container) {
             document: _cloneDoc(snapshot.draft.document),
         };
         selection = _repairSelection(snapshot.selection, draft.document);
-        connectState = { fromStageKey: '', decision: '' };
+        _resetEditorMode();
         _scheduleAutosave();
         render();
     }
@@ -700,8 +815,8 @@ function renderProtocolWorkspace(container) {
                 );
                 return { ...stage, transitions };
             });
-            if (connectState.fromStageKey === sourceKey) {
-                connectState = { ...connectState, fromStageKey: nextKey };
+            if (editorMode.kind === 'connect' && editorMode.sourceStageKey === sourceKey) {
+                editorMode = { ...editorMode, sourceStageKey: nextKey };
             }
             return;
         }
@@ -731,8 +846,8 @@ function renderProtocolWorkspace(container) {
         if (pushHistory) _pushHistory();
         draft.document = nextDoc;
         selection = _repairSelection(nextSelection, nextDoc);
-        if (connectState.fromStageKey && !(nextDoc.stages || []).some((stage) => String(stage.stage_key || '') === connectState.fromStageKey)) {
-            connectState = { fromStageKey: '', decision: '' };
+        if (editorMode.kind === 'connect' && !(nextDoc.stages || []).some((stage) => String(stage.stage_key || '') === editorMode.sourceStageKey)) {
+            _resetEditorMode();
         }
         _scheduleAutosave();
         render();
@@ -818,55 +933,168 @@ function renderProtocolWorkspace(container) {
         await _resolveSelectorPreview(nextParticipantKey, _selectorString(selector));
     }
 
-    function _addNode(sectionKey) {
-        const doc = _cloneDoc(draft.document);
-        if (sectionKey === 'participants') {
-            const n = (doc.participants || []).length + 1;
-            const key = `participant_${n}`;
-            doc.participants = [...(doc.participants || []), {
-                participant_key: key,
-                display_name: '',
-                selector: null,
-                instructions: '',
-            }];
-            _commitDocument(doc, { nextSelection: { sectionKey: 'participants', nodeKey: key } });
-            return;
-        } else if (sectionKey === 'stages') {
-            if (!(doc.participants || []).length) {
-                UI.notify('Add a participant before adding a stage.', 'warning');
-                selection = { sectionKey: 'overview', nodeKey: '' };
-                render();
-                return;
+    function _roleDraftFromSuggestion(suggestion) {
+        const displayName = String(suggestion?.displayName || suggestion?.label || '').trim();
+        return _blankRoleDraft({
+            display_name: displayName,
+            participant_key: _slugSuggestion(String(suggestion?.preferredKey || displayName || 'role')),
+            selector_kind: String(suggestion?.selectorKind || ''),
+            selector_value: String(suggestion?.selectorValue || ''),
+        });
+    }
+
+    function _commitPendingRoleField(_target, key, value) {
+        if (key === 'display_name') {
+            pendingRole.display_name = String(value || '');
+            if (!String(pendingRole.participant_key || '').trim()) {
+                pendingRole.participant_key = _slugSuggestion(pendingRole.display_name);
             }
-            const n = (doc.stages || []).length + 1;
-            const key = `stage_${n}`;
-            const firstParticipant = String(doc.participants?.[0]?.participant_key || '');
-            doc.stages = [...(doc.stages || []), {
-                stage_key: key,
-                display_name: '',
-                participant_key: firstParticipant,
-                stage_kind: 'work',
-                instructions: '',
-                inputs: [],
-                outputs: [],
-                transitions: {},
-            }];
-            _commitDocument(doc, { nextSelection: { sectionKey: 'stages', nodeKey: key } });
-            return;
-        } else if (sectionKey === 'artifacts') {
-            const n = (doc.artifacts || []).length + 1;
-            const key = `artifact_${n}`;
-            doc.artifacts = [...(doc.artifacts || []), {
-                artifact_key: key,
-                display_name: '',
-                kind: 'workspace_file',
-                description: '',
-                path: '',
-                verify: true,
-            }];
-            _commitDocument(doc, { nextSelection: { sectionKey: 'artifacts', nodeKey: key } });
+        } else if (key === 'participant_key') {
+            pendingRole.participant_key = _slugSuggestion(value);
+        } else if (key === 'selector_kind' || key === 'selector_value') {
+            pendingRole[key] = String(value || '');
+        } else {
+            pendingRole[key] = String(value || '');
+        }
+        render();
+    }
+
+    function _applyRoleDraftSuggestion(suggestion) {
+        pendingRole = _roleDraftFromSuggestion(suggestion);
+        render();
+        const selectorText = _selectorString(_selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value));
+        if (selectorText) {
+            void _resolveSelectorPreview('__draft__', selectorText);
+        }
+    }
+
+    function _startRoleInsert(prefill = null) {
+        pendingRole = prefill ? _roleDraftFromSuggestion(prefill) : _blankRoleDraft();
+        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        editorMode = { kind: 'insert-role', sourceStageKey: '', decision: '' };
+        render();
+        const selectorText = _selectorString(_selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value));
+        if (selectorText) {
+            void _resolveSelectorPreview('__draft__', selectorText);
+        }
+    }
+
+    function _confirmRoleInsert() {
+        const displayName = String(pendingRole.display_name || '').trim();
+        if (!displayName) {
+            UI.notify('Give this role a name before adding it to the workflow.', 'warning');
             return;
         }
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.participants || [])];
+        const participantKey = _nextAvailableKey(
+            items,
+            'participant_key',
+            String(pendingRole.participant_key || displayName || 'role'),
+        );
+        doc.participants = [...items, {
+            participant_key: participantKey,
+            display_name: displayName,
+            selector: _selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value),
+            instructions: String(pendingRole.instructions || ''),
+        }];
+        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        _resetEditorMode();
+        _commitDocument(doc, {
+            nextSelection: { sectionKey: 'participants', nodeKey: participantKey },
+        });
+    }
+
+    function _cancelRoleInsert() {
+        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        _resetEditorMode();
+        render();
+    }
+
+    function _commitPendingStageField(_target, key, value) {
+        if (key === 'display_name') {
+            pendingStage.display_name = String(value || '');
+            if (!String(pendingStage.stage_key || '').trim()) {
+                pendingStage.stage_key = _slugSuggestion(pendingStage.display_name);
+            }
+        } else if (key === 'stage_key') {
+            pendingStage.stage_key = _slugSuggestion(value);
+        } else if (key === 'stage_kind') {
+            pendingStage.stage_kind = String(value || 'work') || 'work';
+        } else if (key === 'participant_key') {
+            pendingStage.participant_key = String(value || '');
+        } else if (key === 'instructions') {
+            pendingStage.instructions = String(value || '');
+        } else if (key === 'inputs' || key === 'outputs') {
+            pendingStage[key] = Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : [];
+        } else if (key === 'max_rounds' || key === 'timeout_seconds') {
+            pendingStage[key] = Number.parseInt(String(value || '0'), 10) || 0;
+        }
+        render();
+    }
+
+    function _startStageInsert() {
+        if (!(draft.document.participants || []).length) {
+            UI.notify('Add a role before adding a step.', 'warning');
+            return;
+        }
+        pendingStage = _blankStageDraft(_defaultStageParticipantKey());
+        editorMode = { kind: 'insert-stage', sourceStageKey: '', decision: '' };
+        render();
+    }
+
+    function _confirmStageInsert() {
+        const displayName = String(pendingStage.display_name || '').trim();
+        if (!displayName) {
+            UI.notify('Give this step a name before adding it to the workflow.', 'warning');
+            return;
+        }
+        if (!String(pendingStage.participant_key || '').trim()) {
+            UI.notify('Choose who owns this step before creating it.', 'warning');
+            return;
+        }
+        const doc = _cloneDoc(draft.document);
+        const stageKey = _nextAvailableKey(
+            doc.stages || [],
+            'stage_key',
+            String(pendingStage.stage_key || displayName || 'step'),
+        );
+        doc.stages = [...(doc.stages || []), {
+            stage_key: stageKey,
+            display_name: displayName,
+            participant_key: String(pendingStage.participant_key || ''),
+            stage_kind: String(pendingStage.stage_kind || 'work') || 'work',
+            instructions: String(pendingStage.instructions || ''),
+            inputs: Array.isArray(pendingStage.inputs) ? pendingStage.inputs : [],
+            outputs: Array.isArray(pendingStage.outputs) ? pendingStage.outputs : [],
+            transitions: {},
+            max_rounds: Number.parseInt(String(pendingStage.max_rounds || '0'), 10) || 0,
+            timeout_seconds: Number.parseInt(String(pendingStage.timeout_seconds || '0'), 10) || 0,
+        }];
+        _resetEditorMode();
+        _commitDocument(doc, {
+            nextSelection: { sectionKey: 'stages', nodeKey: stageKey },
+        });
+    }
+
+    function _cancelStageInsert() {
+        _resetEditorMode();
+        render();
+    }
+
+    function _addArtifact() {
+        const doc = _cloneDoc(draft.document);
+        const n = (doc.artifacts || []).length + 1;
+        const key = `artifact_${n}`;
+        doc.artifacts = [...(doc.artifacts || []), {
+            artifact_key: key,
+            display_name: '',
+            kind: 'workspace_file',
+            description: '',
+            path: '',
+            verify: true,
+        }];
+        _commitDocument(doc, { nextSelection: { sectionKey: 'artifacts', nodeKey: key } });
     }
 
     function _moveStageBefore(nodeId, targetId) {
@@ -881,38 +1109,53 @@ function renderProtocolWorkspace(container) {
         _commitDocument(doc, { nextSelection: { sectionKey: 'stages', nodeKey: String(nodeId || '') } });
     }
 
-    function _beginTransitionFromStage(stageKey, decision = '') {
+    function _startConnectMode(stageKey, decision = '') {
         const doc = draft.document;
         const stage = (doc.stages || []).find((item) => String(item.stage_key || '') === String(stageKey || ''));
         if (!stage) return;
-        const defaultDecision = String(decision || Object.keys(stage.transitions || {})[0] || (stage.stage_kind === 'work' ? 'completed' : 'accept')).trim().toLowerCase();
-        connectState = { fromStageKey: String(stage.stage_key || ''), decision: defaultDecision || 'completed' };
+        editorMode = {
+            kind: 'connect',
+            sourceStageKey: String(stage.stage_key || ''),
+            decision: String(decision || Object.keys(stage.transitions || {})[0] || _defaultDecisionForStageKind(stage.stage_kind)).trim().toLowerCase(),
+        };
         selection = { sectionKey: 'stages', nodeKey: String(stage.stage_key || '') };
         render();
     }
 
     function _cancelTransitionConnect() {
-        connectState = { fromStageKey: '', decision: '' };
+        _resetEditorMode();
         render();
     }
 
+    function _commitConnectField(_target, key, value) {
+        if (key === 'decision') {
+            editorMode = {
+                ...editorMode,
+                decision: String(value || '').trim().toLowerCase() || _defaultDecisionForStageKind(
+                    _selectionStage()?.stage_kind || 'work',
+                ),
+            };
+            render();
+        }
+    }
+
     function _connectTransitionTarget(targetKey) {
-        if (!connectState.fromStageKey) return;
+        if (editorMode.kind !== 'connect' || !editorMode.sourceStageKey) return;
         const doc = _cloneDoc(draft.document);
         const items = [...(doc.stages || [])];
-        const idx = items.findIndex((item) => String(item.stage_key || '') === connectState.fromStageKey);
+        const idx = items.findIndex((item) => String(item.stage_key || '') === editorMode.sourceStageKey);
         if (idx < 0) {
             _cancelTransitionConnect();
             return;
         }
         const stage = { ...items[idx] };
         const transitions = Object.assign({}, stage.transitions || {});
-        transitions[connectState.decision || 'completed'] = String(targetKey || '');
+        transitions[editorMode.decision || _defaultDecisionForStageKind(stage.stage_kind)] = String(targetKey || '');
         stage.transitions = transitions;
         items[idx] = stage;
         doc.stages = items;
-        const edgeId = _stageTransitionId(stage.stage_key, connectState.decision || 'completed');
-        connectState = { fromStageKey: '', decision: '' };
+        const edgeId = _stageTransitionId(stage.stage_key, editorMode.decision || _defaultDecisionForStageKind(stage.stage_kind));
+        _resetEditorMode();
         _commitDocument(doc, { nextSelection: { sectionKey: 'transitions', nodeKey: edgeId } });
     }
 
@@ -991,7 +1234,7 @@ function renderProtocolWorkspace(container) {
             seen.add(value);
             suggestions.push(entry);
         };
-        (connectedAgents || []).slice(0, 6).forEach((agent) => {
+        (connectedAgents || []).forEach((agent) => {
             const selectorValue = String(agent?.selector || '').trim();
             const selectorRef = selectorValue.startsWith('@') ? selectorValue.slice(1) : selectorValue;
             const normalizedSelector = selectorRef.startsWith('agent:') ? selectorRef.slice('agent:'.length) : selectorRef;
@@ -1030,41 +1273,25 @@ function renderProtocolWorkspace(container) {
                 preferredKey: _slugSuggestion(role),
             });
         });
-        if (!suggestions.length) {
-            [
-                {
-                    label: 'Anyone with planning',
-                    value: '@skill:planning',
-                    selectorKind: 'skill',
-                    selectorValue: 'planning',
-                    displayName: 'Planner',
-                    preferredKey: 'planner',
-                },
-                {
-                    label: 'Any reviewer',
-                    value: '@role:reviewer',
-                    selectorKind: 'role',
-                    selectorValue: 'reviewer',
-                    displayName: 'Reviewer',
-                    preferredKey: 'reviewer',
-                },
-            ].forEach(pushSuggestion);
-        }
+        [
+            {
+                label: 'Planner role',
+                value: '@skill:planning',
+                selectorKind: 'skill',
+                selectorValue: 'planning',
+                displayName: 'Planner',
+                preferredKey: 'planner',
+            },
+            {
+                label: 'Reviewer role',
+                value: '@role:reviewer',
+                selectorKind: 'role',
+                selectorValue: 'reviewer',
+                displayName: 'Reviewer',
+                preferredKey: 'reviewer',
+            },
+        ].forEach(pushSuggestion);
         return suggestions;
-    }
-
-    async function _addParticipantFromSuggestion(suggestion) {
-        const doc = _cloneDoc(draft.document);
-        const n = (doc.participants || []).length + 1;
-        const key = `participant_${n}`;
-        doc.participants = [...(doc.participants || []), {
-            participant_key: key,
-            display_name: '',
-            selector: null,
-            instructions: '',
-        }];
-        _commitDocument(doc, { nextSelection: { sectionKey: 'participants', nodeKey: key } });
-        await _applyParticipantSuggestion(key, suggestion);
     }
 
     // -------------------------------------------------------------------
@@ -1131,42 +1358,70 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    function _stageColumns(doc) {
+        const stages = Array.isArray(doc?.stages) ? doc.stages : [];
+        const orderIndex = new Map(stages.map((item, index) => [String(item.stage_key || ''), index]));
+        const columns = new Map(stages.map((item) => [String(item.stage_key || ''), 0]));
+
+        stages.forEach((stage) => {
+            const sourceKey = String(stage.stage_key || '');
+            const sourceColumn = Number(columns.get(sourceKey) || 0);
+            Object.values(stage.transitions || {}).forEach((target) => {
+                const targetKey = String(target || '').trim();
+                if (!targetKey || !orderIndex.has(targetKey)) return;
+                const sourceIndex = Number(orderIndex.get(sourceKey) || 0);
+                const targetIndex = Number(orderIndex.get(targetKey) || 0);
+                if (targetIndex <= sourceIndex) return;
+                columns.set(targetKey, Math.max(Number(columns.get(targetKey) || 0), sourceColumn + 1));
+            });
+        });
+
+        const laneOrder = new Map();
+        stages.forEach((stage) => {
+            const laneKey = String(stage.participant_key || '');
+            const items = laneOrder.get(laneKey) || [];
+            items.push(stage);
+            laneOrder.set(laneKey, items);
+        });
+        laneOrder.forEach((items) => {
+            let previous = -1;
+            items.forEach((stage) => {
+                const key = String(stage.stage_key || '');
+                const nextColumn = Math.max(Number(columns.get(key) || 0), previous + 1);
+                columns.set(key, nextColumn);
+                previous = nextColumn;
+            });
+        });
+        return columns;
+    }
+
     function _workflowData() {
         const doc = draft.document;
         const progress = _workflowProgress(doc);
         const participantCount = progress.participantCount;
+        const stageCount = progress.stageCount;
         const stageCounts = new Map();
         (doc.stages || []).forEach((item) => {
             const key = String(item.participant_key || '').trim();
             stageCounts.set(key, Number(stageCounts.get(key) || 0) + 1);
         });
-        const participantMap = new Map((doc.participants || []).map((item) => [
-            String(item.participant_key || ''),
-            String(item.display_name || item.participant_key || ''),
-        ]));
-        const stageCount = progress.stageCount;
-        const hasStages = stageCount > 0;
-        const lanes = [
-            ...(doc.participants || []).map((item) => ({
-                key: String(item.participant_key || ''),
-                label: String(item.display_name || item.participant_key || 'Participant'),
-                sublabel: _selectorString(item.selector || null)
-                    || `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} stage${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
-                empty: Kit.dict.label('protocol.stages.firstrun'),
-            })),
-            ...(hasStages ? [{
-                key: '__outcomes__',
-                label: Kit.dict.label('protocol.workflow.outcomes'),
-                sublabel: Kit.dict.label('protocol.workflow.outcomes_hint'),
-            }] : []),
-        ];
+        const lanes = (doc.participants || []).map((item) => ({
+            key: String(item.participant_key || ''),
+            label: String(item.display_name || item.participant_key || 'Role'),
+            sublabel: _selectorString(item.selector || null)
+                || `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} step${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
+            empty: 'No steps in this role yet.',
+        }));
+        const columns = _stageColumns(doc);
+        const maxStageColumn = Math.max(0, ...Array.from(columns.values(), (value) => Number(value || 0)));
         const nodes = [
-            ...(doc.stages || []).map((item, index) => ({
+            ...(doc.stages || []).map((item) => ({
                 id: String(item.stage_key || ''),
                 kind: 'stage',
                 laneKey: String(item.participant_key || ''),
-                column: index,
-                label: String(item.display_name || item.stage_key || 'New stage'),
+                row: _stageLaneRow(item.participant_key, doc),
+                column: Number(columns.get(String(item.stage_key || '')) || 0),
+                label: String(item.display_name || item.stage_key || 'Untitled step'),
                 sublabel: [
                     (item.inputs || []).length ? `Reads ${(item.inputs || []).length}` : '',
                     (item.outputs || []).length ? `Writes ${(item.outputs || []).length}` : '',
@@ -1179,13 +1434,14 @@ function renderProtocolWorkspace(container) {
                     },
                 ],
             })),
-            ...(hasStages ? PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
+            ...(stageCount ? PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
                 id: item.key,
                 kind: 'terminal',
-                laneKey: '__outcomes__',
-                column: stageCount + index,
+                laneKey: '',
+                row: lanes.length + index,
+                column: maxStageColumn + 1,
                 label: item.label,
-                sublabel: 'Workflow stops here',
+                sublabel: 'Ends the workflow',
                 isTerminal: true,
             })) : []),
         ];
@@ -1200,46 +1456,72 @@ function renderProtocolWorkspace(container) {
             kind: 'artifact',
             label: String(item.display_name || item.artifact_key || 'Artifact'),
         }));
-        const firstRunActions = [];
-        if (!participantCount) {
-            firstRunActions.push({ label: Kit.dict.label('protocol.participants.add'), onClick: () => _addNode('participants') });
-            firstRunActions.push({ label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/gallery') });
-        } else if (!stageCount) {
-            firstRunActions.push({ label: Kit.dict.label('protocol.stages.add'), onClick: () => _addNode('stages') });
-        } else if (!edges.length) {
-            firstRunActions.push({
+        const selectedStage = _selectionStage(doc);
+        const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
+        const toolbarActions = [
+            {
+                label: Kit.dict.label('protocol.participants.add'),
+                tone: 'btn-small',
+                onClick: () => _startRoleInsert(),
+                disabled: !canMutate,
+            },
+            {
+                label: Kit.dict.label('protocol.stages.add'),
+                tone: 'btn-small',
+                onClick: () => _startStageInsert(),
+                disabled: !canMutate || !participantCount,
+            },
+            ...(stageCount ? [{
+                label: Kit.dict.label('protocol.artifacts.add'),
+                tone: 'btn-small',
+                onClick: () => _addArtifact(),
+                disabled: !canMutate,
+            }] : []),
+            ...(selectedStage && editorMode.kind === 'idle' && canMutate ? [{
                 label: Kit.dict.label('protocol.stage.connect'),
-                onClick: () => _beginTransitionFromStage(doc.stages[0]?.stage_key || ''),
-            });
-        }
+                tone: 'btn-small',
+                onClick: () => _startConnectMode(selectedStage.stage_key),
+            }] : []),
+            ...(rehearsal.runId ? [{
+                label: editorMode.kind === 'rehearse' ? 'Back to authoring' : 'View rehearsal',
+                tone: 'btn-small',
+                onClick: () => {
+                    _setEditorMode({ kind: editorMode.kind === 'rehearse' ? 'idle' : 'rehearse' });
+                },
+            }] : []),
+        ];
+        const firstRun = editorMode.kind === 'idle' && !participantCount
+            ? {
+                active: true,
+                title: Kit.dict.label('protocol.canvas.empty.title'),
+                body: 'Start by adding the first role in this workflow. A role is the reusable owner for one or more steps.',
+                actions: [
+                    { label: Kit.dict.label('protocol.participants.add'), onClick: () => _startRoleInsert() },
+                    { label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/gallery') },
+                ],
+            }
+            : editorMode.kind === 'idle' && participantCount && !stageCount
+                ? {
+                    active: true,
+                    title: 'Add the first step',
+                    body: 'Create the first step, choose which role owns it, and then connect it to the next step or an outcome.',
+                    actions: [
+                        { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
+                    ],
+                }
+                : null;
         return {
             lanes,
             nodes,
             edges,
-            toolbarActions: progress.nextStep === 'participant' ? [] : [
-                {
-                    label: Kit.dict.label('protocol.participants.add'),
-                    tone: 'btn-small',
-                    onClick: () => _addNode('participants'),
-                },
-                {
-                    label: Kit.dict.label('protocol.stages.add'),
-                    tone: 'btn-small',
-                    onClick: () => _addNode('stages'),
-                },
-                ...(stageCount ? [{
-                    label: Kit.dict.label('protocol.artifacts.add'),
-                    tone: 'btn-small',
-                    onClick: () => _addNode('artifacts'),
-                }] : []),
-            ],
+            toolbarActions,
             accessorySections: artifactItems.length
                 ? [
                     {
                         key: 'artifacts',
                         title: Kit.dict.label('protocol.workflow.artifacts'),
                         addLabel: Kit.dict.label('protocol.artifacts.add'),
-                        onAdd: () => _addNode('artifacts'),
+                        onAdd: () => _addArtifact(),
                         onSelect: (item) => {
                             selection = { sectionKey: 'artifacts', nodeKey: item.id };
                             render();
@@ -1249,41 +1531,14 @@ function renderProtocolWorkspace(container) {
                     },
                 ]
                 : [],
-            firstRun: {
-                active: Boolean(firstRunActions.length),
-                title: Kit.dict.label('protocol.canvas.empty.title'),
-                body: !participantCount
-                    ? Kit.dict.label('protocol.firstrun.participant')
-                    : !stageCount
-                        ? Kit.dict.label('protocol.firstrun.stage')
-                        : Kit.dict.label('protocol.firstrun.transition'),
-                steps: [
-                    {
-                        label: 'Add the role or agent you need first.',
-                        state: participantCount ? 'complete' : 'active',
-                    },
-                    {
-                        label: 'Add the first stage that role is responsible for.',
-                        state: stageCount ? 'complete' : participantCount ? 'active' : 'pending',
-                    },
-                    {
-                        label: 'Connect the stage to the next step or a finish outcome.',
-                        state: progress.edgeCount ? 'complete' : stageCount ? 'active' : 'pending',
-                    },
-                ],
-                actions: firstRunActions,
-                suggestions: !participantCount
-                    ? _participantSelectorSuggestions().slice(0, 3).map((suggestion) => ({
-                        label: String(suggestion.label || suggestion.displayName || 'Use this role'),
-                        onClick: () => { void _addParticipantFromSuggestion(suggestion); },
-                    }))
-                    : [],
-                footnote: !participantCount
-                    ? 'You can always switch to a Gallery template if a blank start feels too open-ended.'
-                    : progress.nextStep === 'stage'
-                        ? 'Add one concrete step first. You can refine description and policies after the flow is visible.'
-                        : 'Once the first transition exists, you can keep adding parallel steps, artifacts, and review loops.',
-            },
+            firstRun,
+            laneLabels: Object.fromEntries(lanes.map((lane, index) => [lane.key, { ...lane, row: index }])),
+            outcomes: stageCount ? {
+                startRow: lanes.length,
+                count: PROTOCOL_TERMINAL_TARGETS.length,
+                label: Kit.dict.label('protocol.workflow.outcomes'),
+                hint: Kit.dict.label('protocol.workflow.outcomes_hint'),
+            } : null,
         };
     }
 
@@ -1312,7 +1567,9 @@ function renderProtocolWorkspace(container) {
             accessorySections: workflow.accessorySections,
             firstRun: workflow.firstRun,
             mode: _currentWorkflowMode(),
-            connectState,
+            editorMode,
+            laneLabels: workflow.laneLabels,
+            outcomes: workflow.outcomes,
             nodeStates: rehearsal.runId ? _rehearsalNodeStates() : {},
             selection: {
                 kind: selection.sectionKey === 'transitions'
@@ -1327,7 +1584,7 @@ function renderProtocolWorkspace(container) {
                 id: selection.nodeKey,
             },
             onSelect: ({ kind, id }) => {
-                if (connectState.fromStageKey && (kind === 'stage' || kind === 'terminal')) {
+                if (editorMode.kind === 'connect' && (kind === 'stage' || kind === 'terminal')) {
                     _connectTransitionTarget(id);
                     return;
                 }
@@ -1344,7 +1601,7 @@ function renderProtocolWorkspace(container) {
                 }
                 render();
             },
-            onBeginConnect: (stageId) => _beginTransitionFromStage(stageId),
+            onBeginConnect: (stageId) => _startConnectMode(stageId),
             onCancelConnect: _cancelTransitionConnect,
             onMutate: ({ type, nodeId, targetId }) => {
                 if (type === 'undo') {
@@ -1364,40 +1621,37 @@ function renderProtocolWorkspace(container) {
 
     function _detailsEl() {
         const doc = draft.document;
-        const workflow = _workflowData();
-        if (selection.sectionKey === 'overview' || !selection.nodeKey) {
-            if (workflow.firstRun?.active) {
-                return null;
-            }
-            return Kit.detailsPanel({
-                target: {
-                    description: draft.description,
-                    single_active_writer: Boolean(doc.policies?.single_active_writer ?? true),
-                    max_review_rounds: Number(doc.policies?.max_review_rounds || 5) || 5,
-                },
-                surfaceKey: 'protocol',
-                onCommit: _commitOverview,
-                schema: [
-                    { key: 'description', kind: 'textarea', rows: 4 },
-                    { key: 'single_active_writer', kind: 'checkbox', labelKey: 'protocol.policy.single_active_writer.label', helpKey: 'protocol.policy.single_active_writer.help' },
-                    { key: 'max_review_rounds', kind: 'text', labelKey: 'protocol.policy.max_review_rounds.label', helpKey: 'protocol.policy.max_review_rounds.help' },
-                ],
-            });
-        }
-        if (selection.sectionKey === 'participants') {
-            const target = (doc.participants || []).find((item) => String(item.participant_key) === selection.nodeKey);
-            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            const selectorTarget = {
-                ...target,
-                selector_kind: String(target.selector?.kind || ''),
-                selector_value: String(target.selector?.value || ''),
-            };
+        const readOnly = editorMode.kind === 'rehearse';
+        const applyReadOnly = (schema) => (!readOnly
+            ? schema
+            : schema.map((field) => ({
+                ...field,
+                disabled: field.kind === 'checkbox' || field.kind === 'select' ? true : field.disabled,
+                readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
+            })));
+        const participantOptions = [
+            { value: '', label: '(choose a role)' },
+            ...((doc.participants || []).map((p) => ({
+                value: String(p.participant_key || ''),
+                label: String(p.display_name || p.participant_key || ''),
+            }))),
+        ];
+        const kindOptions = _manifestStageKindOptions().map((value) => ({
+            value,
+            label: Kit.dict.label(`protocol.stage.kind.${value}`, value),
+        }));
+        const artifactOptions = (doc.artifacts || []).map((item) => ({
+            value: String(item.artifact_key || ''),
+            label: String(item.display_name || item.artifact_key || ''),
+        }));
+
+        if (editorMode.kind === 'insert-role') {
             const wrap = document.createElement('div');
             wrap.className = 'kit-authoring-canvas-column';
             wrap.appendChild(Kit.detailsPanel({
-                target: selectorTarget,
+                target: pendingRole,
                 surfaceKey: 'protocol.participant',
-                onCommit: (_t, key, value) => _commitNodeField('participant', selection.nodeKey, key, value),
+                onCommit: _commitPendingRoleField,
                 schema: [
                     { key: 'display_name', kind: 'text', required: true },
                     { key: 'participant_key', kind: 'text' },
@@ -1414,45 +1668,38 @@ function renderProtocolWorkspace(container) {
                     { key: 'selector_value', kind: 'text', labelKey: 'protocol.participant.selector_value.label', helpKey: 'protocol.participant.selector_value.help', placeholderKey: 'protocol.participant.selector_value.placeholder' },
                     { key: 'instructions', kind: 'textarea', rows: 4 },
                 ],
+                actions: [
+                    { label: 'Create role', tone: 'btn-primary', onClick: _confirmRoleInsert },
+                    { label: 'Cancel', onClick: _cancelRoleInsert },
+                ],
             }));
-            const currentQuery = selection.nodeKey === selectorPreview.participantKey
-                ? selectorPreview.query
-                : _selectorString(target.selector || null);
             wrap.appendChild(Kit.selectorResolutionPreview({
-                selector: currentQuery,
-                candidates: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.candidates : [],
-                busy: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.busy : false,
-                message: selection.nodeKey === selectorPreview.participantKey
+                selector: selectorPreview.participantKey === '__draft__'
+                    ? selectorPreview.query
+                    : _selectorString(_selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value)),
+                candidates: selectorPreview.participantKey === '__draft__' ? selectorPreview.candidates : [],
+                busy: selectorPreview.participantKey === '__draft__' ? selectorPreview.busy : false,
+                message: selectorPreview.participantKey === '__draft__'
                     ? selectorPreview.message
-                    : Kit.dict.label('protocol.participant.selector_hint'),
-                suggestions: _participantSelectorSuggestions(target),
-                onSuggestionSelect: (value) => { void _applyParticipantSuggestion(selection.nodeKey, value); },
-                onResolve: (value) => { void _resolveSelectorPreview(selection.nodeKey, value); },
+                    : 'Preview who would match this role before you add it.',
+                suggestions: _participantSelectorSuggestions(),
+                onSuggestionSelect: (value) => { _applyRoleDraftSuggestion(value); },
+                onResolve: (value) => {
+                    const parsed = _selectorFieldsFromString(value);
+                    pendingRole.selector_kind = parsed.kind;
+                    pendingRole.selector_value = parsed.value;
+                    render();
+                    void _resolveSelectorPreview('__draft__', value);
+                },
             }));
             return wrap;
         }
-        if (selection.sectionKey === 'stages') {
-            const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
-            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            const participantOptions = [
-                { value: '', label: '(none yet)' },
-                ...((doc.participants || []).map((p) => ({
-                    value: String(p.participant_key || ''),
-                    label: String(p.display_name || p.participant_key || ''),
-                }))),
-            ];
-            const kindOptions = _manifestStageKindOptions().map((value) => ({
-                value,
-                label: Kit.dict.label(`protocol.stage.kind.${value}`, value),
-            }));
-            const artifactOptions = (doc.artifacts || []).map((item) => ({
-                value: String(item.artifact_key || ''),
-                label: String(item.display_name || item.artifact_key || ''),
-            }));
+
+        if (editorMode.kind === 'insert-stage') {
             return Kit.detailsPanel({
-                target,
+                target: pendingStage,
                 surfaceKey: 'protocol.stage',
-                onCommit: (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
+                onCommit: _commitPendingStageField,
                 schema: [
                     { key: 'display_name', kind: 'text', required: true },
                     { key: 'stage_key', kind: 'text' },
@@ -1465,9 +1712,125 @@ function renderProtocolWorkspace(container) {
                     { key: 'timeout_seconds', kind: 'text' },
                 ],
                 actions: [
+                    { label: 'Create step', tone: 'btn-primary', onClick: _confirmStageInsert },
+                    { label: 'Cancel', onClick: _cancelStageInsert },
+                ],
+            });
+        }
+
+        if (editorMode.kind === 'connect') {
+            const sourceStage = (doc.stages || []).find((item) => String(item.stage_key || '') === String(editorMode.sourceStageKey || ''));
+            const wrap = document.createElement('div');
+            wrap.className = 'kit-authoring-canvas-column';
+            wrap.appendChild(Kit.detailsPanel({
+                target: {
+                    source_stage: String(sourceStage?.display_name || sourceStage?.stage_key || ''),
+                    decision: String(editorMode.decision || ''),
+                },
+                surfaceKey: 'protocol.transition',
+                onCommit: _commitConnectField,
+                schema: [
+                    { key: 'source_stage', kind: 'text', label: 'From step', help: 'This transition starts from the selected step.', readOnly: true },
+                    { key: 'decision', kind: 'select', options: _decisionOptionsForStage(sourceStage, editorMode.decision), labelKey: 'protocol.transition.decision.label', helpKey: 'protocol.transition.decision.help' },
+                ],
+                actions: [
+                    { label: 'Cancel', onClick: _cancelTransitionConnect },
+                ],
+            }));
+            const hint = document.createElement('p');
+            hint.className = 'quiet-note';
+            hint.textContent = 'Choose the next step or a finish outcome in the graph to complete this transition.';
+            wrap.appendChild(hint);
+            return wrap;
+        }
+
+        if (selection.sectionKey === 'overview' || !selection.nodeKey) {
+            return Kit.detailsPanel({
+                target: {
+                    description: draft.description,
+                    single_active_writer: Boolean(doc.policies?.single_active_writer ?? true),
+                    max_review_rounds: Number(doc.policies?.max_review_rounds || 5) || 5,
+                },
+                surfaceKey: 'protocol',
+                onCommit: readOnly ? null : _commitOverview,
+                schema: applyReadOnly([
+                    { key: 'description', kind: 'textarea', rows: 4 },
+                    ...((doc.stages || []).length ? [
+                        { key: 'single_active_writer', kind: 'checkbox', labelKey: 'protocol.policy.single_active_writer.label', helpKey: 'protocol.policy.single_active_writer.help' },
+                        { key: 'max_review_rounds', kind: 'text', labelKey: 'protocol.policy.max_review_rounds.label', helpKey: 'protocol.policy.max_review_rounds.help' },
+                    ] : []),
+                ]),
+            });
+        }
+        if (selection.sectionKey === 'participants') {
+            const target = (doc.participants || []).find((item) => String(item.participant_key) === selection.nodeKey);
+            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+            const selectorTarget = {
+                ...target,
+                selector_kind: String(target.selector?.kind || ''),
+                selector_value: String(target.selector?.value || ''),
+            };
+            const wrap = document.createElement('div');
+            wrap.className = 'kit-authoring-canvas-column';
+            wrap.appendChild(Kit.detailsPanel({
+                target: selectorTarget,
+                surfaceKey: 'protocol.participant',
+                onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('participant', selection.nodeKey, key, value),
+                schema: applyReadOnly([
+                    { key: 'display_name', kind: 'text', required: true },
+                    { key: 'participant_key', kind: 'text' },
+                    {
+                        key: 'selector_kind',
+                        kind: 'select',
+                        options: (authoringManifest?.selector_kind_options || ['skill', 'role', 'agent']).map((value) => ({
+                            value,
+                            label: String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1),
+                        })),
+                        labelKey: 'protocol.participant.selector_kind.label',
+                        helpKey: 'protocol.participant.selector_kind.help',
+                    },
+                    { key: 'selector_value', kind: 'text', labelKey: 'protocol.participant.selector_value.label', helpKey: 'protocol.participant.selector_value.help', placeholderKey: 'protocol.participant.selector_value.placeholder' },
+                    { key: 'instructions', kind: 'textarea', rows: 4 },
+                ]),
+            }));
+            const currentQuery = selection.nodeKey === selectorPreview.participantKey
+                ? selectorPreview.query
+                : _selectorString(target.selector || null);
+            wrap.appendChild(Kit.selectorResolutionPreview({
+                selector: currentQuery,
+                candidates: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.candidates : [],
+                busy: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.busy : false,
+                message: selection.nodeKey === selectorPreview.participantKey
+                    ? selectorPreview.message
+                    : Kit.dict.label('protocol.participant.selector_hint'),
+                suggestions: _participantSelectorSuggestions(target),
+                onSuggestionSelect: readOnly ? null : (value) => { void _applyParticipantSuggestion(selection.nodeKey, value); },
+                onResolve: (value) => { void _resolveSelectorPreview(selection.nodeKey, value); },
+            }));
+            return wrap;
+        }
+        if (selection.sectionKey === 'stages') {
+            const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
+            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+            return Kit.detailsPanel({
+                target,
+                surfaceKey: 'protocol.stage',
+                onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
+                schema: applyReadOnly([
+                    { key: 'display_name', kind: 'text', required: true },
+                    { key: 'stage_key', kind: 'text' },
+                    { key: 'participant_key', kind: 'select', options: participantOptions },
+                    { key: 'stage_kind', kind: 'select', options: kindOptions },
+                    { key: 'inputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.inputs.label', helpKey: 'protocol.stage.inputs.help' },
+                    { key: 'outputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.outputs.label', helpKey: 'protocol.stage.outputs.help' },
+                    { key: 'instructions', kind: 'textarea', rows: 4 },
+                    { key: 'max_rounds', kind: 'text' },
+                    { key: 'timeout_seconds', kind: 'text' },
+                ]),
+                actions: readOnly ? [] : [
                     {
                         label: Kit.dict.label('protocol.stage.connect'),
-                        onClick: () => _beginTransitionFromStage(selection.nodeKey),
+                        onClick: () => _startConnectMode(selection.nodeKey),
                     },
                 ],
             });
@@ -1475,6 +1838,7 @@ function renderProtocolWorkspace(container) {
         if (selection.sectionKey === 'transitions') {
             const target = _transitionEntries(doc).find((item) => String(item.id || '') === selection.nodeKey);
             if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol', emptyHint: Kit.dict.label('protocol.details.transition.empty') });
+            const sourceStage = (doc.stages || []).find((stage) => String(stage.stage_key || '') === String(target.from_stage_key || ''));
             const targetOptions = [
                 ...((doc.stages || []).map((stage) => ({
                     value: String(stage.stage_key || ''),
@@ -1492,13 +1856,13 @@ function renderProtocolWorkspace(container) {
                     target_key: String(target.target_key || ''),
                 },
                 surfaceKey: 'protocol.transition',
-                onCommit: (_t, key, value) => _commitTransitionField(selection.nodeKey, key, value),
-                schema: [
+                onCommit: readOnly ? null : (_t, key, value) => _commitTransitionField(selection.nodeKey, key, value),
+                schema: applyReadOnly([
                     { key: 'source_stage', kind: 'text', label: 'From stage', help: 'This transition leaves the selected stage.', readOnly: true },
-                    { key: 'decision', kind: 'text', labelKey: 'protocol.transition.decision.label', helpKey: 'protocol.transition.decision.help', placeholderKey: 'protocol.transition.decision.placeholder' },
+                    { key: 'decision', kind: 'select', options: _decisionOptionsForStage(sourceStage, target.decision), labelKey: 'protocol.transition.decision.label', helpKey: 'protocol.transition.decision.help' },
                     { key: 'target_key', kind: 'select', options: targetOptions, labelKey: 'protocol.transition.target.label', helpKey: 'protocol.transition.target.help' },
-                ],
-                actions: [
+                ]),
+                actions: readOnly ? [] : [
                     {
                         label: Kit.dict.label('protocol.transition.delete'),
                         tone: 'btn-danger',
@@ -1518,15 +1882,15 @@ function renderProtocolWorkspace(container) {
             return Kit.detailsPanel({
                 target,
                 surfaceKey: 'protocol.artifact',
-                onCommit: (_t, key, value) => _commitNodeField('artifact', selection.nodeKey, key, value),
-                schema: [
+                onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('artifact', selection.nodeKey, key, value),
+                schema: applyReadOnly([
                     { key: 'display_name', kind: 'text', required: true },
                     { key: 'artifact_key', kind: 'text' },
                     { key: 'kind', kind: 'select', options: kindOptions },
                     { key: 'path', kind: 'text', labelKey: 'protocol.artifact.path.label', helpKey: 'protocol.artifact.path.help', placeholderKey: 'protocol.artifact.path.placeholder' },
                     { key: 'description', kind: 'textarea', rows: 3 },
                     { key: 'verify', kind: 'checkbox', labelKey: 'protocol.artifact.verify.label', helpKey: 'protocol.artifact.verify.help' },
-                ],
+                ]),
             });
         }
         return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
@@ -1553,15 +1917,18 @@ function renderProtocolWorkspace(container) {
                 },
             });
         }
-        const workflow = _workflowData();
-        if (workflow.firstRun?.active && !normalized.length) {
-            return null;
-        }
         const validation = currentProtocol?.validation;
         if (!validation && !normalized.length) return null;
         const issues = Array.isArray(validation?.issues) ? validation.issues : [];
-        normalized.push(...(issues.length
-            ? issues.map((item) => ({
+        const filteredIssues = issues.filter((item) => {
+            const code = String(item.code || '');
+            if (!(draft.document.stages || []).length && ["metadata.slug_required", "participants.required", "stages.required"].includes(code)) {
+                return false;
+            }
+            return true;
+        });
+        normalized.push(...(filteredIssues.length
+            ? filteredIssues.map((item) => ({
                 severity: String(item.severity || 'error'),
                 message: String(item.message || ''),
                 path: String(item.path || ''),

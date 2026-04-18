@@ -59,6 +59,7 @@ from octopus_sdk.protocols import (
     protocol_review_edge_counts,
     validate_protocol_document,
 )
+from octopus_sdk.protocols.documents import draft_protocol_document_data
 from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import utcnow_iso
@@ -694,8 +695,8 @@ class ProtocolPostgresAdapter:
                 ),
             )
 
-    def _draft_protocol_document(self, row: Mapping[str, object]) -> ProtocolDefinitionDocumentRecord:
-        return canonical_protocol_document(row.get("draft_definition_json") or {})
+    def _draft_protocol_document(self, row: Mapping[str, object]) -> ProtocolDefinitionDocumentRecord | None:
+        return self._strict_protocol_document(row.get("draft_definition_json") or {})
 
     @staticmethod
     def _strict_protocol_document(value: object) -> ProtocolDefinitionDocumentRecord | None:
@@ -1552,8 +1553,7 @@ class ProtocolPostgresAdapter:
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
         protocol_key = str(protocol_id or uuid.uuid4().hex).strip()
-        raw_definition = definition_json.as_dict()
-        document = self._strict_protocol_document(raw_definition)
+        raw_definition = draft_protocol_document_data(definition_json.as_dict())
         now = utcnow_iso()
         with self._connect() as conn, write_tx(conn):
             existing_row = self._protocol_row(conn, protocol_key)
@@ -1572,20 +1572,21 @@ class ProtocolPostgresAdapter:
                         draft_document=current_document,
                         validation=current_validation,
                     )
+            current_metadata = dict(raw_definition.get("metadata") or {})
             normalized_slug = str(
                 slug
-                or (document.slug if document is not None else "")
+                or current_metadata.get("slug", "")
                 or (existing_row.get("slug", "") if existing_row is not None else "")
             ).strip() or f"draft-{protocol_key[:8]}"
             normalized_name = str(
                 display_name
-                or (document.display_name if document is not None else "")
+                or current_metadata.get("display_name", "")
                 or (existing_row.get("display_name", "") if existing_row is not None else "")
                 or ""
             ).strip()
             normalized_description = str(
                 description
-                or (document.description if document is not None else "")
+                or current_metadata.get("description", "")
                 or (existing_row.get("description", "") if existing_row is not None else "")
                 or ""
             ).strip()
@@ -1595,9 +1596,10 @@ class ProtocolPostgresAdapter:
                 display_name=display_name,
                 description=description,
             )
+            raw_definition = draft_protocol_document_data(raw_definition)
             validation = validate_protocol_document(raw_definition, mode="draft")
-            document = self._strict_protocol_document(raw_definition)
-            raw_hash = protocol_definition_content_hash(document) if document is not None else hashlib.sha256(
+            strict_document = self._strict_protocol_document(raw_definition)
+            raw_hash = protocol_definition_content_hash(strict_document) if strict_document is not None else hashlib.sha256(
                 json.dumps(raw_definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest()
             existing_slug_row = self._protocol_row_for_slug(conn, normalized_slug)
@@ -1671,7 +1673,7 @@ class ProtocolPostgresAdapter:
                 message="Protocol draft saved.",
                 protocol=self._protocol_record_from_row(row),
                 draft_definition_json=RegistryJsonRecord.model_validate(raw_definition),
-                draft_document=document,
+                draft_document=strict_document,
                 validation=validation,
             )
 

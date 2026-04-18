@@ -1390,7 +1390,6 @@ function renderProtocolWorkspace(container) {
         }
 
         const headerEl = _lifecycleHeaderEl();
-        _lifecycleHeaderRef = headerEl;
 
         const workspace = document.createElement('div');
         workspace.className = 'kit-authoring-workspace';
@@ -1411,7 +1410,8 @@ function renderProtocolWorkspace(container) {
         }
         workspace.appendChild(detailsColumn);
 
-        UI.reconcileChildren(contentEl, [headerEl, workspace]);
+        contentEl.replaceChildren(headerEl, workspace);
+        _lifecycleHeaderRef = headerEl;
     }
 
     async function loadProtocols({ quiet = false } = {}) {

@@ -1227,8 +1227,13 @@ function renderProtocolWorkspace(container) {
                     tone: 'btn-small',
                     onClick: () => _addNode('stages'),
                 },
+                ...(stageCount ? [{
+                    label: Kit.dict.label('protocol.artifacts.add'),
+                    tone: 'btn-small',
+                    onClick: () => _addNode('artifacts'),
+                }] : []),
             ],
-            accessorySections: (artifactItems.length || hasStages || participantCount > 0)
+            accessorySections: artifactItems.length
                 ? [
                     {
                         key: 'artifacts',
@@ -1565,6 +1570,9 @@ function renderProtocolWorkspace(container) {
                 severity: 'error',
                 message: String(text || ''),
             }))));
+        if (!normalized.length) {
+            return null;
+        }
         return Kit.validationSurface({ issues: normalized, layout: 'summary' });
     }
 

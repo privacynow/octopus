@@ -3157,6 +3157,12 @@ select {
     font-size: var(--text-xs);
 }
 
+.kit-workflow-toolbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
 .kit-workflow-first-run {
     display: flex;
     flex-direction: column;

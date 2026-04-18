@@ -1174,6 +1174,18 @@ function renderProtocolWorkspace(container) {
             lanes,
             nodes,
             edges,
+            toolbarActions: [
+                {
+                    label: Kit.dict.label('protocol.participants.add'),
+                    tone: 'btn-small',
+                    onClick: () => _addNode('participants'),
+                },
+                {
+                    label: Kit.dict.label('protocol.stages.add'),
+                    tone: 'btn-small',
+                    onClick: () => _addNode('stages'),
+                },
+            ],
             accessorySections: [
                 {
                     key: 'artifacts',
@@ -1223,6 +1235,7 @@ function renderProtocolWorkspace(container) {
             lanes: workflow.lanes,
             nodes: workflow.nodes,
             edges: workflow.edges,
+            toolbarActions: workflow.toolbarActions,
             accessorySections: workflow.accessorySections,
             firstRun: workflow.firstRun,
             mode,

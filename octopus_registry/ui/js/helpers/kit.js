@@ -916,6 +916,7 @@ window.Kit = (() => {
         mode = 'graph',
         connectState = null,
         accessorySections = [],
+        toolbarActions = [],
         nodeStates = {},
     } = {}) {
         const root = document.createElement('section');
@@ -976,6 +977,22 @@ window.Kit = (() => {
             cancelBtn.textContent = dictValue('protocol.transition.cancel_connect', 'Cancel transition');
             cancelBtn.addEventListener('click', onCancelConnect);
             toolbar.appendChild(cancelBtn);
+        }
+        const actions = Array.isArray(toolbarActions) ? toolbarActions.filter(Boolean) : [];
+        if (actions.length) {
+            const actionBar = document.createElement('div');
+            actionBar.className = 'kit-workflow-toolbar-actions';
+            actions.forEach((action) => {
+                if (!action || typeof action.onClick !== 'function') return;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = ['btn', action.tone || 'btn-small'].filter(Boolean).join(' ');
+                btn.textContent = String(action.label || '');
+                btn.disabled = Boolean(action.disabled);
+                btn.addEventListener('click', action.onClick);
+                actionBar.appendChild(btn);
+            });
+            toolbar.appendChild(actionBar);
         }
         root.appendChild(toolbar);
 

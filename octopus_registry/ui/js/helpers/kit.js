@@ -76,9 +76,17 @@ window.Kit = (() => {
         'protocol.participant.instructions.label': 'Instructions',
         'protocol.participant.instructions.help': 'What this participant is expected to do across the workflow.',
         'protocol.participant.instructions.placeholder': 'Instructions shared with this participant…',
-        'protocol.participant.required_skills.label': 'Required skills',
-        'protocol.participant.required_skills.help': 'Comma-separated skill slugs — leave blank if anyone can do it.',
-        'protocol.participant.required_skills.placeholder': 'code-review, sql',
+        'protocol.participant.selector_kind.label': 'Assignment rule',
+        'protocol.participant.selector_kind.help': 'How this protocol should find someone for this role at runtime.',
+        'protocol.participant.selector_kind.placeholder': 'Choose how to match this participant…',
+        'protocol.participant.selector_value.label': 'Rule value',
+        'protocol.participant.selector_value.help': 'For example: a skill slug, a role name, or an agent slug.',
+        'protocol.participant.selector_value.placeholder': 'e.g. planning, reviewer, m1',
+        'protocol.participant.selector_preview.label': 'Who matches right now',
+        'protocol.participant.selector_preview.help': 'Preview uses the shared registry selector resolution path. It is informational while you author the protocol.',
+        'protocol.participant.selector_none': 'No rule yet',
+        'protocol.participant.selector_current': 'Currently matches',
+        'protocol.participant.selector_hint': 'Build a rule first, then preview who currently matches it.',
 
         // Details — stages
         'protocol.stages.section': 'Stages',
@@ -103,6 +111,12 @@ window.Kit = (() => {
         'protocol.stage.timeout_seconds.label': 'Timeout (seconds)',
         'protocol.stage.timeout_seconds.help': 'Abandon the stage after this long (0 = no timeout).',
         'protocol.stage.timeout_seconds.placeholder': '0',
+        'protocol.stage.inputs.label': 'Reads artifacts',
+        'protocol.stage.inputs.help': 'Artifacts this stage needs before it starts.',
+        'protocol.stage.outputs.label': 'Writes artifacts',
+        'protocol.stage.outputs.help': 'Artifacts this stage produces or updates.',
+        'protocol.stage.connect': 'Add transition',
+        'protocol.stage.connect_help': 'Pick what should happen after this stage, then click the next stage or outcome.',
 
         // Details — artifacts
         'protocol.artifacts.section': 'Artifacts',
@@ -118,9 +132,33 @@ window.Kit = (() => {
         'protocol.artifact.kind.help': 'What the artifact lives in.',
         'protocol.artifact.description.label': 'Description',
         'protocol.artifact.description.placeholder': 'What the artifact contains…',
+        'protocol.artifact.path.label': 'Workspace path',
+        'protocol.artifact.path.help': 'Relative path inside the workspace for file-based artifacts.',
+        'protocol.artifact.path.placeholder': 'docs/review-notes.md',
+        'protocol.artifact.verify.label': 'Verify outputs',
+        'protocol.artifact.verify.help': 'Keep verification on unless this artifact is intentionally advisory only.',
+
+        // Details — transitions / policies
+        'protocol.transition.details.label': 'Transition',
+        'protocol.transition.decision.label': 'When this happens',
+        'protocol.transition.decision.help': 'Label the outcome that sends the workflow to the next step.',
+        'protocol.transition.decision.placeholder': 'completed',
+        'protocol.transition.target.label': 'Next step',
+        'protocol.transition.target.help': 'Choose the next stage or one of the terminal outcomes.',
+        'protocol.transition.delete': 'Remove transition',
+        'protocol.transition.target.complete': 'Finish successfully',
+        'protocol.transition.target.failed': 'Finish as failed',
+        'protocol.transition.target.cancelled': 'Finish as cancelled',
+        'protocol.transition.connecting': 'Click the next stage or outcome to finish this transition.',
+        'protocol.transition.cancel_connect': 'Cancel transition',
+        'protocol.policy.single_active_writer.label': 'One active writer at a time',
+        'protocol.policy.single_active_writer.help': 'Prevent multiple write-capable stages from running in parallel.',
+        'protocol.policy.max_review_rounds.label': 'Max review loops',
+        'protocol.policy.max_review_rounds.help': 'How many review loops the protocol allows before it must finish or fail.',
 
         // Details — overview
         'protocol.details.overview.empty': 'Select a participant, stage, or artifact in the canvas — or edit the name and slug above.',
+        'protocol.details.transition.empty': 'Select a transition to edit what happens next.',
 
         // Empty / first-run / onboarding
         'protocol.canvas.empty.title': 'Design your workflow',
@@ -130,6 +168,10 @@ window.Kit = (() => {
         'protocol.firstrun.participant': 'Add the first participant.',
         'protocol.firstrun.stage': 'Add the first stage to what this participant does.',
         'protocol.firstrun.transition': 'Connect stages to say what happens when each finishes.',
+        'protocol.workflow.outcomes': 'Outcomes',
+        'protocol.workflow.artifacts': 'Artifacts',
+        'protocol.workflow.narrow.empty': 'No stages yet.',
+        'protocol.workflow.drag_hint': 'Drag stages to reorder them in the workflow.',
 
         // Draft state chip
         'draftchip.idle': 'Saved',
@@ -472,6 +514,7 @@ window.Kit = (() => {
         surfaceKey = 'protocol',
         onCommit = null,
         emptyHint = '',
+        actions = [],
     } = {}) {
         const panel = document.createElement('aside');
         panel.className = 'kit-details-panel';
@@ -514,6 +557,33 @@ window.Kit = (() => {
                     option.textContent = String(opt.label || opt.value);
                     control.appendChild(option);
                 });
+            } else if (kind === 'checklist') {
+                control = document.createElement('div');
+                control.className = 'kit-details-checklist';
+                const selectedValues = Array.isArray(currentValue)
+                    ? currentValue.map((item) => String(item || ''))
+                    : [];
+                (field.options || []).forEach((opt) => {
+                    const itemLabel = document.createElement('label');
+                    itemLabel.className = 'kit-details-checklist-item';
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.value = String(opt.value);
+                    checkbox.checked = selectedValues.includes(String(opt.value));
+                    if (field.disabled || field.readOnly) checkbox.disabled = true;
+                    if (typeof onCommit === 'function') {
+                        checkbox.addEventListener('change', () => {
+                            const values = Array.from(control.querySelectorAll('input[type="checkbox"]:checked'))
+                                .map((el) => String(el.value || ''));
+                            onCommit(target, field.key, values);
+                        });
+                    }
+                    const text = document.createElement('span');
+                    text.textContent = String(opt.label || opt.value);
+                    itemLabel.appendChild(checkbox);
+                    itemLabel.appendChild(text);
+                    control.appendChild(itemLabel);
+                });
             } else if (kind === 'checkbox') {
                 control = document.createElement('input');
                 control.type = 'checkbox';
@@ -526,7 +596,10 @@ window.Kit = (() => {
             label.htmlFor = control.id;
 
             // Placeholder / value assignment honors the blank-first-paint invariant.
-            if (kind === 'checkbox') {
+            if (kind === 'checklist') {
+                control.id = '';
+                label.htmlFor = '';
+            } else if (kind === 'checkbox') {
                 control.checked = Boolean(currentValue);
             } else {
                 const placeholderText = dict.label(placeholderKey, field.placeholder || '');
@@ -540,8 +613,10 @@ window.Kit = (() => {
             }
             if (field.required) control.required = true;
             if (field.maxLength) control.maxLength = Number(field.maxLength);
+            if (field.disabled) control.disabled = true;
+            if (field.readOnly && kind !== 'checkbox' && kind !== 'select') control.readOnly = true;
 
-            if (typeof onCommit === 'function') {
+            if (typeof onCommit === 'function' && kind !== 'checklist') {
                 const commit = () => {
                     const value = kind === 'checkbox' ? control.checked : control.value;
                     onCommit(target, field.key, value);
@@ -564,6 +639,23 @@ window.Kit = (() => {
 
             panel.appendChild(row);
         });
+
+        const actionItems = Array.isArray(actions) ? actions.filter(Boolean) : [];
+        if (actionItems.length) {
+            const actionsRow = document.createElement('div');
+            actionsRow.className = 'kit-details-actions';
+            actionItems.forEach((action) => {
+                if (!action || typeof action.onClick !== 'function') return;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = ['btn', action.tone || ''].filter(Boolean).join(' ');
+                btn.textContent = String(action.label || 'Action');
+                btn.disabled = Boolean(action.disabled);
+                btn.addEventListener('click', () => action.onClick(target));
+                actionsRow.appendChild(btn);
+            });
+            panel.appendChild(actionsRow);
+        }
 
         return panel;
     }
@@ -692,17 +784,12 @@ window.Kit = (() => {
     }
 
     // -----------------------------------------------------------------------
-    // Canvas
+    // Section list canvas
     //
-    // Contract: { sections: [{ key, title, nodes, onAdd?, addLabel?, empty?,
-    //                         firstRunHint? }], selection, onSelect }
-    //
-    // A single scroll surface with labeled groups of selectable node cards.
-    // Fluid — everything edits through the details panel; no in-place forms.
-    // When a section is empty and carries a firstRunHint, the hint is shown
-    // as a placeholder card that also triggers onAdd.
+    // Grouped list primitive retained for non-graph surfaces. Protocol
+    // authoring no longer consumes it; see workflowCanvas below.
     // -----------------------------------------------------------------------
-    function canvas({
+    function sectionListCanvas({
         sections = [],
         selection = null,
         onSelect = null,
@@ -727,7 +814,11 @@ window.Kit = (() => {
                 add.type = 'button';
                 add.className = 'btn btn-small';
                 add.textContent = String(section.addLabel || '+ Add');
-                add.addEventListener('click', section.onAdd);
+                add.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    section.onAdd();
+                });
                 head.appendChild(add);
             }
             group.appendChild(head);
@@ -743,7 +834,11 @@ window.Kit = (() => {
                 placeholder.textContent = String(hint || 'Nothing here yet.');
                 if (typeof section.onAdd === 'function' && section.firstRunHint) {
                     placeholder.classList.add('is-actionable');
-                    placeholder.addEventListener('click', section.onAdd);
+                    placeholder.addEventListener('click', (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        section.onAdd();
+                    });
                 }
                 list.appendChild(placeholder);
             } else {
@@ -755,25 +850,36 @@ window.Kit = (() => {
                         selection
                         && String(selection.sectionKey || selection.kind || '') === section.key
                         && String(selection.nodeKey || selection.key || '') === nodeKey;
-                    li.className = `kit-canvas-node${isSelected ? ' is-selected' : ''}`;
-                    li.dataset.nodeKey = nodeKey;
+                    li.className = `kit-canvas-node-wrap${isSelected ? ' is-selected' : ''}`;
+                    // Stable key for morphdom reconciliation (helpers/ui.js getNodeKey uses dataset.key).
+                    li.dataset.key = `canvas-${section.key}-${nodeKey}`;
+
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'kit-canvas-node';
+                    btn.dataset.nodeKey = nodeKey;
 
                     const label = document.createElement('div');
                     label.className = 'kit-canvas-node-label';
                     label.textContent = String(node.label || nodeKey);
-                    li.appendChild(label);
+                    btn.appendChild(label);
 
                     if (node.sublabel) {
                         const sub = document.createElement('div');
                         sub.className = 'kit-canvas-node-sublabel';
                         sub.textContent = String(node.sublabel);
-                        li.appendChild(sub);
+                        btn.appendChild(sub);
                     }
 
                     if (typeof onSelect === 'function') {
-                        li.addEventListener('click', () => onSelect({ sectionKey: section.key, nodeKey }));
+                        btn.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onSelect({ sectionKey: section.key, nodeKey });
+                        });
                     }
 
+                    li.appendChild(btn);
                     list.appendChild(li);
                 });
             }
@@ -781,6 +887,377 @@ window.Kit = (() => {
             group.appendChild(list);
             root.appendChild(group);
         });
+
+        return root;
+    }
+
+    function workflowCanvas({
+        lanes = [],
+        nodes = [],
+        edges = [],
+        selection = null,
+        onSelect = null,
+        onBeginConnect = null,
+        onCancelConnect = null,
+        onMutate = null,
+        firstRun = null,
+        mode = 'graph',
+        connectState = null,
+        accessorySections = [],
+        nodeStates = {},
+    } = {}) {
+        const root = document.createElement('section');
+        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
+        root.tabIndex = 0;
+
+        if (firstRun && firstRun.active) {
+            const card = document.createElement('div');
+            card.className = 'kit-workflow-first-run';
+
+            const title = document.createElement('h3');
+            title.className = 'kit-workflow-first-run-title';
+            title.textContent = String(firstRun.title || dictValue('protocol.canvas.empty.title', 'Design your workflow'));
+            card.appendChild(title);
+
+            const body = document.createElement('p');
+            body.className = 'kit-workflow-first-run-body';
+            body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Start by adding the first participant.'));
+            card.appendChild(body);
+
+            const actions = document.createElement('div');
+            actions.className = 'kit-workflow-first-run-actions';
+            (Array.isArray(firstRun.actions) ? firstRun.actions : []).forEach((action) => {
+                if (!action || typeof action.onClick !== 'function') return;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = ['btn', action.tone || 'btn-primary'].filter(Boolean).join(' ');
+                btn.textContent = String(action.label || 'Continue');
+                btn.addEventListener('click', action.onClick);
+                actions.appendChild(btn);
+            });
+            card.appendChild(actions);
+            root.appendChild(card);
+        }
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'kit-workflow-toolbar';
+        const hint = document.createElement('div');
+        hint.className = 'kit-workflow-toolbar-hint';
+        hint.textContent = connectState?.fromStageKey
+            ? dictValue('protocol.transition.connecting', 'Click the next stage or outcome to finish this transition.')
+            : dictValue('protocol.workflow.drag_hint', 'Drag stages to reorder them in the workflow.');
+        toolbar.appendChild(hint);
+        if (connectState?.fromStageKey && typeof onCancelConnect === 'function') {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn btn-small';
+            cancelBtn.textContent = dictValue('protocol.transition.cancel_connect', 'Cancel transition');
+            cancelBtn.addEventListener('click', onCancelConnect);
+            toolbar.appendChild(cancelBtn);
+        }
+        root.appendChild(toolbar);
+
+        function _orderedNodes() {
+            return [...nodes].sort((a, b) => {
+                const aCol = Number(a.column || 0);
+                const bCol = Number(b.column || 0);
+                if (aCol !== bCol) return aCol - bCol;
+                const aRow = Number(a.row || 0);
+                const bRow = Number(b.row || 0);
+                if (aRow !== bRow) return aRow - bRow;
+                return String(a.id || '').localeCompare(String(b.id || ''));
+            });
+        }
+
+        function _moveSelection(delta) {
+            if (typeof onSelect !== 'function') return;
+            const ordered = _orderedNodes();
+            if (!ordered.length) return;
+            const currentId = String(selection?.id || '');
+            const idx = Math.max(0, ordered.findIndex((item) => String(item.id || '') === currentId));
+            const next = ordered[Math.max(0, Math.min(ordered.length - 1, idx + delta))];
+            if (next) onSelect({ kind: next.kind, id: next.id });
+        }
+
+        root.addEventListener('keydown', (event) => {
+            if ((event.metaKey || event.ctrlKey) && String(event.key || '').toLowerCase() === 'z' && typeof onMutate === 'function') {
+                event.preventDefault();
+                onMutate({ type: event.shiftKey ? 'redo' : 'undo' });
+                return;
+            }
+            if (event.target && !root.contains(event.target)) return;
+            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                _moveSelection(1);
+            } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                _moveSelection(-1);
+            }
+        });
+
+        if (mode === 'narrow') {
+            const list = document.createElement('div');
+            list.className = 'kit-workflow-narrow';
+            if (!nodes.length) {
+                list.appendChild(UI.renderEmptyState(dictValue('protocol.workflow.narrow.empty', 'No stages yet.')));
+            } else {
+                lanes.forEach((lane) => {
+                    const laneBlock = document.createElement('section');
+                    laneBlock.className = 'kit-workflow-narrow-lane';
+                    const laneHeader = document.createElement('button');
+                    laneHeader.type = 'button';
+                    laneHeader.className = `kit-workflow-lane${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
+                    laneHeader.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
+                    laneHeader.textContent = String(lane.label || lane.key || '');
+                    if (typeof onSelect === 'function') {
+                        laneHeader.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
+                    }
+                    laneBlock.appendChild(laneHeader);
+
+                    const laneNodes = nodes.filter((node) => String(node.laneKey || '') === String(lane.key || ''));
+                    laneNodes.sort((a, b) => Number(a.column || 0) - Number(b.column || 0));
+                    if (!laneNodes.length) {
+                        laneBlock.appendChild(UI.renderEmptyState(String(lane.empty || 'No stages yet.')));
+                    } else {
+                        laneNodes.forEach((node) => {
+                            const item = document.createElement('div');
+                            item.className = `kit-workflow-node-wrap${selection?.id === node.id ? ' is-selected' : ''}`;
+                            const btn = document.createElement('button');
+                            btn.type = 'button';
+                            btn.className = `kit-workflow-node kit-workflow-node-${node.kind || 'stage'}`;
+                            btn.dataset.nodeId = String(node.id || '');
+                            btn.dataset.testid = `workflow-node-${String(node.id || '')}`;
+                            btn.textContent = String(node.label || node.id || '');
+                            if (typeof onSelect === 'function') {
+                                btn.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
+                            }
+                            item.appendChild(btn);
+                            const outgoing = edges.filter((edge) => String(edge.from || '') === String(node.id || ''));
+                            outgoing.forEach((edge) => {
+                                const label = document.createElement('button');
+                                label.type = 'button';
+                                label.className = `kit-workflow-edge-label${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`;
+                                label.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
+                                label.textContent = String(edge.label || '');
+                                if (typeof onSelect === 'function') {
+                                    label.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
+                                }
+                                item.appendChild(label);
+                            });
+                            laneBlock.appendChild(item);
+                        });
+                    }
+                    list.appendChild(laneBlock);
+                });
+            }
+            root.appendChild(list);
+        } else {
+            const shell = document.createElement('div');
+            shell.className = 'kit-workflow-shell';
+
+            const laneRail = document.createElement('div');
+            laneRail.className = 'kit-workflow-lanes';
+            lanes.forEach((lane) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = `kit-workflow-lane${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
+                btn.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
+                btn.textContent = String(lane.label || lane.key || '');
+                if (typeof onSelect === 'function') {
+                    btn.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
+                }
+                laneRail.appendChild(btn);
+            });
+            root.appendChild(laneRail);
+
+            const graph = document.createElement('div');
+            graph.className = 'kit-workflow-graph';
+            graph.style.setProperty('--workflow-columns', String(Math.max(1, ...nodes.map((node) => Number(node.column || 0) + 1))));
+            graph.style.setProperty('--workflow-rows', String(Math.max(1, lanes.length)));
+
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('class', 'kit-workflow-edges');
+            svg.setAttribute('aria-hidden', 'true');
+            graph.appendChild(svg);
+
+            const labelsLayer = document.createElement('div');
+            labelsLayer.className = 'kit-workflow-edge-labels';
+            graph.appendChild(labelsLayer);
+
+            const nodesLayer = document.createElement('div');
+            nodesLayer.className = 'kit-workflow-nodes-layer';
+            graph.appendChild(nodesLayer);
+
+            let draggedNodeId = '';
+            const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
+
+            nodes.forEach((node) => {
+                const wrap = document.createElement('div');
+                wrap.className = [
+                    'kit-workflow-node-wrap',
+                    selection?.kind === node.kind && selection?.id === node.id ? 'is-selected' : '',
+                    node.isTerminal ? 'is-terminal' : '',
+                ].filter(Boolean).join(' ');
+                wrap.dataset.nodeId = String(node.id || '');
+                wrap.style.gridColumn = String(Number(node.column || 0) + 1);
+                wrap.style.gridRow = String((laneIndex.get(String(node.laneKey || '')) || 0) + 1);
+
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = `kit-workflow-node kit-workflow-node-${node.kind || 'stage'}`;
+                btn.dataset.nodeId = String(node.id || '');
+                btn.dataset.testid = `workflow-node-${String(node.id || '')}`;
+                btn.draggable = Boolean(node.kind === 'stage' && typeof onMutate === 'function');
+                if (node.kind === 'stage' && typeof onMutate === 'function') {
+                    btn.addEventListener('dragstart', () => {
+                        draggedNodeId = String(node.id || '');
+                        wrap.classList.add('is-dragging');
+                    });
+                    btn.addEventListener('dragend', () => {
+                        draggedNodeId = '';
+                        wrap.classList.remove('is-dragging');
+                    });
+                    btn.addEventListener('dragover', (event) => event.preventDefault());
+                    btn.addEventListener('drop', (event) => {
+                        event.preventDefault();
+                        if (draggedNodeId && draggedNodeId !== String(node.id || '')) {
+                            onMutate({ type: 'reorder', nodeId: draggedNodeId, targetId: String(node.id || '') });
+                        }
+                    });
+                }
+                if (typeof onSelect === 'function') {
+                    btn.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
+                }
+
+                const label = document.createElement('div');
+                label.className = 'kit-workflow-node-label';
+                label.textContent = String(node.label || node.id || '');
+                btn.appendChild(label);
+
+                if (node.sublabel) {
+                    const sub = document.createElement('div');
+                    sub.className = 'kit-workflow-node-sublabel';
+                    sub.textContent = String(node.sublabel);
+                    btn.appendChild(sub);
+                }
+
+                const state = nodeStates && Object.prototype.hasOwnProperty.call(nodeStates, String(node.id || ''))
+                    ? String(nodeStates[String(node.id || '')] || '')
+                    : '';
+                if (state) {
+                    const badge = document.createElement('span');
+                    badge.className = `kit-workflow-node-state kit-workflow-node-state-${state}`;
+                    badge.textContent = state;
+                    btn.appendChild(badge);
+                }
+
+                wrap.appendChild(btn);
+
+                if (!node.isTerminal && typeof onBeginConnect === 'function') {
+                    const connect = document.createElement('button');
+                    connect.type = 'button';
+                    connect.className = 'kit-workflow-node-connect';
+                    connect.textContent = dictValue('protocol.stage.connect', 'Add transition');
+                    connect.addEventListener('click', (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onBeginConnect(node.id);
+                    });
+                    wrap.appendChild(connect);
+                }
+
+                nodesLayer.appendChild(wrap);
+            });
+
+            function drawEdges() {
+                svg.innerHTML = '';
+                labelsLayer.innerHTML = '';
+                const graphRect = graph.getBoundingClientRect();
+                svg.setAttribute('viewBox', `0 0 ${Math.max(1, graphRect.width)} ${Math.max(1, graphRect.height)}`);
+                edges.forEach((edge) => {
+                    const fromEl = nodesLayer.querySelector(`[data-node-id=\"${CSS.escape(String(edge.from || ''))}\"]`);
+                    const toEl = nodesLayer.querySelector(`[data-node-id=\"${CSS.escape(String(edge.to || ''))}\"]`);
+                    if (!fromEl || !toEl) return;
+                    const fromRect = fromEl.getBoundingClientRect();
+                    const toRect = toEl.getBoundingClientRect();
+                    const x1 = fromRect.right - graphRect.left;
+                    const y1 = fromRect.top - graphRect.top + (fromRect.height / 2);
+                    const x2 = toRect.left - graphRect.left;
+                    const y2 = toRect.top - graphRect.top + (toRect.height / 2);
+                    const dx = Math.max(36, Math.abs(x2 - x1) / 2);
+
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('class', `kit-workflow-edge-path${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`);
+                    path.setAttribute('d', `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
+                    svg.appendChild(path);
+
+                    const label = document.createElement('button');
+                    label.type = 'button';
+                    label.className = `kit-workflow-edge-label${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`;
+                    label.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
+                    label.textContent = String(edge.label || '');
+                    label.style.left = `${((x1 + x2) / 2)}px`;
+                    label.style.top = `${((y1 + y2) / 2)}px`;
+                    if (typeof onSelect === 'function') {
+                        label.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
+                    }
+                    labelsLayer.appendChild(label);
+                });
+            }
+
+            requestAnimationFrame(drawEdges);
+            setTimeout(drawEdges, 40);
+
+            shell.appendChild(graph);
+            root.appendChild(shell);
+        }
+
+        const extras = Array.isArray(accessorySections) ? accessorySections.filter(Boolean) : [];
+        if (extras.length) {
+            const accessories = document.createElement('div');
+            accessories.className = 'kit-workflow-accessories';
+            extras.forEach((section) => {
+                const block = document.createElement('section');
+                block.className = 'kit-workflow-accessory';
+                const head = document.createElement('div');
+                head.className = 'kit-workflow-accessory-head';
+                const title = document.createElement('h3');
+                title.className = 'kit-workflow-accessory-title';
+                title.textContent = String(section.title || '');
+                head.appendChild(title);
+                if (typeof section.onAdd === 'function') {
+                    const add = document.createElement('button');
+                    add.type = 'button';
+                    add.className = 'btn btn-small';
+                    add.textContent = String(section.addLabel || '+ Add');
+                    add.addEventListener('click', section.onAdd);
+                    head.appendChild(add);
+                }
+                block.appendChild(head);
+
+                const items = Array.isArray(section.items) ? section.items : [];
+                if (!items.length) {
+                    block.appendChild(UI.renderEmptyState(String(section.empty || 'Nothing here yet.')));
+                } else {
+                    const list = document.createElement('div');
+                    list.className = 'kit-workflow-accessory-list';
+                    items.forEach((item) => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = `kit-workflow-accessory-item${selection?.kind === item.kind && selection?.id === item.id ? ' is-selected' : ''}`;
+                        btn.dataset.testid = `workflow-accessory-${String(item.kind || 'item')}-${String(item.id || '')}`;
+                        btn.textContent = String(item.label || item.id || '');
+                        if (typeof section.onSelect === 'function') {
+                            btn.addEventListener('click', () => section.onSelect(item));
+                        }
+                        list.appendChild(btn);
+                    });
+                    block.appendChild(list);
+                }
+                accessories.appendChild(block);
+            });
+            root.appendChild(accessories);
+        }
 
         return root;
     }
@@ -1361,7 +1838,8 @@ window.Kit = (() => {
         validationSurface,
         detailsPanel,
         authoredCatalog,
-        canvas,
+        sectionListCanvas,
+        workflowCanvas,
         rehearsalPanel,
         runsList,
         runSummary,

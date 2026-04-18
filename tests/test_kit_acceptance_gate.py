@@ -43,13 +43,13 @@ KIT_MANIFEST: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("validationSurface", ("components/protocol-workspace.js",)),
     ("detailsPanel", ("components/protocol-workspace.js",)),
     ("authoredCatalog", ("components/protocol-workspace.js",)),
-    ("canvas", ("components/protocol-workspace.js",)),
+    ("workflowCanvas", ("components/protocol-workspace.js",)),
     ("rehearsalPanel", ("components/protocol-workspace.js",)),
     ("runsList", ("components/protocol-workspace.js",)),
     ("runSummary", ("components/protocol-workspace.js",)),
     ("agentsList", ("components/agent-list.js",)),
     ("agentSummary", ("components/agent-detail.js",)),
-    ("selectorResolutionPreview", ("components/agent-detail.js",)),
+    ("selectorResolutionPreview", ("components/agent-detail.js", "components/protocol-workspace.js")),
 )
 
 
@@ -133,7 +133,7 @@ def test_kit_primitives_carry_required_dictionary_keys() -> None:
         "'validation.empty'",
         # authoredCatalog
         "'protocol.catalog.empty.title'",
-        # canvas
+        # workflowCanvas
         "'protocol.canvas.empty.title'",
         # rehearsalPanel
         "'protocol.rehearsal.panel.title'",

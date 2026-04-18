@@ -1221,6 +1221,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
+        expected_revision: int | None = None,
     ) -> ProtocolMutationRecord:
         return self._protocol_store.save_protocol_draft(
             access=access,
@@ -1229,6 +1230,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             display_name=display_name,
             description=description,
             definition_json=definition_json,
+            expected_revision=expected_revision,
         )
 
     def create_protocol_draft(

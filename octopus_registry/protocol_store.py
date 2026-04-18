@@ -130,6 +130,7 @@ class ProtocolPostgresAdapter:
                 "visibility": row.get("visibility", PROTOCOL_DEFAULT_VISIBILITY),
                 "created_by": row.get("created_by", ""),
                 "updated_by": row.get("updated_by", ""),
+                "draft_revision": int(row.get("draft_revision", 0) or 0),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             },
@@ -1530,6 +1531,7 @@ class ProtocolPostgresAdapter:
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
+        expected_revision: int | None = None,
     ) -> ProtocolMutationRecord:
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
@@ -1543,6 +1545,21 @@ class ProtocolPostgresAdapter:
         now = utcnow_iso()
         with self._connect() as conn, write_tx(conn):
             existing_row = self._protocol_row(conn, protocol_key)
+            if existing_row is not None and expected_revision is not None:
+                current_revision = int(existing_row.get("draft_revision", 0) or 0)
+                if current_revision != expected_revision:
+                    current_raw_definition = existing_row.get("draft_definition_json") or {}
+                    current_validation = validate_protocol_document(current_raw_definition, mode="draft")
+                    current_document = self._strict_protocol_document(current_raw_definition)
+                    return ProtocolMutationRecord(
+                        ok=False,
+                        status="conflict",
+                        message=f"Protocol draft revision conflict: expected {expected_revision}, found {current_revision}.",
+                        protocol=self._protocol_record_from_row(existing_row),
+                        draft_definition_json=RegistryJsonRecord.model_validate(current_raw_definition),
+                        draft_document=current_document,
+                        validation=current_validation,
+                    )
             normalized_slug = str(
                 slug
                 or (document.slug if document is not None else "")
@@ -1573,9 +1590,9 @@ class ProtocolPostgresAdapter:
                         f"""
                         INSERT INTO {SCHEMA}.protocol_definitions (
                             protocol_id, slug, display_name, description, lifecycle_state, current_version_id,
-                            owner_org_id, visibility, created_by, updated_by,
+                            owner_org_id, visibility, created_by, updated_by, draft_revision,
                             draft_definition_json, draft_content_hash, created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, 'draft', '', %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, 'draft', '', %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING *
                         """,
                         (
@@ -1587,6 +1604,7 @@ class ProtocolPostgresAdapter:
                             PROTOCOL_DEFAULT_VISIBILITY,
                             self._access_actor_ref(access),
                             self._access_actor_ref(access),
+                            1,
                             jsonb(raw_definition),
                             raw_hash,
                             now,
@@ -1605,6 +1623,7 @@ class ProtocolPostgresAdapter:
                             updated_by = %s,
                             draft_definition_json = %s,
                             draft_content_hash = %s,
+                            draft_revision = COALESCE(draft_revision, 0) + 1,
                             updated_at = %s
                         WHERE protocol_id = %s
                         RETURNING *

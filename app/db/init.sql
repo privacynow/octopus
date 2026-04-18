@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_definitions (
     updated_by TEXT NOT NULL DEFAULT '',
     draft_definition_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     draft_content_hash TEXT NOT NULL DEFAULT '',
+    draft_revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -316,7 +317,8 @@ ALTER TABLE agent_registry.protocol_definitions
     ADD COLUMN IF NOT EXISTS owner_org_id TEXT NOT NULL DEFAULT 'local',
     ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'org_private',
     ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '',
-    ADD COLUMN IF NOT EXISTS updated_by TEXT NOT NULL DEFAULT '';
+    ADD COLUMN IF NOT EXISTS updated_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS draft_revision INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_protocol_definitions_lifecycle
     ON agent_registry.protocol_definitions (lifecycle_state, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_definitions_owner

@@ -21,7 +21,7 @@ function renderGallery(container) {
     async function _createDraft(payload) {
         const result = await API.createProtocolDraft(payload);
         const protocolId = String(result?.protocol?.protocol_id || '').trim();
-        Router.navigate(protocolId ? `/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}&protocol_view=design` : '/ui/protocols');
+        Router.navigate(protocolId ? `/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}` : '/ui/protocols');
     }
 
     function _buildTemplateCard(template) {

@@ -72,8 +72,9 @@ const API = (() => {
         if (!resp.ok) {
             const text = await resp.text();
             let message = text;
+            let parsed = null;
             try {
-                const parsed = JSON.parse(text);
+                parsed = JSON.parse(text);
                 if (parsed && typeof parsed === 'object') {
                     const detail = parsed.detail && typeof parsed.detail === 'object' ? parsed.detail : parsed;
                     message = detail.message || detail.error_code || text;
@@ -81,7 +82,15 @@ const API = (() => {
             } catch (err) {
                 void err;
             }
-            throw new Error(`${resp.status}: ${message}`);
+            const detail = parsed && typeof parsed === 'object'
+                ? (parsed.detail && typeof parsed.detail === 'object' ? parsed.detail : parsed)
+                : null;
+            const error = new Error(`${resp.status}: ${message}`);
+            error.status = resp.status;
+            error.errorCode = detail && typeof detail.error_code === 'string' ? detail.error_code : '';
+            error.details = detail && typeof detail.details === 'object' ? detail.details : null;
+            error.payload = parsed;
+            throw error;
         }
         if (resp.status === 204) return null;
         if (raw) return resp.text();
@@ -243,8 +252,11 @@ const API = (() => {
             request('POST', '/v1/protocols', { body }),
         deleteProtocol: (id) =>
             request('DELETE', `/v1/protocols/${encodeURIComponent(id)}`),
-        saveProtocolDraft: (id, body = {}) =>
-            request('PUT', `/v1/protocols/${encodeURIComponent(id)}/draft`, { body }),
+        saveProtocolDraft: (id, body = {}, opts = {}) =>
+            request('PUT', `/v1/protocols/${encodeURIComponent(id)}/draft`, {
+                body,
+                headers: Number.isFinite(opts.ifMatch) ? { 'If-Match': String(opts.ifMatch) } : undefined,
+            }),
         validateProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
         publishProtocol: (id) =>

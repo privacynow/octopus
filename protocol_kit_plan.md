@@ -1,6 +1,6 @@
 # Protocol UX + Authoring Kit Plan
 
-_Status: draft for review. Supersedes `protocol_plan.md` and `new_protocol_plan.md` as the canonical forward direction._
+_Supersedes `protocol_plan.md` and `new_protocol_plan.md` as the canonical forward direction. Steps 1–9 and deferred migration describe the original program; **§15 Execution addendum** locks the remaining **flagship protocol authoring** work (true workflow canvas, conflict-safe drafts, selector-first participants, rehearse overlay, browser E2E gate) with full implementation contracts._
 
 ## 1. Context
 
@@ -253,6 +253,7 @@ Each entry: purpose, contract, invariants, test bar, initial consumers. (API sig
 - **Invariants:** node types are styled distinctly; edges are drawn with labels; drag to arrange; draw to connect; click to select; Cmd+Z / Cmd+Shift+Z for undo; keyboard navigation. When opened on a blank draft the canvas enters a **progressive first-run state** that guides the author through first participant → first stage → first transition inline (no modal, no separate wizard, no leaving the canvas); the state dismisses automatically once the graph has at least one participant, one stage, and one transition. On narrow widths (tablet/mobile) the canvas switches to an **explicit narrow-width mode** — stacked list-with-arrows — not a shrunk graph; mode switch is driven by viewport, not a toggle.
 - **Test bar:** interaction tests (drag, connect, select, keyboard); visual baseline for node types; first-run state exits correctly as each prerequisite lands; narrow-width mode renders correctly at defined breakpoints.
 - **Initial consumers:** protocol authoring canvas; protocol rehearsal canvas (same graph, live state overlay).
+- **Implementation name:** ship as **`Kit.workflowCanvas`** (see **§15.9**); the grouped-list primitive is **not** the workflow canvas. **§15.4** locks terminal transitions and key-rename semantics for document round-trip.
 
 ### 7.4 Details panel
 
@@ -432,6 +433,9 @@ Triggered after protocol UX is accepted. Per surface:
 - **End-to-end test** for rehearsal, covering author draft → rehearse → verify engine walk + no external egress.
 - **Acceptance-gate check** — CI job that greps for forbidden patterns in non-kit UX paths and fails on new occurrences.
 - **Dead-code sweep** after each step — any code path left orphaned by the step's kill list is removed in the same PR, not in a follow-up.
+- **Browser E2E (merge-blocking for flagship authoring)** — Playwright (or equivalent) against the **canonical environment** defined in **§15.7**; covers graph interaction, conflict resolution, and rehearse overlay. Grep/unit/DOM harness alone are insufficient for the protocol authoring surface given its regression history.
+
+See **§15** for the full execution addendum (conflict policy, `draft_revision`, graph adapter invariants, Playwright contract, and `Kit.workflowCanvas` cutover).
 
 ## 11. Backlog (observability and runs, future)
 
@@ -476,3 +480,139 @@ Not in scope for the first cut. Captured here to inform data-model choices so we
 - SDK protocols package file sizes (`models.py`, `documents.py`, `engine.py`) — this plan adds new files (`ports.py` for new SDK ports), it does not restructure existing ones.
 
 This plan does not advance those items and does not block on them. When the debt items move, they move on their own track. When this plan touches a file those items also touch (`protocol_http.py`, `protocol_store.py`, `server.py`), the change follows the integration seams in §6.6 so the two tracks do not collide.
+
+---
+
+## 15. Execution addendum — flagship protocol authoring (remaining work)
+
+This section **tightens** Steps 5–6 and kit §7.3 for **execution quality**. Much of the original program (ports, runs, rehearsal plumbing, agents admin, kit foundation, acceptance gate, Gallery split) may already be shipped; **what follows is the contract for finishing** the flagship experience: **true workflow graph**, **optimistic-concurrency drafts**, **selector-first participants** (without blurring stage assignment), **rehearse on the same graph**, and **browser-level QA**.
+
+### 15.1 Problem statement (what remains)
+
+1. **Wrong or incomplete canvas metaphor** if `Kit.canvas` remains a grouped list: a protocol is a **workflow graph**; authors need nodes, edges, terminal transitions, and referential integrity on key renames.
+2. **Last-write-wins drafts** without `draft_revision` + `If-Match` + `conflict` state + clear resolution paths.
+3. **Conflation of authored roles with runtime resolution** if stage assignment is framed as “pick live agents” instead of “pick **protocol participant**.”
+4. **Insufficient gate** if only grep/unit tests protect an interaction-heavy editor.
+
+### 15.2 Goals and non-goals
+
+**Goals**
+
+- **`Kit.workflowCanvas`** per §7.3 (nodes, edges, layout, undo, first-run progressive state, narrow “list-with-arrows” mode).
+- **Graph document adapter** with **round-trip guarantees** (§15.4).
+- **Selector-first participant authoring** with **live preview** via the **shared resolver**; **UI reuses `Kit.selectorResolutionPreview`** (or the same thin wrapper the agents detail page uses)—**extend in place**; do not duplicate preview UI (§15.8).
+- **Stage assignment** = **which participant defined in this protocol owns this stage**; labels and optional **secondary** “who matches this participant’s selector today”—not runtime resolution as the primary control (§15.5).
+- **Conflict-safe drafts:** `draft_revision`, `If-Match`, **`conflict`** chip, locked overwrite policy (§15.6); **lifecycle actions blocked while conflicted** (§15.6).
+- **`draft_revision` on every path that establishes editor truth** (§15.6).
+- **Rehearse:** same graph + execution overlay + rehearsal panel (§5.1).
+- **Atomic cutover:** rename current grouped-list primitive; introduce `workflowCanvas`; **no** long-lived dual meaning of `canvas` (§15.9).
+- **Playwright** merge-blocking per §15.7.
+
+**Non-goals**
+
+- Full three-way merge UI for conflicts (reload + explicit overwrite-after-reload is enough initially).
+- Generic `force: true` on stale revision without reload-first semantics (forbidden as “silent last-write-wins with better marketing”).
+- Forking a second selector-preview component while calling the same HTTP endpoint.
+
+### 15.3 Dependency order (phases)
+
+| Phase | Content | Note |
+|-------|---------|------|
+| **A** | `draft_revision`, `If-Match`, 409 conflict, client `conflict` state, lifecycle **blocked** while conflicted | Before or with graph-heavy autosave |
+| **B** | `Kit.workflowCanvas` + **graph adapter** (§15.4) + atomic rename of old `Kit.canvas` | Single slice; update kit + gate + tests together |
+| **C** | Protocol workspace: one selection model, details panel, participant vs stage rules (§15.5), preview primitive reuse (§15.8) | |
+| **D** | Rehearse overlay on same canvas | |
+| **E** | Gallery URL / query contract alignment | Small, can slip early |
+| **F** | Playwright suite wired to §15.7 | Merge-blocking |
+
+### 15.4 Graph adapter — terminal transitions and key renames (locked)
+
+The adapter is not optional polish: **`octopus_sdk/protocols/models.py` validates cross-references** (participants, stages, transitions, artifact references). The graph must **round-trip** to a valid document.
+
+**Terminal edges**
+
+- Represent engine terminal targets explicitly: **`__complete__`**, **`__failed__`**, **`__cancelled__`** (and any other reserved targets the document allows) as **first-class edge targets** in the canvas model—e.g. dedicated sink nodes or a single end hub with labeled terminal edges—so serialization never drops or mislabels terminal transitions.
+
+**Key renames (referential rewrite)**
+
+- Any user edit that changes **`participant_key`**, **`stage_key`**, or **`artifact_key`** must run through a **single rewrite** path used by the graph and details panel:
+  - Update the entity’s identity field.
+  - Rewrite **all** references: stage `participant_key`, transition map values, stage `inputs`/`outputs` artifact lists, and any other fields the validator checks.
+- **Raw key text fields** that bypass the rewriter are forbidden for end-user flows; advanced escape hatches, if any, must call the same rewriter or run validation immediately after edit.
+
+The graph adapter **owns** referential integrity for renames; “stages → nodes, transitions → edges” is incomplete without the above.
+
+### 15.5 Participant vs stage assignment (locked)
+
+| Layer | Responsibility |
+|-------|----------------|
+| **Protocol participant** | Selector-first definition + preview (`preview_target_resolution` / shared HTTP path). Pins are rare. |
+| **Stage** | **`participant_key`** references a **participant row in this protocol document**, with clear human labels. |
+| **Secondary (optional)** | Read-only or collapsible line: “Agents matching this participant’s selector right now”—**informational only**; it does **not** replace picking a protocol participant for the stage. |
+
+### 15.6 Draft revision, conflict policy, and lifecycle while conflicted
+
+**Revision propagation (locked)**
+
+- Add **`draft_revision`** (monotonic integer) on the draft row; bump atomically on successful draft save.
+- Return **`draft_revision`** on: **`POST /v1/protocol-drafts`**, **`GET /v1/protocols/{id}`** (and any response used to hydrate the editor), **`PUT /v1/protocols/{id}/draft`**, and **any mutation response** that becomes the new draft truth—so the client always has a trustworthy value for the first **`If-Match`**.
+
+**Conflict policy (locked)**
+
+- **`PUT .../draft`** accepts **`If-Match: <draft_revision>`**; mismatch → **409** with stable error code and server draft payload (or explicit reload instruction).
+- **Default resolution:** **Reload** server copy → replace local model → set `draft_revision` from response → chip returns to **saved**.
+- **Overwrite:** User **explicitly confirms** discarding local divergence, then **resubmit using the revision obtained after reload** (or equivalent: editor holds server revision, user re-applies edits). **No** generic `force` flag for stale revision without that sequence.
+
+**While `saveState.state === 'conflict'` (locked)**
+
+- **Validate, Publish, Archive, Rehearse** (and any other lifecycle or run-start from this surface) are **disabled**, or the UI offers a single primary path: **resolve conflict** → reload. Prevents acting on stale local state while server truth has moved.
+
+### 15.7 Playwright — canonical environment (locked)
+
+Avoid “local smoke + informal CI.” Lock **one** recipe (values are examples; the **structure** is what must not drift):
+
+| Knob | Requirement |
+|------|----------------|
+| **Base URL** | Single env var, e.g. `PLAYWRIGHT_BASE_URL=http://127.0.0.1:8787` — tests read **only** this. |
+| **Auth** | Fixture-based session / operator login — **no** manual steps in tests. |
+| **Data** | Idempotent: create draft via API, or fixed seed + cleanup by id; no reliance on undeclared DB state. |
+| **Where CI runs** | **One** canonical place: either **this repo’s** workflow runs Playwright with registry via compose, **or** the **`octopus`** deploy repo runs it — **document which**; merge-blocking job is named in CI. |
+
+Playwright is **merge-blocking** for changes touching graph authoring, conflict UI, or rehearse overlay—not optional polish.
+
+### 15.8 Selector preview — UI reuse (locked)
+
+- Protocol **participant** editing must embed **`Kit.selectorResolutionPreview`** (same primitive **agents** detail uses—`agent-detail.js` pattern), or a **single shared wrapper** used by both; **extend the primitive in place** if protocol needs extra props.
+- **Same backend + two bespoke preview UIs** is **not** acceptable; acceptance gate / kit manifest must list protocol participant surface as a **consumer** of the preview primitive.
+
+### 15.9 Atomic `Kit.canvas` → `Kit.workflowCanvas` cutover (locked)
+
+In **one deliverable slice** (same PR or tightly coupled PRs with no ambiguous mainline):
+
+1. Rename the current grouped-list primitive (e.g. `Kit.sectionListCanvas` or `Kit.groupedNodeList`) — **not** two meanings under `canvas`.
+2. Introduce **`Kit.workflowCanvas`** per §7.3.
+3. Migrate **protocol authoring** to **`workflowCanvas` only**.
+4. Update **kit contract tests**, **acceptance gate**, **dictionary**, and **CSS** in the same slice.
+
+### 15.10 Definition of done (flagship slice)
+
+- **`Kit.workflowCanvas`** + graph adapter with **terminal edges** + **key-rename rewriter**; old list primitive renamed.
+- **`draft_revision`** everywhere drafts are read or written; **`If-Match`** + **`conflict`** + **lifecycle blocked** while conflicted; overwrite only after explicit confirm + fresh revision.
+- **Participants:** selector-first + **shared** preview primitive; **stages:** protocol-participant assignment + optional secondary preview only.
+- **Rehearse:** same graph + overlay + panel.
+- **Playwright** passes per §15.7 on the named CI job.
+- **Gallery** URL contract aligned with workspace query rules.
+- No **temporary** “canvas” alias exporting two semantics.
+
+### 15.11 Risks
+
+| Risk | Mitigation |
+|------|------------|
+| Graph scope creep | Ship read-only + selection before drag/connect; time-box milestones |
+| Referential bugs on rename | Single rewriter; server validation surfaced in UI |
+| Playwright flake | Stable `data-testid` on kit nodes where needed; CI retries policy |
+| Dual preview UIs | §15.8 + gate |
+
+---
+
+*End of execution addendum.*

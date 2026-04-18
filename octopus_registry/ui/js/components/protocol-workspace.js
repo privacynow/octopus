@@ -89,15 +89,40 @@ function _slugSuggestion(value) {
         .replace(/^-+|-+$/g, '');
 }
 
+const PROTOCOL_TERMINAL_TARGETS = [
+    { key: '__complete__', label: 'Finish successfully' },
+    { key: '__failed__', label: 'Finish as failed' },
+    { key: '__cancelled__', label: 'Finish as cancelled' },
+];
+
+function _selectorString(selector) {
+    if (!selector || !selector.kind || !selector.value) return '';
+    const kind = String(selector.kind || '').trim();
+    const value = String(selector.value || '').trim();
+    if (!kind || !value) return '';
+    return kind === 'agent' ? `@${value}` : `@${kind}:${value}`;
+}
+
+function _selectorFromFields(kind, value) {
+    const selectorKind = String(kind || '').trim();
+    const selectorValue = String(value || '').trim();
+    if (!selectorKind || !selectorValue) return null;
+    return { kind: selectorKind, value: selectorValue };
+}
+
+function _protocolDecisionLabel(value) {
+    const key = String(value || '').trim().toLowerCase();
+    if (!key) return '';
+    return Kit.dict.label(`protocol.stage.decision.${key}`, value);
+}
+
 /*
  * Protocol authoring workspace — kit-driven surface.
  *
  * This route is the reference implementation of the authoring kit (see
- * telegram-agent-bot/protocol_kit_plan.md). It is intentionally short: all
- * visuals go through Kit.lifecycleHeader, Kit.authoredCatalog, Kit.canvas,
- * Kit.detailsPanel, and Kit.validationSurface. No bespoke section tabs, no
- * raw-JSON tab, no server-seeded defaults — the canvas starts blank and the
- * user adds the first participant/stage/artifact from there.
+ * telegram-agent-bot/protocol_kit_plan.md). The workflow graph is the primary
+ * authoring surface; details, validation, and rehearsal hang off the same
+ * selection model. No section-tab maze, no raw JSON tab, and no second canvas.
  */
 function renderProtocolWorkspace(container) {
     const cleanups = UI.beginCleanupScope();
@@ -112,6 +137,17 @@ function renderProtocolWorkspace(container) {
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
     let currentProtocol = null;
     let protocolDetailLoading = false;
+    let draftRevision = 0;
+    let draftConflict = null;
+    let selectorPreview = {
+        participantKey: '',
+        query: '',
+        candidates: [],
+        busy: false,
+        message: '',
+    };
+    let connectState = { fromStageKey: '', decision: '' };
+    let documentHistory = { undo: [], redo: [] };
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
     let draft = {
@@ -132,6 +168,7 @@ function renderProtocolWorkspace(container) {
         runId: '',
         sessions: [],
         scenarios: [],
+        runDetail: null,
         pollTimer: 0,
     };
 
@@ -181,6 +218,11 @@ function renderProtocolWorkspace(container) {
 
     function _applyServerDetail(detail) {
         currentProtocol = detail;
+        draftRevision = Number(detail?.protocol?.draft_revision || 0) || 0;
+        draftConflict = null;
+        connectState = { fromStageKey: '', decision: '' };
+        documentHistory = { undo: [], redo: [] };
+        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
         const docFromServer = (detail && detail.draft_definition_json && Object.keys(detail.draft_definition_json).length)
             ? detail.draft_definition_json
             : (detail && detail.draft_document) || _blankDocument();
@@ -202,12 +244,22 @@ function renderProtocolWorkspace(container) {
     function _repairSelection(current, doc) {
         const key = current.sectionKey || 'overview';
         if (key === 'overview') return { sectionKey: 'overview', nodeKey: '' };
-        const items = doc[key] || [];
+        if (key === 'transitions') {
+            const hit = _transitionEntries(doc).some((item) => String(item.id || '') === String(current.nodeKey || ''));
+            return hit ? current : { sectionKey: 'overview', nodeKey: '' };
+        }
+        const items = key === 'participants'
+            ? (doc.participants || [])
+            : key === 'stages'
+                ? (doc.stages || [])
+                : key === 'artifacts'
+                    ? (doc.artifacts || [])
+                    : [];
         const hit = items.find((item) => String(
             key === 'participants' ? item.participant_key
                 : key === 'stages' ? item.stage_key
                     : item.artifact_key,
-        ) === current.nodeKey);
+        ) === String(current.nodeKey || ''));
         if (hit) return current;
         return { sectionKey: 'overview', nodeKey: '' };
     }
@@ -236,6 +288,7 @@ function renderProtocolWorkspace(container) {
 
     function _scheduleAutosave() {
         if (!currentProtocolId) return;
+        if (saveState.state === 'conflict') return;
         _clearAutosaveTimer();
         saveState = { state: 'editing', lastSavedAt: saveState.lastSavedAt, error: '' };
         _syncLifecycleChip();
@@ -255,25 +308,85 @@ function renderProtocolWorkspace(container) {
                 display_name: draft.display_name,
                 description: draft.description,
                 definition_json: _docFromDraft(),
-            });
+            }, { ifMatch: draftRevision });
             _applyServerDetail(result);
-            saveState = { state: 'saved', lastSavedAt: new Date().toISOString(), error: '' };
+            saveState = { state: 'saved', lastSavedAt: result?.protocol?.updated_at || new Date().toISOString(), error: '' };
             _syncLifecycleChip();
             await loadProtocols({ quiet: true });
             render();
+            return true;
         } catch (err) {
+            if (err?.status === 409 && err?.errorCode === 'PROTOCOL_DRAFT_CONFLICT') {
+                draftConflict = {
+                    serverDetail: {
+                        protocol: err?.details?.protocol || null,
+                        draft_definition_json: err?.details?.draft_definition_json || {},
+                        draft_document: err?.details?.draft_document || null,
+                        validation: err?.details?.validation || null,
+                    },
+                };
+                saveState = {
+                    state: 'conflict',
+                    lastSavedAt: err?.details?.protocol?.updated_at || saveState.lastSavedAt,
+                    error: err.message || String(err),
+                };
+                _syncLifecycleChip();
+                render();
+                UI.notify('Protocol draft changed in another tab or client. Reload or overwrite to continue.', 'warning');
+                return false;
+            }
             saveState = { state: 'error', lastSavedAt: saveState.lastSavedAt, error: err.message || String(err) };
             _syncLifecycleChip();
             UI.reportError('Failed to save the protocol draft', err, { context: 'Protocol autosave failed' });
+            return false;
+        }
+    }
+
+    function _blockConflictAction(actionLabel) {
+        if (saveState.state !== 'conflict' || !draftConflict?.serverDetail?.protocol) {
+            return false;
+        }
+        UI.notify(`${actionLabel} is blocked until you reload or overwrite the latest server draft.`, 'warning');
+        return true;
+    }
+
+    function _reloadServerDraftConflict() {
+        if (!draftConflict?.serverDetail?.protocol) return;
+        _applyServerDetail(draftConflict.serverDetail);
+        saveState = { state: 'saved', lastSavedAt: currentProtocol?.protocol?.updated_at || '', error: '' };
+        render();
+        UI.notify('Reloaded the latest server draft.', 'success');
+    }
+
+    async function _overwriteServerDraftConflict() {
+        if (!draftConflict?.serverDetail?.protocol) return;
+        const localDraft = {
+            slug: draft.slug,
+            display_name: draft.display_name,
+            description: draft.description,
+            document: _cloneDoc(draft.document),
+        };
+        const localSelection = selection;
+        _applyServerDetail(draftConflict.serverDetail);
+        draft = localDraft;
+        selection = _repairSelection(localSelection, draft.document);
+        saveState = { state: 'editing', lastSavedAt: currentProtocol?.protocol?.updated_at || '', error: '' };
+        _syncLifecycleChip();
+        render();
+        const saved = await _autosave();
+        if (saved) {
+            UI.notify('Overwrote the server draft with your local changes.', 'success');
         }
     }
 
     async function _validateNow() {
+        if (_blockConflictAction('Validate')) return;
         if (!currentProtocolId) {
             await _saveNew();
             if (!currentProtocolId) return;
         } else if (saveState.state === 'editing' || saveState.state === 'saving') {
-            await _autosave();
+            const saved = await _autosave();
+            if (!saved) return;
         }
         saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
         _syncLifecycleChip();
@@ -288,11 +401,13 @@ function renderProtocolWorkspace(container) {
     }
 
     async function _publishNow() {
+        if (_blockConflictAction('Publish')) return;
         if (!currentProtocolId) {
             await _saveNew();
             if (!currentProtocolId) return;
         } else if (saveState.state === 'editing' || saveState.state === 'saving') {
-            await _autosave();
+            const saved = await _autosave();
+            if (!saved) return;
         }
         _clearAutosaveTimer();
         saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
@@ -306,6 +421,7 @@ function renderProtocolWorkspace(container) {
     }
 
     async function _archiveNow() {
+        if (_blockConflictAction('Archive')) return;
         _clearAutosaveTimer();
         saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
         _syncLifecycleChip();
@@ -318,6 +434,7 @@ function renderProtocolWorkspace(container) {
     }
 
     async function _discardNow() {
+        if (_blockConflictAction('Discard')) return;
         _clearAutosaveTimer();
         if (!currentProtocolId) {
             _resetDraft();
@@ -338,6 +455,11 @@ function renderProtocolWorkspace(container) {
         currentProtocolId = '';
         currentProtocol = null;
         protocolDetailLoading = false;
+        draftRevision = 0;
+        draftConflict = null;
+        connectState = { fromStageKey: '', decision: '' };
+        documentHistory = { undo: [], redo: [] };
+        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
         draft = { slug: '', display_name: '', description: '', document: _blankDocument() };
         selection = { sectionKey: 'overview', nodeKey: '' };
         saveState = { state: 'idle', lastSavedAt: '', error: '' };
@@ -389,12 +511,14 @@ function renderProtocolWorkspace(container) {
     async function _refreshRehearsalSessions() {
         if (!rehearsal.runId) return;
         try {
-            const [sessionsResp, scenariosResp] = await Promise.all([
+            const [sessionsResp, scenariosResp, runDetail] = await Promise.all([
                 API.listRehearsalSessions(rehearsal.runId),
                 API.listProtocolScenarios({ protocol_id: currentProtocolId || '' }),
+                API.getProtocolRun(rehearsal.runId),
             ]);
             rehearsal.sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : [];
             rehearsal.scenarios = Array.isArray(scenariosResp?.scenarios) ? scenariosResp.scenarios : [];
+            rehearsal.runDetail = runDetail || null;
             render();
         } catch (err) {
             UI.reportError('Failed to refresh rehearsal state', err);
@@ -407,6 +531,7 @@ function renderProtocolWorkspace(container) {
     }
 
     async function _startRehearsal() {
+        if (_blockConflictAction('Rehearsal')) return;
         if (!currentProtocolId) return;
         const run = await API.createProtocolRun({
             protocol_id: currentProtocolId,
@@ -416,6 +541,7 @@ function renderProtocolWorkspace(container) {
         rehearsal.runId = String(run?.protocol_run?.protocol_run_id || run?.protocol_run_id || '');
         rehearsal.sessions = [];
         rehearsal.scenarios = [];
+        rehearsal.runDetail = null;
         if (!rehearsal.runId) {
             UI.notify('Rehearsal could not be started.', 'error');
             return;
@@ -453,9 +579,124 @@ function renderProtocolWorkspace(container) {
             draft.slug = _slugSuggestion(value);
         } else if (key === 'description') {
             draft.description = String(value || '');
+        } else if (key === 'single_active_writer') {
+            draft.document.policies = Object.assign({}, draft.document.policies || {}, { single_active_writer: Boolean(value) });
+        } else if (key === 'max_review_rounds') {
+            draft.document.policies = Object.assign({}, draft.document.policies || {}, {
+                max_review_rounds: Number.parseInt(String(value || '5'), 10) || 5,
+            });
         }
         _scheduleAutosave();
         _syncLifecycleHeaderInputs();
+        render();
+    }
+
+    function _historySnapshot() {
+        return {
+            draft: {
+                slug: draft.slug,
+                display_name: draft.display_name,
+                description: draft.description,
+                document: _cloneDoc(draft.document),
+            },
+            selection: { ...selection },
+        };
+    }
+
+    function _pushHistory() {
+        documentHistory.undo.push(_historySnapshot());
+        if (documentHistory.undo.length > 40) {
+            documentHistory.undo.shift();
+        }
+        documentHistory.redo = [];
+    }
+
+    function _restoreHistory(direction) {
+        const source = direction === 'redo' ? documentHistory.redo : documentHistory.undo;
+        const target = direction === 'redo' ? documentHistory.undo : documentHistory.redo;
+        const snapshot = source.pop();
+        if (!snapshot) return;
+        target.push(_historySnapshot());
+        draft = {
+            slug: String(snapshot.draft.slug || ''),
+            display_name: String(snapshot.draft.display_name || ''),
+            description: String(snapshot.draft.description || ''),
+            document: _cloneDoc(snapshot.draft.document),
+        };
+        selection = _repairSelection(snapshot.selection, draft.document);
+        connectState = { fromStageKey: '', decision: '' };
+        _scheduleAutosave();
+        render();
+    }
+
+    function _stageTransitionId(stageKey, decision) {
+        return `${String(stageKey || '').trim()}::${String(decision || '').trim().toLowerCase()}`;
+    }
+
+    function _transitionEntries(doc) {
+        const entries = [];
+        (doc.stages || []).forEach((stage) => {
+            const transitions = stage.transitions || {};
+            Object.entries(transitions).forEach(([decision, target]) => {
+                const decisionKey = String(decision || '').trim().toLowerCase();
+                const targetKey = String(target || '').trim();
+                if (!decisionKey || !targetKey) return;
+                entries.push({
+                    id: _stageTransitionId(stage.stage_key, decisionKey),
+                    from_stage_key: String(stage.stage_key || ''),
+                    decision: decisionKey,
+                    target_key: targetKey,
+                });
+            });
+        });
+        return entries;
+    }
+
+    function _rewriteKeyReferences(doc, kind, fromKey, toKey) {
+        const sourceKey = String(fromKey || '').trim();
+        const nextKey = String(toKey || '').trim();
+        if (!sourceKey || !nextKey || sourceKey === nextKey) return;
+        if (kind === 'participant') {
+            doc.stages = (doc.stages || []).map((stage) => (
+                String(stage.participant_key || '') === sourceKey
+                    ? { ...stage, participant_key: nextKey }
+                    : stage
+            ));
+            return;
+        }
+        if (kind === 'stage') {
+            doc.stages = (doc.stages || []).map((stage) => {
+                const transitions = Object.fromEntries(
+                    Object.entries(stage.transitions || {}).map(([decision, target]) => [
+                        decision,
+                        String(target || '') === sourceKey ? nextKey : target,
+                    ]),
+                );
+                return { ...stage, transitions };
+            });
+            if (connectState.fromStageKey === sourceKey) {
+                connectState = { ...connectState, fromStageKey: nextKey };
+            }
+            return;
+        }
+        if (kind === 'artifact') {
+            doc.stages = (doc.stages || []).map((stage) => ({
+                ...stage,
+                inputs: (stage.inputs || []).map((item) => (String(item || '') === sourceKey ? nextKey : item)),
+                outputs: (stage.outputs || []).map((item) => (String(item || '') === sourceKey ? nextKey : item)),
+            }));
+        }
+    }
+
+    function _commitDocument(nextDoc, { nextSelection = selection, pushHistory = true } = {}) {
+        if (pushHistory) _pushHistory();
+        draft.document = nextDoc;
+        selection = _repairSelection(nextSelection, nextDoc);
+        if (connectState.fromStageKey && !(nextDoc.stages || []).some((stage) => String(stage.stage_key || '') === connectState.fromStageKey)) {
+            connectState = { fromStageKey: '', decision: '' };
+        }
+        _scheduleAutosave();
+        render();
     }
 
     function _commitNodeField(kind, nodeKey, key, value) {
@@ -466,25 +707,35 @@ function renderProtocolWorkspace(container) {
         const idx = items.findIndex((item) => String(item[idField] || '') === nodeKey);
         if (idx < 0) return;
         const next = Object.assign({}, items[idx]);
-        if (key === 'required_skills') {
-            next.required_skills = String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+        if (key === 'selector_kind') {
+            next.selector = _selectorFromFields(value, next.selector?.value || '');
+        } else if (key === 'selector_value') {
+            next.selector = _selectorFromFields(next.selector?.kind || '', value);
+        } else if (key === 'inputs' || key === 'outputs') {
+            next[key] = Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : [];
         } else if (key === 'max_rounds' || key === 'timeout_seconds') {
             next[key] = Number.parseInt(String(value || '0'), 10) || 0;
+        } else if (key === 'verify') {
+            next.verify = Boolean(value);
         } else {
             next[key] = value;
         }
-        // slug-style rekey when editing the identity field
+        let nextNodeKey = nodeKey;
         if (key === idField) {
-            next[idField] = _slugSuggestion(value) || nodeKey;
+            const rewritten = _slugSuggestion(value) || nodeKey;
+            next[idField] = rewritten;
+            _rewriteKeyReferences(doc, kind, nodeKey, rewritten);
+            nextNodeKey = rewritten;
         }
         items[idx] = next;
         doc[plural] = items;
-        draft.document = doc;
-        if (key === idField && next[idField] !== nodeKey) {
-            selection = { sectionKey: plural, nodeKey: String(next[idField]) };
+        if (kind === 'participant' && String(nextNodeKey || '') === selectorPreview.participantKey) {
+            selectorPreview.query = _selectorString(next.selector || null);
+            selectorPreview.message = '';
         }
-        _scheduleAutosave();
-        render();
+        _commitDocument(doc, {
+            nextSelection: { sectionKey: plural, nodeKey: String(nextNodeKey || '') },
+        });
     }
 
     function _addNode(sectionKey) {
@@ -495,11 +746,18 @@ function renderProtocolWorkspace(container) {
             doc.participants = [...(doc.participants || []), {
                 participant_key: key,
                 display_name: '',
-                required_skills: [],
+                selector: null,
                 instructions: '',
             }];
-            selection = { sectionKey: 'participants', nodeKey: key };
+            _commitDocument(doc, { nextSelection: { sectionKey: 'participants', nodeKey: key } });
+            return;
         } else if (sectionKey === 'stages') {
+            if (!(doc.participants || []).length) {
+                UI.notify('Add a participant before adding a stage.', 'warning');
+                selection = { sectionKey: 'overview', nodeKey: '' };
+                render();
+                return;
+            }
             const n = (doc.stages || []).length + 1;
             const key = `stage_${n}`;
             const firstParticipant = String(doc.participants?.[0]?.participant_key || '');
@@ -513,7 +771,8 @@ function renderProtocolWorkspace(container) {
                 outputs: [],
                 transitions: {},
             }];
-            selection = { sectionKey: 'stages', nodeKey: key };
+            _commitDocument(doc, { nextSelection: { sectionKey: 'stages', nodeKey: key } });
+            return;
         } else if (sectionKey === 'artifacts') {
             const n = (doc.artifacts || []).length + 1;
             const key = `artifact_${n}`;
@@ -522,12 +781,125 @@ function renderProtocolWorkspace(container) {
                 display_name: '',
                 kind: 'workspace_file',
                 description: '',
+                path: '',
+                verify: true,
             }];
-            selection = { sectionKey: 'artifacts', nodeKey: key };
+            _commitDocument(doc, { nextSelection: { sectionKey: 'artifacts', nodeKey: key } });
+            return;
         }
-        draft.document = doc;
-        _scheduleAutosave();
+    }
+
+    function _moveStageBefore(nodeId, targetId) {
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.stages || [])];
+        const fromIndex = items.findIndex((item) => String(item.stage_key || '') === String(nodeId || ''));
+        const toIndex = items.findIndex((item) => String(item.stage_key || '') === String(targetId || ''));
+        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+        const [moved] = items.splice(fromIndex, 1);
+        items.splice(toIndex, 0, moved);
+        doc.stages = items;
+        _commitDocument(doc, { nextSelection: { sectionKey: 'stages', nodeKey: String(nodeId || '') } });
+    }
+
+    function _beginTransitionFromStage(stageKey, decision = '') {
+        const doc = draft.document;
+        const stage = (doc.stages || []).find((item) => String(item.stage_key || '') === String(stageKey || ''));
+        if (!stage) return;
+        const defaultDecision = String(decision || Object.keys(stage.transitions || {})[0] || (stage.stage_kind === 'work' ? 'completed' : 'accept')).trim().toLowerCase();
+        connectState = { fromStageKey: String(stage.stage_key || ''), decision: defaultDecision || 'completed' };
+        selection = { sectionKey: 'stages', nodeKey: String(stage.stage_key || '') };
         render();
+    }
+
+    function _cancelTransitionConnect() {
+        connectState = { fromStageKey: '', decision: '' };
+        render();
+    }
+
+    function _connectTransitionTarget(targetKey) {
+        if (!connectState.fromStageKey) return;
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.stages || [])];
+        const idx = items.findIndex((item) => String(item.stage_key || '') === connectState.fromStageKey);
+        if (idx < 0) {
+            _cancelTransitionConnect();
+            return;
+        }
+        const stage = { ...items[idx] };
+        const transitions = Object.assign({}, stage.transitions || {});
+        transitions[connectState.decision || 'completed'] = String(targetKey || '');
+        stage.transitions = transitions;
+        items[idx] = stage;
+        doc.stages = items;
+        const edgeId = _stageTransitionId(stage.stage_key, connectState.decision || 'completed');
+        connectState = { fromStageKey: '', decision: '' };
+        _commitDocument(doc, { nextSelection: { sectionKey: 'transitions', nodeKey: edgeId } });
+    }
+
+    function _commitTransitionField(edgeId, key, value) {
+        const [fromStageKey, currentDecision] = String(edgeId || '').split('::');
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.stages || [])];
+        const idx = items.findIndex((item) => String(item.stage_key || '') === fromStageKey);
+        if (idx < 0) return;
+        const stage = { ...items[idx] };
+        const transitions = Object.assign({}, stage.transitions || {});
+        const existingTarget = String(transitions[currentDecision] || '').trim();
+        if (!existingTarget) return;
+        let nextDecision = currentDecision;
+        let nextTarget = existingTarget;
+        if (key === 'decision') {
+            nextDecision = String(value || '').trim().toLowerCase() || currentDecision;
+            delete transitions[currentDecision];
+            transitions[nextDecision] = existingTarget;
+        } else if (key === 'target_key') {
+            nextTarget = String(value || '').trim();
+            transitions[currentDecision] = nextTarget;
+        }
+        stage.transitions = transitions;
+        items[idx] = stage;
+        doc.stages = items;
+        _commitDocument(doc, {
+            nextSelection: { sectionKey: 'transitions', nodeKey: _stageTransitionId(fromStageKey, nextDecision) },
+        });
+    }
+
+    function _deleteTransition(edgeId) {
+        const [fromStageKey, decision] = String(edgeId || '').split('::');
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.stages || [])];
+        const idx = items.findIndex((item) => String(item.stage_key || '') === fromStageKey);
+        if (idx < 0) return;
+        const stage = { ...items[idx] };
+        const transitions = Object.assign({}, stage.transitions || {});
+        delete transitions[decision];
+        stage.transitions = transitions;
+        items[idx] = stage;
+        doc.stages = items;
+        _commitDocument(doc, { nextSelection: { sectionKey: 'stages', nodeKey: fromStageKey } });
+    }
+
+    async function _resolveSelectorPreview(participantKey, selectorValue) {
+        selectorPreview = {
+            participantKey: String(participantKey || ''),
+            query: String(selectorValue || ''),
+            candidates: [],
+            busy: true,
+            message: '',
+        };
+        render();
+        try {
+            const result = await API.previewSelectorResolution({ selector: selectorValue });
+            selectorPreview.candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+            selectorPreview.message = selectorPreview.candidates.length
+                ? ''
+                : Kit.dict.label('agents.selector.no_matches');
+        } catch (err) {
+            selectorPreview.message = err.message || String(err);
+        } finally {
+            selectorPreview.busy = false;
+            render();
+        }
     }
 
     // -------------------------------------------------------------------
@@ -544,10 +916,11 @@ function renderProtocolWorkspace(container) {
             || (Array.isArray(currentProtocol?.versions)
                 && currentProtocol.versions.some((v) => String(v.lifecycle_state || '') === 'published'));
         const permissions = {
-            canPublish: Boolean(currentProtocolId),
-            canArchive: Boolean(currentProtocolId) && lifecycleState !== 'archived',
-            canRehearse: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived',
-            canDiscard: Boolean(currentProtocolId),
+            canValidate: Boolean(currentProtocolId) && saveState.state !== 'conflict',
+            canPublish: Boolean(currentProtocolId) && saveState.state !== 'conflict',
+            canArchive: Boolean(currentProtocolId) && lifecycleState !== 'archived' && saveState.state !== 'conflict',
+            canRehearse: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
+            canDiscard: Boolean(currentProtocolId) && saveState.state !== 'conflict',
         };
         return Kit.lifecycleHeader({
             surfaceKey: 'protocol',
@@ -592,59 +965,169 @@ function renderProtocolWorkspace(container) {
         }
     }
 
-    function _canvasEl() {
+    function _workflowData() {
         const doc = draft.document;
-        const participantNodes = (doc.participants || []).map((item) => ({
-            key: String(item.participant_key || ''),
-            label: String(item.display_name || item.participant_key || 'New participant'),
-            sublabel: (item.required_skills || []).join(', '),
+        const participantMap = new Map((doc.participants || []).map((item) => [
+            String(item.participant_key || ''),
+            String(item.display_name || item.participant_key || ''),
+        ]));
+        const stageCount = (doc.stages || []).length;
+        const lanes = [
+            ...(doc.participants || []).map((item) => ({
+                key: String(item.participant_key || ''),
+                label: String(item.display_name || item.participant_key || 'Participant'),
+                empty: Kit.dict.label('protocol.stages.firstrun'),
+            })),
+            { key: '__outcomes__', label: Kit.dict.label('protocol.workflow.outcomes') },
+        ];
+        const nodes = [
+            ...(doc.stages || []).map((item, index) => ({
+                id: String(item.stage_key || ''),
+                kind: 'stage',
+                laneKey: String(item.participant_key || ''),
+                column: index,
+                label: String(item.display_name || item.stage_key || 'New stage'),
+                sublabel: [
+                    Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
+                    participantMap.get(String(item.participant_key || '')) || '',
+                    (item.outputs || []).length ? `${(item.outputs || []).length} artifact${(item.outputs || []).length === 1 ? '' : 's'}` : '',
+                ].filter(Boolean).join(' · '),
+            })),
+            ...PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
+                id: item.key,
+                kind: 'terminal',
+                laneKey: '__outcomes__',
+                column: stageCount + index,
+                label: item.label,
+                sublabel: item.key,
+                isTerminal: true,
+            })),
+        ];
+        const edges = _transitionEntries(doc).map((edge) => ({
+            id: edge.id,
+            from: edge.from_stage_key,
+            to: edge.target_key,
+            label: _protocolDecisionLabel(edge.decision),
         }));
-        const stageNodes = (doc.stages || []).map((item) => ({
-            key: String(item.stage_key || ''),
-            label: String(item.display_name || item.stage_key || 'New stage'),
-            sublabel: [
-                Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
-                item.participant_key || '',
-            ].filter(Boolean).join(' · '),
+        const artifactItems = (doc.artifacts || []).map((item) => ({
+            id: String(item.artifact_key || ''),
+            kind: 'artifact',
+            label: String(item.display_name || item.artifact_key || 'Artifact'),
         }));
-        const artifactNodes = (doc.artifacts || []).map((item) => ({
-            key: String(item.artifact_key || ''),
-            label: String(item.display_name || item.artifact_key || 'New artifact'),
-            sublabel: String(item.kind || ''),
-        }));
-
-        return Kit.canvas({
-            selection,
-            onSelect: ({ sectionKey, nodeKey }) => {
-                selection = { sectionKey, nodeKey };
-                render();
-            },
-            sections: [
-                {
-                    key: 'participants',
-                    title: Kit.dict.label('protocol.participants.section'),
-                    addLabel: Kit.dict.label('protocol.participants.add'),
-                    firstRunHint: Kit.dict.label('protocol.participants.firstrun'),
-                    onAdd: () => _addNode('participants'),
-                    nodes: participantNodes,
-                },
-                {
-                    key: 'stages',
-                    title: Kit.dict.label('protocol.stages.section'),
-                    addLabel: Kit.dict.label('protocol.stages.add'),
-                    firstRunHint: Kit.dict.label('protocol.stages.firstrun'),
-                    onAdd: () => _addNode('stages'),
-                    nodes: stageNodes,
-                },
+        const firstRunActions = [];
+        if (!(doc.participants || []).length) {
+            firstRunActions.push({ label: Kit.dict.label('protocol.participants.add'), onClick: () => _addNode('participants') });
+        } else if (!(doc.stages || []).length) {
+            firstRunActions.push({ label: Kit.dict.label('protocol.stages.add'), onClick: () => _addNode('stages') });
+        } else if (!edges.length) {
+            firstRunActions.push({
+                label: Kit.dict.label('protocol.stage.connect'),
+                onClick: () => _beginTransitionFromStage(doc.stages[0]?.stage_key || ''),
+            });
+        }
+        return {
+            lanes,
+            nodes,
+            edges,
+            accessorySections: [
                 {
                     key: 'artifacts',
-                    title: Kit.dict.label('protocol.artifacts.section'),
+                    title: Kit.dict.label('protocol.workflow.artifacts'),
                     addLabel: Kit.dict.label('protocol.artifacts.add'),
-                    firstRunHint: Kit.dict.label('protocol.artifacts.firstrun'),
                     onAdd: () => _addNode('artifacts'),
-                    nodes: artifactNodes,
+                    onSelect: (item) => {
+                        selection = { sectionKey: 'artifacts', nodeKey: item.id };
+                        render();
+                    },
+                    empty: Kit.dict.label('protocol.artifacts.firstrun'),
+                    items: artifactItems,
                 },
             ],
+            firstRun: {
+                active: Boolean(firstRunActions.length),
+                title: Kit.dict.label('protocol.canvas.empty.title'),
+                body: !(doc.participants || []).length
+                    ? Kit.dict.label('protocol.firstrun.participant')
+                    : !(doc.stages || []).length
+                        ? Kit.dict.label('protocol.firstrun.stage')
+                        : Kit.dict.label('protocol.firstrun.transition'),
+                actions: firstRunActions,
+            },
+        };
+    }
+
+    function _rehearsalNodeStates() {
+        const states = {};
+        (rehearsal.runDetail?.stage_executions || []).forEach((stage) => {
+            const key = String(stage.stage_key || '').trim();
+            if (!key) return;
+            states[key] = String(stage.status || '').trim() || 'queued';
+        });
+        (rehearsal.sessions || []).forEach((session) => {
+            const key = String(session.stage_key || '').trim();
+            if (!key) return;
+            states[key] = session.state || 'awaiting response';
+        });
+        return states;
+    }
+
+    function _canvasEl() {
+        const workflow = _workflowData();
+        const mode = window.innerWidth <= 960 ? 'narrow' : 'graph';
+        return Kit.workflowCanvas({
+            lanes: workflow.lanes,
+            nodes: workflow.nodes,
+            edges: workflow.edges,
+            accessorySections: workflow.accessorySections,
+            firstRun: workflow.firstRun,
+            mode,
+            connectState,
+            nodeStates: rehearsal.runId ? _rehearsalNodeStates() : {},
+            selection: {
+                kind: selection.sectionKey === 'transitions'
+                    ? 'transition'
+                    : selection.sectionKey === 'participants'
+                        ? 'participant'
+                        : selection.sectionKey === 'artifacts'
+                            ? 'artifact'
+                            : selection.sectionKey === 'stages'
+                                ? 'stage'
+                                : 'overview',
+                id: selection.nodeKey,
+            },
+            onSelect: ({ kind, id }) => {
+                if (connectState.fromStageKey && (kind === 'stage' || kind === 'terminal')) {
+                    _connectTransitionTarget(id);
+                    return;
+                }
+                if (kind === 'participant') {
+                    selection = { sectionKey: 'participants', nodeKey: id };
+                } else if (kind === 'artifact') {
+                    selection = { sectionKey: 'artifacts', nodeKey: id };
+                } else if (kind === 'transition') {
+                    selection = { sectionKey: 'transitions', nodeKey: id };
+                } else if (kind === 'stage') {
+                    selection = { sectionKey: 'stages', nodeKey: id };
+                } else {
+                    selection = { sectionKey: 'overview', nodeKey: '' };
+                }
+                render();
+            },
+            onBeginConnect: (stageId) => _beginTransitionFromStage(stageId),
+            onCancelConnect: _cancelTransitionConnect,
+            onMutate: ({ type, nodeId, targetId }) => {
+                if (type === 'undo') {
+                    _restoreHistory('undo');
+                    return;
+                }
+                if (type === 'redo') {
+                    _restoreHistory('redo');
+                    return;
+                }
+                if (type === 'reorder' && nodeId && targetId) {
+                    _moveStageBefore(nodeId, targetId);
+                }
+            },
         });
     }
 
@@ -652,31 +1135,68 @@ function renderProtocolWorkspace(container) {
         const doc = draft.document;
         if (selection.sectionKey === 'overview' || !selection.nodeKey) {
             return Kit.detailsPanel({
-                target: { display_name: draft.display_name, slug: draft.slug, description: draft.description },
+                target: {
+                    display_name: draft.display_name,
+                    slug: draft.slug,
+                    description: draft.description,
+                    single_active_writer: Boolean(doc.policies?.single_active_writer ?? true),
+                    max_review_rounds: Number(doc.policies?.max_review_rounds || 5) || 5,
+                },
                 surfaceKey: 'protocol',
                 onCommit: _commitOverview,
                 schema: [
                     { key: 'display_name', kind: 'text', required: true },
                     { key: 'slug', kind: 'text' },
                     { key: 'description', kind: 'textarea', rows: 4 },
+                    { key: 'single_active_writer', kind: 'checkbox', labelKey: 'protocol.policy.single_active_writer.label', helpKey: 'protocol.policy.single_active_writer.help' },
+                    { key: 'max_review_rounds', kind: 'text', labelKey: 'protocol.policy.max_review_rounds.label', helpKey: 'protocol.policy.max_review_rounds.help' },
                 ],
             });
         }
         if (selection.sectionKey === 'participants') {
             const target = (doc.participants || []).find((item) => String(item.participant_key) === selection.nodeKey);
             if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            const view = { ...target, required_skills: (target.required_skills || []).join(', ') };
-            return Kit.detailsPanel({
-                target: view,
+            const selectorTarget = {
+                ...target,
+                selector_kind: String(target.selector?.kind || ''),
+                selector_value: String(target.selector?.value || ''),
+            };
+            const wrap = document.createElement('div');
+            wrap.className = 'kit-authoring-canvas-column';
+            wrap.appendChild(Kit.detailsPanel({
+                target: selectorTarget,
                 surfaceKey: 'protocol.participant',
                 onCommit: (_t, key, value) => _commitNodeField('participant', selection.nodeKey, key, value),
                 schema: [
                     { key: 'display_name', kind: 'text', required: true },
                     { key: 'participant_key', kind: 'text' },
+                    {
+                        key: 'selector_kind',
+                        kind: 'select',
+                        options: (authoringManifest?.selector_kind_options || ['skill', 'role', 'agent']).map((value) => ({
+                            value,
+                            label: String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1),
+                        })),
+                        labelKey: 'protocol.participant.selector_kind.label',
+                        helpKey: 'protocol.participant.selector_kind.help',
+                    },
+                    { key: 'selector_value', kind: 'text', labelKey: 'protocol.participant.selector_value.label', helpKey: 'protocol.participant.selector_value.help', placeholderKey: 'protocol.participant.selector_value.placeholder' },
                     { key: 'instructions', kind: 'textarea', rows: 4 },
-                    { key: 'required_skills', kind: 'text' },
                 ],
-            });
+            }));
+            const currentQuery = selection.nodeKey === selectorPreview.participantKey
+                ? selectorPreview.query
+                : _selectorString(target.selector || null);
+            wrap.appendChild(Kit.selectorResolutionPreview({
+                selector: currentQuery,
+                candidates: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.candidates : [],
+                busy: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.busy : false,
+                message: selection.nodeKey === selectorPreview.participantKey
+                    ? selectorPreview.message
+                    : Kit.dict.label('protocol.participant.selector_hint'),
+                onResolve: (value) => { void _resolveSelectorPreview(selection.nodeKey, value); },
+            }));
+            return wrap;
         }
         if (selection.sectionKey === 'stages') {
             const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
@@ -692,6 +1212,10 @@ function renderProtocolWorkspace(container) {
                 value,
                 label: Kit.dict.label(`protocol.stage.kind.${value}`, value),
             }));
+            const artifactOptions = (doc.artifacts || []).map((item) => ({
+                value: String(item.artifact_key || ''),
+                label: String(item.display_name || item.artifact_key || ''),
+            }));
             return Kit.detailsPanel({
                 target,
                 surfaceKey: 'protocol.stage',
@@ -701,9 +1225,56 @@ function renderProtocolWorkspace(container) {
                     { key: 'stage_key', kind: 'text' },
                     { key: 'participant_key', kind: 'select', options: participantOptions },
                     { key: 'stage_kind', kind: 'select', options: kindOptions },
+                    { key: 'inputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.inputs.label', helpKey: 'protocol.stage.inputs.help' },
+                    { key: 'outputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.outputs.label', helpKey: 'protocol.stage.outputs.help' },
                     { key: 'instructions', kind: 'textarea', rows: 4 },
                     { key: 'max_rounds', kind: 'text' },
                     { key: 'timeout_seconds', kind: 'text' },
+                ],
+                actions: [
+                    {
+                        label: Kit.dict.label('protocol.stage.connect'),
+                        onClick: () => _beginTransitionFromStage(selection.nodeKey),
+                    },
+                ],
+            });
+        }
+        if (selection.sectionKey === 'transitions') {
+            const target = _transitionEntries(doc).find((item) => String(item.id || '') === selection.nodeKey);
+            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol', emptyHint: Kit.dict.label('protocol.details.transition.empty') });
+            const targetOptions = [
+                ...((doc.stages || []).map((stage) => ({
+                    value: String(stage.stage_key || ''),
+                    label: String(stage.display_name || stage.stage_key || ''),
+                }))),
+                ...PROTOCOL_TERMINAL_TARGETS.map((item) => ({
+                    value: item.key,
+                    label: item.label,
+                })),
+            ];
+            return Kit.detailsPanel({
+                target: {
+                    source_stage: String(target.from_stage_key || ''),
+                    decision: String(target.decision || ''),
+                    target_key: String(target.target_key || ''),
+                },
+                surfaceKey: 'protocol.transition',
+                onCommit: (_t, key, value) => _commitTransitionField(selection.nodeKey, key, value),
+                schema: [
+                    { key: 'source_stage', kind: 'text', label: 'From stage', help: 'This transition leaves the selected stage.', readOnly: true },
+                    { key: 'decision', kind: 'text', labelKey: 'protocol.transition.decision.label', helpKey: 'protocol.transition.decision.help', placeholderKey: 'protocol.transition.decision.placeholder' },
+                    { key: 'target_key', kind: 'select', options: targetOptions, labelKey: 'protocol.transition.target.label', helpKey: 'protocol.transition.target.help' },
+                ],
+                actions: [
+                    {
+                        label: Kit.dict.label('protocol.transition.delete'),
+                        tone: 'btn-danger',
+                        onClick: () => UI.showConfirm(
+                            'Remove transition',
+                            'Remove this transition from the workflow?',
+                            async () => { _deleteTransition(selection.nodeKey); },
+                        ),
+                    },
                 ],
             });
         }
@@ -719,7 +1290,9 @@ function renderProtocolWorkspace(container) {
                     { key: 'display_name', kind: 'text', required: true },
                     { key: 'artifact_key', kind: 'text' },
                     { key: 'kind', kind: 'select', options: kindOptions },
+                    { key: 'path', kind: 'text', labelKey: 'protocol.artifact.path.label', helpKey: 'protocol.artifact.path.help', placeholderKey: 'protocol.artifact.path.placeholder' },
                     { key: 'description', kind: 'textarea', rows: 3 },
+                    { key: 'verify', kind: 'checkbox', labelKey: 'protocol.artifact.verify.label', helpKey: 'protocol.artifact.verify.help' },
                 ],
             });
         }
@@ -727,19 +1300,39 @@ function renderProtocolWorkspace(container) {
     }
 
     function _validationEl() {
+        const normalized = [];
+        if (saveState.state === 'conflict' && draftConflict?.serverDetail?.protocol) {
+            normalized.push({
+                severity: 'error',
+                message: 'This draft changed in another tab or client. Reload the latest server copy before validating, publishing, archiving, or rehearsing.',
+                action: { label: 'Reload', onClick: _reloadServerDraftConflict },
+            });
+            normalized.push({
+                severity: 'warning',
+                message: 'If your local edits should win, reload the latest server draft first and then explicitly overwrite it.',
+                action: {
+                    label: 'Overwrite',
+                    onClick: () => UI.showConfirm(
+                        'Overwrite server draft',
+                        'This reloads the latest server draft revision and immediately reapplies your current local edits on top of it.',
+                        async () => { await _overwriteServerDraftConflict(); },
+                    ),
+                },
+            });
+        }
         const validation = currentProtocol?.validation;
-        if (!validation) return null;
-        const issues = Array.isArray(validation.issues) ? validation.issues : [];
-        const normalized = issues.length
+        if (!validation && !normalized.length) return null;
+        const issues = Array.isArray(validation?.issues) ? validation.issues : [];
+        normalized.push(...(issues.length
             ? issues.map((item) => ({
                 severity: String(item.severity || 'error'),
                 message: String(item.message || ''),
                 path: String(item.path || ''),
             }))
-            : (Array.isArray(validation.errors) ? validation.errors : []).map((text) => ({
+            : (Array.isArray(validation?.errors) ? validation.errors : []).map((text) => ({
                 severity: 'error',
                 message: String(text || ''),
-            }));
+            }))));
         return Kit.validationSurface({ issues: normalized, layout: 'summary' });
     }
 
@@ -801,16 +1394,13 @@ function renderProtocolWorkspace(container) {
 
         const workspace = document.createElement('div');
         workspace.className = 'kit-authoring-workspace';
-        const canvasColumn = document.createElement('div');
-        canvasColumn.className = 'kit-authoring-canvas-column';
-        canvasColumn.appendChild(_canvasEl());
-        const validation = _validationEl();
-        if (validation) canvasColumn.appendChild(validation);
-        workspace.appendChild(canvasColumn);
+        workspace.appendChild(_canvasEl());
 
         const detailsColumn = document.createElement('div');
         detailsColumn.className = 'kit-authoring-details-column';
         detailsColumn.appendChild(_detailsEl());
+        const validation = _validationEl();
+        if (validation) detailsColumn.appendChild(validation);
         if (rehearsal.runId) {
             detailsColumn.appendChild(Kit.rehearsalPanel({
                 runId: rehearsal.runId,
@@ -875,6 +1465,9 @@ function renderProtocolWorkspace(container) {
         currentProtocol = null;
         _lifecycleHeaderRef = null;
     });
+    const onResize = () => render();
+    window.addEventListener('resize', onResize);
+    cleanups.add(() => window.removeEventListener('resize', onResize));
 
     UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols({ quiet: false }), 350);
     container.__routeReady = bootstrap();

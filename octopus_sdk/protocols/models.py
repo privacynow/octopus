@@ -369,6 +369,7 @@ class ProtocolDefinitionRecord(RegistryRecordModel):
     visibility: ProtocolVisibility = PROTOCOL_DEFAULT_VISIBILITY
     created_by: str = ""
     updated_by: str = ""
+    draft_revision: int = 0
     created_at: str = ""
     updated_at: str = ""
 

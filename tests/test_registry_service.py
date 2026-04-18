@@ -1476,6 +1476,7 @@ def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path:
                     "visibility": "org_shared",
                     "created_by": "operator",
                     "updated_by": "operator",
+                    "draft_revision": 1,
                     "created_at": "2026-04-16T00:00:00+00:00",
                     "updated_at": "2026-04-16T00:00:00+00:00",
                 },
@@ -1513,8 +1514,82 @@ def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path:
     assert response.status_code == 200
     payload = response.json()
     assert payload["protocol"]["protocol_id"] == "protocol-blank"
+    assert payload["protocol"]["draft_revision"] == 1
     assert payload["draft_definition_json"]["metadata"]["slug"] == ""
     assert payload["draft_definition_json"]["metadata"]["display_name"] == ""
+
+
+def test_protocol_draft_save_route_returns_conflict_for_revision_mismatch(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def save_protocol_draft(self, *, access, protocol_id, slug, display_name, description, definition_json, expected_revision=None):
+            assert protocol_id == "protocol-1"
+            assert expected_revision == 3
+            return ProtocolMutationRecord(
+                ok=False,
+                status="conflict",
+                message="Protocol draft revision conflict: expected 3, found 4.",
+                protocol={
+                    "protocol_id": "protocol-1",
+                    "slug": "protocol-1",
+                    "display_name": "Conflict Protocol",
+                    "description": "Server draft",
+                    "lifecycle_state": "draft",
+                    "current_version_id": "",
+                    "owner_org_id": "local",
+                    "visibility": "org_shared",
+                    "created_by": "operator",
+                    "updated_by": "operator",
+                    "draft_revision": 4,
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:05+00:00",
+                },
+                draft_definition_json={
+                    "schema_version": 1,
+                    "metadata": {
+                        "slug": "protocol-1",
+                        "display_name": "Conflict Protocol",
+                        "description": "Server draft",
+                    },
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                },
+                validation={
+                    "ok": False,
+                    "errors": ["Add at least one participant before adding a stage."],
+                    "content_hash": "",
+                },
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.put(
+            "/v1/protocols/protocol-1/draft",
+            headers={"If-Match": "3"},
+            json={
+                "slug": "protocol-1",
+                "display_name": "Conflict Protocol",
+                "description": "Local draft",
+                "definition_json": {"schema_version": 1, "metadata": {"slug": "protocol-1"}},
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 409
+    payload = response.json()["detail"]
+    assert payload["error_code"] == "PROTOCOL_DRAFT_CONFLICT"
+    assert payload["details"]["protocol"]["draft_revision"] == 4
+    assert payload["details"]["draft_definition_json"]["metadata"]["description"] == "Server draft"
 
 
 def test_protocol_draft_create_route_rejects_template_without_slug(monkeypatch, tmp_path: Path):

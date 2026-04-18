@@ -131,24 +131,35 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     # Authoring: kit-first
     assert "Kit.lifecycleHeader(" in workspace
     assert "Kit.authoredCatalog(" in workspace
-    assert "Kit.canvas(" in workspace
+    assert "Kit.workflowCanvas(" in workspace
     assert "Kit.detailsPanel(" in workspace
     assert "Kit.validationSurface(" in workspace
     assert "Kit.rehearsalPanel(" in workspace
+    assert "Kit.selectorResolutionPreview(" in workspace
 
     # Rehearsal API the workspace drives
     assert "API.listRehearsalSessions(" in workspace
     assert "API.respondRehearsalSession(" in workspace
     assert "API.listProtocolScenarios(" in workspace
+    assert "API.getProtocolRun(rehearsal.runId)" in workspace
 
     # Authoring API the kit surface drives
     assert "API.getProtocolAuthoringManifest()" in workspace
+    assert "API.previewSelectorResolution(" in workspace
     assert "API.createProtocolDraft(" in workspace
     assert "API.saveProtocolDraft(" in workspace
     assert "API.publishProtocol(" in workspace
     assert "API.archiveProtocol(" in workspace
     assert "API.deleteProtocol(" in workspace
     assert "API.validateProtocol(" in workspace
+    assert "ifMatch: draftRevision" in workspace
+    assert "PROTOCOL_DRAFT_CONFLICT" in workspace
+    assert "state: 'conflict'" in workspace
+    assert "_reloadServerDraftConflict" in workspace
+    assert "_overwriteServerDraftConflict" in workspace
+    assert "_rewriteKeyReferences(" in workspace
+    assert "_stageTransitionId(" in workspace
+    assert "_transitionEntries(" in workspace
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
@@ -174,20 +185,10 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
         "Raw editor has unsynced errors.",
         "validation_mode: 'draft'",
         "Workflow overview",
-        "Workflow map",
         "Review & publish",
-        "Build the first workflow path",
         "Protocol basics",
-        "Structured editor",
         "editorFormat",
         "_buildStageFlow(",
-        "_buildOverviewCanvas(",
-        "_buildStagesCanvas(",
-        "_buildParticipantsCanvas(",
-        "_buildArtifactsCanvas(",
-        "_buildPoliciesCanvas(",
-        "_buildAdvancedCanvas(",
-        "_buildReviewCanvas(",
         "_buildModeNav(",
         "_buildStarterPanel(",
         "_buildAuthorHeader(",
@@ -255,7 +256,9 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     # Kit-owned authoring styles
     assert ".kit-lifecycle-header" in css
     assert ".kit-authoring-workspace" in css
-    assert ".kit-canvas" in css
+    assert ".kit-workflow-canvas" in css
+    assert ".kit-workflow-graph" in css
+    assert ".kit-workflow-node" in css
     assert ".kit-details-panel" in css
     assert ".kit-validation" in css
     assert ".kit-authored-catalog" in css

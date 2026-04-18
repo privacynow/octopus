@@ -55,6 +55,14 @@ def build_protocol_router(
     def _protocol_result_http_error(result) -> HTTPException:
         status = str(getattr(result, "status", "") or "").lower()
         message = str(getattr(result, "message", "") or "Protocol request failed.")
+        if status == "conflict":
+            details = {
+                "protocol": _json_payload(getattr(result, "protocol", None)),
+                "draft_definition_json": _json_payload(getattr(result, "draft_definition_json", None)),
+                "draft_document": _json_payload(getattr(result, "draft_document", None)),
+                "validation": _json_payload(getattr(result, "validation", None)),
+            }
+            return _protocol_http_error(409, error_code="PROTOCOL_DRAFT_CONFLICT", message=message, details=details)
         if status == "not_found":
             return _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message=message)
         if status == "not_visible":
@@ -84,6 +92,20 @@ def build_protocol_router(
                 400,
                 error_code="PROTOCOL_INVALID_IF_MATCH",
                 message="If-Match must be an integer protocol run version.",
+                details={"if_match": value},
+            ) from exc
+
+    def _expected_draft_revision(if_match: str | None) -> int | None:
+        value = str(if_match or "").strip()
+        if not value:
+            return None
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_INVALID_IF_MATCH",
+                message="If-Match must be an integer protocol draft revision.",
                 details={"if_match": value},
             ) from exc
 
@@ -284,12 +306,14 @@ def build_protocol_router(
     async def resource_save_protocol_draft(
         protocol_id: str,
         request: Request,
+        if_match: str | None = Header(default=None, alias="If-Match"),
         auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         payload = await request.json()
         if not isinstance(payload, dict):
             raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message="Invalid protocol payload.")
+        expected_revision = _expected_draft_revision(if_match)
         result = store.save_protocol_draft(
             access=protocol_access(auth),
             protocol_id=protocol_id,
@@ -297,6 +321,7 @@ def build_protocol_router(
             display_name=str(payload.get("display_name", "") or ""),
             description=str(payload.get("description", "") or ""),
             definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
+            expected_revision=expected_revision,
         )
         if not result.ok:
             raise _protocol_result_http_error(result)

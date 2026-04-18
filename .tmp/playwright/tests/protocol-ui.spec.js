@@ -14,6 +14,15 @@ function registryUiToken() {
   return '';
 }
 
+function protocolIdFromUrl(urlText) {
+  const url = new URL(urlText);
+  const value = String(url.searchParams.get('protocol_id') || '').trim();
+  if (!value) {
+    throw new Error(`protocol_id missing from URL: ${urlText}`);
+  }
+  return value;
+}
+
 async function login(page) {
   const password = registryUiToken();
   if (!password) {
@@ -25,22 +34,49 @@ async function login(page) {
   await page.waitForURL(/\/ui\/?$/);
 }
 
-test.describe('protocol routes live', () => {
-  test('dashboard protocol links land on the correct owner routes', async ({ page }) => {
-    await login(page);
-    await page.goto('/ui/', { waitUntil: 'domcontentloaded' });
+async function apiCsrf(api) {
+  const resp = await api.get('/v1/auth/csrf');
+  expect(resp.ok()).toBeTruthy();
+  const payload = await resp.json();
+  return String(payload.csrf_token || payload.token || '').trim();
+}
 
-    await page.getByRole('link', { name: 'Published protocols' }).click();
-    await page.waitForURL(/\/ui\/protocols(\?.*)?$/);
-    await expect(page.getByRole('heading', { name: 'Protocols' })).toBeVisible();
+async function apiGetProtocol(api, protocolId) {
+  const resp = await api.get(`/v1/protocols/${encodeURIComponent(protocolId)}`);
+  expect(resp.ok()).toBeTruthy();
+  return resp.json();
+}
 
-    await page.goto('/ui/', { waitUntil: 'domcontentloaded' });
-    await page.getByRole('link', { name: 'Active protocol runs' }).click();
-    await page.waitForURL(/\/ui\/runs(\?.*)?$/);
-    await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+async function apiSaveProtocolDraft(api, protocolId, body, revision) {
+  const csrf = await apiCsrf(api);
+  const resp = await api.put(`/v1/protocols/${encodeURIComponent(protocolId)}/draft`, {
+    headers: {
+      'X-CSRF-Token': csrf,
+      'If-Match': String(revision),
+      'Content-Type': 'application/json',
+    },
+    data: JSON.stringify(body),
+    failOnStatusCode: false,
   });
+  const payload = await resp.json();
+  return { status: resp.status(), payload };
+}
 
-  test('protocols nav opens authoring only and runs live on their own route', async ({ page }) => {
+async function waitForSaved(page) {
+  await expect(page.locator('.kit-draft-chip[data-state="saved"]')).toBeVisible({ timeout: 15000 });
+}
+
+async function discardDraft(page) {
+  const deleteBtn = page.getByRole('button', { name: 'Delete draft' });
+  if (await deleteBtn.count()) {
+    await deleteBtn.click();
+    await page.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page).toHaveURL(/\/ui\/protocols(\?.*)?$/);
+  }
+}
+
+test.describe('protocol authoring live', () => {
+  test('gallery blank draft uses clean URL and empty first-run fields', async ({ page }) => {
     const consoleErrors = [];
     const pageErrors = [];
     page.on('console', (msg) => {
@@ -51,79 +87,129 @@ test.describe('protocol routes live', () => {
     });
 
     await login(page);
-    await page.getByRole('link', { name: 'Protocols' }).click();
-    await page.waitForURL(/\/ui\/protocols(\?.*)?$/);
-
-    await expect(page.getByRole('heading', { name: 'Protocols' })).toBeVisible();
-    await expect(page.getByText('Run launcher')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'New protocol' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Gallery', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeVisible();
-    await expect(page.getByText('Built-in examples')).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'Gallery', exact: true }).click();
-    await page.waitForURL(/\/ui\/gallery$/);
+    await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: 'Gallery' })).toBeVisible();
-    await expect(page.getByText('Software Engineering')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Use template' }).first()).toBeVisible();
-
     await page.getByRole('button', { name: 'Start blank' }).click();
-    await expect(page.getByText('Workflow overview')).toBeVisible();
-    await expect(page.getByText('Protocol basics')).toBeVisible();
     await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
-    await expect(page.getByText('Advanced raw editor')).toHaveCount(0);
-    await expect(page.getByText('Recommended next steps')).toBeVisible();
-    await expect(page.getByText('Build the first workflow path')).toBeVisible();
+    await expect(page).not.toHaveURL(/protocol_view=/);
+    await expect(page.locator('.kit-workflow-canvas')).toBeVisible();
 
-    const authorColumns = page.locator('.protocol-author-board > .dashboard-column');
-    const listBox = await authorColumns.nth(0).boundingBox();
-    const editorBox = await authorColumns.nth(1).boundingBox();
-    expect(listBox).toBeTruthy();
-    expect(editorBox).toBeTruthy();
-    expect(editorBox.y).toBeGreaterThan(listBox.y);
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await expect(lifecycle.getByLabel('Name')).toHaveValue('');
+    await expect(lifecycle.getByLabel('URL slug')).toHaveValue('');
+    await expect(lifecycle.getByLabel('Name')).toHaveAttribute('placeholder', /workflow/i);
+    await expect(lifecycle.getByLabel('URL slug')).toHaveAttribute('placeholder', /url/i);
 
-    const displayNameInput = page.locator('.settings-row', { hasText: 'Display name' }).locator('input');
-    const slugInput = page.locator('.settings-row', { hasText: 'Slug' }).locator('input');
-    await expect(displayNameInput).toHaveValue('');
-    await expect(slugInput).toHaveValue('');
-    await expect(displayNameInput).toHaveAttribute('placeholder', 'Name your workflow');
-    await expect(slugInput).toHaveAttribute('placeholder', /Short URL-friendly name/);
+    await expect(page.locator('.kit-workflow-first-run')).toContainText('Add the first participant');
+    await page.getByRole('button', { name: /Add participant/i }).first().click();
+    await expect(page.getByTestId('workflow-lane-participant_1')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Add first participant' }).first().click();
-    await expect(page.getByText('Participant details')).toBeVisible();
-    await expect(page.getByText('New participant')).toBeVisible();
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
 
-    await page.locator('.settings-row', { hasText: 'Display name' }).locator('input').fill('Planner');
-    await page.locator('.settings-row', { hasText: 'Display name' }).locator('input').press('Tab');
-    await expect(page.getByText('Workflow stages')).toBeVisible();
-    await page.getByRole('button', { name: 'Add stage', exact: true }).click();
-    const stageNode = page.locator('.protocol-stage-node').filter({ hasText: 'New stage' }).first();
-    await expect(stageNode).toBeVisible();
-    await stageNode.click();
-    await expect(page.getByText('Stage details')).toBeVisible();
+  test('draft conflicts surface reload-first resolution and block lifecycle actions', async ({ page }) => {
+    const consoleErrors = [];
+    const pageErrors = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', (err) => {
+      pageErrors.push(String(err));
+    });
 
-    await page.getByRole('tab', { name: /^Review/ }).click();
-    await expect(page.getByText('Review & publish')).toBeVisible();
-    await page.getByRole('tab', { name: /^Advanced$/ }).click();
-    await expect(page.getByText('Advanced raw editor')).toBeVisible();
-    await page.getByRole('tab', { name: /^Review/ }).click();
-    await page.getByRole('button', { name: 'Discard draft' }).click();
+    await login(page);
+    await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'New protocol' }).click();
+    await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
+
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await lifecycle.getByLabel('Name').fill(`Conflict Draft ${Date.now()}`);
+    await lifecycle.getByLabel('Name').blur();
+    await waitForSaved(page);
+
+    const protocolId = protocolIdFromUrl(page.url());
+    const api = page.context().request;
+    const detail = await apiGetProtocol(api, protocolId);
+    const serverDisplayName = `Server Truth ${Date.now()}`;
+    const serverSave = await apiSaveProtocolDraft(api, protocolId, {
+      slug: detail.protocol.slug,
+      display_name: serverDisplayName,
+      description: 'Server-side conflict edit',
+      definition_json: detail.draft_definition_json,
+    }, detail.protocol.draft_revision);
+    expect(serverSave.status).toBe(200);
+
+    await lifecycle.getByLabel('Name').fill('Local conflicting change');
+    await lifecycle.getByLabel('Name').blur();
+    await expect(page.locator('.kit-draft-chip[data-state="conflict"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.kit-validation')).toContainText('Reload');
+    await expect(page.getByRole('button', { name: 'Validate' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Publish' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Reload' }).click();
+    await expect(page.locator('.kit-draft-chip[data-state="saved"]')).toBeVisible({ timeout: 15000 });
+    await expect(lifecycle.getByLabel('Name')).toHaveValue(serverDisplayName);
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('blank protocol authoring supports graph flow, publish, and rehearse overlay', async ({ page }) => {
+    const consoleErrors = [];
+    const pageErrors = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', (err) => {
+      pageErrors.push(String(err));
+    });
+
+    await login(page);
+    await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'New protocol' }).click();
+    await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
+
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await lifecycle.getByLabel('Name').fill(`Playwright Protocol ${Date.now()}`);
+    await lifecycle.getByLabel('Name').blur();
+    await waitForSaved(page);
+    await expect(lifecycle.getByLabel('URL slug')).not.toHaveValue('');
+
+    await page.getByRole('button', { name: /Add participant/i }).first().click();
+    const participantPanel = page.locator('.kit-details-panel').first();
+    await participantPanel.getByLabel('Name').fill('Planner');
+    await participantPanel.getByLabel('Name').blur();
+    await participantPanel.getByLabel('Assignment rule').selectOption('agent');
+    await participantPanel.getByLabel('Rule value').fill('m1');
+    await participantPanel.getByLabel('Rule value').blur();
+    await page.getByRole('button', { name: 'Resolve' }).click();
+    await expect(page.locator('.kit-selector-preview')).toBeVisible();
+
+    await page.getByRole('button', { name: /Add stage/i }).first().click();
+    await page.getByTestId('workflow-node-stage_1').click();
+    const stagePanel = page.locator('.kit-details-panel').first();
+    await stagePanel.getByLabel('Name').fill('Plan');
+    await stagePanel.getByLabel('Name').blur();
+    await stagePanel.getByRole('button', { name: 'Add transition' }).click();
+    await page.getByTestId('workflow-node-__complete__').click();
+    await expect(page.getByTestId('workflow-edge-stage_1::completed')).toBeVisible();
+    await waitForSaved(page);
+
+    await page.getByRole('button', { name: 'Validate' }).click();
+    await expect(page.locator('.kit-validation-ok')).toBeVisible({ timeout: 15000 });
+    await page.getByRole('button', { name: 'Publish' }).click();
+    await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole('button', { name: 'Rehearse' }).click();
+    await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
+    await expect.poll(async () => page.locator('.kit-workflow-node-state').count(), { timeout: 15000 }).toBeGreaterThan(0);
+
+    await page.getByRole('button', { name: 'Archive' }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.getByText('Start authoring')).toBeVisible();
-    await expect(page).toHaveURL(/\/ui\/protocols(\?.*)?$/);
-    await expect(page.getByText('Your definitions')).toBeVisible();
-
-    await page.goto('/ui/runs', { waitUntil: 'domcontentloaded' });
-    await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
-    await expect(page.locator('.editor-section-title').filter({ hasText: /^Runs$/ }).first()).toBeVisible();
-    await expect(page.locator('.editor-section-title').filter({ hasText: /^Run detail$/ }).first()).toBeVisible();
-    await expect(page.getByText('Structured editor')).toHaveCount(0);
-
-    const runRows = page.locator('.protocol-panel .list-row').first();
-    if (await runRows.count()) {
-      await runRows.click();
-      await expect(page).toHaveURL(/\/ui\/runs\?run_id=/);
-    }
+    await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Archived' })).toBeVisible({ timeout: 15000 });
 
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);

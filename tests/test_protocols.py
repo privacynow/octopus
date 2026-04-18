@@ -222,6 +222,66 @@ def test_registry_store_preserves_invalid_protocol_draft(postgres_registry_trunc
     assert loaded.validation.ok is False
     assert loaded.draft_document is None
     assert loaded.draft_definition_json.as_dict()["metadata"]["slug"] == "broken-protocol"
+    assert loaded.protocol.draft_revision == 1
+
+
+def test_registry_store_protocol_draft_conflict_requires_matching_revision(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "blank"}),
+        access=operator_access(),
+    )
+    assert created.ok is True
+    assert created.protocol is not None
+    protocol_id = created.protocol.protocol_id
+    initial_revision = created.protocol.draft_revision
+    assert initial_revision == 1
+
+    first_save = store.save_protocol_draft(
+        access=operator_access(),
+        protocol_id=protocol_id,
+        slug="conflict-protocol",
+        display_name="Conflict Protocol",
+        description="First writer",
+        definition_json=RegistryJsonRecord.model_validate(
+            {
+                **created.draft_definition_json.as_dict(),
+                "metadata": {
+                    "slug": "conflict-protocol",
+                    "display_name": "Conflict Protocol",
+                    "description": "First writer",
+                },
+            }
+        ),
+        expected_revision=initial_revision,
+    )
+    assert first_save.ok is True
+    assert first_save.protocol is not None
+    assert first_save.protocol.draft_revision == 2
+
+    stale_save = store.save_protocol_draft(
+        access=operator_access(),
+        protocol_id=protocol_id,
+        slug="conflict-protocol",
+        display_name="Conflict Protocol",
+        description="Stale writer",
+        definition_json=RegistryJsonRecord.model_validate(
+            {
+                **created.draft_definition_json.as_dict(),
+                "metadata": {
+                    "slug": "conflict-protocol",
+                    "display_name": "Conflict Protocol",
+                    "description": "Stale writer",
+                },
+            }
+        ),
+        expected_revision=initial_revision,
+    )
+    assert stale_save.ok is False
+    assert stale_save.status == "conflict"
+    assert stale_save.protocol is not None
+    assert stale_save.protocol.draft_revision == 2
+    assert stale_save.draft_definition_json.as_dict()["metadata"]["description"] == "First writer"
 
 
 def test_registry_store_protocol_run_advances_from_work_to_review(postgres_registry_truncated: str) -> None:

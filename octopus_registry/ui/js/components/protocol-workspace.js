@@ -1900,8 +1900,86 @@ function renderProtocolWorkspace(container) {
         };
     }
 
+    function _fullGraphWorkflowData(projection, progress, resolvedView) {
+        const doc = draft.document;
+        const stageCounts = new Map();
+        (doc.stages || []).forEach((item) => {
+            const key = String(item.participant_key || '').trim();
+            stageCounts.set(key, Number(stageCounts.get(key) || 0) + 1);
+        });
+        const lanes = (doc.participants || []).map((item) => ({
+            key: String(item.participant_key || ''),
+            label: String(item.display_name || item.participant_key || 'Role'),
+            sublabel: _selectorString(item.selector || null)
+                || `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} step${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
+            empty: 'No steps in this role yet.',
+        }));
+        const stageKeys = (doc.stages || []).map((item) => String(item.stage_key || ''));
+        const columns = _stageColumns(stageKeys, projection.topology);
+        const maxStageColumn = Math.max(0, ...Array.from(columns.values(), (value) => Number(value || 0)));
+        return {
+            lanes,
+            nodes: [
+                ...(doc.stages || []).map((item) => ({
+                    id: String(item.stage_key || ''),
+                    kind: 'stage',
+                    laneKey: String(item.participant_key || ''),
+                    row: _stageLaneRow(item.participant_key, doc),
+                    column: Number(columns.get(String(item.stage_key || '')) || 0),
+                    label: String(item.display_name || item.stage_key || 'Untitled step'),
+                    sublabel: [
+                        (item.inputs || []).length ? `Reads ${(item.inputs || []).length}` : '',
+                        (item.outputs || []).length ? `Writes ${(item.outputs || []).length}` : '',
+                        String(item.instructions || '').trim() ? 'Instructions ready' : '',
+                    ].filter(Boolean).join(' · '),
+                    badges: [
+                        {
+                            tone: String(item.stage_kind || 'work'),
+                            label: Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
+                        },
+                    ],
+                })),
+                ...(progress.stageCount ? PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
+                    id: item.key,
+                    kind: 'terminal',
+                    laneKey: '',
+                    row: lanes.length + index,
+                    column: maxStageColumn + 1,
+                    label: item.label,
+                    sublabel: 'Ends the workflow',
+                    isTerminal: true,
+                })) : []),
+            ],
+            edges: _transitionEntries(doc).map((edge) => ({
+                id: edge.id,
+                from: edge.from_stage_key,
+                to: edge.target_key,
+                label: _protocolDecisionLabel(edge.decision),
+            })),
+            toolbarActions: _baseToolbarActions(progress, resolvedView, projection),
+            accessorySections: _artifactAccessorySections(),
+            firstRun: _firstRunState(progress),
+            laneLabels: Object.fromEntries(lanes.map((lane, index) => [lane.key, { ...lane, row: index }])),
+            outcomes: progress.stageCount ? {
+                startRow: lanes.length,
+                count: PROTOCOL_TERMINAL_TARGETS.length,
+                label: Kit.dict.label('protocol.workflow.outcomes'),
+                hint: Kit.dict.label('protocol.workflow.outcomes_hint'),
+            } : null,
+            viewState: {
+                kind: 'focus',
+                title: 'Workflow',
+                subtitle: 'Select a role, step, or transition to edit it.',
+                canReturn: false,
+            },
+        };
+    }
+
     function _focusWorkflowData(projection, progress, resolvedView) {
         const doc = draft.document;
+        if (progress.stageCount < 6) {
+            return _fullGraphWorkflowData(projection, progress, resolvedView);
+        }
         const segment = projection.segmentsById.get(resolvedView.segmentId) || projection.segments[0];
         if (!segment) {
             return _overviewWorkflowData(projection, progress, { kind: 'overview', segmentId: '' });

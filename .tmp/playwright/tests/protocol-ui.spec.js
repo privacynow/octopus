@@ -24,7 +24,7 @@ test.describe('protocol authoring live', () => {
     await expect(lifecycle.getByLabel('Name')).toHaveValue('');
     await expect(lifecycle.getByLabel('URL slug')).toHaveValue('');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start the workflow');
-    await expect(page.locator('.kit-workflow-first-run')).toContainText('Add the first role');
+    await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first role');
 
     const plannerKey = await createRole(page, { name: 'Planner', key: 'planner' });
     await expect(page.getByText(/^participant_[0-9]+$/i)).toHaveCount(0);
@@ -69,6 +69,36 @@ test.describe('protocol authoring live', () => {
     await page.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Archived' })).toBeVisible({ timeout: 15000 });
 
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('software engineering template uses overview first and focuses local flow', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
+    const templateCard = page.locator('.protocol-template-card').filter({ hasText: 'Software Engineering' }).first();
+    await expect(templateCard).toBeVisible();
+    await templateCard.getByRole('button', { name: 'Use template' }).click();
+
+    await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
+    await expect(page.getByTestId('workflow-node-segment:planning')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('workflow-node-implementation')).toHaveCount(0);
+
+    await page.getByTestId('workflow-node-segment:planning').click();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
+    await expect(page.getByRole('button', { name: 'Back to overview' })).toBeVisible();
+    await expect(page.getByTestId('workflow-node-planning')).toBeVisible();
+    await expect(page.getByTestId('workflow-node-plan_review')).toBeVisible();
+    await expect(page.getByTestId('workflow-node-segment:architecture')).toBeVisible();
+    await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
+
+    await page.getByRole('button', { name: 'Back to overview' }).click();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
+
+    await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });

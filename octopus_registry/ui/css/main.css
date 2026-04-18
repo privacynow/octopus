@@ -3428,6 +3428,24 @@ select {
     gap: var(--space-3);
 }
 
+.kit-workflow-viewbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: 0 var(--space-1);
+}
+
+.kit-workflow-viewbar-title {
+    font-size: var(--text-sm);
+    color: var(--text);
+}
+
+.kit-workflow-viewbar-subtitle {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+}
+
 .kit-workflow-lane-strip {
     display: flex;
     flex-wrap: wrap;
@@ -3586,6 +3604,11 @@ select {
     border-left: 4px solid var(--accent);
 }
 
+.kit-workflow-node-segment {
+    border-left: 4px solid #176ea6;
+    background: linear-gradient(180deg, rgba(23, 110, 166, 0.08), rgba(255, 255, 255, 0.96));
+}
+
 .kit-workflow-node-terminal {
     border-left: 4px solid var(--color-success, #1f7a4c);
     background: linear-gradient(180deg, rgba(31, 122, 76, 0.1), rgba(255,255,255,0.95));
@@ -3599,6 +3622,12 @@ select {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(147, 83, 53, 0.16), 0 18px 36px rgba(17, 24, 39, 0.12);
     transform: translateY(-1px);
+}
+
+.kit-workflow-node-wrap.is-context .kit-workflow-node {
+    border-style: dashed;
+    box-shadow: 0 10px 22px rgba(17, 24, 39, 0.07);
+    background: linear-gradient(180deg, rgba(244, 247, 250, 0.96), rgba(255, 255, 255, 0.96));
 }
 
 .kit-workflow-node-badges {
@@ -3633,6 +3662,16 @@ select {
 .kit-workflow-node-badge.is-work {
     background: rgba(149, 76, 47, 0.12);
     color: var(--accent);
+}
+
+.kit-workflow-node-badge.is-phase {
+    background: rgba(23, 110, 166, 0.12);
+    color: var(--color-info, #176ea6);
+}
+
+.kit-workflow-node-badge.is-context {
+    background: rgba(17, 24, 39, 0.08);
+    color: var(--text-secondary);
 }
 
 .kit-workflow-node-label {

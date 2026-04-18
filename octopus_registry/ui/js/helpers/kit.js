@@ -1037,12 +1037,15 @@ window.Kit = (() => {
         nodeStates = {},
         laneLabels = {},
         outcomes = null,
+        viewState = null,
     } = {}) {
         const root = document.createElement('section');
         root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
         root.dataset.key = [
             'workflow-canvas',
             mode,
+            String(viewState?.kind || ''),
+            String(viewState?.title || ''),
             lanes.map((lane) => String(lane.key || '')).join(','),
             nodes.map((node) => String(node.id || '')).join(','),
             edges.map((edge) => String(edge.id || '')).join(','),
@@ -1088,7 +1091,24 @@ window.Kit = (() => {
             ? dictValue('protocol.transition.connecting', 'Connecting this step. Click the next step or finish outcome.')
             : currentMode === 'rehearse'
                 ? 'Viewing live rehearsal state on the published workflow.'
-                : dictValue('protocol.workflow.drag_hint', 'Select a role, step, or transition to edit it. Drag steps to reorder their default sequence.');
+                : viewState?.kind === 'overview'
+                    ? String(viewState?.subtitle || 'Overview of the workflow. Click a phase to open its local flow.')
+                    : String(viewState?.subtitle || dictValue('protocol.workflow.drag_hint', 'Select a role, step, or transition to edit it. Drag steps to reorder their default sequence.'));
+        if (viewState?.title || viewState?.subtitle) {
+            const viewBar = document.createElement('div');
+            viewBar.className = 'kit-workflow-viewbar';
+            const title = document.createElement('strong');
+            title.className = 'kit-workflow-viewbar-title';
+            title.textContent = String(viewState?.title || (viewState?.kind === 'overview' ? 'Workflow overview' : 'Workflow'));
+            viewBar.appendChild(title);
+            if (viewState?.subtitle) {
+                const subtitle = document.createElement('span');
+                subtitle.className = 'kit-workflow-viewbar-subtitle';
+                subtitle.textContent = String(viewState.subtitle || '');
+                viewBar.appendChild(subtitle);
+            }
+            root.appendChild(viewBar);
+        }
         if (!firstRun?.active || currentMode === 'connect' || currentMode === 'rehearse') {
             const toolbar = document.createElement('div');
             toolbar.className = 'kit-workflow-toolbar';
@@ -1173,18 +1193,24 @@ window.Kit = (() => {
             if (!nodes.length) {
                 list.appendChild(UI.renderEmptyState(dictValue('protocol.workflow.narrow.empty', 'No stages yet.')));
             } else {
-                const narrowGroups = [
-                    ...lanes.map((lane) => ({
-                        key: String(lane.key || ''),
-                        label: String(lane.label || lane.key || ''),
-                        items: nodes.filter((node) => String(node.laneKey || '') === String(lane.key || '')),
-                    })),
-                    ...(outcomes ? [{
-                        key: '__outcomes__',
-                        label: String(outcomes.label || 'Outcomes'),
-                        items: nodes.filter((node) => node.isTerminal),
-                    }] : []),
-                ];
+                const narrowGroups = lanes.length
+                    ? [
+                        ...lanes.map((lane) => ({
+                            key: String(lane.key || ''),
+                            label: String(lane.label || lane.key || ''),
+                            items: nodes.filter((node) => String(node.laneKey || '') === String(lane.key || '')),
+                        })),
+                        ...(outcomes ? [{
+                            key: '__outcomes__',
+                            label: String(outcomes.label || 'Outcomes'),
+                            items: nodes.filter((node) => node.isTerminal),
+                        }] : []),
+                    ]
+                    : [{
+                        key: '__overview__',
+                        label: String(viewState?.title || 'Workflow overview'),
+                        items: [...nodes].sort((a, b) => Number(a.column || 0) - Number(b.column || 0) || Number(a.row || 0) - Number(b.row || 0)),
+                    }];
                 narrowGroups.forEach((lane) => {
                     const laneBlock = document.createElement('section');
                     laneBlock.className = 'kit-workflow-narrow-lane';
@@ -1193,7 +1219,7 @@ window.Kit = (() => {
                     laneHeader.className = `kit-workflow-lane${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
                     laneHeader.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
                     laneHeader.textContent = String(lane.label || lane.key || '');
-                    if (typeof onSelect === 'function' && lane.key !== '__outcomes__') {
+                    if (typeof onSelect === 'function' && lane.key !== '__outcomes__' && lane.key !== '__overview__') {
                         laneHeader.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
                     }
                     laneBlock.appendChild(laneHeader);
@@ -1382,6 +1408,7 @@ window.Kit = (() => {
                     'kit-workflow-node-wrap',
                     selection?.kind === node.kind && selection?.id === node.id ? 'is-selected' : '',
                     node.isTerminal ? 'is-terminal' : '',
+                    node.isContext ? 'is-context' : '',
                     isConnectSource ? 'is-connect-source' : '',
                     isConnectTarget ? 'is-connect-target' : '',
                 ].filter(Boolean).join(' ');

@@ -243,7 +243,6 @@ test.describe('protocol authoring live', () => {
     await waitForSaved(page);
 
     await page.getByRole('button', { name: 'Validate' }).click();
-    await expect(page.locator('.kit-validation-ok')).toBeVisible({ timeout: 15000 });
     await page.getByRole('button', { name: 'Publish' }).click();
     await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
 

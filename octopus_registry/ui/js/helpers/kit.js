@@ -1096,6 +1096,33 @@ window.Kit = (() => {
                 actions.appendChild(btn);
             });
             card.appendChild(actions);
+
+            const suggestions = Array.isArray(firstRun.suggestions) ? firstRun.suggestions.filter(Boolean) : [];
+            if (suggestions.length) {
+                const title = document.createElement('div');
+                title.className = 'kit-workflow-first-run-suggestions-title';
+                title.textContent = 'Quick starts';
+                card.appendChild(title);
+                const row = document.createElement('div');
+                row.className = 'kit-workflow-first-run-suggestions';
+                suggestions.forEach((suggestion) => {
+                    if (!suggestion || typeof suggestion.onClick !== 'function') return;
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = ['btn', suggestion.tone || 'btn-small'].filter(Boolean).join(' ');
+                    btn.textContent = String(suggestion.label || '');
+                    btn.addEventListener('click', suggestion.onClick);
+                    row.appendChild(btn);
+                });
+                card.appendChild(row);
+            }
+
+            if (firstRun.footnote) {
+                const note = document.createElement('p');
+                note.className = 'kit-workflow-first-run-note';
+                note.textContent = String(firstRun.footnote || '');
+                card.appendChild(note);
+            }
             root.appendChild(card);
         }
 

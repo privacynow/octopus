@@ -1267,6 +1267,17 @@ function renderProtocolWorkspace(container) {
                     },
                 ],
                 actions: firstRunActions,
+                suggestions: !participantCount
+                    ? _participantSelectorSuggestions().slice(0, 3).map((suggestion) => ({
+                        label: String(suggestion.label || suggestion.displayName || 'Use this role'),
+                        onClick: () => { void _addParticipantFromSuggestion(suggestion); },
+                    }))
+                    : [],
+                footnote: !participantCount
+                    ? 'You can always switch to a Gallery template if a blank start feels too open-ended.'
+                    : progress.nextStep === 'stage'
+                        ? 'Add one concrete step first. You can refine description and policies after the flow is visible.'
+                        : 'Once the first transition exists, you can keep adding parallel steps, artifacts, and review loops.',
             },
         };
     }
@@ -1351,7 +1362,7 @@ function renderProtocolWorkspace(container) {
         const workflow = _workflowData();
         if (selection.sectionKey === 'overview' || !selection.nodeKey) {
             if (workflow.firstRun?.active) {
-                return _starterPanelEl(workflow);
+                return null;
             }
             return Kit.detailsPanel({
                 target: {
@@ -1516,85 +1527,6 @@ function renderProtocolWorkspace(container) {
         return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
     }
 
-    function _starterPanelEl(workflow) {
-        const progress = _workflowProgress();
-        const panel = document.createElement('aside');
-        panel.className = 'kit-details-panel protocol-starter-panel';
-
-        const eyebrow = document.createElement('div');
-        eyebrow.className = 'protocol-starter-eyebrow';
-        eyebrow.textContent = progress.participantCount ? 'Next up' : 'Blank workflow';
-        panel.appendChild(eyebrow);
-
-        const title = document.createElement('h3');
-        title.className = 'protocol-starter-title';
-        title.textContent = progress.nextStep === 'participant'
-            ? 'Start with the first role in this workflow'
-            : progress.nextStep === 'stage'
-                ? 'Add the first step that role should handle'
-                : 'Connect the workflow so it can finish clearly';
-        panel.appendChild(title);
-
-        const body = document.createElement('p');
-        body.className = 'protocol-starter-body';
-        body.textContent = progress.nextStep === 'participant'
-            ? 'Pick a participant first. You can use a connected agent, a role, or a skill-based rule, then refine it in the details panel.'
-            : progress.nextStep === 'stage'
-                ? 'Stages are the visible workflow steps. Start with one concrete step, then connect later steps only when you need them.'
-                : 'Transitions describe what happens next after a stage completes. Connect to another stage or finish outcome to make the flow readable.';
-        panel.appendChild(body);
-
-        const steps = document.createElement('ol');
-        steps.className = 'protocol-starter-steps';
-        [
-            { label: 'Participant', done: progress.participantCount > 0, active: progress.nextStep === 'participant' },
-            { label: 'Stage', done: progress.stageCount > 0, active: progress.nextStep === 'stage' },
-            { label: 'Transition', done: progress.edgeCount > 0, active: progress.nextStep === 'transition' },
-        ].forEach((step) => {
-            const item = document.createElement('li');
-            item.className = `protocol-starter-step${step.done ? ' is-complete' : ''}${step.active ? ' is-active' : ''}`;
-            const badge = document.createElement('span');
-            badge.className = 'protocol-starter-step-badge';
-            badge.textContent = step.done ? 'Done' : step.active ? 'Now' : 'Later';
-            item.appendChild(badge);
-            const text = document.createElement('span');
-            text.className = 'protocol-starter-step-label';
-            text.textContent = step.label;
-            item.appendChild(text);
-            steps.appendChild(item);
-        });
-        panel.appendChild(steps);
-
-        if (!progress.participantCount) {
-            const suggestions = _participantSelectorSuggestions().slice(0, 3);
-            if (suggestions.length) {
-                const suggestTitle = document.createElement('div');
-                suggestTitle.className = 'protocol-starter-suggestions-title';
-                suggestTitle.textContent = 'Quick starts';
-                panel.appendChild(suggestTitle);
-                const suggestRow = document.createElement('div');
-                suggestRow.className = 'protocol-starter-suggestions';
-                suggestions.forEach((suggestion) => {
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = 'btn btn-small';
-                    btn.textContent = String(suggestion.label || suggestion.displayName || 'Use this role');
-                    btn.addEventListener('click', () => { void _addParticipantFromSuggestion(suggestion); });
-                    suggestRow.appendChild(btn);
-                });
-                panel.appendChild(suggestRow);
-            }
-        }
-
-        const foot = document.createElement('div');
-        foot.className = 'protocol-starter-foot';
-        foot.textContent = progress.participantCount
-            ? 'You can still rename the workflow and edit description later.'
-            : 'You can always switch to a Gallery template if a blank start feels too open-ended.';
-        panel.appendChild(foot);
-        return panel;
-    }
-
     function _validationEl() {
         const normalized = [];
         if (saveState.state === 'conflict' && draftConflict?.serverDetail?.protocol) {
@@ -1692,7 +1624,10 @@ function renderProtocolWorkspace(container) {
 
         const detailsColumn = document.createElement('div');
         detailsColumn.className = 'kit-authoring-details-column';
-        detailsColumn.appendChild(_detailsEl());
+        const details = _detailsEl();
+        if (details) {
+            detailsColumn.appendChild(details);
+        }
         const validation = _validationEl();
         if (validation) detailsColumn.appendChild(validation);
         if (rehearsal.runId) {
@@ -1703,7 +1638,9 @@ function renderProtocolWorkspace(container) {
                 onRespond: (payload) => { void _respondRehearsal(payload); },
             }));
         }
-        workspace.appendChild(detailsColumn);
+        if (detailsColumn.childElementCount) {
+            workspace.appendChild(detailsColumn);
+        }
 
         contentEl.replaceChildren(headerEl, workspace);
         _lifecycleHeaderRef = headerEl;

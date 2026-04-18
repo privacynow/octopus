@@ -1103,6 +1103,7 @@ function renderProtocolWorkspace(container) {
 
     function _workflowData() {
         const doc = draft.document;
+        const participantCount = (doc.participants || []).length;
         const stageCounts = new Map();
         (doc.stages || []).forEach((item) => {
             const key = String(item.participant_key || '').trim();
@@ -1113,6 +1114,7 @@ function renderProtocolWorkspace(container) {
             String(item.display_name || item.participant_key || ''),
         ]));
         const stageCount = (doc.stages || []).length;
+        const hasStages = stageCount > 0;
         const lanes = [
             ...(doc.participants || []).map((item) => ({
                 key: String(item.participant_key || ''),
@@ -1121,11 +1123,11 @@ function renderProtocolWorkspace(container) {
                     || `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} stage${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
                 empty: Kit.dict.label('protocol.stages.firstrun'),
             })),
-            {
+            ...(hasStages ? [{
                 key: '__outcomes__',
                 label: Kit.dict.label('protocol.workflow.outcomes'),
                 sublabel: Kit.dict.label('protocol.workflow.outcomes_hint'),
-            },
+            }] : []),
         ];
         const nodes = [
             ...(doc.stages || []).map((item, index) => ({
@@ -1146,7 +1148,7 @@ function renderProtocolWorkspace(container) {
                     },
                 ],
             })),
-            ...PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
+            ...(hasStages ? PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
                 id: item.key,
                 kind: 'terminal',
                 laneKey: '__outcomes__',
@@ -1154,7 +1156,7 @@ function renderProtocolWorkspace(container) {
                 label: item.label,
                 sublabel: 'Workflow stops here',
                 isTerminal: true,
-            })),
+            })) : []),
         ];
         const edges = _transitionEntries(doc).map((edge) => ({
             id: edge.id,
@@ -1194,20 +1196,22 @@ function renderProtocolWorkspace(container) {
                     onClick: () => _addNode('stages'),
                 },
             ],
-            accessorySections: [
-                {
-                    key: 'artifacts',
-                    title: Kit.dict.label('protocol.workflow.artifacts'),
-                    addLabel: Kit.dict.label('protocol.artifacts.add'),
-                    onAdd: () => _addNode('artifacts'),
-                    onSelect: (item) => {
-                        selection = { sectionKey: 'artifacts', nodeKey: item.id };
-                        render();
+            accessorySections: (artifactItems.length || hasStages || participantCount > 0)
+                ? [
+                    {
+                        key: 'artifacts',
+                        title: Kit.dict.label('protocol.workflow.artifacts'),
+                        addLabel: Kit.dict.label('protocol.artifacts.add'),
+                        onAdd: () => _addNode('artifacts'),
+                        onSelect: (item) => {
+                            selection = { sectionKey: 'artifacts', nodeKey: item.id };
+                            render();
+                        },
+                        empty: Kit.dict.label('protocol.artifacts.firstrun'),
+                        items: artifactItems,
                     },
-                    empty: Kit.dict.label('protocol.artifacts.firstrun'),
-                    items: artifactItems,
-                },
-            ],
+                ]
+                : [],
             firstRun: {
                 active: Boolean(firstRunActions.length),
                 title: Kit.dict.label('protocol.canvas.empty.title'),
@@ -1483,6 +1487,10 @@ function renderProtocolWorkspace(container) {
                     ),
                 },
             });
+        }
+        const workflow = _workflowData();
+        if (workflow.firstRun?.active) {
+            return null;
         }
         const validation = currentProtocol?.validation;
         if (!validation && !normalized.length) return null;

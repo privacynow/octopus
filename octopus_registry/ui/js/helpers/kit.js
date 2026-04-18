@@ -1151,7 +1151,9 @@ window.Kit = (() => {
             }
         });
 
-        if (mode === 'narrow') {
+        if (!nodes.length && !lanes.length) {
+            // True blank-first-run state: no fake graph, no decorative lanes.
+        } else if (mode === 'narrow') {
             const list = document.createElement('div');
             list.className = 'kit-workflow-narrow';
             if (!nodes.length) {

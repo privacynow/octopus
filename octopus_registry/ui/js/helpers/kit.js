@@ -1038,6 +1038,8 @@ window.Kit = (() => {
         laneLabels = {},
         outcomes = null,
         viewState = null,
+        viewportState = {},
+        onViewportChange = null,
     } = {}) {
         const root = document.createElement('section');
         root.className = `kit-workflow-canvas kit-workflow-canvas-${mode} kit-workflow-view-${String(viewState?.kind || 'focus')}`;
@@ -1264,9 +1266,13 @@ window.Kit = (() => {
         } else {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
-            const isOverview = viewState?.kind === 'overview';
+            const currentView = String(viewState?.kind || 'focus');
+            const isOverview = currentView === 'overview';
+            const isFull = currentView === 'full';
+            const denseMode = isOverview || isFull || nodes.length >= 8;
+            const showLaneStrip = lanes.length && !isOverview;
 
-            if (lanes.length) {
+            if (showLaneStrip) {
                 const laneStrip = document.createElement('div');
                 laneStrip.className = 'kit-workflow-lane-strip';
                 lanes.forEach((lane) => {
@@ -1283,40 +1289,45 @@ window.Kit = (() => {
                 shell.appendChild(laneStrip);
             }
 
-            const laneHeight = isOverview ? 92 : 126;
-            const laneGap = isOverview ? 16 : 18;
-            const columnWidth = isOverview ? 152 : 228;
-            const columnGap = isOverview ? 16 : 40;
-            const nodeWidth = isOverview ? 136 : 212;
-            const stageHeight = isOverview ? 84 : 110;
-            const terminalHeight = 88;
-            const leftPad = isOverview ? 18 : 132;
-            const rightPad = isOverview ? 18 : 40;
-            const bottomPad = isOverview ? 20 : 36;
+            const controls = document.createElement('div');
+            controls.className = 'kit-workflow-controls';
+            const viewport = document.createElement('div');
+            viewport.className = 'kit-workflow-viewport';
+
+            const rowHeight = isOverview ? 78 : denseMode ? 92 : 108;
+            const rowGap = isOverview ? 12 : denseMode ? 14 : 18;
+            const nodeWidth = isOverview ? 172 : denseMode ? 186 : 208;
+            const stageHeight = isOverview ? 78 : denseMode ? 92 : 108;
+            const terminalHeight = denseMode ? 72 : 84;
+            const columnGap = isOverview ? 18 : denseMode ? 28 : 38;
+            const leftPad = isOverview ? 28 : lanes.length ? 136 : 28;
+            const rightPad = denseMode ? 24 : 36;
+            const bottomPad = 24;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
                 if (Number.isFinite(Number(node.row))) return Number(node.row);
                 const laneRow = laneIndex.get(String(node.laneKey || ''));
                 return Number.isFinite(Number(laneRow)) ? Number(laneRow) : 0;
             };
+            const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
             const backEdges = edges.filter((edge) => {
-                const fromNode = nodes.find((node) => String(node.id || '') === String(edge.from || ''));
-                const toNode = nodes.find((node) => String(node.id || '') === String(edge.to || ''));
+                const fromNode = nodeById.get(String(edge.from || ''));
+                const toNode = nodeById.get(String(edge.to || ''));
                 return toNode && fromNode && Number(toNode.column || 0) <= Number(fromNode.column || 0);
             });
-            const routeHeadroom = backEdges.length ? 28 + (backEdges.length * 26) : 28;
-            const topPad = (isOverview ? 18 : 28) + routeHeadroom;
+            const routeHeadroom = backEdges.length ? 20 + (backEdges.length * 22) : 20;
+            const topPad = 18 + routeHeadroom;
             const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
             const maxRow = Math.max(0, ...nodes.map((node) => nodeRow(node)));
-            const graphWidth = leftPad + rightPad + ((maxColumn + 1) * columnWidth) + (Math.max(0, maxColumn) * columnGap);
-            const graphHeight = topPad + bottomPad + ((maxRow + 1) * laneHeight) + (Math.max(0, maxRow) * laneGap);
+            const graphWidth = leftPad + rightPad + ((maxColumn + 1) * nodeWidth) + (Math.max(0, maxColumn) * columnGap);
+            const graphHeight = topPad + bottomPad + ((maxRow + 1) * rowHeight) + (Math.max(0, maxRow) * rowGap);
 
             const layout = new Map();
             nodes.forEach((node) => {
                 const row = Math.max(0, nodeRow(node));
                 const height = node.isTerminal ? terminalHeight : stageHeight;
-                const x = leftPad + (Number(node.column || 0) * (columnWidth + columnGap));
-                const y = topPad + (row * (laneHeight + laneGap)) + Math.max(0, Math.floor((laneHeight - height) / 2));
+                const x = leftPad + (Number(node.column || 0) * (nodeWidth + columnGap));
+                const y = topPad + (row * (rowHeight + rowGap)) + Math.max(0, Math.floor((rowHeight - height) / 2));
                 layout.set(String(node.id || ''), {
                     x,
                     y,
@@ -1327,8 +1338,8 @@ window.Kit = (() => {
                 });
             });
 
-            const viewport = document.createElement('div');
-            viewport.className = 'kit-workflow-viewport';
+            const graphFrame = document.createElement('div');
+            graphFrame.className = 'kit-workflow-frame';
 
             const graph = document.createElement('div');
             graph.className = 'kit-workflow-graph';
@@ -1336,55 +1347,71 @@ window.Kit = (() => {
             graph.style.height = `${graphHeight}px`;
             graph.style.setProperty('--workflow-columns', String(Math.max(1, maxColumn + 1)));
             graph.style.setProperty('--workflow-rows', String(Math.max(1, maxRow + 1)));
+            graph.style.setProperty('--workflow-lane-gutter', `${leftPad}px`);
 
-            const bandsLayer = document.createElement('div');
-            bandsLayer.className = 'kit-workflow-band-layer';
+            const guidesLayer = document.createElement('div');
+            guidesLayer.className = 'kit-workflow-guide-layer';
             lanes.forEach((lane) => {
-                const band = document.createElement('div');
-                band.className = 'kit-workflow-band';
+                const guide = document.createElement('div');
+                guide.className = 'kit-workflow-lane-guide';
                 const laneMeta = laneLabels[String(lane.key || '')] || {};
                 const row = Math.max(0, Number(laneMeta.row || laneIndex.get(String(lane.key || '')) || 0));
-                band.style.top = `${topPad + (row * (laneHeight + laneGap))}px`;
-                band.style.height = `${laneHeight}px`;
+                guide.style.top = `${topPad + (row * (rowHeight + rowGap))}px`;
+                guide.style.height = `${rowHeight}px`;
                 const label = document.createElement('button');
                 label.type = 'button';
-                label.className = `kit-workflow-band-label${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
+                label.className = `kit-workflow-lane-guide-label${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
+                label.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
                 label.textContent = String(laneMeta.label || lane.label || lane.key || '');
                 if (typeof onSelect === 'function') {
                     label.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
                 }
-                band.appendChild(label);
-                if (laneMeta.sublabel) {
+                guide.appendChild(label);
+                if (laneMeta.sublabel && !denseMode) {
                     const sub = document.createElement('div');
-                    sub.className = 'kit-workflow-band-sublabel';
+                    sub.className = 'kit-workflow-lane-guide-sublabel';
                     sub.textContent = String(laneMeta.sublabel || '');
-                    band.appendChild(sub);
+                    guide.appendChild(sub);
                 }
-                bandsLayer.appendChild(band);
+                const rule = document.createElement('div');
+                rule.className = 'kit-workflow-lane-guide-rule';
+                guide.appendChild(rule);
+                guidesLayer.appendChild(guide);
             });
             if (outcomes && Number(outcomes.count || 0) > 0) {
-                const band = document.createElement('div');
-                band.className = 'kit-workflow-band is-outcomes';
-                band.style.top = `${topPad + (Number(outcomes.startRow || 0) * (laneHeight + laneGap))}px`;
-                band.style.height = `${(Number(outcomes.count || 0) * laneHeight) + (Math.max(0, Number(outcomes.count || 0) - 1) * laneGap)}px`;
+                const guide = document.createElement('div');
+                guide.className = 'kit-workflow-lane-guide is-outcomes';
+                guide.style.top = `${topPad + (Number(outcomes.startRow || 0) * (rowHeight + rowGap))}px`;
+                guide.style.height = `${(Number(outcomes.count || 0) * rowHeight) + (Math.max(0, Number(outcomes.count || 0) - 1) * rowGap)}px`;
                 const label = document.createElement('div');
-                label.className = 'kit-workflow-band-label is-static';
+                label.className = 'kit-workflow-lane-guide-label is-static';
                 label.textContent = String(outcomes.label || 'Outcomes');
-                band.appendChild(label);
-                if (outcomes.hint) {
-                    const sub = document.createElement('div');
-                    sub.className = 'kit-workflow-band-sublabel';
-                    sub.textContent = String(outcomes.hint || '');
-                    band.appendChild(sub);
-                }
-                bandsLayer.appendChild(band);
+                guide.appendChild(label);
+                const rule = document.createElement('div');
+                rule.className = 'kit-workflow-lane-guide-rule';
+                guide.appendChild(rule);
+                guidesLayer.appendChild(guide);
             }
-            graph.appendChild(bandsLayer);
+            graph.appendChild(guidesLayer);
 
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.setAttribute('class', 'kit-workflow-edges');
             svg.setAttribute('aria-hidden', 'true');
             svg.setAttribute('viewBox', `0 0 ${graphWidth} ${graphHeight}`);
+            const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+            const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+            marker.setAttribute('id', 'kit-workflow-arrow');
+            marker.setAttribute('markerWidth', '10');
+            marker.setAttribute('markerHeight', '10');
+            marker.setAttribute('refX', '8');
+            marker.setAttribute('refY', '5');
+            marker.setAttribute('orient', 'auto');
+            const markerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            markerPath.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+            markerPath.setAttribute('fill', 'currentColor');
+            marker.appendChild(markerPath);
+            defs.appendChild(marker);
+            svg.appendChild(defs);
             graph.appendChild(svg);
 
             const labelsLayer = document.createElement('div');
@@ -1424,6 +1451,7 @@ window.Kit = (() => {
                 btn.className = `kit-workflow-node kit-workflow-node-${node.kind || 'stage'}`;
                 btn.dataset.nodeId = String(node.id || '');
                 btn.dataset.testid = `workflow-node-${String(node.id || '')}`;
+                btn.title = String(node.label || node.id || '');
                 btn.draggable = Boolean(node.kind === 'stage' && typeof onMutate === 'function');
                 if (node.kind === 'stage' && typeof onMutate === 'function') {
                     btn.addEventListener('dragstart', () => {
@@ -1446,17 +1474,33 @@ window.Kit = (() => {
                     btn.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
                 }
 
-                if (Array.isArray(node.badges) && node.badges.length) {
+                const metaRow = document.createElement('div');
+                metaRow.className = 'kit-workflow-node-meta';
+                const visibleBadges = (Array.isArray(node.badges) ? node.badges : []).slice(0, denseMode ? 1 : 2);
+                if (visibleBadges.length) {
                     const badgeRow = document.createElement('div');
                     badgeRow.className = 'kit-workflow-node-badges';
-                    node.badges.forEach((badge) => {
+                    visibleBadges.forEach((badge) => {
                         if (!badge) return;
                         const chip = document.createElement('span');
                         chip.className = `kit-workflow-node-badge${badge.tone ? ` is-${badge.tone}` : ''}`;
                         chip.textContent = String(badge.label || '');
                         badgeRow.appendChild(chip);
                     });
-                    btn.appendChild(badgeRow);
+                    metaRow.appendChild(badgeRow);
+                }
+
+                const state = nodeStates && Object.prototype.hasOwnProperty.call(nodeStates, String(node.id || ''))
+                    ? String(nodeStates[String(node.id || '')] || '')
+                    : '';
+                if (state) {
+                    const badge = document.createElement('span');
+                    badge.className = `kit-workflow-node-state kit-workflow-node-state-${state}`;
+                    badge.textContent = state;
+                    metaRow.appendChild(badge);
+                }
+                if (metaRow.childElementCount) {
+                    btn.appendChild(metaRow);
                 }
 
                 const label = document.createElement('div');
@@ -1471,18 +1515,7 @@ window.Kit = (() => {
                     btn.appendChild(sub);
                 }
 
-                const state = nodeStates && Object.prototype.hasOwnProperty.call(nodeStates, String(node.id || ''))
-                    ? String(nodeStates[String(node.id || '')] || '')
-                    : '';
-                if (state) {
-                    const badge = document.createElement('span');
-                    badge.className = `kit-workflow-node-state kit-workflow-node-state-${state}`;
-                    badge.textContent = state;
-                    btn.appendChild(badge);
-                }
-
                 wrap.appendChild(btn);
-
                 nodesLayer.appendChild(wrap);
             });
 
@@ -1494,6 +1527,13 @@ window.Kit = (() => {
                     backEdgeOrder.set(String(edge.id || ''), backEdgeOrder.size);
                 }
             });
+            const labelSlots = new Map();
+            function reserveLabelPosition(x, y) {
+                const key = `${Math.round(Number(x || 0) / 56)}:${Math.round(Number(y || 0) / 28)}`;
+                const count = Number(labelSlots.get(key) || 0);
+                labelSlots.set(key, count + 1);
+                return { x, y: Number(y || 0) + (count * 18) };
+            }
 
             edges.forEach((edge) => {
                 const fromLayout = layout.get(String(edge.from || ''));
@@ -1513,9 +1553,9 @@ window.Kit = (() => {
 
                 if (isBackEdge) {
                     const bandIndex = Number(backEdgeOrder.get(String(edge.id || '')) || 0);
-                    const trackY = 22 + (bandIndex * 26);
-                    const exitX = fromX + 28;
-                    const entryX = Math.max(leftPad - 8, toX - 28);
+                    const trackY = 16 + (bandIndex * 22);
+                    const exitX = fromX + 18;
+                    const entryX = Math.max(leftPad - 10, toX - 18);
                     pathData = [
                         `M ${fromX} ${fromY}`,
                         `L ${exitX} ${fromY}`,
@@ -1527,7 +1567,7 @@ window.Kit = (() => {
                     labelX = entryX + ((exitX - entryX) / 2);
                     labelY = trackY;
                 } else {
-                    const bendX = fromX + Math.max(44, Math.floor((toX - fromX) / 2));
+                    const bendX = fromX + Math.max(26, Math.floor((toX - fromX) / 2));
                     pathData = [
                         `M ${fromX} ${fromY}`,
                         `L ${bendX} ${fromY}`,
@@ -1538,7 +1578,7 @@ window.Kit = (() => {
                         labelX = fromX + ((toX - fromX) / 2);
                         labelY = fromY - 18;
                     } else {
-                        labelX = bendX + 12;
+                        labelX = bendX;
                         labelY = fromY + ((toY - fromY) / 2);
                     }
                 }
@@ -1546,24 +1586,84 @@ window.Kit = (() => {
                 const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 path.setAttribute('class', `kit-workflow-edge-path${selected ? ' is-selected' : ''}`);
                 path.setAttribute('d', pathData);
+                path.setAttribute('marker-end', 'url(#kit-workflow-arrow)');
                 svg.appendChild(path);
 
+                if (edge.showLabel === false || !String(edge.label || '').trim()) {
+                    return;
+                }
+                const reserved = reserveLabelPosition(labelX, labelY);
                 const label = document.createElement('button');
                 label.type = 'button';
                 label.className = `kit-workflow-edge-label${selected ? ' is-selected' : ''}`;
                 label.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
                 label.textContent = String(edge.label || '');
-                label.style.left = `${labelX}px`;
-                label.style.top = `${labelY}px`;
+                label.style.left = `${reserved.x}px`;
+                label.style.top = `${reserved.y}px`;
                 if (typeof onSelect === 'function') {
                     label.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
                 }
                 labelsLayer.appendChild(label);
             });
 
-            viewport.appendChild(graph);
+            const defaultZoom = Object.prototype.hasOwnProperty.call(viewportState || {}, 'zoom')
+                ? viewportState.zoom
+                : (isOverview || isFull ? 'fit' : 1);
+            function resolvedZoomValue() {
+                return Math.max(0.55, Math.min(1.5, Number(graph.dataset.zoomResolved || 1) || 1));
+            }
+            function computeFitZoom() {
+                const viewportWidth = Math.max(320, Number(viewport.clientWidth || 0) - 12);
+                return Math.max(0.55, Math.min(1, viewportWidth / Math.max(graphWidth, 1)));
+            }
+            function applyZoom(nextZoom, notify = true) {
+                const zoomValue = nextZoom === 'fit'
+                    ? computeFitZoom()
+                    : Math.max(0.55, Math.min(1.5, Number(nextZoom || 1) || 1));
+                graph.dataset.zoomResolved = String(zoomValue);
+                graph.style.transform = `scale(${zoomValue})`;
+                graphFrame.style.width = `${graphWidth * zoomValue}px`;
+                graphFrame.style.height = `${graphHeight * zoomValue}px`;
+                controls.dataset.zoom = nextZoom === 'fit' ? 'fit' : String(zoomValue);
+                if (notify && typeof onViewportChange === 'function') {
+                    onViewportChange(nextZoom === 'fit' ? 'fit' : zoomValue);
+                }
+            }
+
+            const fitBtn = document.createElement('button');
+            fitBtn.type = 'button';
+            fitBtn.className = 'btn btn-small';
+            fitBtn.textContent = 'Fit';
+            fitBtn.addEventListener('click', () => applyZoom('fit'));
+            controls.appendChild(fitBtn);
+
+            const zoomOut = document.createElement('button');
+            zoomOut.type = 'button';
+            zoomOut.className = 'btn btn-small';
+            zoomOut.textContent = '−';
+            zoomOut.addEventListener('click', () => applyZoom(resolvedZoomValue() - 0.12));
+            controls.appendChild(zoomOut);
+
+            const zoomReset = document.createElement('button');
+            zoomReset.type = 'button';
+            zoomReset.className = 'btn btn-small';
+            zoomReset.textContent = '100%';
+            zoomReset.addEventListener('click', () => applyZoom(1));
+            controls.appendChild(zoomReset);
+
+            const zoomIn = document.createElement('button');
+            zoomIn.type = 'button';
+            zoomIn.className = 'btn btn-small';
+            zoomIn.textContent = '+';
+            zoomIn.addEventListener('click', () => applyZoom(resolvedZoomValue() + 0.12));
+            controls.appendChild(zoomIn);
+
+            graphFrame.appendChild(graph);
+            viewport.appendChild(graphFrame);
+            shell.appendChild(controls);
             shell.appendChild(viewport);
             root.appendChild(shell);
+            requestAnimationFrame(() => applyZoom(defaultZoom, false));
         }
 
         const extras = Array.isArray(accessorySections) ? accessorySections.filter(Boolean) : [];

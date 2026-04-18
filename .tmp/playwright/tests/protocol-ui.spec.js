@@ -102,8 +102,29 @@ test.describe('protocol authoring live', () => {
 
     await page.getByRole('button', { name: 'All steps' }).click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('All steps');
+    await expect(page.getByRole('button', { name: 'Fit' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '100%' })).toBeVisible();
     await expect(page.getByTestId('workflow-node-implementation')).toBeVisible();
     await expect(page.getByTestId('workflow-node-acceptance')).toBeVisible();
+    const labelOverlaps = await page.evaluate(() => {
+      const edgeLabels = [...document.querySelectorAll('.kit-workflow-edge-label')].map((element) => ({
+        id: element.getAttribute('data-testid') || element.textContent || 'edge-label',
+        rect: element.getBoundingClientRect(),
+      }));
+      const nodes = [...document.querySelectorAll('.kit-workflow-node')].map((element) => ({
+        id: element.getAttribute('data-testid') || element.getAttribute('data-node-id') || 'node',
+        rect: element.getBoundingClientRect(),
+      }));
+      return edgeLabels.flatMap((label) =>
+        nodes
+          .filter((node) =>
+            label.rect.left < node.rect.right
+            && label.rect.right > node.rect.left
+            && label.rect.top < node.rect.bottom
+            && label.rect.bottom > node.rect.top)
+          .map((node) => `${label.id}:${node.id}`));
+    });
+    expect(labelOverlaps).toEqual([]);
 
     await page.getByRole('button', { name: 'Back to overview' }).click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');

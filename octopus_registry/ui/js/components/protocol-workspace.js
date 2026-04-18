@@ -191,6 +191,7 @@ function renderProtocolWorkspace(container) {
     };
     let documentHistory = { undo: [], redo: [] };
     let workflowView = { kind: 'focus', segmentId: '' };
+    let workflowViewport = { overview: 'fit', focus: 1, full: 'fit' };
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
     let draft = {
@@ -252,6 +253,26 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    function _defaultWorkflowZoom(kind) {
+        return String(kind || 'focus') === 'focus' ? 1 : 'fit';
+    }
+
+    function _workflowViewportValue(kind = workflowView.kind) {
+        const key = String(kind || 'focus');
+        return Object.prototype.hasOwnProperty.call(workflowViewport, key)
+            ? workflowViewport[key]
+            : _defaultWorkflowZoom(key);
+    }
+
+    function _setWorkflowViewport(kind, zoom, { renderNow = false } = {}) {
+        const key = String(kind || workflowView.kind || 'focus');
+        workflowViewport = {
+            ...workflowViewport,
+            [key]: zoom === 'fit' ? 'fit' : Math.max(0.55, Math.min(1.5, Number(zoom || 1) || 1)),
+        };
+        if (renderNow) render();
+    }
+
     function _setWorkflowView(next, { renderNow = true, persist = true } = {}) {
         workflowView = {
             kind: 'focus',
@@ -262,6 +283,9 @@ function renderProtocolWorkspace(container) {
         workflowView.segmentId = String(workflowView.segmentId || '');
         if (workflowView.kind === 'overview') {
             selection = { sectionKey: 'overview', nodeKey: '' };
+        }
+        if (!Object.prototype.hasOwnProperty.call(workflowViewport, workflowView.kind)) {
+            _setWorkflowViewport(workflowView.kind, _defaultWorkflowZoom(workflowView.kind));
         }
         if (persist) _persistWorkflowView();
         if (renderNow) render();
@@ -420,7 +444,7 @@ function renderProtocolWorkspace(container) {
     function _defaultWorkflowView(doc = draft.document) {
         const stageCount = Array.isArray(doc?.stages) ? doc.stages.length : 0;
         return {
-            kind: stageCount >= 6 ? 'overview' : 'focus',
+            kind: stageCount >= 10 ? 'overview' : stageCount >= 6 ? 'full' : 'focus',
             segmentId: '',
         };
     }
@@ -444,10 +468,15 @@ function renderProtocolWorkspace(container) {
         return `segment:${String(stageKey || '').trim()}`;
     }
 
+    function _sortedGraphKeys(keys, documentIndex) {
+        return [...keys].sort((left, right) =>
+            Number(documentIndex.get(String(left || '')) || 0) - Number(documentIndex.get(String(right || '')) || 0));
+    }
+
     function _stageTopology(doc = draft.document) {
         const stages = Array.isArray(doc?.stages) ? doc.stages : [];
         const stageByKey = new Map(stages.map((item) => [String(item.stage_key || ''), item]));
-        const orderIndex = new Map(stages.map((item, index) => [String(item.stage_key || ''), index]));
+        const documentIndex = new Map(stages.map((item, index) => [String(item.stage_key || ''), index]));
         const outgoingStage = new Map();
         const incomingStage = new Map();
         const outgoingTerminal = new Map();
@@ -477,25 +506,85 @@ function renderProtocolWorkspace(container) {
                 }
             });
         });
+        const orderedStageKeys = _sortedGraphKeys(stageByKey.keys(), documentIndex);
+        const visitState = new Map();
+        const backEdgeIds = new Set();
+        function walk(stageKey) {
+            visitState.set(stageKey, 'visiting');
+            const outgoing = _sortedGraphKeys(
+                (outgoingStage.get(stageKey) || []).map((edge) => String(edge.to || '')),
+                documentIndex,
+            ).map((targetKey) => (outgoingStage.get(stageKey) || []).find((edge) => String(edge.to || '') === targetKey)).filter(Boolean);
+            outgoing.forEach((edge) => {
+                const targetKey = String(edge.to || '');
+                const state = visitState.get(targetKey);
+                if (state === 'visiting') {
+                    backEdgeIds.add(String(edge.id || ''));
+                    return;
+                }
+                if (state === 'done') return;
+                if (!stageByKey.has(targetKey)) return;
+                walk(targetKey);
+            });
+            visitState.set(stageKey, 'done');
+        }
+        orderedStageKeys.forEach((stageKey) => {
+            if (!visitState.has(stageKey)) walk(stageKey);
+        });
+
+        const forwardOutgoingStage = new Map(stages.map((item) => [String(item.stage_key || ''), []]));
+        const forwardIncomingStage = new Map(stages.map((item) => [String(item.stage_key || ''), []]));
+        stages.forEach((stage) => {
+            const sourceKey = String(stage.stage_key || '');
+            (outgoingStage.get(sourceKey) || []).forEach((edge) => {
+                if (backEdgeIds.has(String(edge.id || ''))) return;
+                forwardOutgoingStage.get(sourceKey)?.push(edge);
+                forwardIncomingStage.get(String(edge.to || ''))?.push(edge);
+            });
+        });
+
+        const rank = new Map(orderedStageKeys.map((stageKey) => [stageKey, 0]));
+        const indegree = new Map(orderedStageKeys.map((stageKey) => [stageKey, Number((forwardIncomingStage.get(stageKey) || []).length)]));
+        const queue = orderedStageKeys.filter((stageKey) => Number(indegree.get(stageKey) || 0) === 0);
+        while (queue.length) {
+            const stageKey = queue.shift();
+            const sourceRank = Number(rank.get(stageKey) || 0);
+            const outgoing = _sortedGraphKeys(
+                (forwardOutgoingStage.get(stageKey) || []).map((edge) => String(edge.to || '')),
+                documentIndex,
+            ).map((targetKey) => (forwardOutgoingStage.get(stageKey) || []).find((edge) => String(edge.to || '') === targetKey)).filter(Boolean);
+            outgoing.forEach((edge) => {
+                const targetKey = String(edge.to || '');
+                rank.set(targetKey, Math.max(Number(rank.get(targetKey) || 0), sourceRank + 1));
+                indegree.set(targetKey, Math.max(0, Number(indegree.get(targetKey) || 0) - 1));
+                if (Number(indegree.get(targetKey) || 0) === 0 && !queue.includes(targetKey)) {
+                    queue.push(targetKey);
+                    queue.sort((left, right) =>
+                        Number(documentIndex.get(String(left || '')) || 0) - Number(documentIndex.get(String(right || '')) || 0));
+                }
+            });
+        }
         return {
             stages,
             stageByKey,
-            orderIndex,
+            documentIndex,
             outgoingStage,
             incomingStage,
             outgoingTerminal,
+            forwardOutgoingStage,
+            forwardIncomingStage,
+            backEdgeIds,
+            rank,
         };
     }
 
     function _singleForwardStageTarget(stage, topology) {
         const sourceKey = String(stage?.stage_key || '');
         if (!sourceKey) return '';
-        const sourceIndex = Number(topology.orderIndex.get(sourceKey) || 0);
-        const targets = (topology.outgoingStage.get(sourceKey) || [])
+        const targets = (topology.forwardOutgoingStage.get(sourceKey) || [])
             .map((edge) => String(edge.to || '').trim())
             .filter((targetKey, index, items) =>
                 targetKey
-                && Number(topology.orderIndex.get(targetKey) || 0) > sourceIndex
                 && items.indexOf(targetKey) === index);
         return targets.length === 1 ? targets[0] : '';
     }
@@ -505,7 +594,7 @@ function renderProtocolWorkspace(container) {
         if (String(currentStage.stage_kind || 'work') !== 'work') return false;
         if ((topology.outgoingTerminal.get(String(currentStage.stage_key || '')) || []).length) return false;
         if (_singleForwardStageTarget(currentStage, topology) !== String(nextStage.stage_key || '')) return false;
-        const incoming = topology.incomingStage.get(String(nextStage.stage_key || '')) || [];
+        const incoming = topology.forwardIncomingStage.get(String(nextStage.stage_key || '')) || [];
         if (incoming.length !== 1 || String(incoming[0]?.from || '') !== String(currentStage.stage_key || '')) return false;
         return (
             String(currentStage.participant_key || '') === String(nextStage.participant_key || '')
@@ -519,10 +608,10 @@ function renderProtocolWorkspace(container) {
         if (String(nextStage.stage_kind || 'work') === 'work') return false;
         if ((topology.outgoingTerminal.get(String(currentStage.stage_key || '')) || []).length) return false;
         if (_singleForwardStageTarget(currentStage, topology) !== String(nextStage.stage_key || '')) return false;
-        const incoming = topology.incomingStage.get(String(nextStage.stage_key || '')) || [];
+        const incoming = topology.forwardIncomingStage.get(String(nextStage.stage_key || '')) || [];
         if (incoming.length !== 1 || String(incoming[0]?.from || '') !== String(currentStage.stage_key || '')) return false;
         const chainKeys = new Set(chainStageKeys.map((item) => String(item || '').trim()).filter(Boolean));
-        const stageEdges = topology.outgoingStage.get(String(nextStage.stage_key || '')) || [];
+        const stageEdges = topology.forwardOutgoingStage.get(String(nextStage.stage_key || '')) || [];
         const externalTargets = Array.from(new Set(stageEdges
             .map((edge) => String(edge.to || '').trim())
             .filter((targetKey) => targetKey && !chainKeys.has(targetKey))));
@@ -531,7 +620,7 @@ function renderProtocolWorkspace(container) {
             const targetKey = String(edge.to || '').trim();
             if (!targetKey) return false;
             if (chainKeys.has(targetKey)) return true;
-            return Number(topology.orderIndex.get(targetKey) || 0) > Number(topology.orderIndex.get(String(nextStage.stage_key || '')) || 0);
+            return Number(topology.rank.get(targetKey) || 0) >= Number(topology.rank.get(String(nextStage.stage_key || '')) || 0);
         });
     }
 
@@ -668,10 +757,18 @@ function renderProtocolWorkspace(container) {
                 });
         });
 
+        segments.forEach((segment) => {
+            segment.column = Number(topology.rank.get(segment.startStageKey) || 0);
+        });
+        const minColumn = Math.min(...segments.map((segment) => Number(segment.column || 0)), 0);
+        segments.forEach((segment) => {
+            segment.column = Math.max(0, Number(segment.column || 0) - minColumn);
+        });
         const segmentOrder = segments
             .slice()
             .sort((a, b) =>
-                Number(topology.orderIndex.get(a.startStageKey) || 0) - Number(topology.orderIndex.get(b.startStageKey) || 0))
+                Number(topology.rank.get(a.startStageKey) || 0) - Number(topology.rank.get(b.startStageKey) || 0)
+                || Number(topology.documentIndex.get(a.startStageKey) || 0) - Number(topology.documentIndex.get(b.startStageKey) || 0))
             .map((segment) => segment.id);
         segmentOrder.forEach((segmentId) => {
             const segment = segmentsById.get(segmentId);
@@ -681,9 +778,9 @@ function renderProtocolWorkspace(container) {
                 .forEach((edge) => {
                     const target = segmentsById.get(edge.targetKey);
                     if (!target) return;
-                    const sourceIndex = Number(topology.orderIndex.get(segment.endStageKey) || 0);
-                    const targetIndex = Number(topology.orderIndex.get(target.startStageKey) || 0);
-                    if (targetIndex <= sourceIndex) return;
+                    const sourceIndex = Number(topology.rank.get(segment.endStageKey) || 0);
+                    const targetIndex = Number(topology.rank.get(target.startStageKey) || 0);
+                    if (targetIndex < sourceIndex) return;
                     target.column = Math.max(Number(target.column || 0), Number(segment.column || 0) + 1);
                 });
         });
@@ -753,6 +850,7 @@ function renderProtocolWorkspace(container) {
         draftConflict = null;
         documentHistory = { undo: [], redo: [] };
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        workflowViewport = { overview: 'fit', focus: 1, full: 'fit' };
         if (previousProtocolId && previousProtocolId !== String(detail?.protocol?.protocol_id || '')) {
             _stopRehearsalPolling();
             rehearsal.runId = '';
@@ -1747,22 +1845,22 @@ function renderProtocolWorkspace(container) {
 
     function _stageColumns(stageKeys, topology) {
         const orderedKeys = Array.isArray(stageKeys) ? stageKeys.map((item) => String(item || '').trim()).filter(Boolean) : [];
-        const orderIndex = new Map(orderedKeys.map((item, index) => [item, index]));
-        const columns = new Map(orderedKeys.map((item) => [item, 0]));
-
+        const columns = new Map(orderedKeys.map((item) => [item, Number(topology.rank.get(item) || 0)]));
+        const minimum = Math.min(...Array.from(columns.values()), 0);
         orderedKeys.forEach((stageKey) => {
-            const sourceColumn = Number(columns.get(stageKey) || 0);
-            (topology.outgoingStage.get(stageKey) || []).forEach((edge) => {
-                const targetKey = String(edge.to || '').trim();
-                if (!orderIndex.has(targetKey)) return;
-                const sourceIndex = Number(orderIndex.get(stageKey) || 0);
-                const targetIndex = Number(orderIndex.get(targetKey) || 0);
-                if (targetIndex <= sourceIndex) return;
-                columns.set(targetKey, Math.max(Number(columns.get(targetKey) || 0), sourceColumn + 1));
-            });
+            columns.set(stageKey, Math.max(0, Number(columns.get(stageKey) || 0) - minimum));
         });
-
         return columns;
+    }
+
+    function _stageNodeSublabel(stage) {
+        const reads = Number((stage.inputs || []).length || 0);
+        const writes = Number((stage.outputs || []).length || 0);
+        const parts = [];
+        if (reads) parts.push(`Reads ${reads}`);
+        if (writes) parts.push(`Writes ${writes}`);
+        if (!parts.length && String(stage.instructions || '').trim()) parts.push('Instructions ready');
+        return parts.join(' · ');
     }
 
     function _artifactAccessorySections() {
@@ -1877,24 +1975,23 @@ function renderProtocolWorkspace(container) {
                 row: Number(segment.row || 0),
                 column: Number(segment.column || 0),
                 label: segment.label,
-                sublabel: segment.roleSummary,
+                sublabel: [segment.stepSummary, segment.roleSummary].filter(Boolean).join(' · '),
                 badges: terminalCount
-                    ? [
-                        ...segment.badges,
-                        { tone: 'context', label: `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` },
-                    ]
-                    : segment.badges,
+                    ? [{ tone: 'context', label: `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` }]
+                    : [],
             };
         });
         const edges = [];
         projection.segments.forEach((segment) => {
             segment.outgoingEdges.forEach((edge) => {
                 if (edge.targetKind !== 'segment') return;
+                const showLabel = (segment.outgoingEdges || []).length > 1;
                 edges.push({
                     id: `overview::${edge.id}`,
                     from: segment.id,
                     to: edge.targetKey,
                     label: edge.label,
+                    showLabel,
                 });
             });
         });
@@ -1944,11 +2041,7 @@ function renderProtocolWorkspace(container) {
                     row: _stageLaneRow(item.participant_key, doc),
                     column: Number(columns.get(String(item.stage_key || '')) || 0),
                     label: String(item.display_name || item.stage_key || 'Untitled step'),
-                    sublabel: [
-                        (item.inputs || []).length ? `Reads ${(item.inputs || []).length}` : '',
-                        (item.outputs || []).length ? `Writes ${(item.outputs || []).length}` : '',
-                        String(item.instructions || '').trim() ? 'Instructions ready' : '',
-                    ].filter(Boolean).join(' · '),
+                    sublabel: _stageNodeSublabel(item),
                     badges: [
                         {
                             tone: String(item.stage_kind || 'work'),
@@ -1967,12 +2060,17 @@ function renderProtocolWorkspace(container) {
                     isTerminal: true,
                 })) : []),
             ],
-            edges: _transitionEntries(doc).map((edge) => ({
-                id: edge.id,
-                from: edge.from_stage_key,
-                to: edge.target_key,
-                label: _protocolDecisionLabel(edge.decision),
-            })),
+            edges: _transitionEntries(doc).map((edge) => {
+                const sourceStage = (doc.stages || []).find((item) => String(item.stage_key || '') === String(edge.from_stage_key || ''));
+                const sourceTransitionCount = Object.keys(sourceStage?.transitions || {}).length;
+                return {
+                    id: edge.id,
+                    from: edge.from_stage_key,
+                    to: edge.target_key,
+                    label: _protocolDecisionLabel(edge.decision),
+                    showLabel: progress.stageCount <= 6 || sourceTransitionCount > 1 || PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === String(edge.target_key || '')),
+                };
+            }),
             toolbarActions: _baseToolbarActions(progress, resolvedView, projection),
             accessorySections: _artifactAccessorySections(),
             firstRun: _firstRunState(progress),
@@ -1987,7 +2085,7 @@ function renderProtocolWorkspace(container) {
                 kind: isExpandedMap ? 'full' : 'focus',
                 title: isExpandedMap ? 'All steps' : 'Workflow',
                 subtitle: isExpandedMap
-                    ? 'Expanded map of every step in the workflow.'
+                    ? 'Expanded map of every step in the workflow. Use fit/zoom controls to scan the whole graph.'
                     : 'Select a role, step, or transition to edit it.',
                 canReturn: false,
             },
@@ -2054,7 +2152,7 @@ function renderProtocolWorkspace(container) {
                 row: laneRowForParticipant(item.primaryParticipantKey),
                 column: 0,
                 label: item.label,
-                sublabel: `Context · ${item.sublabel}`,
+                sublabel: item.stepSummary,
                 badges: [{ tone: 'context', label: 'Context' }],
                 isContext: true,
             })),
@@ -2065,11 +2163,7 @@ function renderProtocolWorkspace(container) {
                 row: laneRowForParticipant(item.participant_key),
                 column: focusOffset + Number(stageColumns.get(String(item.stage_key || '')) || 0),
                 label: String(item.display_name || item.stage_key || 'Untitled step'),
-                sublabel: [
-                    (item.inputs || []).length ? `Reads ${(item.inputs || []).length}` : '',
-                    (item.outputs || []).length ? `Writes ${(item.outputs || []).length}` : '',
-                    String(item.instructions || '').trim() ? 'Instructions ready' : '',
-                ].filter(Boolean).join(' · '),
+                sublabel: _stageNodeSublabel(item),
                 badges: [
                     {
                         tone: String(item.stage_kind || 'work'),
@@ -2084,7 +2178,7 @@ function renderProtocolWorkspace(container) {
                 row: laneRowForParticipant(item.primaryParticipantKey),
                 column: contextSuccessorColumn,
                 label: item.label,
-                sublabel: `Next · ${item.sublabel}`,
+                sublabel: item.stepSummary,
                 badges: [{ tone: 'context', label: 'Next phase' }],
                 isContext: true,
             })),
@@ -2116,6 +2210,7 @@ function renderProtocolWorkspace(container) {
                         from: item.id,
                         to: stageKey,
                         label: edge.label,
+                        showLabel: true,
                     }));
                 })),
             ..._transitionEntries(doc)
@@ -2131,6 +2226,7 @@ function renderProtocolWorkspace(container) {
                                 ? targetSegmentId
                                 : edge.target_key,
                         label: _protocolDecisionLabel(edge.decision),
+                        showLabel: true,
                     };
                 }),
         ];
@@ -2207,6 +2303,8 @@ function renderProtocolWorkspace(container) {
             laneLabels: workflow.laneLabels,
             outcomes: workflow.outcomes,
             viewState: workflow.viewState,
+            viewportState: { zoom: _workflowViewportValue(workflow.viewState.kind) },
+            onViewportChange: (zoom) => _setWorkflowViewport(workflow.viewState.kind, zoom),
             nodeStates: rehearsal.runId ? _rehearsalNodeStates() : {},
             selection: {
                 kind: selection.sectionKey === 'transitions'
@@ -2267,13 +2365,24 @@ function renderProtocolWorkspace(container) {
         });
     }
 
-    function _stageEditorSection(title, panel, { wide = false } = {}) {
-        const section = document.createElement('section');
-        section.className = `kit-stage-editor-section${wide ? ' is-wide' : ''}`;
-        const heading = document.createElement('h4');
-        heading.className = 'kit-stage-editor-title';
-        heading.textContent = String(title || '');
-        section.appendChild(heading);
+    function _stageEditorSection(title, panel, { wide = false, collapsible = false, open = true } = {}) {
+        const section = document.createElement(collapsible ? 'details' : 'section');
+        section.className = `kit-stage-editor-section${wide ? ' is-wide' : ''}${collapsible ? ' is-collapsible' : ''}`;
+        if (collapsible) {
+            section.open = Boolean(open);
+            const summary = document.createElement('summary');
+            summary.className = 'kit-stage-editor-summary';
+            const heading = document.createElement('h4');
+            heading.className = 'kit-stage-editor-title';
+            heading.textContent = String(title || '');
+            summary.appendChild(heading);
+            section.appendChild(summary);
+        } else {
+            const heading = document.createElement('h4');
+            heading.className = 'kit-stage-editor-title';
+            heading.textContent = String(title || '');
+            section.appendChild(heading);
+        }
         section.appendChild(panel);
         return section;
     }
@@ -2361,7 +2470,7 @@ function renderProtocolWorkspace(container) {
             ]),
             actions: advancedActions,
         });
-        shell.appendChild(_stageEditorSection('Advanced', advancedPanel));
+        shell.appendChild(_stageEditorSection('Advanced', advancedPanel, { collapsible: true, open: false }));
         return shell;
     }
 

@@ -3218,6 +3218,7 @@ select {
     gap: var(--space-1);
     min-height: var(--workflow-lane-height, 148px);
     box-shadow: var(--shadow-xs);
+    color: #1f2937;
 }
 
 .kit-workflow-lane.is-selected {
@@ -3231,7 +3232,7 @@ select {
 }
 
 .kit-workflow-lane-subtitle {
-    color: var(--text-muted);
+    color: rgba(31, 41, 55, 0.72);
     font-size: var(--text-xs);
     line-height: 1.45;
 }

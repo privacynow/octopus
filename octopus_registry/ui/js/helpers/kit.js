@@ -353,6 +353,15 @@ window.Kit = (() => {
     } = {}) {
         const header = document.createElement('header');
         header.className = 'kit-lifecycle-header';
+        const lifecycleState = String(record.lifecycle_state || 'draft');
+        const availableActions = [
+            permissions.canValidate !== false ? 'validate' : '',
+            permissions.canPublish !== false ? 'publish' : '',
+            permissions.canRehearse !== false ? 'rehearse' : '',
+            permissions.canArchive !== false ? 'archive' : '',
+            permissions.canDiscard !== false ? 'discard' : '',
+        ].filter(Boolean);
+        header.dataset.key = ['lifecycle-header', surfaceKey, lifecycleState, availableActions.join(',')].join('|');
 
         const topRow = document.createElement('div');
         topRow.className = 'kit-lifecycle-header-top';
@@ -391,8 +400,6 @@ window.Kit = (() => {
 
         const actionRow = document.createElement('div');
         actionRow.className = 'kit-lifecycle-actions';
-
-        const lifecycleState = String(record.lifecycle_state || 'draft');
         const chipBadge = document.createElement('span');
         chipBadge.dataset.key = 'lifecycle-state';
         chipBadge.className = `badge kit-lifecycle-chip kit-lifecycle-chip-${lifecycleState}`;

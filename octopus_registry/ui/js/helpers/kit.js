@@ -1283,15 +1283,15 @@ window.Kit = (() => {
                 shell.appendChild(laneStrip);
             }
 
-            const laneHeight = isOverview ? 104 : 132;
-            const laneGap = isOverview ? 16 : 20;
-            const columnWidth = isOverview ? 160 : 280;
-            const columnGap = isOverview ? 18 : 72;
-            const nodeWidth = isOverview ? 144 : 236;
+            const laneHeight = isOverview ? 104 : 126;
+            const laneGap = isOverview ? 16 : 18;
+            const columnWidth = isOverview ? 160 : 228;
+            const columnGap = isOverview ? 18 : 40;
+            const nodeWidth = isOverview ? 144 : 212;
             const stageHeight = isOverview ? 96 : 110;
             const terminalHeight = 88;
-            const leftPad = isOverview ? 24 : 164;
-            const rightPad = isOverview ? 24 : 56;
+            const leftPad = isOverview ? 24 : 132;
+            const rightPad = isOverview ? 24 : 40;
             const bottomPad = isOverview ? 24 : 36;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {

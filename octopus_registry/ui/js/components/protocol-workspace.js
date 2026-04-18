@@ -1843,43 +1843,34 @@ function renderProtocolWorkspace(container) {
     }
 
     function _overviewWorkflowData(projection, progress, resolvedView) {
-        const nodes = projection.segments.map((segment) => ({
-            id: segment.id,
-            kind: 'segment',
-            laneKey: '',
-            row: Number(segment.row || 0),
-            column: Number(segment.column || 0),
-            label: segment.label,
-            sublabel: segment.sublabel,
-            badges: segment.badges,
-        }));
-        const terminalColumn = Math.max(0, ...projection.segments.map((segment) => Number(segment.column || 0))) + 1;
-        const terminalRows = new Map();
+        const nodes = projection.segments.map((segment) => {
+            const terminalCount = segment.outgoingEdges.filter((edge) => edge.targetKind === 'terminal').length;
+            return {
+                id: segment.id,
+                kind: 'segment',
+                laneKey: '',
+                row: Number(segment.row || 0),
+                column: Number(segment.column || 0),
+                label: segment.label,
+                sublabel: [
+                    segment.sublabel,
+                    terminalCount ? `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` : '',
+                ].filter(Boolean).join(' · '),
+                badges: terminalCount
+                    ? [...segment.badges, { tone: 'context', label: 'Can finish' }]
+                    : segment.badges,
+            };
+        });
         const edges = [];
         projection.segments.forEach((segment) => {
             segment.outgoingEdges.forEach((edge) => {
+                if (edge.targetKind !== 'segment') return;
                 edges.push({
                     id: `overview::${edge.id}`,
                     from: segment.id,
-                    to: edge.targetKind === 'segment' ? edge.targetKey : edge.targetKey,
+                    to: edge.targetKey,
                     label: edge.label,
                 });
-                if (edge.targetKind === 'terminal' && !terminalRows.has(edge.targetKey)) {
-                    terminalRows.set(edge.targetKey, terminalRows.size);
-                }
-            });
-        });
-        PROTOCOL_TERMINAL_TARGETS.forEach((item) => {
-            if (!terminalRows.has(item.key)) return;
-            nodes.push({
-                id: item.key,
-                kind: 'terminal',
-                laneKey: '',
-                row: Number(terminalRows.get(item.key) || 0),
-                column: terminalColumn,
-                label: item.label,
-                sublabel: 'Ends the workflow',
-                isTerminal: true,
             });
         });
         return {
@@ -2388,14 +2379,6 @@ function renderProtocolWorkspace(container) {
                         { key: 'max_review_rounds', kind: 'text', labelKey: 'protocol.policy.max_review_rounds.label', helpKey: 'protocol.policy.max_review_rounds.help' },
                     ] : []),
                 ]),
-                actions: readOnly ? [] : [
-                    ...(!participantCount ? [
-                        { label: Kit.dict.label('protocol.participants.add'), tone: 'btn-primary', onClick: _startRoleInsert },
-                    ] : []),
-                    ...(participantCount && !stageCount ? [
-                        { label: Kit.dict.label('protocol.stages.add'), tone: 'btn-primary', onClick: _startStageInsert },
-                    ] : []),
-                ],
             });
         }
         if (selection.sectionKey === 'participants') {

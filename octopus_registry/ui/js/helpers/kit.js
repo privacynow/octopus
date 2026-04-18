@@ -1264,6 +1264,7 @@ window.Kit = (() => {
         } else {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
+            const isOverview = viewState?.kind === 'overview';
 
             if (lanes.length) {
                 const laneStrip = document.createElement('div');
@@ -1282,16 +1283,16 @@ window.Kit = (() => {
                 shell.appendChild(laneStrip);
             }
 
-            const laneHeight = 132;
-            const laneGap = 20;
-            const columnWidth = 280;
-            const columnGap = 72;
-            const nodeWidth = 236;
-            const stageHeight = 110;
+            const laneHeight = isOverview ? 104 : 132;
+            const laneGap = isOverview ? 16 : 20;
+            const columnWidth = isOverview ? 160 : 280;
+            const columnGap = isOverview ? 18 : 72;
+            const nodeWidth = isOverview ? 144 : 236;
+            const stageHeight = isOverview ? 96 : 110;
             const terminalHeight = 88;
-            const leftPad = 164;
-            const rightPad = 56;
-            const bottomPad = 36;
+            const leftPad = isOverview ? 24 : 164;
+            const rightPad = isOverview ? 24 : 56;
+            const bottomPad = isOverview ? 24 : 36;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
                 if (Number.isFinite(Number(node.row))) return Number(node.row);
@@ -1304,7 +1305,7 @@ window.Kit = (() => {
                 return toNode && fromNode && Number(toNode.column || 0) <= Number(fromNode.column || 0);
             });
             const routeHeadroom = backEdges.length ? 28 + (backEdges.length * 26) : 28;
-            const topPad = 28 + routeHeadroom;
+            const topPad = (isOverview ? 18 : 28) + routeHeadroom;
             const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
             const maxRow = Math.max(0, ...nodes.map((node) => nodeRow(node)));
             const graphWidth = leftPad + rightPad + ((maxColumn + 1) * columnWidth) + (Math.max(0, maxColumn) * columnGap);

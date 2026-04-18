@@ -147,6 +147,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolAuthoringManifest()" in workspace
     assert "API.previewSelectorResolution(" in workspace
     assert "API.createProtocolDraft(" in workspace
+    assert "created?.run?.protocol_run_id" in workspace
     assert "API.saveProtocolDraft(" in workspace
     assert "API.publishProtocol(" in workspace
     assert "API.archiveProtocol(" in workspace

@@ -533,12 +533,12 @@ function renderProtocolWorkspace(container) {
     async function _startRehearsal() {
         if (_blockConflictAction('Rehearsal')) return;
         if (!currentProtocolId) return;
-        const run = await API.createProtocolRun({
+        const created = await API.createProtocolRun({
             protocol_id: currentProtocolId,
             is_rehearsal: true,
             entry_authority_ref: 'rehearsal',
         });
-        rehearsal.runId = String(run?.protocol_run?.protocol_run_id || run?.protocol_run_id || '');
+        rehearsal.runId = String(created?.run?.protocol_run_id || '');
         rehearsal.sessions = [];
         rehearsal.scenarios = [];
         rehearsal.runDetail = null;

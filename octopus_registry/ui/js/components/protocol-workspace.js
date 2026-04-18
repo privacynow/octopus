@@ -1216,7 +1216,7 @@ function renderProtocolWorkspace(container) {
             lanes,
             nodes,
             edges,
-            toolbarActions: firstRunActions.length ? [] : [
+            toolbarActions: progress.nextStep === 'participant' ? [] : [
                 {
                     label: Kit.dict.label('protocol.participants.add'),
                     tone: 'btn-small',

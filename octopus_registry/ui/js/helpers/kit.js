@@ -24,7 +24,7 @@ window.Kit = (() => {
 
         'protocol.slug.label': 'URL slug',
         'protocol.slug.help': 'Short identifier used in URLs. Auto-suggested from the name once you enter one.',
-        'protocol.slug.placeholder': 'Generated from the name; editable later',
+        'protocol.slug.placeholder': 'URL slug is generated from the name; editable later',
 
         'protocol.description.label': 'Description',
         'protocol.description.help': 'Optional. What this protocol is for and when to use it.',

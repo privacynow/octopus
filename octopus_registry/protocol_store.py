@@ -19,6 +19,7 @@ from octopus_sdk.protocols import (
     PROTOCOL_SELECTOR_KIND_OPTIONS,
     PROTOCOL_STAGE_KIND_OPTIONS,
     PROTOCOL_DEFAULT_VISIBILITY,
+    REHEARSAL_AUTHORITY_REF,
     ProtocolAuthoringManifestRecord,
     ProtocolAccessContextRecord,
     ProtocolArtifactObservationRecord,
@@ -37,6 +38,7 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolScenarioRecord,
     ProtocolStageExecutionRecord,
     ProtocolStageTaskResultRecord,
     ProtocolTemplateSummaryRecord,
@@ -160,6 +162,7 @@ class ProtocolPostgresAdapter:
                 "protocol_definition_version_id": row["protocol_definition_version_id"],
                 "entry_agent_id": row["entry_agent_id"],
                 "entry_authority_ref": row["entry_authority_ref"],
+                "is_rehearsal": bool(row.get("is_rehearsal", False)),
                 "root_conversation_id": row["root_conversation_id"],
                 "root_external_conversation_ref": row.get("root_external_conversation_ref", ""),
                 "origin_channel": row["origin_channel"],
@@ -2146,7 +2149,21 @@ class ProtocolPostgresAdapter:
                 status="invalid",
                 message="entry_agent_id is required to start a protocol run.",
             )
-        request = request.model_copy(update={"entry_agent_id": entry_agent_id})
+        authority_ref = str(request.entry_authority_ref or "").strip()
+        if request.is_rehearsal:
+            authority_ref = REHEARSAL_AUTHORITY_REF
+        elif authority_ref == REHEARSAL_AUTHORITY_REF:
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="invalid",
+                message="entry_authority_ref 'rehearsal' is reserved; set is_rehearsal=true instead.",
+            )
+        request = request.model_copy(
+            update={
+                "entry_agent_id": entry_agent_id,
+                "entry_authority_ref": authority_ref,
+            }
+        )
         request_hash = self._request_hash(
             {
                 "payload": request.model_dump(mode="json"),
@@ -2193,8 +2210,11 @@ class ProtocolPostgresAdapter:
                 return ProtocolRunMutationRecord(ok=False, status="not_found", message="Published protocol version required.")
             if visibility == "not_visible":
                 return ProtocolRunMutationRecord(ok=False, status="not_visible", message="Protocol is not visible to this actor.")
-            if str(protocol_row.get("lifecycle_state", "") or "") != "published":
+            lifecycle_state = str(protocol_row.get("lifecycle_state", "") or "")
+            if lifecycle_state != "published" and not request.is_rehearsal:
                 return ProtocolRunMutationRecord(ok=False, status="invalid", message="Only published protocols can start runs.")
+            if lifecycle_state == "archived":
+                return ProtocolRunMutationRecord(ok=False, status="invalid", message="Archived protocols cannot start runs.")
             if not shared_agent_exists(
                 conn,
                 dialect=POSTGRES_STORE_DIALECT,
@@ -2224,13 +2244,13 @@ class ProtocolPostgresAdapter:
                     f"""
                     INSERT INTO {SCHEMA}.protocol_runs (
                         protocol_run_id, protocol_id, protocol_definition_version_id,
-                        entry_agent_id, entry_authority_ref, root_conversation_id,
+                        entry_agent_id, entry_authority_ref, is_rehearsal, root_conversation_id,
                         origin_channel, workspace_ref, repo_ref, branch_ref,
                         problem_statement, constraints_json, status,
                         current_stage_execution_id, current_stage_key, termination_summary,
                         blocked_code, blocked_detail, run_org_id, started_by, version,
                         retention_until, last_transition_at, created_at, updated_at, completed_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued', '', '', '', '', '', %s, %s, 1, %s, '', %s, %s, '')
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued', '', '', '', '', '', %s, %s, 1, %s, '', %s, %s, '')
                     RETURNING *
                     """,
                     (
@@ -2239,6 +2259,7 @@ class ProtocolPostgresAdapter:
                         version_row["protocol_definition_version_id"],
                         request.entry_agent_id,
                         request.entry_authority_ref,
+                        bool(request.is_rehearsal),
                         root_conversation_id,
                         request.origin_channel,
                         request.workspace_ref,
@@ -2531,3 +2552,117 @@ class ProtocolPostgresAdapter:
                 now=now,
             )
             return result
+
+    @staticmethod
+    def _protocol_scenario_from_row(row: Mapping[str, object]) -> ProtocolScenarioRecord:
+        return record(
+            ProtocolScenarioRecord,
+            {
+                "protocol_scenario_id": row["protocol_scenario_id"],
+                "protocol_id": row.get("protocol_id", ""),
+                "stage_key": row.get("stage_key", ""),
+                "participant_key": row.get("participant_key", ""),
+                "display_name": row.get("display_name", ""),
+                "response_text": row.get("response_text", ""),
+                "run_org_id": row.get("run_org_id", PROTOCOL_DEFAULT_RUN_ORG_ID),
+                "created_by": row.get("created_by", ""),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            },
+        )
+
+    def list_protocol_scenarios(
+        self,
+        *,
+        protocol_id: str = "",
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolScenarioRecord]:
+        org_id = self._access_org_id(access)
+        with self._connect() as conn:
+            with cur(conn) as db_cur:
+                if protocol_id:
+                    db_cur.execute(
+                        f"""
+                        SELECT * FROM {SCHEMA}.protocol_scenarios
+                        WHERE run_org_id = %s AND protocol_id = %s
+                        ORDER BY updated_at DESC
+                        """,
+                        (org_id, str(protocol_id).strip()),
+                    )
+                else:
+                    db_cur.execute(
+                        f"""
+                        SELECT * FROM {SCHEMA}.protocol_scenarios
+                        WHERE run_org_id = %s
+                        ORDER BY updated_at DESC
+                        """,
+                        (org_id,),
+                    )
+                rows = db_cur.fetchall() or []
+        return [self._protocol_scenario_from_row(row) for row in rows]
+
+    def create_protocol_scenario(
+        self,
+        *,
+        payload: Mapping[str, object],
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolScenarioRecord:
+        candidate = ProtocolScenarioRecord.model_validate(dict(payload or {}))
+        protocol_id = str(candidate.protocol_id or "").strip()
+        if not protocol_id:
+            raise ValueError("protocol_id is required to create a scenario.")
+        display_name = str(candidate.display_name or "").strip() or "Untitled scenario"
+        response_text = str(candidate.response_text or "")
+        now = utcnow_iso()
+        scenario_id = uuid.uuid4().hex
+        org_id = self._access_org_id(access)
+        actor_ref = self._access_actor_ref(access)
+        with self._connect() as conn, write_tx(conn):
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_scenarios (
+                        protocol_scenario_id, protocol_id, stage_key, participant_key,
+                        display_name, response_text, run_org_id, created_by,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        scenario_id,
+                        protocol_id,
+                        str(candidate.stage_key or "").strip(),
+                        str(candidate.participant_key or "").strip(),
+                        display_name,
+                        response_text,
+                        org_id,
+                        actor_ref,
+                        now,
+                        now,
+                    ),
+                )
+                row = db_cur.fetchone()
+        if row is None:
+            raise RuntimeError("Failed to create protocol scenario.")
+        return self._protocol_scenario_from_row(row)
+
+    def delete_protocol_scenario(
+        self,
+        *,
+        scenario_id: str,
+        access: ProtocolAccessContextRecord,
+    ) -> bool:
+        token = str(scenario_id or "").strip()
+        if not token:
+            return False
+        org_id = self._access_org_id(access)
+        with self._connect() as conn, write_tx(conn):
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    DELETE FROM {SCHEMA}.protocol_scenarios
+                    WHERE protocol_scenario_id = %s AND run_org_id = %s
+                    """,
+                    (token, org_id),
+                )
+                return bool(db_cur.rowcount or 0)

@@ -116,46 +116,89 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
 
 
 def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operator_controls() -> None:
+    """Protocol authoring is kit-driven (plan §7). No bespoke section tabs,
+    no raw-JSON tab, no server-seeded defaults. Runs route keeps its live
+    observation contract until Step 7."""
     repo_root = Path(__file__).resolve().parents[1]
     workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
 
+    # Entry points
     assert "function renderProtocolWorkspace(" in workspace
     assert "function renderProtocolRuns(" in workspace
-    assert "API.parseProtocolDocument(" in workspace
-    assert "API.exportProtocolDraft(" in workspace
-    assert "API.diffProtocolDraft(" in workspace
+
+    # Authoring: kit-first
+    assert "Kit.lifecycleHeader(" in workspace
+    assert "Kit.authoredCatalog(" in workspace
+    assert "Kit.canvas(" in workspace
+    assert "Kit.detailsPanel(" in workspace
+    assert "Kit.validationSurface(" in workspace
+    assert "Kit.rehearsalPanel(" in workspace
+
+    # Rehearsal API the workspace drives
+    assert "API.listRehearsalSessions(" in workspace
+    assert "API.respondRehearsalSession(" in workspace
+    assert "API.listProtocolScenarios(" in workspace
+
+    # Authoring API the kit surface drives
     assert "API.getProtocolAuthoringManifest()" in workspace
     assert "API.createProtocolDraft(" in workspace
+    assert "API.saveProtocolDraft(" in workspace
+    assert "API.publishProtocol(" in workspace
+    assert "API.archiveProtocol(" in workspace
     assert "API.deleteProtocol(" in workspace
-    assert "API.listProtocolIssues({" in workspace
+    assert "API.validateProtocol(" in workspace
+
+    # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
     assert "API.getProtocolRun(currentRunId)" in workspace
+    assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
-    assert "Workflow overview" in workspace
-    assert "Workflow map" in workspace
-    assert "Review & publish" in workspace
-    assert "Advanced raw editor" in workspace
-    assert "Protocol basics" in workspace
-    assert "Start blank" in workspace
-    assert "Import definition" in workspace
-    assert "Add participant" in workspace
-    assert "Add artifact" in workspace
-    assert "Add stage" in workspace
-    assert "Raw editor has unsynced errors." in workspace
-    assert "Choose a blank workflow, browse the Gallery for starter examples, or import an existing definition." in workspace
-    assert "Browse Gallery" in workspace
-    assert "Build the first workflow path" in workspace
-    assert "Add first participant" in workspace
-    assert "validation_mode: 'draft'" in workspace
+
+    # Runs-side copy stays; empty/hint strings for the catalog now flow
+    # through Kit.dict.
     assert "Select a run to inspect state, timeline, artifacts, and operator actions." in workspace
     assert "No protocol issues detected for this run." in workspace
     assert "No blocked runs, lease issues, contract failures, or expired timeouts match this filter." in workspace
-    assert "Structured editor" not in workspace
+
+    # Dead UX must be gone
+    for forbidden in (
+        "API.parseProtocolDocument(",
+        "API.exportProtocolDraft(",
+        "API.diffProtocolDraft(",
+        "Advanced raw editor",
+        "Raw editor has unsynced errors.",
+        "validation_mode: 'draft'",
+        "Workflow overview",
+        "Workflow map",
+        "Review & publish",
+        "Build the first workflow path",
+        "Protocol basics",
+        "Structured editor",
+        "editorFormat",
+        "_buildStageFlow(",
+        "_buildOverviewCanvas(",
+        "_buildStagesCanvas(",
+        "_buildParticipantsCanvas(",
+        "_buildArtifactsCanvas(",
+        "_buildPoliciesCanvas(",
+        "_buildAdvancedCanvas(",
+        "_buildReviewCanvas(",
+        "_buildModeNav(",
+        "_buildStarterPanel(",
+        "_buildAuthorHeader(",
+        "_buildDefinitionPanel(",
+        "PROTOCOL_AUTHORING_MODE_OPTIONS",
+        "PROTOCOL_CATALOG_STATUS_OPTIONS",
+        "single_active_writer: true",
+        "max_review_rounds: 5",
+        "structuredInputDrafts",
+    ):
+        assert forbidden not in workspace, f"dead UX remnant found: {forbidden}"
 
 
 def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_modes() -> None:
@@ -170,6 +213,8 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
         repo_root / "octopus_registry" / "ui" / "js" / "router.js"
     ).read_text(encoding="utf-8")
 
+    # Forbidden: cross-cutting operator modes, launcher strips, agent
+    # management dropdowns, and the retired protocol_view query param.
     assert "WORKSPACE_VIEW_OPTIONS" not in workspace
     assert "UI.createAgentManagementDropdown(" not in workspace
     assert "_setCurrentView(" not in workspace
@@ -178,13 +223,16 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "renderLauncherStrip" not in workspace
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'agents'" not in workspace
-    assert "UI.readQueryParam('protocol_view', 'design')" in workspace
+    assert "UI.readQueryParam('protocol_view'" not in workspace
+    assert "protocol_view:" in workspace  # kept in _writeState to clear legacy URLs
     assert "API.getProtocolTemplate('software-engineering')" not in workspace
     assert "loadDefaultTemplate" not in workspace
-    assert "const structuredInputDrafts = new Map();" in workspace
-    assert "_revealEditorSurface()" in workspace
-    assert "UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols(), 350);" in workspace
+
+    # Protocol authoring lifecycle subscription is retained
+    assert "UI.subscribeWithRefresh(cleanups, 'protocols'" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
+
+    # Router wiring
     assert "Router.register('/ui/gallery', renderGallery);" in app_js
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
@@ -192,31 +240,62 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
 
 
 def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:
+    """Authoring styles are kit-owned; runs styles are protocol-scoped."""
     repo_root = Path(__file__).resolve().parents[1]
     css = (
         repo_root / "octopus_registry" / "ui" / "css" / "main.css"
     ).read_text(encoding="utf-8")
 
+    # Still required for the runs route and the shared shell
     assert ".protocol-route-shell {" in css
     assert ".protocol-surface-shell {" in css
     assert ".protocol-scroll {" in css
-    assert ".protocol-workspace-grid {" not in css
-    assert "max-height: min(36dvh, 460px);" not in css
-    assert ".protocol-author-board {" in css
-    assert ".protocol-author-workspace {" in css
-    assert ".protocol-template-grid {" in css
-    assert ".protocol-catalog-groups {" in css
-    assert ".protocol-catalog-list {" in css
-    assert ".protocol-next-steps {" in css
-    assert ".protocol-stage-flow {" in css
-    assert ".protocol-stage-flow-preview {" in css
-    assert ".protocol-stage-preview-node {" in css
-    assert ".protocol-inspector-panel {" in css
-    assert ".protocol-inline-checkbox {" in css
-    assert "@media (max-width: 1080px)" in css
-    assert ".dashboard-board," in css
-    assert "@media (max-width: 900px)" in css
     assert ".protocol-sticky-actions {" in css
+
+    # Kit-owned authoring styles
+    assert ".kit-lifecycle-header" in css
+    assert ".kit-authoring-workspace" in css
+    assert ".kit-canvas" in css
+    assert ".kit-details-panel" in css
+    assert ".kit-validation" in css
+    assert ".kit-authored-catalog" in css
+    assert "@media (max-width: 960px)" in css  # authoring responsive collapse
+
+    # Legacy authoring CSS that must stay removed
+    for dead in (
+        ".protocol-workspace-grid {",
+        ".protocol-author-board {",
+        ".protocol-author-workspace {",
+        ".protocol-author-header {",
+        ".protocol-author-main {",
+        ".protocol-author-title {",
+        ".protocol-design-workspace {",
+        ".protocol-inspector-panel {",
+        ".protocol-first-run-card {",
+        ".protocol-template-grid {",
+        ".protocol-template-card {",
+        ".protocol-template-card-subtle {",
+        ".protocol-template-highlight {",
+        ".protocol-catalog-groups {",
+        ".protocol-catalog-toolbar {",
+        ".protocol-catalog-heading {",
+        ".protocol-catalog-list {",
+        ".protocol-next-steps {",
+        ".protocol-validation-gutter {",
+        ".protocol-validation-list {",
+        ".protocol-stage-flow {",
+        ".protocol-stage-flow-compact {",
+        ".protocol-stage-flow-preview {",
+        ".protocol-stage-preview-node {",
+        ".protocol-stage-preview-meta {",
+        ".protocol-stage-preview-arrow {",
+        ".protocol-stage-node {",
+        ".protocol-stage-node-meta {",
+        ".protocol-advanced-panel ",
+        ".protocol-structured-textarea {",
+        ".protocol-inline-checkbox {",
+    ):
+        assert dead not in css, f"dead CSS must be removed: {dead}"
 
 
 def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
@@ -333,6 +412,46 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "selectedActivationSkill = requestedActivationSkill;" in conversation_detail
     assert "getSkillLifecycle: (agentId, name) =>" in api_js
     assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
+
+
+def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
+    """Plan §8: agents list + detail migrate to Kit primitives; detail surface
+    exposes admin actions (trust tier, capacity, token rotation, soft-delete)
+    and a selector resolution preview wired to /v1/selector/preview."""
+    repo_root = Path(__file__).resolve().parents[1]
+    agent_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
+    ).read_text(encoding="utf-8")
+    agent_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-detail.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+
+    # List
+    assert "Kit.agentsList(" in agent_list
+    assert "trustTier: String(agent.trust_tier" in agent_list
+    assert "currentCapacity: Number(agent.current_capacity" in agent_list
+    assert "softDeletedAt: String(agent.soft_deleted_at" in agent_list
+
+    # Detail surfaces
+    assert "Kit.agentSummary(" in agent_detail
+    assert "Kit.selectorResolutionPreview(" in agent_detail
+    assert "function buildAdminCard(" in agent_detail
+    assert "function buildSelectorCard(" in agent_detail
+    assert "API.updateAgentTrustTier(" in agent_detail
+    assert "API.updateAgentCapacity(" in agent_detail
+    assert "API.rotateAgentToken(" in agent_detail
+    assert "API.softDeleteAgent(" in agent_detail
+    assert "API.previewSelectorResolution(" in agent_detail
+
+    # API client
+    assert "updateAgentTrustTier: (id" in api_js
+    assert "updateAgentCapacity: (id" in api_js
+    assert "rotateAgentToken: (id" in api_js
+    assert "softDeleteAgent: (id" in api_js
+    assert "previewSelectorResolution: (body" in api_js
 
 
 def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills() -> None:
@@ -589,8 +708,10 @@ def test_agent_surfaces_distinguish_transport_from_execution_and_offer_reset() -
     assert "execution faulted" in agent_detail
     assert "Reset execution" in agent_detail
     assert "resetAgentExecutionFault" in agent_detail
-    assert "execution faulted" in agent_list
-    assert "badge-faulted" in agent_list
+    # Agents list now renders through Kit.agentsList (plan §8), which surfaces
+    # an execution-faulted presence chip via the faulted flag.
+    assert "Kit.agentsList(" in agent_list
+    assert "executionFaulted: _executionFaulted" in agent_list
     assert "execution_faulted" in dashboard
     assert "badge-faulted" in dashboard
     assert "resetAgentExecutionFault" in api_js
@@ -643,9 +764,6 @@ def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:
 def test_live_refresh_signatures_use_rendered_time_labels_not_raw_timestamps() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     files = {
-        "agent-list.js": [
-            "heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : ''",
-        ],
         "agent-detail.js": [
             "heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : ''",
             "lastSeenLabel: worker.last_seen_at ? UI.relativeTime(worker.last_seen_at) : ''",
@@ -714,11 +832,14 @@ def test_agent_list_uses_disconnected_not_offline_filter() -> None:
     agent_list = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
     ).read_text(encoding="utf-8")
+    kit = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
 
-    assert "label: 'Disconnected'" in agent_list
-    assert "value: 'disconnected'" in agent_list
-    assert "label: 'Offline'" not in agent_list
-    assert "value: 'offline'" not in agent_list
+    assert "Kit.agentsList(" in agent_list
+    assert "'offline'" not in agent_list
+    assert "'agents.presence.disconnected': 'Disconnected'" in kit
+    assert "'agents.presence.offline'" not in kit
 
 
 def test_ui_helpers_cover_shared_registry_patterns() -> None:

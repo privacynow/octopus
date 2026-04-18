@@ -37,6 +37,7 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolScenarioRecord,
     ProtocolArtifactRecord,
     ProtocolTransitionRecord,
 )
@@ -546,8 +547,35 @@ class AbstractRegistryStore(Protocol):
         limit: int = 25,
         q: str = "",
         connectivity_state: str = "",
+        include_soft_deleted: bool = False,
     ) -> list[AgentRecord]:
         """Return registered agents in UI-ready form with offset-based pagination."""
+
+    def update_agent_trust_tier(self, agent_id: str, trust_tier: str) -> AgentRecord:
+        """Update an agent's trust tier (community|trusted|verified|restricted)."""
+
+    def update_agent_capacity(
+        self,
+        agent_id: str,
+        *,
+        current_capacity: int | None = None,
+        max_capacity: int | None = None,
+    ) -> AgentRecord:
+        """Admin override for an agent's capacity counters."""
+
+    def rotate_agent_token(self, agent_id: str) -> tuple[AgentRecord, str]:
+        """Issue a fresh agent token for an enrolled agent, returning (record, plaintext_token)."""
+
+    def soft_delete_agent(self, agent_id: str) -> AgentRecord:
+        """Mark an agent soft-deleted; hidden from default listings, connectivity forced to disconnected."""
+
+    def preview_selector_resolution(
+        self,
+        selector,
+        *,
+        exclude_agent_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, object]]:
+        """Return every candidate row a selector matches, with no ambiguity enforcement."""
 
     def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         """Return mirrored runtime-health detail for a registered agent."""
@@ -835,6 +863,30 @@ class AbstractRegistryStore(Protocol):
 
     def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
         """Sweep protocol maintenance work such as overdue timeouts."""
+
+    def list_protocol_scenarios(
+        self,
+        *,
+        protocol_id: str = "",
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolScenarioRecord]:
+        """Return canned rehearsal scenarios for this org, optionally filtered by protocol."""
+
+    def create_protocol_scenario(
+        self,
+        *,
+        payload: Mapping[str, object],
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolScenarioRecord:
+        """Create a canned rehearsal scenario."""
+
+    def delete_protocol_scenario(
+        self,
+        *,
+        scenario_id: str,
+        access: ProtocolAccessContextRecord,
+    ) -> bool:
+        """Delete a canned rehearsal scenario; returns True if a row was removed."""
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

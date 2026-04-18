@@ -144,6 +144,18 @@ const API = (() => {
             request('GET', `/v1/agents/${encodeURIComponent(id)}/status`),
         resetAgentExecutionFault: (id, body = {}) =>
             request('POST', `/v1/agents/${encodeURIComponent(id)}/execution/reset`, { body }),
+        updateAgentTrustTier: (id, trustTier) =>
+            request('PATCH', `/v1/agents/${encodeURIComponent(id)}/trust-tier`, {
+                body: { trust_tier: String(trustTier || '') },
+            }),
+        updateAgentCapacity: (id, body = {}) =>
+            request('PATCH', `/v1/agents/${encodeURIComponent(id)}/capacity`, { body }),
+        rotateAgentToken: (id) =>
+            request('POST', `/v1/agents/${encodeURIComponent(id)}/rotate-token`, { body: {} }),
+        softDeleteAgent: (id) =>
+            request('DELETE', `/v1/agents/${encodeURIComponent(id)}`),
+        previewSelectorResolution: (body = {}) =>
+            request('POST', '/v1/selector/preview', { body }),
         getAgentConversations: (id, opts = {}) =>
             request('GET', `/v1/agents/${encodeURIComponent(id)}/conversations`, { params: opts }),
         openConversationForAgent: async (agentId, opts = {}) => {
@@ -270,6 +282,16 @@ const API = (() => {
                     ...(Number.isFinite(opts.expectedVersion) ? { 'If-Match': String(opts.expectedVersion) } : {}),
                 },
             }),
+        listRehearsalSessions: (runId) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(runId)}/rehearsal/sessions`),
+        respondRehearsalSession: (runId, body = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(runId)}/rehearsal/respond`, { body }),
+        listProtocolScenarios: (opts = {}) =>
+            request('GET', '/v1/protocol-scenarios', { params: opts }),
+        createProtocolScenario: (body = {}) =>
+            request('POST', '/v1/protocol-scenarios', { body }),
+        deleteProtocolScenario: (scenarioId) =>
+            request('DELETE', `/v1/protocol-scenarios/${encodeURIComponent(scenarioId)}`),
 
         // Routing skills
         listRoutingSkills: () =>

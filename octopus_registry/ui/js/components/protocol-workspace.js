@@ -1,12 +1,3 @@
-const PROTOCOL_RUN_STATUS_OPTIONS = [
-    { value: '', label: 'All runs' },
-    { value: 'running', label: 'Running' },
-    { value: 'blocked', label: 'Blocked' },
-    { value: 'completed', label: 'Completed' },
-    { value: 'failed', label: 'Failed' },
-    { value: 'cancelled', label: 'Cancelled' },
-];
-
 const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: '', label: 'Runs' },
     { value: 'all', label: 'All issues' },
@@ -14,19 +5,6 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'invalid_contract', label: 'Contract errors' },
     { value: 'stuck_lease', label: 'Stuck leases' },
     { value: 'expired_timeout', label: 'Expired timeouts' },
-];
-
-const PROTOCOL_AUTHORING_MODE_OPTIONS = [
-    { value: 'design', label: 'Design' },
-    { value: 'review', label: 'Review' },
-    { value: 'advanced', label: 'Advanced' },
-];
-
-const PROTOCOL_CATALOG_STATUS_OPTIONS = [
-    { value: '', label: 'All statuses' },
-    { value: 'draft', label: 'Drafts' },
-    { value: 'published', label: 'Published' },
-    { value: 'archived', label: 'Archived' },
 ];
 
 function _downloadProtocolText(filename, text, contentType) {
@@ -39,15 +17,6 @@ function _downloadProtocolText(filename, text, contentType) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 500);
-}
-
-function _readProtocolFileText(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.readAsText(file);
-    });
 }
 
 function _protocolArtifactLabel(item) {
@@ -112,24 +81,24 @@ function _protocolIssueApiValue(value) {
     return value === 'all' ? '' : String(value || '');
 }
 
-function _protocolRunDeepLink(run, params = {}) {
-    const search = new URLSearchParams();
-    const runId = String(run?.protocol_run_id || params.run_id || '').trim();
-    if (runId) {
-        search.set('run_id', runId);
-    }
-    const status = String(params.status || '').trim();
-    if (status) {
-        search.set('status', status);
-    }
-    const issueKind = _protocolIssueFilterValue(params.issue_kind || '');
-    if (issueKind) {
-        search.set('issue_kind', issueKind);
-    }
-    const suffix = search.toString();
-    return suffix ? `/ui/runs?${suffix}` : '/ui/runs';
+function _slugSuggestion(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
 }
 
+/*
+ * Protocol authoring workspace — kit-driven surface.
+ *
+ * This route is the reference implementation of the authoring kit (see
+ * telegram-agent-bot/protocol_kit_plan.md). It is intentionally short: all
+ * visuals go through Kit.lifecycleHeader, Kit.authoredCatalog, Kit.canvas,
+ * Kit.detailsPanel, and Kit.validationSurface. No bespoke section tabs, no
+ * raw-JSON tab, no server-seeded defaults — the canvas starts blank and the
+ * user adds the first participant/stage/artifact from there.
+ */
 function renderProtocolWorkspace(container) {
     const cleanups = UI.beginCleanupScope();
     const contentInner = container.closest('.content-inner');
@@ -139,34 +108,37 @@ function renderProtocolWorkspace(container) {
     }
 
     let protocols = [];
+    let authoringManifest = null;
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
     let currentProtocol = null;
     let protocolDetailLoading = false;
-    let authoringManifest = null;
-    let editorFormat = 'json';
-    let protocolSearch = '';
-    let protocolLifecycleFilter = '';
-    let currentSection = '';
-    let selectedEntityKind = 'overview';
-    let selectedParticipantKey = '';
-    let selectedArtifactKey = '';
-    let selectedStageKey = '';
-    let draftSaveState = 'idle';
-    let autosaveTimer = 0;
-    const structuredInputDrafts = new Map();
+
+    // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
     let draft = {
-        protocol_id: '',
         slug: '',
         display_name: '',
         description: '',
-        definition_text: '',
-        document_json: null,
-        parse_error: '',
+        document: _blankDocument(),
     };
 
+    // The canvas/details interaction works off one selection.
+    let selection = { sectionKey: 'overview', nodeKey: '' };
+
+    let saveState = { state: 'idle', lastSavedAt: '', error: '' };
+    let autosaveTimer = 0;
+
+    // Rehearsal state. Present only while a rehearsal run is active.
+    let rehearsal = {
+        runId: '',
+        sessions: [],
+        scenarios: [],
+        pollTimer: 0,
+    };
+
+    // Layout shell
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Protocols</h2><p>Author reusable, versioned workflow definitions without the live run console in the way.</p>';
+    header.innerHTML = '<h2>Protocols</h2><p>Author reusable, versioned workflow definitions. Runs live under their own tab.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');
@@ -174,38 +146,77 @@ function renderProtocolWorkspace(container) {
     container.appendChild(shell);
 
     const contentEl = document.createElement('div');
-    contentEl.className = 'protocol-surface-shell';
+    contentEl.className = 'protocol-surface-shell protocol-authoring-shell';
     shell.appendChild(contentEl);
-    const authorBoard = document.createElement('div');
-    authorBoard.className = 'dashboard-board protocol-author-board';
-    const listColumnEl = document.createElement('div');
-    listColumnEl.className = 'dashboard-column';
-    const editorColumnEl = document.createElement('div');
-    editorColumnEl.className = 'dashboard-column';
-    authorBoard.appendChild(listColumnEl);
-    authorBoard.appendChild(editorColumnEl);
 
-    const _validSectionValues = new Set(PROTOCOL_AUTHORING_MODE_OPTIONS.map((item) => item.value));
-
-    function _normalizeAuthorSection(value) {
-        const normalized = String(value || '').trim().toLowerCase();
-        return _validSectionValues.has(normalized) ? normalized : 'design';
+    function _blankDocument() {
+        return {
+            schema_version: 1,
+            metadata: {},
+            participants: [],
+            artifacts: [],
+            stages: [],
+            // policies intentionally omitted — server defaults apply until the
+            // user edits them explicitly via the details panel.
+        };
     }
 
-    function _sectionLabel(value) {
-        return PROTOCOL_AUTHORING_MODE_OPTIONS.find((item) => item.value === value)?.label || 'Design';
+    function _cloneDoc(doc) {
+        return JSON.parse(JSON.stringify(doc || _blankDocument()));
     }
 
-    function _readAuthorSection() {
-        return _normalizeAuthorSection(UI.readQueryParam('protocol_view', 'design'));
+    function _docFromDraft() {
+        const doc = _cloneDoc(draft.document);
+        doc.schema_version = Number(doc.schema_version || 1) || 1;
+        doc.metadata = Object.assign({}, doc.metadata || {}, {
+            slug: String(draft.slug || '').trim(),
+            display_name: String(draft.display_name || '').trim(),
+            description: String(draft.description || '').trim(),
+        });
+        doc.participants = Array.isArray(doc.participants) ? doc.participants : [];
+        doc.artifacts = Array.isArray(doc.artifacts) ? doc.artifacts : [];
+        doc.stages = Array.isArray(doc.stages) ? doc.stages : [];
+        return doc;
     }
 
-    currentSection = _readAuthorSection();
+    function _applyServerDetail(detail) {
+        currentProtocol = detail;
+        const docFromServer = (detail && detail.draft_definition_json && Object.keys(detail.draft_definition_json).length)
+            ? detail.draft_definition_json
+            : (detail && detail.draft_document) || _blankDocument();
+        const metadata = docFromServer.metadata || {};
+        draft = {
+            slug: metadata.slug !== undefined ? String(metadata.slug || '') : String(detail?.protocol?.slug || ''),
+            display_name: metadata.display_name !== undefined
+                ? String(metadata.display_name || '')
+                : String(detail?.protocol?.display_name || ''),
+            description: metadata.description !== undefined
+                ? String(metadata.description || '')
+                : String(detail?.protocol?.description || ''),
+            document: _cloneDoc(docFromServer),
+        };
+        saveState = { state: 'idle', lastSavedAt: detail?.protocol?.updated_at || '', error: '' };
+        selection = _repairSelection(selection, draft.document);
+    }
 
+    function _repairSelection(current, doc) {
+        const key = current.sectionKey || 'overview';
+        if (key === 'overview') return { sectionKey: 'overview', nodeKey: '' };
+        const items = doc[key] || [];
+        const hit = items.find((item) => String(
+            key === 'participants' ? item.participant_key
+                : key === 'stages' ? item.stage_key
+                    : item.artifact_key,
+        ) === current.nodeKey);
+        if (hit) return current;
+        return { sectionKey: 'overview', nodeKey: '' };
+    }
+
+    // URL state (kept minimal — no protocol_view / section nav)
     function _writeState({ push = false } = {}) {
         UI.updateQueryParams({
             protocol_id: currentProtocolId || '',
-            protocol_view: currentProtocolId ? currentSection : '',
+            protocol_view: '',
             run_id: '',
             status: '',
             issue_kind: '',
@@ -213,145 +224,9 @@ function renderProtocolWorkspace(container) {
         }, { replace: !push });
     }
 
-    function _resetDraftState() {
-        _clearAutosaveTimer();
-        currentProtocolId = '';
-        currentProtocol = null;
-        protocolDetailLoading = false;
-        currentSection = 'design';
-        selectedEntityKind = 'overview';
-        selectedParticipantKey = '';
-        selectedArtifactKey = '';
-        selectedStageKey = '';
-        draftSaveState = 'idle';
-        draft = {
-            protocol_id: '',
-            slug: '',
-            display_name: '',
-            description: '',
-            definition_text: '',
-            document_json: _cloneDocument(_defaultProtocolDocument()),
-            parse_error: '',
-        };
-        _clearStructuredDrafts();
-    }
-
-    function _revealEditorSurface() {
-        requestAnimationFrame(() => {
-            editorColumnEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        });
-    }
-
-    function _selectDesignTarget(kind, key = '') {
-        selectedEntityKind = kind;
-        if (kind === 'participant') {
-            selectedParticipantKey = key || selectedParticipantKey;
-        } else if (kind === 'artifact') {
-            selectedArtifactKey = key || selectedArtifactKey;
-        } else if (kind === 'stage') {
-            selectedStageKey = key || selectedStageKey;
-        }
-    }
-
-    function _defaultProtocolDocument() {
-        return {
-            schema_version: 1,
-            metadata: {},
-            participants: [],
-            artifacts: [],
-            stages: [],
-            policies: {
-                single_active_writer: true,
-                max_review_rounds: 5,
-            },
-        };
-    }
-
-    function _cloneDocument(value) {
-        return JSON.parse(JSON.stringify(value || _defaultProtocolDocument()));
-    }
-
-    function _draftDocument() {
-        return _cloneDocument(draft.document_json || _defaultProtocolDocument());
-    }
-
-    function _syncDraftFieldsFromDocument(document) {
-        const metadata = (document && document.metadata) || {};
-        draft.slug = Object.prototype.hasOwnProperty.call(metadata, 'slug')
-            ? String(metadata.slug || '')
-            : String(draft.slug || '');
-        draft.display_name = Object.prototype.hasOwnProperty.call(metadata, 'display_name')
-            ? String(metadata.display_name || '')
-            : String(draft.display_name || '');
-        draft.description = Object.prototype.hasOwnProperty.call(metadata, 'description')
-            ? String(metadata.description || '')
-            : String(draft.description || '');
-    }
-
-    function _clearStructuredDrafts(prefix = '') {
-        if (!prefix) {
-            structuredInputDrafts.clear();
-            return;
-        }
-        Array.from(structuredInputDrafts.keys()).forEach((key) => {
-            if (String(key || '').startsWith(prefix)) {
-                structuredInputDrafts.delete(key);
-            }
-        });
-    }
-
-    function _rememberStructuredDraftValue(draftKey, value) {
-        if (!draftKey) {
-            return;
-        }
-        structuredInputDrafts.set(draftKey, value);
-    }
-
-    function _resolveStructuredDraftValue(draftKey, committedValue, normalize) {
-        if (!draftKey || !structuredInputDrafts.has(draftKey)) {
-            return committedValue;
-        }
-        const pendingValue = structuredInputDrafts.get(draftKey);
-        if (normalize(pendingValue) === normalize(committedValue)) {
-            structuredInputDrafts.delete(draftKey);
-            return committedValue;
-        }
-        return pendingValue;
-    }
-
-    function _applyDraftMetadataToDocument(document) {
-        const next = _cloneDocument(document);
-        next.schema_version = Number(next.schema_version || 1) || 1;
-        next.metadata = Object.assign({}, next.metadata || {}, {
-            slug: String(draft.slug || next.metadata?.slug || '').trim(),
-            display_name: String(draft.display_name || next.metadata?.display_name || '').trim(),
-            description: String(draft.description || next.metadata?.description || '').trim(),
-        });
-        next.participants = Array.isArray(next.participants) ? next.participants : [];
-        next.artifacts = Array.isArray(next.artifacts) ? next.artifacts : [];
-        next.stages = Array.isArray(next.stages) ? next.stages : [];
-        next.policies = Object.assign({
-            single_active_writer: true,
-            max_review_rounds: 5,
-        }, next.policies || {});
-        return next;
-    }
-
-    function _mergeProtocolMutation(detail) {
-        if (!detail) {
-            return;
-        }
-        currentProtocol = Object.assign({}, currentProtocol || {}, detail, {
-            protocol: detail.protocol || currentProtocol?.protocol || null,
-            version: detail.version || currentProtocol?.version || null,
-            validation: detail.validation || currentProtocol?.validation || null,
-            draft_definition_json: detail.draft_definition_json || currentProtocol?.draft_definition_json || null,
-            draft_document: Object.prototype.hasOwnProperty.call(detail, 'draft_document')
-                ? detail.draft_document
-                : (currentProtocol?.draft_document || null),
-        });
-    }
-
+    // -------------------------------------------------------------------
+    // Persistence
+    // -------------------------------------------------------------------
     function _clearAutosaveTimer() {
         if (autosaveTimer) {
             clearTimeout(autosaveTimer);
@@ -359,410 +234,513 @@ function renderProtocolWorkspace(container) {
         }
     }
 
-    function _savePayloadFromDraft() {
-        if (draft.parse_error) {
-            throw new Error('Fix the Advanced raw editor syntax before saving this draft.');
-        }
-        const document = _applyDraftMetadataToDocument(_draftDocument());
-        return {
-            slug: draft.slug,
-            display_name: draft.display_name,
-            description: draft.description,
-            definition_json: document,
-        };
-    }
-
-    async function _serializeProtocolDocument(document, format = editorFormat) {
-        const normalized = _applyDraftMetadataToDocument(document);
-        if (format === 'json') {
-            return JSON.stringify(normalized, null, 2);
-        }
-        const parsed = await API.parseProtocolDocument({
-            definition_text: JSON.stringify(normalized, null, 2),
-            format,
-            validation_mode: 'draft',
-        });
-        return String(parsed.text || '');
-    }
-
-    async function _parseDraftDocument({ report = false } = {}) {
-        const result = await API.parseProtocolDocument({
-            definition_text: draft.definition_text || '',
-            format: editorFormat,
-            validation_mode: 'draft',
-        });
-        if (!result.document) {
-            const message = (result.validation && result.validation.errors && result.validation.errors.join(' · '))
-                || 'Protocol draft is invalid.';
-            draft.parse_error = message;
-            if (report) {
-                throw new Error(message);
-            }
-            return null;
-        }
-        const document = _applyDraftMetadataToDocument(result.document);
-        draft.document_json = document;
-        draft.parse_error = '';
-        _syncDraftFieldsFromDocument(document);
-        _mergeProtocolMutation({ validation: result.validation || null });
-        return document;
-    }
-
-    async function _autosaveCurrentDraft() {
-        if (!currentProtocolId) {
-            return;
-        }
-        const payload = _savePayloadFromDraft();
-        draftSaveState = 'saving';
-        renderAuthorRoute();
-        try {
-            const result = await API.saveProtocolDraft(currentProtocolId, payload);
-            _mergeProtocolMutation(result);
-            draftSaveState = 'saved';
-            await loadProtocols();
-            renderAuthorRoute();
-        } catch (err) {
-            draftSaveState = 'error';
-            renderAuthorRoute();
-            UI.reportError('Failed to save the protocol draft', err, {
-                context: 'Protocol autosave failed',
-            });
-        }
-    }
-
     function _scheduleAutosave() {
-        if (!currentProtocolId || draft.parse_error) {
-            return;
-        }
+        if (!currentProtocolId) return;
         _clearAutosaveTimer();
-        draftSaveState = 'dirty';
+        saveState = { state: 'editing', lastSavedAt: saveState.lastSavedAt, error: '' };
+        _syncLifecycleChip();
         autosaveTimer = setTimeout(() => {
             autosaveTimer = 0;
-            void _autosaveCurrentDraft();
+            void _autosave();
         }, 450);
     }
 
-    async function _commitDraftDocument(document, { rerender = true, autosave = true } = {}) {
-        const normalized = _applyDraftMetadataToDocument(document);
-        draft.document_json = normalized;
-        draft.parse_error = '';
-        _syncDraftFieldsFromDocument(normalized);
-        draft.definition_text = await _serializeProtocolDocument(normalized, editorFormat);
-        _mergeProtocolMutation({
-            draft_definition_json: normalized,
-            draft_document: null,
-            validation: currentProtocol?.validation || null,
-        });
-        if (autosave) {
-            _scheduleAutosave();
-        }
-        if (rerender) {
-            renderAuthorRoute();
-        }
-        return normalized;
-    }
-
-    async function _applyStructuredChange(mutator) {
+    async function _autosave() {
+        if (!currentProtocolId) return;
+        saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
+        _syncLifecycleChip();
         try {
-            const working = _draftDocument();
-            mutator(working);
-            await _commitDraftDocument(working);
+            const result = await API.saveProtocolDraft(currentProtocolId, {
+                slug: draft.slug,
+                display_name: draft.display_name,
+                description: draft.description,
+                definition_json: _docFromDraft(),
+            });
+            _applyServerDetail(result);
+            saveState = { state: 'saved', lastSavedAt: new Date().toISOString(), error: '' };
+            _syncLifecycleChip();
+            await loadProtocols({ quiet: true });
+            render();
         } catch (err) {
-            UI.reportError('Failed to update this workflow step', err, {
-                context: 'Protocol authoring change failed',
-            });
+            saveState = { state: 'error', lastSavedAt: saveState.lastSavedAt, error: err.message || String(err) };
+            _syncLifecycleChip();
+            UI.reportError('Failed to save the protocol draft', err, { context: 'Protocol autosave failed' });
         }
     }
 
-    async function _syncEditorFormat(nextFormat) {
-        const parsed = await _parseDraftDocument({ report: true }) || _draftDocument();
-        editorFormat = nextFormat;
-        draft.definition_text = await _serializeProtocolDocument(parsed, nextFormat);
-    }
-
-    function _applyDraftFromProtocol(detail) {
-        currentProtocol = detail;
-        _clearStructuredDrafts();
-        selectedEntityKind = 'overview';
-        selectedParticipantKey = '';
-        selectedArtifactKey = '';
-        selectedStageKey = '';
-        const rawDraftDocument = detail && detail.draft_definition_json
-            && Object.keys(detail.draft_definition_json).length
-            ? detail.draft_definition_json
-            : null;
-        const draftDocument = rawDraftDocument || (detail && detail.draft_document) || _defaultProtocolDocument();
-        const metadata = draftDocument.metadata || {};
-        draft = {
-            protocol_id: detail?.protocol?.protocol_id || '',
-            slug: Object.prototype.hasOwnProperty.call(metadata, 'slug')
-                ? String(metadata.slug || '')
-                : String(detail?.protocol?.slug || ''),
-            display_name: Object.prototype.hasOwnProperty.call(metadata, 'display_name')
-                ? String(metadata.display_name || '')
-                : String(detail?.protocol?.display_name || ''),
-            description: Object.prototype.hasOwnProperty.call(metadata, 'description')
-                ? String(metadata.description || '')
-                : String(detail?.protocol?.description || ''),
-            definition_text: editorFormat === 'yaml'
-                ? ''
-                : JSON.stringify(draftDocument, null, 2),
-            document_json: _cloneDocument(draftDocument),
-            parse_error: '',
-        };
-        draftSaveState = 'idle';
-        _clearAutosaveTimer();
-        _setSelectedEntityDefaults(draft.document_json);
-    }
-
-    async function _refreshDraftTextForCurrentFormat() {
-        if (!currentProtocol && !draft.definition_text) {
-            draft.document_json = _cloneDocument(_defaultProtocolDocument());
-            draft.definition_text = editorFormat === 'yaml'
-                ? String((await API.parseProtocolDocument({
-                    definition_text: JSON.stringify(_defaultProtocolDocument(), null, 2),
-                    format: 'yaml',
-                    validation_mode: 'draft',
-                })).text || '')
-                : JSON.stringify(_defaultProtocolDocument(), null, 2);
-            return;
-        }
-        const source = currentProtocol?.draft_document || currentProtocol?.draft_definition_json || draft.document_json || _defaultProtocolDocument();
-        draft.document_json = _cloneDocument(source);
-        draft.parse_error = '';
-        if (editorFormat === 'json') {
-            draft.definition_text = JSON.stringify(source, null, 2);
-            return;
-        }
-        const parsed = await API.parseProtocolDocument({
-            definition_text: JSON.stringify(source, null, 2),
-            format: editorFormat,
-            validation_mode: 'draft',
-        });
-        draft.definition_text = String(parsed.text || '');
-    }
-
-    function _renderValidationGutter(parent) {
-        const validation = currentProtocol?.validation;
-        const parseError = String(draft.parse_error || '');
-        if (!validation && !parseError) {
-            return;
-        }
-        const ok = Boolean(validation && validation.ok && !parseError);
-        const issueMessages = Array.isArray(validation?.issues)
-            ? validation.issues.map((item) => String(item.message || '').trim()).filter(Boolean)
-            : [];
-        const gutter = document.createElement('section');
-        gutter.className = `protocol-validation-gutter ${ok ? 'is-valid' : 'is-invalid'}`;
-        gutter.setAttribute('role', ok ? 'status' : 'alert');
-        const title = document.createElement('strong');
-        title.textContent = ok
-            ? (String(validation?.mode || 'strict') === 'draft' ? 'Draft looks healthy' : 'Validation passed')
-            : 'Validation issues';
-        gutter.appendChild(title);
-        const summary = document.createElement('div');
-        summary.className = 'quiet-note';
-        summary.textContent = ok
-            ? `Draft valid. Content hash: ${validation?.content_hash || 'n/a'}`
-            : parseError || `${issueMessages.length || validation?.errors.length || 0} issue(s) found.`;
-        gutter.appendChild(summary);
-        if (!ok && (issueMessages.length || validation?.errors.length)) {
-            const list = document.createElement('ul');
-            list.className = 'protocol-validation-list';
-            (issueMessages.length ? issueMessages : validation.errors).forEach((item) => {
-                const li = document.createElement('li');
-                li.textContent = item;
-                list.appendChild(li);
-            });
-            gutter.appendChild(list);
-        }
-        parent.appendChild(gutter);
-    }
-
-    function _textInput(value, onCommit, { placeholder = '', ariaLabel = '', draftKey = '' } = {}) {
-        const input = document.createElement('input');
-        input.className = 'search-input';
-        input.placeholder = placeholder;
-        input.value = String(_resolveStructuredDraftValue(
-            draftKey,
-            String(value || ''),
-            (item) => String(item || ''),
-        ) || '');
-        if (ariaLabel) {
-            input.setAttribute('aria-label', ariaLabel);
-        }
-        input.addEventListener('input', () => _rememberStructuredDraftValue(draftKey, String(input.value || '')));
-        input.addEventListener('change', () => {
-            const nextValue = String(input.value || '');
-            _rememberStructuredDraftValue(draftKey, nextValue);
-            onCommit(nextValue);
-        });
-        return input;
-    }
-
-    function _numberInput(value, onCommit, { min = 0, placeholder = '', ariaLabel = '', draftKey = '' } = {}) {
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.className = 'search-input';
-        input.min = String(min);
-        input.placeholder = placeholder;
-        input.value = String(_resolveStructuredDraftValue(
-            draftKey,
-            String(value ?? ''),
-            (item) => String(item ?? ''),
-        ) ?? '');
-        if (ariaLabel) {
-            input.setAttribute('aria-label', ariaLabel);
-        }
-        input.addEventListener('input', () => _rememberStructuredDraftValue(draftKey, String(input.value ?? '')));
-        input.addEventListener('change', () => {
-            const nextValue = String(input.value ?? '');
-            _rememberStructuredDraftValue(draftKey, nextValue);
-            onCommit(Number.parseInt(nextValue || '0', 10) || 0);
-        });
-        return input;
-    }
-
-    function _textAreaInput(value, onCommit, { placeholder = '', rows = 3, ariaLabel = '', draftKey = '' } = {}) {
-        const area = document.createElement('textarea');
-        area.className = 'guidance-textarea protocol-structured-textarea';
-        area.rows = rows;
-        area.placeholder = placeholder;
-        area.value = String(_resolveStructuredDraftValue(
-            draftKey,
-            String(value || ''),
-            (item) => String(item || ''),
-        ) || '');
-        if (ariaLabel) {
-            area.setAttribute('aria-label', ariaLabel);
-        }
-        area.addEventListener('input', () => _rememberStructuredDraftValue(draftKey, String(area.value || '')));
-        area.addEventListener('change', () => {
-            const nextValue = String(area.value || '');
-            _rememberStructuredDraftValue(draftKey, nextValue);
-            onCommit(nextValue);
-        });
-        return area;
-    }
-
-    function _selectInput(options, value, onCommit, { ariaLabel = '', draftKey = '' } = {}) {
-        const select = document.createElement('select');
-        select.className = 'search-input';
-        const selectedValue = String(_resolveStructuredDraftValue(
-            draftKey,
-            String(value || ''),
-            (item) => String(item || ''),
-        ) || '');
-        if (ariaLabel) {
-            select.setAttribute('aria-label', ariaLabel);
-        }
-        options.forEach((item) => {
-            const option = document.createElement('option');
-            option.value = String(item.value || '');
-            option.textContent = String(item.label || item.value || '');
-            option.selected = String(item.value || '') === selectedValue;
-            select.appendChild(option);
-        });
-        select.addEventListener('change', () => {
-            const nextValue = String(select.value || '');
-            _rememberStructuredDraftValue(draftKey, nextValue);
-            onCommit(nextValue);
-        });
-        return select;
-    }
-
-    function _checkboxInput(checked, labelText, onCommit, { ariaLabel = '', draftKey = '' } = {}) {
-        const label = document.createElement('label');
-        label.className = 'protocol-inline-checkbox';
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.checked = Boolean(_resolveStructuredDraftValue(
-            draftKey,
-            Boolean(checked),
-            (item) => Boolean(item),
-        ));
-        if (ariaLabel) {
-            input.setAttribute('aria-label', ariaLabel);
-        }
-        input.addEventListener('change', () => {
-            const nextValue = Boolean(input.checked);
-            _rememberStructuredDraftValue(draftKey, nextValue);
-            onCommit(nextValue);
-        });
-        const text = document.createElement('span');
-        text.textContent = labelText;
-        label.appendChild(input);
-        label.appendChild(text);
-        return label;
-    }
-
-    function _commaList(value) {
-        return String(value || '')
-            .split(',')
-            .map((item) => item.trim())
-            .filter(Boolean);
-    }
-
-    function _slugSuggestion(value) {
-        return String(value || '')
-            .trim()
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-+|-+$/g, '');
-    }
-
-    function _draftTitle() {
-        return String(draft.display_name || '').trim()
-            || (currentProtocol?.protocol?.display_name || '').trim()
-            || 'New protocol draft';
-    }
-
-
-    async function _downloadDraft(format) {
-        const normalized = format === 'yaml' ? 'yaml' : 'json';
-        try {
-            let exported;
-            if (currentProtocolId) {
-                exported = await API.exportProtocolDraft(currentProtocolId, normalized);
-            } else {
-                const document = await _parseDraftDocument({ report: true }) || _draftDocument();
-                exported = {
-                    text: await _serializeProtocolDocument(document, normalized),
-                };
-            }
-            _downloadProtocolText(
-                `${UI.safeFilename(draft.slug || currentProtocol?.protocol?.slug || 'protocol')}.${normalized === 'yaml' ? 'yaml' : 'json'}`,
-                String(exported.text || ''),
-                normalized === 'yaml' ? 'text/yaml' : 'application/json',
-            );
-        } catch (err) {
-            UI.reportError('Failed to export the protocol draft', err, {
-                context: 'Protocol draft export failed',
-            });
-        }
-    }
-
-    async function _showDraftDiff() {
+    async function _validateNow() {
         if (!currentProtocolId) {
-            UI.notify('Create and publish the protocol before requesting a diff.', 'warning');
+            await _saveNew();
+            if (!currentProtocolId) return;
+        } else if (saveState.state === 'editing' || saveState.state === 'saving') {
+            await _autosave();
+        }
+        saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
+        _syncLifecycleChip();
+        currentProtocol = await API.validateProtocol(currentProtocolId);
+        _applyServerDetail(currentProtocol);
+        saveState = { state: 'saved', lastSavedAt: new Date().toISOString(), error: '' };
+        render();
+        UI.notify(
+            currentProtocol.validation?.ok ? 'Protocol validated.' : 'Protocol validation found issues.',
+            currentProtocol.validation?.ok ? 'success' : 'warning',
+        );
+    }
+
+    async function _publishNow() {
+        if (!currentProtocolId) {
+            await _saveNew();
+            if (!currentProtocolId) return;
+        } else if (saveState.state === 'editing' || saveState.state === 'saving') {
+            await _autosave();
+        }
+        _clearAutosaveTimer();
+        saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
+        _syncLifecycleChip();
+        currentProtocol = await API.publishProtocol(currentProtocolId);
+        _applyServerDetail(currentProtocol);
+        await loadProtocols({ quiet: true });
+        saveState = { state: 'saved', lastSavedAt: new Date().toISOString(), error: '' };
+        render();
+        UI.notify('Protocol published.', 'success');
+    }
+
+    async function _archiveNow() {
+        _clearAutosaveTimer();
+        saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
+        _syncLifecycleChip();
+        currentProtocol = await API.archiveProtocol(currentProtocolId);
+        _applyServerDetail(currentProtocol);
+        await loadProtocols({ quiet: true });
+        saveState = { state: 'saved', lastSavedAt: new Date().toISOString(), error: '' };
+        render();
+        UI.notify('Protocol archived.', 'success');
+    }
+
+    async function _discardNow() {
+        _clearAutosaveTimer();
+        if (!currentProtocolId) {
+            _resetDraft();
+            _writeState({ push: true });
+            render();
             return;
         }
+        await API.deleteProtocol(currentProtocolId);
+        _resetDraft();
+        _writeState({ push: true });
+        await loadProtocols({ quiet: true });
+        render();
+        UI.notify('Protocol draft discarded.', 'success');
+    }
+
+    function _resetDraft() {
+        _clearAutosaveTimer();
+        currentProtocolId = '';
+        currentProtocol = null;
+        protocolDetailLoading = false;
+        draft = { slug: '', display_name: '', description: '', document: _blankDocument() };
+        selection = { sectionKey: 'overview', nodeKey: '' };
+        saveState = { state: 'idle', lastSavedAt: '', error: '' };
+    }
+
+    async function _saveNew() {
+        saveState = { state: 'saving', lastSavedAt: '', error: '' };
+        _syncLifecycleChip();
+        const result = await API.createProtocol({
+            slug: draft.slug,
+            display_name: draft.display_name,
+            description: draft.description,
+            definition_json: _docFromDraft(),
+        });
+        currentProtocolId = result.protocol?.protocol_id || '';
+        _applyServerDetail(result);
+        _writeState({ push: true });
+        await loadProtocols({ quiet: true });
+        render();
+        UI.notify('Protocol draft saved.', 'success');
+    }
+
+    async function _createBlankDraft() {
         try {
-            const result = await API.diffProtocolDraft(currentProtocolId, editorFormat);
-            UI.showTextDialog(
-                `Protocol diff · ${draft.display_name || draft.slug || currentProtocolId}`,
-                result.diff || 'No differences.',
-                { maxWidth: '960px' },
-            );
+            const result = await API.createProtocolDraft({ source_kind: 'blank' });
+            currentProtocolId = result.protocol?.protocol_id || '';
+            _applyServerDetail(result);
+            _writeState({ push: true });
+            await loadProtocols({ quiet: true });
+            render();
+            UI.notify('Protocol draft created.', 'success');
         } catch (err) {
-            UI.reportError('Failed to generate the protocol diff', err, {
-                context: 'Protocol diff failed',
+            UI.reportError('Failed to create a blank protocol draft', err, {
+                context: 'Protocol draft create failed',
             });
         }
     }
 
-    function _manifestTemplates() {
-        return Array.isArray(authoringManifest?.templates) ? authoringManifest.templates : [];
+    // -------------------------------------------------------------------
+    // Rehearsal
+    // -------------------------------------------------------------------
+    function _stopRehearsalPolling() {
+        if (rehearsal.pollTimer) {
+            clearTimeout(rehearsal.pollTimer);
+            rehearsal.pollTimer = 0;
+        }
+    }
+
+    async function _refreshRehearsalSessions() {
+        if (!rehearsal.runId) return;
+        try {
+            const [sessionsResp, scenariosResp] = await Promise.all([
+                API.listRehearsalSessions(rehearsal.runId),
+                API.listProtocolScenarios({ protocol_id: currentProtocolId || '' }),
+            ]);
+            rehearsal.sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : [];
+            rehearsal.scenarios = Array.isArray(scenariosResp?.scenarios) ? scenariosResp.scenarios : [];
+            render();
+        } catch (err) {
+            UI.reportError('Failed to refresh rehearsal state', err);
+        } finally {
+            if (rehearsal.runId) {
+                _stopRehearsalPolling();
+                rehearsal.pollTimer = setTimeout(() => { void _refreshRehearsalSessions(); }, 1500);
+            }
+        }
+    }
+
+    async function _startRehearsal() {
+        if (!currentProtocolId) return;
+        const run = await API.createProtocolRun({
+            protocol_id: currentProtocolId,
+            is_rehearsal: true,
+            entry_authority_ref: 'rehearsal',
+        });
+        rehearsal.runId = String(run?.protocol_run?.protocol_run_id || run?.protocol_run_id || '');
+        rehearsal.sessions = [];
+        rehearsal.scenarios = [];
+        if (!rehearsal.runId) {
+            UI.notify('Rehearsal could not be started.', 'error');
+            return;
+        }
+        UI.notify('Rehearsal started — dry run, external transports gated.', 'success');
+        render();
+        await _refreshRehearsalSessions();
+    }
+
+    async function _respondRehearsal({ routedTaskId, responseText, stageKey, participantKey }) {
+        if (!rehearsal.runId || !routedTaskId) return;
+        try {
+            await API.respondRehearsalSession(rehearsal.runId, {
+                routed_task_id: routedTaskId,
+                response_text: String(responseText || ''),
+                stage_key: stageKey || '',
+                participant_key: participantKey || '',
+            });
+            await _refreshRehearsalSessions();
+        } catch (err) {
+            UI.reportError('Failed to submit rehearsal response', err);
+        }
+    }
+
+    cleanups.add(_stopRehearsalPolling);
+
+    // -------------------------------------------------------------------
+    // Details panel field commits
+    // -------------------------------------------------------------------
+    function _commitOverview(_target, key, value) {
+        if (key === 'display_name') {
+            draft.display_name = String(value || '');
+            if (!draft.slug) draft.slug = _slugSuggestion(draft.display_name);
+        } else if (key === 'slug') {
+            draft.slug = _slugSuggestion(value);
+        } else if (key === 'description') {
+            draft.description = String(value || '');
+        }
+        _scheduleAutosave();
+        _syncLifecycleHeaderInputs();
+    }
+
+    function _commitNodeField(kind, nodeKey, key, value) {
+        const plural = kind + 's';
+        const doc = _cloneDoc(draft.document);
+        const items = Array.isArray(doc[plural]) ? doc[plural] : [];
+        const idField = kind === 'participant' ? 'participant_key' : kind === 'stage' ? 'stage_key' : 'artifact_key';
+        const idx = items.findIndex((item) => String(item[idField] || '') === nodeKey);
+        if (idx < 0) return;
+        const next = Object.assign({}, items[idx]);
+        if (key === 'required_skills') {
+            next.required_skills = String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+        } else if (key === 'max_rounds' || key === 'timeout_seconds') {
+            next[key] = Number.parseInt(String(value || '0'), 10) || 0;
+        } else {
+            next[key] = value;
+        }
+        // slug-style rekey when editing the identity field
+        if (key === idField) {
+            next[idField] = _slugSuggestion(value) || nodeKey;
+        }
+        items[idx] = next;
+        doc[plural] = items;
+        draft.document = doc;
+        if (key === idField && next[idField] !== nodeKey) {
+            selection = { sectionKey: plural, nodeKey: String(next[idField]) };
+        }
+        _scheduleAutosave();
+        render();
+    }
+
+    function _addNode(sectionKey) {
+        const doc = _cloneDoc(draft.document);
+        if (sectionKey === 'participants') {
+            const n = (doc.participants || []).length + 1;
+            const key = `participant_${n}`;
+            doc.participants = [...(doc.participants || []), {
+                participant_key: key,
+                display_name: '',
+                required_skills: [],
+                instructions: '',
+            }];
+            selection = { sectionKey: 'participants', nodeKey: key };
+        } else if (sectionKey === 'stages') {
+            const n = (doc.stages || []).length + 1;
+            const key = `stage_${n}`;
+            const firstParticipant = String(doc.participants?.[0]?.participant_key || '');
+            doc.stages = [...(doc.stages || []), {
+                stage_key: key,
+                display_name: '',
+                participant_key: firstParticipant,
+                stage_kind: 'work',
+                instructions: '',
+                inputs: [],
+                outputs: [],
+                transitions: {},
+            }];
+            selection = { sectionKey: 'stages', nodeKey: key };
+        } else if (sectionKey === 'artifacts') {
+            const n = (doc.artifacts || []).length + 1;
+            const key = `artifact_${n}`;
+            doc.artifacts = [...(doc.artifacts || []), {
+                artifact_key: key,
+                display_name: '',
+                kind: 'workspace_file',
+                description: '',
+            }];
+            selection = { sectionKey: 'artifacts', nodeKey: key };
+        }
+        draft.document = doc;
+        _scheduleAutosave();
+        render();
+    }
+
+    // -------------------------------------------------------------------
+    // Rendering
+    // -------------------------------------------------------------------
+    function _lifecycleHeaderEl() {
+        const record = {
+            display_name: draft.display_name,
+            slug: draft.slug,
+            lifecycle_state: String(currentProtocol?.protocol?.lifecycle_state || 'draft'),
+        };
+        const lifecycleState = String(currentProtocol?.protocol?.lifecycle_state || '');
+        const hasPublishedVersion = Boolean(currentProtocol?.protocol?.current_version_id)
+            || (Array.isArray(currentProtocol?.versions)
+                && currentProtocol.versions.some((v) => String(v.lifecycle_state || '') === 'published'));
+        const permissions = {
+            canPublish: Boolean(currentProtocolId),
+            canArchive: Boolean(currentProtocolId) && lifecycleState !== 'archived',
+            canRehearse: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived',
+            canDiscard: Boolean(currentProtocolId),
+        };
+        return Kit.lifecycleHeader({
+            surfaceKey: 'protocol',
+            record,
+            saveState,
+            permissions,
+            actions: {
+                validate: () => void _validateNow().catch((err) => UI.reportError('Validation failed', err)),
+                publish: () => void _publishNow().catch((err) => UI.reportError('Publish failed', err)),
+                rehearse: () => void _startRehearsal().catch((err) => UI.reportError('Rehearsal failed to start', err)),
+                archive: () => UI.showConfirm(
+                    'Archive protocol',
+                    'Archive this protocol definition? Published versions remain immutable, but the definition will no longer be offered for new runs.',
+                    async () => { await _archiveNow(); },
+                ),
+                discard: () => UI.showConfirm(
+                    'Delete protocol draft?',
+                    'This permanently deletes the unpublished draft. Published protocols must be archived instead.',
+                    async () => { await _discardNow(); },
+                ),
+            },
+            onTitleCommit: (value) => _commitOverview(null, 'display_name', value),
+            onSlugCommit: (value) => _commitOverview(null, 'slug', value),
+        });
+    }
+
+    // Refs maintained across renders so we can sync inputs without blurring
+    // the user's caret.
+    let _lifecycleHeaderRef = null;
+    function _syncLifecycleChip() {
+        if (_lifecycleHeaderRef && typeof _lifecycleHeaderRef.updateSaveState === 'function') {
+            _lifecycleHeaderRef.updateSaveState(saveState);
+        }
+    }
+    function _syncLifecycleHeaderInputs() {
+        if (_lifecycleHeaderRef && typeof _lifecycleHeaderRef.syncRecord === 'function') {
+            _lifecycleHeaderRef.syncRecord({
+                display_name: draft.display_name,
+                slug: draft.slug,
+                lifecycle_state: String(currentProtocol?.protocol?.lifecycle_state || 'draft'),
+            });
+        }
+    }
+
+    function _canvasEl() {
+        const doc = draft.document;
+        const participantNodes = (doc.participants || []).map((item) => ({
+            key: String(item.participant_key || ''),
+            label: String(item.display_name || item.participant_key || 'New participant'),
+            sublabel: (item.required_skills || []).join(', '),
+        }));
+        const stageNodes = (doc.stages || []).map((item) => ({
+            key: String(item.stage_key || ''),
+            label: String(item.display_name || item.stage_key || 'New stage'),
+            sublabel: [
+                Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
+                item.participant_key || '',
+            ].filter(Boolean).join(' · '),
+        }));
+        const artifactNodes = (doc.artifacts || []).map((item) => ({
+            key: String(item.artifact_key || ''),
+            label: String(item.display_name || item.artifact_key || 'New artifact'),
+            sublabel: String(item.kind || ''),
+        }));
+
+        return Kit.canvas({
+            selection,
+            onSelect: ({ sectionKey, nodeKey }) => {
+                selection = { sectionKey, nodeKey };
+                render();
+            },
+            sections: [
+                {
+                    key: 'participants',
+                    title: Kit.dict.label('protocol.participants.section'),
+                    addLabel: Kit.dict.label('protocol.participants.add'),
+                    firstRunHint: Kit.dict.label('protocol.participants.firstrun'),
+                    onAdd: () => _addNode('participants'),
+                    nodes: participantNodes,
+                },
+                {
+                    key: 'stages',
+                    title: Kit.dict.label('protocol.stages.section'),
+                    addLabel: Kit.dict.label('protocol.stages.add'),
+                    firstRunHint: Kit.dict.label('protocol.stages.firstrun'),
+                    onAdd: () => _addNode('stages'),
+                    nodes: stageNodes,
+                },
+                {
+                    key: 'artifacts',
+                    title: Kit.dict.label('protocol.artifacts.section'),
+                    addLabel: Kit.dict.label('protocol.artifacts.add'),
+                    firstRunHint: Kit.dict.label('protocol.artifacts.firstrun'),
+                    onAdd: () => _addNode('artifacts'),
+                    nodes: artifactNodes,
+                },
+            ],
+        });
+    }
+
+    function _detailsEl() {
+        const doc = draft.document;
+        if (selection.sectionKey === 'overview' || !selection.nodeKey) {
+            return Kit.detailsPanel({
+                target: { display_name: draft.display_name, slug: draft.slug, description: draft.description },
+                surfaceKey: 'protocol',
+                onCommit: _commitOverview,
+                schema: [
+                    { key: 'display_name', kind: 'text', required: true },
+                    { key: 'slug', kind: 'text' },
+                    { key: 'description', kind: 'textarea', rows: 4 },
+                ],
+            });
+        }
+        if (selection.sectionKey === 'participants') {
+            const target = (doc.participants || []).find((item) => String(item.participant_key) === selection.nodeKey);
+            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+            const view = { ...target, required_skills: (target.required_skills || []).join(', ') };
+            return Kit.detailsPanel({
+                target: view,
+                surfaceKey: 'protocol.participant',
+                onCommit: (_t, key, value) => _commitNodeField('participant', selection.nodeKey, key, value),
+                schema: [
+                    { key: 'display_name', kind: 'text', required: true },
+                    { key: 'participant_key', kind: 'text' },
+                    { key: 'instructions', kind: 'textarea', rows: 4 },
+                    { key: 'required_skills', kind: 'text' },
+                ],
+            });
+        }
+        if (selection.sectionKey === 'stages') {
+            const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
+            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+            const participantOptions = [
+                { value: '', label: '(none yet)' },
+                ...((doc.participants || []).map((p) => ({
+                    value: String(p.participant_key || ''),
+                    label: String(p.display_name || p.participant_key || ''),
+                }))),
+            ];
+            const kindOptions = _manifestStageKindOptions().map((value) => ({
+                value,
+                label: Kit.dict.label(`protocol.stage.kind.${value}`, value),
+            }));
+            return Kit.detailsPanel({
+                target,
+                surfaceKey: 'protocol.stage',
+                onCommit: (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
+                schema: [
+                    { key: 'display_name', kind: 'text', required: true },
+                    { key: 'stage_key', kind: 'text' },
+                    { key: 'participant_key', kind: 'select', options: participantOptions },
+                    { key: 'stage_kind', kind: 'select', options: kindOptions },
+                    { key: 'instructions', kind: 'textarea', rows: 4 },
+                    { key: 'max_rounds', kind: 'text' },
+                    { key: 'timeout_seconds', kind: 'text' },
+                ],
+            });
+        }
+        if (selection.sectionKey === 'artifacts') {
+            const target = (doc.artifacts || []).find((item) => String(item.artifact_key) === selection.nodeKey);
+            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+            const kindOptions = _manifestArtifactKindOptions().map((value) => ({ value, label: String(value) }));
+            return Kit.detailsPanel({
+                target,
+                surfaceKey: 'protocol.artifact',
+                onCommit: (_t, key, value) => _commitNodeField('artifact', selection.nodeKey, key, value),
+                schema: [
+                    { key: 'display_name', kind: 'text', required: true },
+                    { key: 'artifact_key', kind: 'text' },
+                    { key: 'kind', kind: 'select', options: kindOptions },
+                    { key: 'description', kind: 'textarea', rows: 3 },
+                ],
+            });
+        }
+        return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+    }
+
+    function _validationEl() {
+        const validation = currentProtocol?.validation;
+        if (!validation) return null;
+        const issues = Array.isArray(validation.issues) ? validation.issues : [];
+        const normalized = issues.length
+            ? issues.map((item) => ({
+                severity: String(item.severity || 'error'),
+                message: String(item.message || ''),
+                path: String(item.path || ''),
+            }))
+            : (Array.isArray(validation.errors) ? validation.errors : []).map((text) => ({
+                severity: 'error',
+                message: String(text || ''),
+            }));
+        return Kit.validationSurface({ issues: normalized, layout: 'summary' });
     }
 
     function _manifestStageKindOptions() {
@@ -777,1768 +755,84 @@ function renderProtocolWorkspace(container) {
             : ['workspace_file', 'control_plane_text'];
     }
 
-    function _manifestSelectorKindOptions() {
-        return Array.isArray(authoringManifest?.selector_kind_options) && authoringManifest.selector_kind_options.length
-            ? authoringManifest.selector_kind_options
-            : ['agent', 'skill', 'role'];
-    }
-
-    function _setSelectedEntityDefaults(document = _draftDocument()) {
-        if (!selectedParticipantKey && document.participants?.length) {
-            selectedParticipantKey = String(document.participants[0].participant_key || '');
-        }
-        if (!selectedArtifactKey && document.artifacts?.length) {
-            selectedArtifactKey = String(document.artifacts[0].artifact_key || '');
-        }
-        if (!selectedStageKey && document.stages?.length) {
-            selectedStageKey = String(document.stages[0].stage_key || '');
-        }
-    }
-
-    async function _saveCurrentDraft() {
-        _clearAutosaveTimer();
-        draftSaveState = 'saving';
-        renderAuthorRoute();
-        const payload = _savePayloadFromDraft();
-        const result = currentProtocolId
-            ? await API.saveProtocolDraft(currentProtocolId, payload)
-            : await API.createProtocol(payload);
-        currentProtocolId = result.protocol?.protocol_id || currentProtocolId;
-        currentProtocol = result;
-        _applyDraftFromProtocol(result);
-        await _refreshDraftTextForCurrentFormat();
-        await loadProtocols();
-        if (currentProtocolId) {
-            await loadProtocolDetail();
-        } else {
-            renderAuthorRoute();
-        }
-        draftSaveState = 'saved';
-        UI.notify('Protocol draft saved.', 'success');
-    }
-
-    async function _validateCurrentDraft() {
-        if (!currentProtocolId) {
-            await _saveCurrentDraft();
-        } else if (draftSaveState === 'dirty' || draftSaveState === 'saving') {
-            await _saveCurrentDraft();
-        }
-        draftSaveState = 'saving';
-        renderAuthorRoute();
-        currentProtocol = await API.validateProtocol(currentProtocolId);
-        _applyDraftFromProtocol(currentProtocol);
-        await _refreshDraftTextForCurrentFormat();
-        draftSaveState = 'saved';
-        renderAuthorRoute();
-        UI.notify(
-            currentProtocol.validation?.ok ? 'Protocol validated.' : 'Protocol validation found issues.',
-            currentProtocol.validation?.ok ? 'success' : 'warning',
-        );
-    }
-
-    async function _publishCurrentDraft() {
-        if (!currentProtocolId) {
-            await _saveCurrentDraft();
-        } else if (draftSaveState === 'dirty' || draftSaveState === 'saving') {
-            await _saveCurrentDraft();
-        }
-        _clearAutosaveTimer();
-        draftSaveState = 'saving';
-        renderAuthorRoute();
-        currentProtocol = await API.publishProtocol(currentProtocolId);
-        _applyDraftFromProtocol(currentProtocol);
-        await _refreshDraftTextForCurrentFormat();
-        await loadProtocols();
-        draftSaveState = 'saved';
-        renderAuthorRoute();
-        UI.notify('Protocol published.', 'success');
-    }
-
-    async function _archiveCurrentDraft() {
-        _clearAutosaveTimer();
-        draftSaveState = 'saving';
-        renderAuthorRoute();
-        currentProtocol = await API.archiveProtocol(currentProtocolId);
-        _applyDraftFromProtocol(currentProtocol);
-        await _refreshDraftTextForCurrentFormat();
-        await loadProtocols();
-        draftSaveState = 'saved';
-        renderAuthorRoute();
-        UI.notify('Protocol archived.', 'success');
-    }
-
-    async function _createDraftFromSource(payload) {
-        const result = await API.createProtocolDraft(payload);
-        currentProtocolId = result.protocol?.protocol_id || '';
-        currentProtocol = result;
-        _applyDraftFromProtocol(result);
-        currentSection = 'design';
-        selectedEntityKind = 'overview';
-        _writeState({ push: true });
-        await _refreshDraftTextForCurrentFormat();
-        await loadProtocols();
-        draftSaveState = 'idle';
-        renderAuthorRoute();
-        _revealEditorSurface();
-        UI.notify('Protocol draft created.', 'success');
-    }
-
-    async function _discardCurrentDraft() {
-        _clearAutosaveTimer();
-        if (!currentProtocolId) {
-            _resetDraftState();
-            _writeState({ push: true });
-            renderAuthorRoute();
-            _revealEditorSurface();
-            return;
-        }
-        await API.deleteProtocol(currentProtocolId);
-        _resetDraftState();
-        _writeState({ push: true });
-        await loadProtocols();
-        renderAuthorRoute();
-        _revealEditorSurface();
-        UI.notify('Protocol draft discarded.', 'success');
-    }
-
-    async function _duplicateCurrentProtocol() {
-        if (!currentProtocolId) {
-            return;
-        }
-        await _createDraftFromSource({
-            source_kind: 'protocol',
-            source_protocol_id: currentProtocolId,
-        });
-    }
-
-    function _validationIssues() {
-        return Array.isArray(currentProtocol?.validation?.issues) ? currentProtocol.validation.issues : [];
-    }
-
-    function _nextRequiredActionLabels() {
-        const actions = Array.isArray(currentProtocol?.validation?.next_required_actions)
-            ? currentProtocol.validation.next_required_actions
-            : [];
-        return actions.map((item) => {
-            if (item === 'overview.complete_slug') return 'Set a protocol slug in Overview.';
-            if (item === 'participants.add_first') return 'Add the first participant.';
-            if (item === 'stages.add_first') return 'Add the first workflow stage.';
-            if (item === 'stages.assign_participant') return 'Assign a participant to each stage.';
-            return String(item || '').trim();
-        }).filter(Boolean);
-    }
-
-    function _sectionIssues(section) {
-        const issues = _validationIssues();
-        const parseError = String(draft.parse_error || '').trim();
-        if (issues.length) {
-            const sectionIssues = issues.filter((item) =>
-                section === 'review'
-                    ? true
-                    : String(item.section || '').trim().toLowerCase() === section,
-            ).map((item) => String(item.message || '').trim()).filter(Boolean);
-            return parseError ? [parseError, ...sectionIssues] : sectionIssues;
-        }
-        const errors = Array.isArray(currentProtocol?.validation?.errors) ? currentProtocol.validation.errors : [];
-        if (section === 'review') {
-            return parseError ? [parseError, ...errors] : errors;
-        }
-        return errors.filter((item) => {
-            const text = String(item || '').toLowerCase();
-            if (section === 'participants') return text.includes('participant');
-            if (section === 'artifacts') return text.includes('artifact') || text.includes('workspace_file');
-            if (section === 'stages') return text.includes('stage') || text.includes('transition');
-            if (section === 'policies') return text.includes('review') || text.includes('policy');
-            if (section === 'overview') {
-                return !text.includes('participant') && !text.includes('artifact') && !text.includes('stage') && !text.includes('transition');
-            }
-            return false;
-        });
-    }
-
-    function _canAddStages(document) {
-        return Boolean(document.participants?.length);
-    }
-
-    function _modeSummary(document) {
-        const designCount = (document.participants?.length || 0) + (document.stages?.length || 0) + (document.artifacts?.length || 0);
-        const reviewIssues = _sectionIssues('review').length;
-        return PROTOCOL_AUTHORING_MODE_OPTIONS.map((item) => {
-            const count = item.value === 'design' ? designCount : item.value === 'review' ? reviewIssues : 0;
-            const hasIssues = item.value === 'review' && reviewIssues > 0;
-            return {
-                value: item.value,
-                label: item.label,
-                count,
-                hasIssues,
-            };
-        });
-    }
-
-    function _filteredProtocols() {
-        return (protocols || []).filter((item) => {
-            const haystack = [
-                item.display_name || '',
-                item.slug || '',
-                item.protocol_id || '',
-                item.description || '',
-                item.visibility || '',
-                item.lifecycle_state || '',
-            ].join(' ').toLowerCase();
-            if (protocolSearch && !haystack.includes(protocolSearch.toLowerCase())) {
-                return false;
-            }
-            if (protocolLifecycleFilter && String(item.lifecycle_state || '') !== protocolLifecycleFilter) {
-                return false;
-            }
-            return true;
-        });
-    }
-
-    function _protocolCatalogGroups() {
-        const filtered = _filteredProtocols();
-        return {
-            authored: filtered,
-        };
-    }
-
-    function _protocolRows(items) {
-        return (items || []).map((item) => UI.renderListRow({
-            label: item.display_name || 'Untitled draft',
-            sublabel: [
-                item.description || '',
-                item.display_name ? (item.slug || '') : 'Name this workflow to make it easy to find later.',
-                item.updated_at ? `updated ${UI.relativeTime(item.updated_at)}` : '',
-            ].filter(Boolean).join(' · '),
-            badgeText: item.lifecycle_state || 'draft',
-            className: item.protocol_id === currentProtocolId ? 'is-selected' : '',
-            onClick: () => {
-                currentProtocolId = item.protocol_id;
+    function _catalogEl() {
+        return Kit.authoredCatalog({
+            records: protocols,
+            surfaceKey: 'protocol',
+            onOpen: (record) => {
+                currentProtocolId = String(record.protocol_id || '');
                 currentProtocol = null;
-                currentSection = 'design';
-                selectedEntityKind = 'overview';
                 protocolDetailLoading = true;
-                selectedParticipantKey = '';
-                selectedArtifactKey = '';
-                selectedStageKey = '';
                 _writeState({ push: true });
-                renderAuthorRoute();
-                _revealEditorSurface();
+                render();
                 void loadProtocolDetail();
             },
-        }));
-    }
-
-    function _buildCatalogGroup(titleText, rows, emptyMessage, { tone = '' } = {}) {
-        const section = document.createElement('section');
-        section.className = `protocol-catalog-group${tone ? ` ${tone}` : ''}`;
-        const heading = document.createElement('div');
-        heading.className = 'protocol-catalog-heading';
-        heading.textContent = titleText;
-        section.appendChild(heading);
-        const body = document.createElement('div');
-        body.className = 'protocol-scroll protocol-catalog-list';
-        UI.reconcileChildren(
-            body,
-            rows.length ? rows : [UI.renderEmptyState(emptyMessage, true)],
-        );
-        section.appendChild(body);
-        return section;
-    }
-
-    function _openImportDialog() {
-        const form = document.createElement('div');
-        form.className = 'studio-dialog-form';
-
-        const formatControl = UI.createSegmentedControl(
-            [
-                { value: 'json', label: 'JSON' },
-                { value: 'yaml', label: 'YAML' },
-            ],
-            (value) => {
-                formatValue = value || 'json';
+            createAction: {
+                label: 'New protocol',
+                onClick: () => void _createBlankDraft(),
             },
-            { label: 'Import format', value: 'yaml' },
-        );
-        let formatValue = 'yaml';
-        form.appendChild(formatControl.element);
-
-        const fileInput = document.createElement('input');
-        fileInput.type = 'file';
-        fileInput.className = 'input';
-        fileInput.accept = '.json,.yaml,.yml,application/json,text/yaml,text/x-yaml';
-        form.appendChild(fileInput);
-
-        const textarea = document.createElement('textarea');
-        textarea.className = 'guidance-textarea';
-        textarea.rows = 12;
-        textarea.placeholder = 'Paste protocol JSON or YAML here';
-        form.appendChild(textarea);
-
-        const note = document.createElement('p');
-        note.className = 'quiet-note';
-        note.textContent = 'Import normalizes JSON or YAML into the shared protocol draft model. Incomplete drafts stay editable and Review handles strict publish validation.';
-        form.appendChild(note);
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.className = 'btn';
-        cancelBtn.textContent = 'Cancel';
-        const importBtn = document.createElement('button');
-        importBtn.type = 'button';
-        importBtn.className = 'btn btn-primary';
-        importBtn.textContent = 'Import';
-        const view = UI.showDialog('Import protocol definition', form, {
-            actions: [cancelBtn, importBtn],
-            maxWidth: '760px',
-            initialFocus: textarea,
-        });
-        cancelBtn.addEventListener('click', () => view.close());
-        importBtn.addEventListener('click', async () => {
-            importBtn.disabled = true;
-            try {
-                let definitionText = String(textarea.value || '').trim();
-                const file = fileInput.files && fileInput.files[0];
-                if (!definitionText && file) {
-                    definitionText = await _readProtocolFileText(file);
-                }
-                if (!definitionText) {
-                    textarea.focus();
-                    return;
-                }
-                const parsed = await API.parseProtocolDocument({
-                    definition_text: definitionText,
-                    format: formatValue,
-                    validation_mode: 'draft',
-                });
-                const document = _applyDraftMetadataToDocument(parsed.document || _defaultProtocolDocument());
-                const result = await API.createProtocol({
-                    slug: document.metadata?.slug || '',
-                    display_name: document.metadata?.display_name || 'Imported Protocol',
-                    description: document.metadata?.description || '',
-                    definition_json: document,
-                });
-                currentProtocolId = result.protocol?.protocol_id || '';
-                currentProtocol = result;
-                _applyDraftFromProtocol(result);
-                currentSection = 'design';
-                selectedEntityKind = 'overview';
-                editorFormat = formatValue;
-                await _refreshDraftTextForCurrentFormat();
-                await loadProtocols();
-                _writeState({ push: true });
-                renderAuthorRoute();
-                _revealEditorSurface();
-                view.close();
-                UI.notify('Protocol definition imported into a new draft.', 'success');
-            } catch (err) {
-                UI.reportError('Failed to import the protocol definition', err, {
-                    context: 'Protocol import failed',
-                });
-            }
-            importBtn.disabled = false;
         });
     }
 
-    function _buildDefinitionPanel() {
-        const definitionPanel = document.createElement('section');
-        definitionPanel.className = 'editor-panel protocol-panel';
-
-        const definitionTitle = document.createElement('div');
-        definitionTitle.className = 'editor-section-title';
-        definitionTitle.textContent = 'Definitions';
-        definitionPanel.appendChild(definitionTitle);
-
-        const definitionSearch = document.createElement('input');
-        definitionSearch.className = 'search-input';
-        definitionSearch.placeholder = 'Search your protocol drafts and published workflows';
-        definitionSearch.value = protocolSearch;
-        definitionSearch.addEventListener('input', () => {
-            protocolSearch = definitionSearch.value;
-            renderAuthorRoute();
-        });
-        definitionPanel.appendChild(definitionSearch);
-
-        const statusControl = UI.createSegmentedControl(
-            PROTOCOL_CATALOG_STATUS_OPTIONS,
-            (value) => {
-                protocolLifecycleFilter = String(value || '');
-                renderAuthorRoute();
-            },
-            {
-                label: 'Protocol lifecycle filter',
-                value: protocolLifecycleFilter,
-            },
-        );
-        const toolbar = document.createElement('div');
-        toolbar.className = 'protocol-catalog-toolbar';
-        toolbar.appendChild(statusControl.element);
-        definitionPanel.appendChild(toolbar);
-
-        const definitionActions = document.createElement('div');
-        definitionActions.className = 'editor-actions';
-
-        const newButton = document.createElement('button');
-        newButton.type = 'button';
-        newButton.className = 'btn btn-primary';
-        newButton.textContent = 'New protocol';
-        newButton.addEventListener('click', () => {
-            void _createDraftFromSource({ source_kind: 'blank' }).catch((err) => {
-                UI.reportError('Failed to create a blank protocol draft', err, {
-                    context: 'Protocol draft create failed',
-                });
-            });
-        });
-        definitionActions.appendChild(newButton);
-
-        const galleryButton = document.createElement('button');
-        galleryButton.type = 'button';
-        galleryButton.className = 'btn';
-        galleryButton.textContent = 'Gallery';
-        galleryButton.addEventListener('click', () => Router.navigate('/ui/gallery'));
-        definitionActions.appendChild(galleryButton);
-
-        const importButton = document.createElement('button');
-        importButton.type = 'button';
-        importButton.className = 'btn';
-        importButton.textContent = 'Import';
-        importButton.addEventListener('click', _openImportDialog);
-        definitionActions.appendChild(importButton);
-        definitionPanel.appendChild(definitionActions);
-
-        const groups = _protocolCatalogGroups();
-        const catalogGroups = document.createElement('div');
-        catalogGroups.className = 'protocol-catalog-groups';
-        catalogGroups.appendChild(_buildCatalogGroup(
-            'Your definitions',
-            _protocolRows(groups.authored),
-            'No authored protocols yet. Start blank, browse the Gallery, or import a definition.',
-        ));
-        definitionPanel.appendChild(catalogGroups);
-        return definitionPanel;
-    }
-
-    function _buildStageFlow(protocolDocument, { compact = false, preview = false } = {}) {
-        const stages = protocolDocument.stages || [];
-        if (preview) {
-            const previewFlow = document.createElement('div');
-            previewFlow.className = 'protocol-stage-flow protocol-stage-flow-preview';
-            stages.forEach((stage, index) => {
-                if (index > 0) {
-                    const arrow = document.createElement('span');
-                    arrow.className = 'protocol-stage-preview-arrow';
-                    arrow.textContent = '→';
-                    previewFlow.appendChild(arrow);
-                }
-                const previewNode = document.createElement('button');
-                previewNode.type = 'button';
-                previewNode.className = `protocol-stage-preview-node ${selectedEntityKind === 'stage' && String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
-                previewNode.addEventListener('click', () => {
-                    _selectDesignTarget('stage', String(stage.stage_key || ''));
-                    currentSection = 'design';
-                    _writeState({ push: true });
-                    renderAuthorRoute();
-                    _revealEditorSurface();
-                });
-                const title = document.createElement('strong');
-                title.textContent = stage.display_name || 'New stage';
-                previewNode.appendChild(title);
-                const meta = document.createElement('span');
-                meta.className = 'protocol-stage-preview-meta';
-                meta.textContent = [
-                    stage.stage_kind || 'work',
-                    stage.participant_key || '',
-                ].filter(Boolean).join(' · ');
-                previewNode.appendChild(meta);
-                previewFlow.appendChild(previewNode);
-            });
-            if (!stages.length) {
-                previewFlow.appendChild(UI.renderEmptyState('No stages defined yet.', true));
-            }
-            return previewFlow;
-        }
-        const flow = document.createElement('div');
-        flow.className = compact ? 'protocol-stage-flow protocol-stage-flow-compact' : 'protocol-stage-flow';
-        stages.forEach((stage) => {
-            const card = document.createElement('button');
-            card.type = 'button';
-            card.className = `protocol-stage-node ${selectedEntityKind === 'stage' && String(stage.stage_key || '') === selectedStageKey ? 'is-selected' : ''}`;
-            card.addEventListener('click', () => {
-                _selectDesignTarget('stage', String(stage.stage_key || ''));
-                currentSection = 'design';
-                _writeState();
-                renderAuthorRoute();
-                _revealEditorSurface();
-            });
-
-            const title = document.createElement('strong');
-            title.textContent = stage.display_name || 'New stage';
-            card.appendChild(title);
-
-            const meta = document.createElement('div');
-            meta.className = 'protocol-stage-node-meta';
-            meta.textContent = [
-                stage.stage_kind || 'work',
-                stage.participant_key || '',
-            ].filter(Boolean).join(' · ');
-            card.appendChild(meta);
-
-            const transitionText = Object.entries(stage.transitions || {})
-                .map(([decision, target]) => `${decision} → ${target}`)
-                .join(' · ');
-            if (transitionText) {
-                const transitions = document.createElement('div');
-                transitions.className = 'quiet-note';
-                transitions.textContent = transitionText;
-                card.appendChild(transitions);
-            }
-            flow.appendChild(card);
-        });
-        if (!stages.length) {
-            flow.appendChild(UI.renderEmptyState('No stages defined yet.', true));
-        }
-        return flow;
-    }
-
-    function _selectedParticipant(protocolDocument) {
-        _setSelectedEntityDefaults(protocolDocument);
-        return (protocolDocument.participants || []).find((item) => String(item.participant_key || '') === selectedParticipantKey) || null;
-    }
-
-    function _selectedArtifact(protocolDocument) {
-        _setSelectedEntityDefaults(protocolDocument);
-        return (protocolDocument.artifacts || []).find((item) => String(item.artifact_key || '') === selectedArtifactKey) || null;
-    }
-
-    function _selectedStage(protocolDocument) {
-        _setSelectedEntityDefaults(protocolDocument);
-        return (protocolDocument.stages || []).find((item) => String(item.stage_key || '') === selectedStageKey) || null;
-    }
-
-    function _buildStarterPanel() {
-        const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel protocol-starter-panel';
-        panel.dataset.key = 'protocol-author:starter';
-
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Start authoring';
-        panel.appendChild(title);
-
-        const intro = document.createElement('p');
-        intro.className = 'quiet-note';
-        intro.textContent = 'Choose a blank workflow, browse the Gallery for starter examples, or import an existing definition. New and existing protocols open in the same design workspace.';
-        panel.appendChild(intro);
-        const blankBtn = document.createElement('button');
-        blankBtn.type = 'button';
-        blankBtn.className = 'btn btn-primary';
-        blankBtn.textContent = 'Start blank';
-        blankBtn.addEventListener('click', () => {
-            void _createDraftFromSource({ source_kind: 'blank' }).catch((err) => {
-                UI.reportError('Failed to create a blank protocol draft', err, {
-                    context: 'Protocol draft create failed',
-                });
-                });
-            });
-        const actions = document.createElement('div');
-        actions.className = 'editor-actions';
-        actions.appendChild(blankBtn);
-
-        const galleryBtn = document.createElement('button');
-        galleryBtn.type = 'button';
-        galleryBtn.className = 'btn';
-        galleryBtn.textContent = 'Browse Gallery';
-        galleryBtn.addEventListener('click', () => Router.navigate('/ui/gallery'));
-        actions.appendChild(galleryBtn);
-
-        const importBtn = document.createElement('button');
-        importBtn.type = 'button';
-        importBtn.className = 'btn';
-        importBtn.textContent = 'Import definition';
-        importBtn.addEventListener('click', _openImportDialog);
-        actions.appendChild(importBtn);
-        panel.appendChild(actions);
-
-        if (_manifestTemplates().length) {
-            const highlights = document.createElement('div');
-            highlights.className = 'protocol-template-highlights';
-            _manifestTemplates().slice(0, 3).forEach((template) => {
-                const hint = document.createElement('div');
-                hint.className = 'protocol-template-highlight';
-                hint.textContent = `${template.display_name || template.slug} · ${template.stage_count || 0} stages`;
-                highlights.appendChild(hint);
-            });
-            panel.appendChild(highlights);
-        }
-        return panel;
-    }
-
-    function _buildAuthorHeader(protocolDocument) {
-        const header = document.createElement('div');
-        header.className = 'protocol-author-header';
-
-        const titleWrap = document.createElement('div');
-        titleWrap.className = 'protocol-author-title';
-        const title = document.createElement('h3');
-        title.textContent = _draftTitle();
-        titleWrap.appendChild(title);
-        const note = document.createElement('p');
-        note.className = 'quiet-note';
-        note.textContent = currentProtocol?.protocol
-            ? [
-                String(currentProtocol.protocol.lifecycle_state || 'draft').replace(/_/g, ' '),
-                currentProtocol.version ? `version ${currentProtocol.version.version || 0}` : '',
-                currentProtocol.protocol.current_version_id ? 'published version available' : 'not yet published',
-                draftSaveState === 'saving'
-                    ? 'saving'
-                    : draftSaveState === 'dirty'
-                        ? 'unsaved changes'
-                        : draftSaveState === 'error'
-                            ? 'save failed'
-                            : 'saved',
-            ].filter(Boolean).join(' · ')
-            : 'Map the workflow in Design, then use Review for validation and publishing.';
-        titleWrap.appendChild(note);
-        header.appendChild(titleWrap);
-
-        const actions = document.createElement('div');
-        actions.className = 'editor-actions';
-
-        const saveButton = document.createElement('button');
-        saveButton.type = 'button';
-        saveButton.className = 'btn btn-primary';
-        saveButton.textContent = 'Save draft';
-        saveButton.addEventListener('click', () => {
-            void _saveCurrentDraft().catch((err) => {
-                UI.reportError('Failed to save the protocol draft', err, {
-                    context: 'Protocol save failed',
-                });
-            });
-        });
-        actions.appendChild(saveButton);
-
-        if (currentProtocolId) {
-            const duplicateButton = document.createElement('button');
-            duplicateButton.type = 'button';
-            duplicateButton.className = 'btn';
-            duplicateButton.textContent = 'Duplicate';
-            duplicateButton.addEventListener('click', () => {
-                void _duplicateCurrentProtocol().catch((err) => {
-                    UI.reportError('Failed to duplicate the protocol draft', err, {
-                        context: 'Protocol duplicate failed',
-                    });
-                });
-            });
-            actions.appendChild(duplicateButton);
-        }
-
-        const reviewButton = document.createElement('button');
-        reviewButton.type = 'button';
-        reviewButton.className = 'btn';
-        reviewButton.textContent = 'Review';
-        reviewButton.addEventListener('click', () => {
-            currentSection = 'review';
-            selectedEntityKind = 'review';
-            _writeState({ push: true });
-            renderAuthorRoute();
-            _revealEditorSurface();
-        });
-        actions.appendChild(reviewButton);
-        header.appendChild(actions);
-        return header;
-    }
-
-    function _buildModeNav(protocolDocument) {
-        const options = _modeSummary(protocolDocument).map((item) => ({
-            value: item.value,
-            label: item.hasIssues
-                ? `${item.label}${item.count ? ` (${item.count})` : ''} !`
-                : item.count
-                    ? `${item.label} (${item.count})`
-                    : item.label,
-        }));
-        return UI.createSegmentedControl(
-            options,
-            (value) => {
-                currentSection = _normalizeAuthorSection(value);
-                if (currentSection === 'design') {
-                    selectedEntityKind = selectedEntityKind === 'review' || selectedEntityKind === 'advanced'
-                        ? 'overview'
-                        : selectedEntityKind;
-                } else {
-                    selectedEntityKind = currentSection;
-                }
-                _writeState({ push: true });
-                renderAuthorRoute();
-            },
-            {
-                label: 'Protocol authoring mode',
-                value: currentSection,
-            },
-        ).element;
-    }
-
-    function _buildOverviewCanvas(protocolDocument) {
-        const main = document.createElement('div');
-        main.className = 'protocol-author-main';
-        main.dataset.key = 'protocol-author:overview:main';
-        const nextSteps = _nextRequiredActionLabels();
-
-        const summaryCard = document.createElement('section');
-        summaryCard.className = `editor-panel protocol-panel protocol-design-card ${selectedEntityKind === 'overview' ? 'is-selected' : ''}`;
-        summaryCard.tabIndex = 0;
-        summaryCard.setAttribute('role', 'button');
-        summaryCard.addEventListener('click', () => {
-            _selectDesignTarget('overview');
-            renderAuthorRoute();
-        });
-        const summaryTitle = document.createElement('div');
-        summaryTitle.className = 'editor-section-title';
-        summaryTitle.textContent = 'Workflow overview';
-        summaryCard.appendChild(summaryTitle);
-        summaryCard.appendChild(UI.renderMetadataGrid([
-            { label: 'Participants', value: String(protocolDocument.participants?.length || 0) },
-            { label: 'Stages', value: String(protocolDocument.stages?.length || 0) },
-            { label: 'Artifacts', value: String(protocolDocument.artifacts?.length || 0) },
-            {
-                label: 'Save state',
-                value: draftSaveState === 'saving'
-                    ? 'Saving…'
-                    : draftSaveState === 'dirty'
-                        ? 'Unsaved changes'
-                        : draftSaveState === 'error'
-                            ? 'Save failed'
-                            : 'Saved',
-            },
-        ], { compact: true }));
-        const summaryNote = document.createElement('p');
-        summaryNote.className = 'quiet-note';
-        summaryNote.textContent = draft.description || 'Describe the intent of this workflow, then refine the participants, stages, artifacts, and policies in the sections below.';
-        summaryCard.appendChild(summaryNote);
-        if (nextSteps.length) {
-            const checklist = document.createElement('div');
-            checklist.className = 'protocol-next-steps';
-            const checklistTitle = document.createElement('div');
-            checklistTitle.className = 'detail-label';
-            checklistTitle.textContent = 'Recommended next steps';
-            checklist.appendChild(checklistTitle);
-            const list = document.createElement('ul');
-            list.className = 'protocol-validation-list';
-            nextSteps.forEach((item) => {
-                const li = document.createElement('li');
-                li.textContent = item;
-                list.appendChild(li);
-            });
-            checklist.appendChild(list);
-            summaryCard.appendChild(checklist);
-        }
-        main.appendChild(summaryCard);
-
-        const flowCard = document.createElement('section');
-        flowCard.className = 'editor-panel protocol-panel';
-        const flowTitle = document.createElement('div');
-        flowTitle.className = 'editor-section-title';
-        flowTitle.textContent = 'Workflow map';
-        flowCard.appendChild(flowTitle);
-        flowCard.appendChild(_buildStageFlow(protocolDocument, { preview: true }));
-        main.appendChild(flowCard);
-        return main;
-    }
-
-    function _buildOverviewInspector(protocolDocument) {
-        const inspector = document.createElement('section');
-        inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
-        inspector.dataset.key = 'protocol-author:overview:inspector';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Protocol basics';
-        inspector.appendChild(title);
-
-        const suggestedSlug = _slugSuggestion(draft.display_name || '');
-
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Slug',
-            control: _textInput(draft.slug || '', (value) => {
-                draft.slug = value;
-                void _commitDraftDocument(_draftDocument());
-            }, {
-                placeholder: suggestedSlug || 'Short URL-friendly name',
-                ariaLabel: 'Protocol slug',
-                draftKey: 'meta:slug',
-            }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Display name',
-            control: _textInput(draft.display_name || '', (value) => {
-                draft.display_name = value;
-                void _commitDraftDocument(_draftDocument());
-            }, {
-                placeholder: 'Name your workflow',
-                ariaLabel: 'Protocol display name',
-                draftKey: 'meta:display_name',
-            }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Description',
-            control: _textAreaInput(draft.description || '', (value) => {
-                draft.description = value;
-                void _commitDraftDocument(_draftDocument());
-            }, {
-                placeholder: 'What should this workflow help a team accomplish?',
-                rows: 4,
-                ariaLabel: 'Protocol description',
-                draftKey: 'meta:description',
-            }),
-        }));
-
-        const helper = document.createElement('p');
-        helper.className = 'quiet-note';
-        helper.textContent = draft.slug || !suggestedSlug
-            ? 'Start with a clear name and summary, then build the workflow path below.'
-            : `Suggested slug once you name it: ${suggestedSlug}`;
-        inspector.appendChild(helper);
-        return inspector;
-    }
-
-    function _buildParticipantsCanvas(protocolDocument) {
-        const main = document.createElement('div');
-        main.className = 'protocol-author-main';
-        main.dataset.key = 'protocol-author:participants:main';
-        const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel';
-        const headerRow = document.createElement('div');
-        headerRow.className = 'protocol-structured-header';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Participants';
-        headerRow.appendChild(title);
-        const addButton = document.createElement('button');
-        addButton.type = 'button';
-        addButton.className = 'btn';
-        addButton.textContent = 'Add participant';
-        addButton.addEventListener('click', () => {
-            void _applyStructuredChange((next) => {
-                const index = (next.participants || []).length + 1;
-                next.participants = [...(next.participants || []), {
-                    participant_key: `participant_${index}`,
-                    display_name: '',
-                    required_skills: [],
-                    instructions: '',
-                }];
-                _selectDesignTarget('participant', `participant_${index}`);
-            });
-        });
-        headerRow.appendChild(addButton);
-        panel.appendChild(headerRow);
-
-        const list = document.createElement('div');
-        list.className = 'protocol-stage-flow protocol-entity-flow';
-        (protocolDocument.participants || []).forEach((item) => {
-            const card = document.createElement('button');
-            card.type = 'button';
-            card.className = `protocol-stage-node ${selectedEntityKind === 'participant' && String(item.participant_key || '') === selectedParticipantKey ? 'is-selected' : ''}`;
-            card.addEventListener('click', () => {
-                _selectDesignTarget('participant', String(item.participant_key || ''));
-                renderAuthorRoute();
-            });
-            const name = document.createElement('strong');
-            name.textContent = item.display_name || 'New participant';
-            card.appendChild(name);
-            const meta = document.createElement('div');
-            meta.className = 'protocol-stage-node-meta';
-            meta.textContent = (item.required_skills || []).join(', ') || 'No required skills';
-            card.appendChild(meta);
-            if (item.instructions) {
-                const summary = document.createElement('div');
-                summary.className = 'quiet-note';
-                summary.textContent = String(item.instructions || '').slice(0, 100);
-                card.appendChild(summary);
-            }
-            list.appendChild(card);
-        });
-        if (!(protocolDocument.participants || []).length) {
-            list.appendChild(UI.renderEmptyState('No participants defined yet.', true));
-        }
-        panel.appendChild(list);
-        main.appendChild(panel);
-        return main;
-    }
-
-    function _buildParticipantsInspector(protocolDocument) {
-        const selected = _selectedParticipant(protocolDocument);
-        const inspector = document.createElement('section');
-        inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
-        inspector.dataset.key = 'protocol-author:participants:inspector';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Participant details';
-        inspector.appendChild(title);
-        if (!selected) {
-            inspector.appendChild(UI.renderEmptyState('Select a participant to edit it.', true));
-            return inspector;
-        }
-        const index = (protocolDocument.participants || []).findIndex((item) => String(item.participant_key || '') === String(selected.participant_key || ''));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Reference key',
-            control: _textInput(selected.participant_key, (value) => void _applyStructuredChange((next) => {
-                next.participants[index].participant_key = value;
-                selectedParticipantKey = value;
-            }), { placeholder: 'participant-id', ariaLabel: 'Participant key', draftKey: `participant:${index}:participant_key` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Display name',
-            control: _textInput(selected.display_name, (value) => void _applyStructuredChange((next) => {
-                next.participants[index].display_name = value;
-            }), { placeholder: 'Display name', ariaLabel: 'Participant display name', draftKey: `participant:${index}:display_name` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Required skills',
-            control: _textInput((selected.required_skills || []).join(', '), (value) => void _applyStructuredChange((next) => {
-                next.participants[index].required_skills = _commaList(value);
-            }), { placeholder: 'review, planning, implementation', ariaLabel: 'Participant skills', draftKey: `participant:${index}:required_skills` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Match by',
-            control: _selectInput(
-                [{ value: '', label: 'None' }].concat(_manifestSelectorKindOptions().map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }))),
-                selected.selector?.kind || '',
-                (value) => void _applyStructuredChange((next) => {
-                    next.participants[index].selector = value
-                        ? Object.assign({}, next.participants[index].selector || {}, { kind: value })
-                        : null;
-                }),
-                { ariaLabel: 'Participant selector kind', draftKey: `participant:${index}:selector_kind` },
-            ),
-        }));
-        if (selected.selector?.kind) {
-            inspector.appendChild(UI.renderSettingsRow({
-                label: 'Match value',
-                control: _textInput(selected.selector?.value || '', (value) => void _applyStructuredChange((next) => {
-                    next.participants[index].selector = Object.assign({}, next.participants[index].selector || {}, { value });
-                }), { placeholder: 'Selector value', ariaLabel: 'Participant selector value', draftKey: `participant:${index}:selector_value` }),
-            }));
-        }
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Instructions',
-            control: _textAreaInput(selected.instructions || '', (value) => void _applyStructuredChange((next) => {
-                next.participants[index].instructions = value;
-            }), { placeholder: 'Participant-specific instructions', rows: 5, ariaLabel: 'Participant instructions', draftKey: `participant:${index}:instructions` }),
-        }));
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'btn btn-sm btn-danger';
-        remove.textContent = 'Remove participant';
-        remove.addEventListener('click', () => void _applyStructuredChange((next) => {
-            next.participants.splice(index, 1);
-            selectedParticipantKey = '';
-        }));
-        inspector.appendChild(remove);
-        return inspector;
-    }
-
-    function _buildArtifactsCanvas(protocolDocument) {
-        const main = document.createElement('div');
-        main.className = 'protocol-author-main';
-        main.dataset.key = 'protocol-author:artifacts:main';
-        const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel';
-        const headerRow = document.createElement('div');
-        headerRow.className = 'protocol-structured-header';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Artifacts';
-        headerRow.appendChild(title);
-        const addButton = document.createElement('button');
-        addButton.type = 'button';
-        addButton.className = 'btn';
-        addButton.textContent = 'Add artifact';
-        addButton.addEventListener('click', () => {
-            void _applyStructuredChange((next) => {
-                const index = (next.artifacts || []).length + 1;
-                next.artifacts = [...(next.artifacts || []), {
-                    artifact_key: `artifact_${index}`,
-                    display_name: '',
-                    description: '',
-                    kind: 'workspace_file',
-                    path: '',
-                    verify: true,
-                }];
-                _selectDesignTarget('artifact', `artifact_${index}`);
-            });
-        });
-        headerRow.appendChild(addButton);
-        panel.appendChild(headerRow);
-
-        const list = document.createElement('div');
-        list.className = 'protocol-stage-flow protocol-entity-flow';
-        (protocolDocument.artifacts || []).forEach((item) => {
-            const card = document.createElement('button');
-            card.type = 'button';
-            card.className = `protocol-stage-node ${selectedEntityKind === 'artifact' && String(item.artifact_key || '') === selectedArtifactKey ? 'is-selected' : ''}`;
-            card.addEventListener('click', () => {
-                _selectDesignTarget('artifact', String(item.artifact_key || ''));
-                renderAuthorRoute();
-            });
-            const name = document.createElement('strong');
-            name.textContent = item.display_name || 'New artifact';
-            card.appendChild(name);
-            const meta = document.createElement('div');
-            meta.className = 'protocol-stage-node-meta';
-            meta.textContent = [item.kind || 'workspace_file', item.path || ''].filter(Boolean).join(' · ');
-            card.appendChild(meta);
-            if (item.description) {
-                const summary = document.createElement('div');
-                summary.className = 'quiet-note';
-                summary.textContent = item.description;
-                card.appendChild(summary);
-            }
-            list.appendChild(card);
-        });
-        if (!(protocolDocument.artifacts || []).length) {
-            list.appendChild(UI.renderEmptyState('No artifacts defined yet.', true));
-        }
-        panel.appendChild(list);
-        main.appendChild(panel);
-        return main;
-    }
-
-    function _buildArtifactsInspector(protocolDocument) {
-        const selected = _selectedArtifact(protocolDocument);
-        const inspector = document.createElement('section');
-        inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
-        inspector.dataset.key = 'protocol-author:artifacts:inspector';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Artifact details';
-        inspector.appendChild(title);
-        if (!selected) {
-            inspector.appendChild(UI.renderEmptyState('Select an artifact to edit it.', true));
-            return inspector;
-        }
-        const index = (protocolDocument.artifacts || []).findIndex((item) => String(item.artifact_key || '') === String(selected.artifact_key || ''));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Reference key',
-            control: _textInput(selected.artifact_key, (value) => void _applyStructuredChange((next) => {
-                next.artifacts[index].artifact_key = value;
-                selectedArtifactKey = value;
-            }), { placeholder: 'artifact-id', ariaLabel: 'Artifact key', draftKey: `artifact:${index}:artifact_key` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Display name',
-            control: _textInput(selected.display_name, (value) => void _applyStructuredChange((next) => {
-                next.artifacts[index].display_name = value;
-            }), { placeholder: 'Display name', ariaLabel: 'Artifact display name', draftKey: `artifact:${index}:display_name` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Kind',
-            control: _selectInput(
-                _manifestArtifactKindOptions().map((value) => ({ value, label: value.replace(/_/g, ' ') })),
-                selected.kind || 'workspace_file',
-                (value) => void _applyStructuredChange((next) => {
-                    next.artifacts[index].kind = value || 'workspace_file';
-                }),
-                { ariaLabel: 'Artifact kind', draftKey: `artifact:${index}:kind` },
-            ),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Path',
-            control: _textInput(selected.path || '', (value) => void _applyStructuredChange((next) => {
-                next.artifacts[index].path = value;
-            }), { placeholder: 'relative/path.md', ariaLabel: 'Artifact path', draftKey: `artifact:${index}:path` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Description',
-            control: _textAreaInput(selected.description || '', (value) => void _applyStructuredChange((next) => {
-                next.artifacts[index].description = value;
-            }), { placeholder: 'Artifact description', rows: 4, ariaLabel: 'Artifact description', draftKey: `artifact:${index}:description` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Verification',
-            control: _checkboxInput(Boolean(selected.verify !== false), 'Require verification', (checked) => void _applyStructuredChange((next) => {
-                next.artifacts[index].verify = checked;
-            }), { ariaLabel: 'Artifact verification required', draftKey: `artifact:${index}:verify` }),
-        }));
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'btn btn-sm btn-danger';
-        remove.textContent = 'Remove artifact';
-        remove.addEventListener('click', () => void _applyStructuredChange((next) => {
-            next.artifacts.splice(index, 1);
-            selectedArtifactKey = '';
-        }));
-        inspector.appendChild(remove);
-        return inspector;
-    }
-
-    function _buildStagesCanvas(protocolDocument) {
-        const main = document.createElement('div');
-        main.className = 'protocol-author-main';
-        main.dataset.key = 'protocol-author:stages:main';
-        const canAddStages = _canAddStages(protocolDocument);
-        const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel';
-        const headerRow = document.createElement('div');
-        headerRow.className = 'protocol-structured-header';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Workflow stages';
-        headerRow.appendChild(title);
-        const addButton = document.createElement('button');
-        addButton.type = 'button';
-        addButton.className = 'btn';
-        addButton.textContent = 'Add stage';
-        addButton.disabled = !canAddStages;
-        addButton.addEventListener('click', () => {
-            void _applyStructuredChange((next) => {
-                const index = (next.stages || []).length + 1;
-                next.stages = [...(next.stages || []), {
-                    stage_key: `stage_${index}`,
-                    display_name: '',
-                    participant_key: String(next.participants?.[0]?.participant_key || ''),
-                    stage_kind: 'work',
-                    instructions: '',
-                    inputs: [],
-                    outputs: [],
-                    transitions: { completed: '' },
-                    write_capable: false,
-                    max_rounds: 0,
-                    strict_completion: false,
-                    require_output_verification: null,
-                    timeout_seconds: 0,
-                }];
-                _selectDesignTarget('stage', `stage_${index}`);
-            });
-        });
-        headerRow.appendChild(addButton);
-        panel.appendChild(headerRow);
-        const note = document.createElement('p');
-        note.className = 'quiet-note';
-        note.textContent = canAddStages
-            ? 'Add and order stages here. Each stage should point at one participant and describe its transitions.'
-            : 'Add at least one participant before creating workflow stages.';
-        panel.appendChild(note);
-        if (!canAddStages) {
-            const jumpButton = document.createElement('button');
-            jumpButton.type = 'button';
-            jumpButton.className = 'btn';
-            jumpButton.textContent = 'Add first participant';
-            jumpButton.addEventListener('click', () => {
-                void _applyStructuredChange((next) => {
-                    const index = (next.participants || []).length + 1;
-                    next.participants = [...(next.participants || []), {
-                        participant_key: `participant_${index}`,
-                        display_name: '',
-                        required_skills: [],
-                        instructions: '',
-                    }];
-                    _selectDesignTarget('participant', `participant_${index}`);
-                });
-            });
-            panel.appendChild(jumpButton);
-        }
-        panel.appendChild(_buildStageFlow(protocolDocument));
-        main.appendChild(panel);
-        return main;
-    }
-
-    function _buildStagesInspector(protocolDocument) {
-        const selected = _selectedStage(protocolDocument);
-        const inspector = document.createElement('section');
-        inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
-        inspector.dataset.key = 'protocol-author:stages:inspector';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Stage details';
-        inspector.appendChild(title);
-        if (!selected) {
-            inspector.appendChild(UI.renderEmptyState('Select a stage to edit it.', true));
-            return inspector;
-        }
-        const index = (protocolDocument.stages || []).findIndex((item) => String(item.stage_key || '') === String(selected.stage_key || ''));
-        const participantOptions = [{ value: '', label: 'Select participant' }].concat(
-            (protocolDocument.participants || []).map((item) => ({
-                value: String(item.participant_key || ''),
-                label: item.display_name || item.participant_key || '',
-            })),
-        );
-        const artifactOptions = (protocolDocument.artifacts || []).map((item) => String(item.artifact_key || '')).filter(Boolean);
-
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Reference key',
-            control: _textInput(selected.stage_key, (value) => void _applyStructuredChange((next) => {
-                next.stages[index].stage_key = value;
-                selectedStageKey = value;
-            }), { placeholder: 'stage-id', ariaLabel: 'Stage key', draftKey: `stage:${index}:stage_key` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Display name',
-            control: _textInput(selected.display_name, (value) => void _applyStructuredChange((next) => {
-                next.stages[index].display_name = value;
-            }), { placeholder: 'Display name', ariaLabel: 'Stage display name', draftKey: `stage:${index}:display_name` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Participant',
-            control: _selectInput(participantOptions, selected.participant_key || '', (value) => void _applyStructuredChange((next) => {
-                next.stages[index].participant_key = value;
-            }), { ariaLabel: 'Stage participant', draftKey: `stage:${index}:participant_key` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Kind',
-            control: _selectInput(
-                _manifestStageKindOptions().map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) })),
-                selected.stage_kind || 'work',
-                (value) => void _applyStructuredChange((next) => {
-                    next.stages[index].stage_kind = value || 'work';
-                }),
-                { ariaLabel: 'Stage kind', draftKey: `stage:${index}:stage_kind` },
-            ),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Instructions',
-            control: _textAreaInput(selected.instructions || '', (value) => void _applyStructuredChange((next) => {
-                next.stages[index].instructions = value;
-            }), { placeholder: 'Stage instructions', rows: 5, ariaLabel: 'Stage instructions', draftKey: `stage:${index}:instructions` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Inputs',
-            control: _textInput((selected.inputs || []).join(', '), (value) => void _applyStructuredChange((next) => {
-                next.stages[index].inputs = _commaList(value);
-            }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage inputs', draftKey: `stage:${index}:inputs` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Outputs',
-            control: _textInput((selected.outputs || []).join(', '), (value) => void _applyStructuredChange((next) => {
-                next.stages[index].outputs = _commaList(value);
-            }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage outputs', draftKey: `stage:${index}:outputs` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Transitions',
-            control: _textAreaInput(JSON.stringify(selected.transitions || {}, null, 2), (value) => {
-                try {
-                    const transitions = value.trim() ? JSON.parse(value) : {};
-                    void _applyStructuredChange((next) => {
-                        next.stages[index].transitions = transitions;
-                    });
-                } catch (err) {
-                    UI.reportError('Transitions must be valid JSON', err, {
-                        context: 'Protocol stage transitions invalid',
-                    });
-                }
-            }, { placeholder: '{"completed":"approval"}', rows: 5, ariaLabel: 'Stage transitions JSON', draftKey: `stage:${index}:transitions` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Exclusive writing',
-            control: _checkboxInput(Boolean(selected.write_capable), 'Write-capable stage', (checked) => void _applyStructuredChange((next) => {
-                next.stages[index].write_capable = checked;
-            }), { ariaLabel: 'Stage write capable', draftKey: `stage:${index}:write_capable` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Completion rule',
-            control: _checkboxInput(Boolean(selected.strict_completion), 'Require protocol control lines', (checked) => void _applyStructuredChange((next) => {
-                next.stages[index].strict_completion = checked;
-            }), { ariaLabel: 'Stage strict completion', draftKey: `stage:${index}:strict_completion` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Output check',
-            control: _selectInput(
-                [
-                    { value: '', label: 'Inherit default' },
-                    { value: 'true', label: 'Required' },
-                    { value: 'false', label: 'Not required' },
-                ],
-                selected.require_output_verification === null || selected.require_output_verification === undefined
-                    ? ''
-                    : String(Boolean(selected.require_output_verification)),
-                (value) => void _applyStructuredChange((next) => {
-                    next.stages[index].require_output_verification = value === ''
-                        ? null
-                        : value === 'true';
-                }),
-                { ariaLabel: 'Stage output verification', draftKey: `stage:${index}:require_output_verification` },
-            ),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Review rounds',
-            control: _numberInput(selected.max_rounds || 0, (value) => void _applyStructuredChange((next) => {
-                next.stages[index].max_rounds = value;
-            }), { min: 0, ariaLabel: 'Stage max rounds', draftKey: `stage:${index}:max_rounds` }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Timeout seconds',
-            control: _numberInput(selected.timeout_seconds || 0, (value) => void _applyStructuredChange((next) => {
-                next.stages[index].timeout_seconds = value;
-            }), { min: 0, ariaLabel: 'Stage timeout seconds', draftKey: `stage:${index}:timeout_seconds` }),
-        }));
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'btn btn-sm btn-danger';
-        remove.textContent = 'Remove stage';
-        remove.addEventListener('click', () => void _applyStructuredChange((next) => {
-            next.stages.splice(index, 1);
-            selectedStageKey = '';
-        }));
-        inspector.appendChild(remove);
-        return inspector;
-    }
-
-    function _buildPoliciesCanvas(protocolDocument) {
-        const main = document.createElement('div');
-        main.className = 'protocol-author-main';
-        main.dataset.key = 'protocol-author:policies:main';
-        const panel = document.createElement('section');
-        panel.className = `editor-panel protocol-panel protocol-design-card ${selectedEntityKind === 'policy' ? 'is-selected' : ''}`;
-        panel.tabIndex = 0;
-        panel.setAttribute('role', 'button');
-        panel.addEventListener('click', () => {
-            _selectDesignTarget('policy');
-            renderAuthorRoute();
-        });
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Policies';
-        panel.appendChild(title);
-        const note = document.createElement('p');
-        note.className = 'quiet-note';
-        note.textContent = 'Policies define how strict the workflow is about write ownership and review loops. Keep them lightweight unless the workflow needs stronger controls.';
-        panel.appendChild(note);
-        panel.appendChild(UI.renderMetadataGrid([
-            { label: 'Single active writer', value: protocolDocument.policies?.single_active_writer !== false ? 'Enabled' : 'Disabled' },
-            { label: 'Max review rounds', value: String(protocolDocument.policies?.max_review_rounds || 5) },
-        ], { compact: true }));
-        main.appendChild(panel);
-        return main;
-    }
-
-    function _buildPoliciesInspector(protocolDocument) {
-        const inspector = document.createElement('section');
-        inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
-        inspector.dataset.key = 'protocol-author:policies:inspector';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Policy details';
-        inspector.appendChild(title);
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Single active writer',
-            control: _checkboxInput(Boolean(protocolDocument.policies?.single_active_writer !== false), 'Enforce one write lease at a time', (checked) => void _applyStructuredChange((next) => {
-                next.policies.single_active_writer = checked;
-            }), { ariaLabel: 'Single active writer', draftKey: 'policy:single_active_writer' }),
-        }));
-        inspector.appendChild(UI.renderSettingsRow({
-            label: 'Max review rounds',
-            control: _numberInput(protocolDocument.policies?.max_review_rounds || 5, (value) => void _applyStructuredChange((next) => {
-                next.policies.max_review_rounds = Math.max(value, 1);
-            }), { min: 1, ariaLabel: 'Max review rounds', draftKey: 'policy:max_review_rounds' }),
-        }));
-        return inspector;
-    }
-
-    function _buildDesignCanvas(protocolDocument) {
-        const design = document.createElement('div');
-        design.className = 'protocol-design-workspace';
-        design.dataset.key = 'protocol-author:design:main';
-        const needsFirstParticipant = !(protocolDocument.participants || []).length;
-        const needsFirstStage = !(protocolDocument.stages || []).length;
-        if (needsFirstParticipant || needsFirstStage) {
-            const starter = document.createElement('section');
-            starter.className = 'editor-panel protocol-panel protocol-first-run-card';
-            const title = document.createElement('div');
-            title.className = 'editor-section-title';
-            title.textContent = 'Build the first workflow path';
-            starter.appendChild(title);
-            const note = document.createElement('p');
-            note.className = 'quiet-note';
-            note.textContent = needsFirstParticipant
-                ? 'Start by naming the people or roles that will take part in this workflow.'
-                : 'You have participants. Add the first stage and connect the workflow path.';
-            starter.appendChild(note);
-            const actions = document.createElement('div');
-            actions.className = 'editor-actions';
-            if (needsFirstParticipant) {
-                const addParticipant = document.createElement('button');
-                addParticipant.type = 'button';
-                addParticipant.className = 'btn btn-primary';
-                addParticipant.textContent = 'Add first participant';
-                addParticipant.addEventListener('click', () => {
-                    void _applyStructuredChange((next) => {
-                        const index = (next.participants || []).length + 1;
-                        next.participants = [...(next.participants || []), {
-                            participant_key: `participant_${index}`,
-                            display_name: '',
-                            required_skills: [],
-                            instructions: '',
-                        }];
-                        _selectDesignTarget('participant', `participant_${index}`);
-                    });
-                });
-                actions.appendChild(addParticipant);
-            }
-            if (!needsFirstParticipant && needsFirstStage) {
-                const addStage = document.createElement('button');
-                addStage.type = 'button';
-                addStage.className = 'btn btn-primary';
-                addStage.textContent = 'Add first stage';
-                addStage.addEventListener('click', () => {
-                    void _applyStructuredChange((next) => {
-                        const index = (next.stages || []).length + 1;
-                        next.stages = [...(next.stages || []), {
-                            stage_key: `stage_${index}`,
-                            display_name: '',
-                            participant_key: String(next.participants?.[0]?.participant_key || ''),
-                            stage_kind: 'work',
-                            instructions: '',
-                            inputs: [],
-                            outputs: [],
-                            transitions: { completed: '' },
-                            write_capable: false,
-                            max_rounds: 0,
-                            strict_completion: false,
-                            require_output_verification: null,
-                            timeout_seconds: 0,
-                        }];
-                        _selectDesignTarget('stage', `stage_${index}`);
-                    });
-                });
-                actions.appendChild(addStage);
-            }
-            starter.appendChild(actions);
-            design.appendChild(starter);
-        }
-        design.appendChild(_buildOverviewCanvas(protocolDocument));
-        design.appendChild(_buildParticipantsCanvas(protocolDocument));
-        design.appendChild(_buildStagesCanvas(protocolDocument));
-        design.appendChild(_buildArtifactsCanvas(protocolDocument));
-        design.appendChild(_buildPoliciesCanvas(protocolDocument));
-        return design;
-    }
-
-    function _buildDesignInspector(protocolDocument) {
-        if (selectedEntityKind === 'participant') {
-            return _buildParticipantsInspector(protocolDocument);
-        }
-        if (selectedEntityKind === 'artifact') {
-            return _buildArtifactsInspector(protocolDocument);
-        }
-        if (selectedEntityKind === 'stage') {
-            return _buildStagesInspector(protocolDocument);
-        }
-        if (selectedEntityKind === 'policy') {
-            return _buildPoliciesInspector(protocolDocument);
-        }
-        return _buildOverviewInspector(protocolDocument);
-    }
-
-    function _buildReviewCanvas(protocolDocument) {
-        const main = document.createElement('div');
-        main.className = 'protocol-author-main';
-        main.dataset.key = 'protocol-author:review:main';
-        const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Review & publish';
-        panel.appendChild(title);
-        _renderValidationGutter(panel);
-        const nextSteps = document.createElement('p');
-        nextSteps.className = 'quiet-note';
-        nextSteps.textContent = currentProtocol?.validation?.ok
-            ? 'The draft validates. Review the workflow map and publish when ready.'
-            : 'Fix the issues called out here or in the relevant sections before publishing.';
-        panel.appendChild(nextSteps);
-        panel.appendChild(_buildStageFlow(protocolDocument, { compact: true }));
-        main.appendChild(panel);
-        return main;
-    }
-
-    function _buildReviewInspector() {
-        const inspector = document.createElement('section');
-        inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
-        inspector.dataset.key = 'protocol-author:review:inspector';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Actions';
-        inspector.appendChild(title);
-
-        inspector.appendChild(UI.renderMetadataGrid([
-            {
-                label: 'Lifecycle',
-                value: String(currentProtocol?.protocol?.lifecycle_state || 'draft').replace(/_/g, ' '),
-            },
-            {
-                label: 'Save state',
-                value: draftSaveState === 'saving'
-                    ? 'Saving…'
-                    : draftSaveState === 'dirty'
-                        ? 'Unsaved changes'
-                        : draftSaveState === 'error'
-                            ? 'Save failed'
-                            : 'Saved',
-            },
-            {
-                label: 'Validation mode',
-                value: String(currentProtocol?.validation?.mode || 'draft'),
-            },
-        ], { compact: true }));
-
-        const note = document.createElement('p');
-        note.className = 'quiet-note';
-        note.textContent = String(currentProtocol?.validation?.mode || 'draft') === 'strict'
-            ? 'Strict validation is active in Review. Save changes in the other sections first, then validate or publish here.'
-            : 'Review uses publish-ready validation. Save the draft, then validate before publishing.';
-        inspector.appendChild(note);
-
-        const validateButton = document.createElement('button');
-        validateButton.type = 'button';
-        validateButton.className = 'btn btn-primary';
-        validateButton.textContent = 'Validate';
-        validateButton.addEventListener('click', () => {
-            void _validateCurrentDraft().catch((err) => {
-                UI.reportError('Failed to validate the protocol draft', err, {
-                    context: 'Protocol validate failed',
-                });
-            });
-        });
-        inspector.appendChild(validateButton);
-
-        const publishButton = document.createElement('button');
-        publishButton.type = 'button';
-        publishButton.className = 'btn btn-primary';
-        publishButton.textContent = 'Publish';
-        publishButton.disabled = !currentProtocolId;
-        publishButton.addEventListener('click', () => {
-            void _publishCurrentDraft().catch((err) => {
-                UI.reportError('Failed to publish the protocol', err, {
-                    context: 'Protocol publish failed',
-                });
-            });
-        });
-        inspector.appendChild(publishButton);
-
-        const diffButton = document.createElement('button');
-        diffButton.type = 'button';
-        diffButton.className = 'btn';
-        diffButton.textContent = 'Diff';
-        diffButton.disabled = !currentProtocolId;
-        diffButton.addEventListener('click', () => {
-            void _showDraftDiff();
-        });
-        inspector.appendChild(diffButton);
-
-        const exportJsonBtn = document.createElement('button');
-        exportJsonBtn.type = 'button';
-        exportJsonBtn.className = 'btn';
-        exportJsonBtn.textContent = 'Export JSON';
-        exportJsonBtn.addEventListener('click', () => {
-            void _downloadDraft('json');
-        });
-        inspector.appendChild(exportJsonBtn);
-
-        const exportYamlBtn = document.createElement('button');
-        exportYamlBtn.type = 'button';
-        exportYamlBtn.className = 'btn';
-        exportYamlBtn.textContent = 'Export YAML';
-        exportYamlBtn.addEventListener('click', () => {
-            void _downloadDraft('yaml');
-        });
-        inspector.appendChild(exportYamlBtn);
-
-        const isDiscardableDraft = Boolean(
-            currentProtocolId
-            && String(currentProtocol?.protocol?.lifecycle_state || '') === 'draft'
-            && !String(currentProtocol?.protocol?.current_version_id || '').trim(),
-        );
-        if (isDiscardableDraft) {
-            const discardButton = document.createElement('button');
-            discardButton.type = 'button';
-            discardButton.className = 'btn btn-danger';
-            discardButton.textContent = 'Discard draft';
-            discardButton.addEventListener('click', () => {
-                UI.showConfirm(
-                    'Discard protocol draft?',
-                    'This permanently deletes the unpublished draft. Published protocols must be archived instead.',
-                    async () => {
-                        await _discardCurrentDraft();
-                    },
-                );
-            });
-            inspector.appendChild(discardButton);
-        }
-
-        if (currentProtocolId) {
-            const archiveButton = document.createElement('button');
-            archiveButton.type = 'button';
-            archiveButton.className = 'btn btn-danger';
-            archiveButton.textContent = 'Archive';
-            archiveButton.disabled = String(currentProtocol?.protocol?.lifecycle_state || '') === 'archived';
-            archiveButton.addEventListener('click', () => {
-                UI.showConfirm(
-                    'Archive protocol',
-                    'Archive this protocol definition? Published versions remain immutable, but the definition will no longer be offered for new runs.',
-                    async () => {
-                        try {
-                            await _archiveCurrentDraft();
-                        } catch (err) {
-                            UI.reportError('Failed to archive the protocol', err, {
-                                context: 'Protocol archive failed',
-                            });
-                        }
-                    },
-                );
-            });
-            inspector.appendChild(archiveButton);
-        }
-        return inspector;
-    }
-
-    function _buildAdvancedCanvas() {
-        const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel protocol-advanced-panel';
-        panel.dataset.key = 'protocol-author:advanced:main';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Advanced raw editor';
-        panel.appendChild(title);
-
-        const note = document.createElement('p');
-        note.className = 'quiet-note';
-        note.textContent = draft.parse_error
-            ? `Raw editor has unsynced errors. Structured sections are using the last valid draft: ${draft.parse_error}`
-            : 'Use the raw editor for bulk edits, import/export, or exact JSON/YAML control. The guided design workspace remains the default.';
-        panel.appendChild(note);
-
-        const formatControl = UI.createSegmentedControl(
-            [
-                { value: 'json', label: 'JSON' },
-                { value: 'yaml', label: 'YAML' },
-            ],
-            (value) => {
-                void _syncEditorFormat(value || 'json').then(renderAuthorRoute).catch((err) => {
-                    UI.reportError('Failed to switch the protocol editor format', err, {
-                        context: 'Protocol editor format switch failed',
-                    });
-                });
-            },
-            { label: 'Editor format', value: editorFormat },
-        );
-        panel.appendChild(formatControl.element);
-
-        const definitionInput = document.createElement('textarea');
-        definitionInput.className = 'guidance-textarea';
-        definitionInput.value = draft.definition_text || '';
-        definitionInput.addEventListener('input', () => {
-            draft.definition_text = definitionInput.value;
-        });
-        definitionInput.addEventListener('change', () => {
-            void _parseDraftDocument().then((document) => {
-                if (document) {
-                    _clearStructuredDrafts();
-                    renderAuthorRoute();
-                }
-            });
-        });
-        panel.appendChild(definitionInput);
-        return panel;
-    }
-
-    function _buildAdvancedInspector() {
-        const inspector = document.createElement('section');
-        inspector.className = 'editor-panel protocol-panel protocol-inspector-panel';
-        inspector.dataset.key = 'protocol-author:advanced:inspector';
-        const title = document.createElement('div');
-        title.className = 'editor-section-title';
-        title.textContent = 'Advanced actions';
-        inspector.appendChild(title);
-
-        const saveButton = document.createElement('button');
-        saveButton.type = 'button';
-        saveButton.className = 'btn btn-primary';
-        saveButton.textContent = 'Save draft';
-        saveButton.addEventListener('click', () => {
-            void _saveCurrentDraft().catch((err) => {
-                UI.reportError('Failed to save the protocol draft', err, {
-                    context: 'Protocol save failed',
-                });
-            });
-        });
-        inspector.appendChild(saveButton);
-
-        const importButton = document.createElement('button');
-        importButton.type = 'button';
-        importButton.className = 'btn';
-        importButton.textContent = 'Import';
-        importButton.addEventListener('click', _openImportDialog);
-        inspector.appendChild(importButton);
-
-        return inspector;
-    }
-
-    function _buildEditorPanel() {
-        const editorPanel = document.createElement('section');
-        editorPanel.className = 'editor-panel protocol-panel protocol-editor-panel';
-        editorPanel.dataset.key = currentProtocolId
-            ? `protocol-author:${currentProtocolId}:${currentSection}`
-            : 'protocol-author:starter';
-
-        if (protocolDetailLoading && currentProtocolId) {
-            editorPanel.appendChild(UI.renderEmptyState('Loading protocol detail…', true));
-            return editorPanel;
-        }
-
+    function render() {
         if (!currentProtocolId) {
-            editorPanel.appendChild(_buildStarterPanel());
-            return editorPanel;
+            const catalog = _catalogEl();
+            const galleryCta = document.createElement('div');
+            galleryCta.className = 'kit-catalog-tertiary';
+            const galleryButton = document.createElement('button');
+            galleryButton.type = 'button';
+            galleryButton.className = 'btn';
+            galleryButton.textContent = 'Browse template gallery';
+            galleryButton.addEventListener('click', () => Router.navigate('/ui/gallery'));
+            galleryCta.appendChild(galleryButton);
+            UI.reconcileChildren(contentEl, [catalog, galleryCta]);
+            _lifecycleHeaderRef = null;
+            return;
         }
 
-        const protocolDocument = _draftDocument();
-        _setSelectedEntityDefaults(protocolDocument);
+        if (protocolDetailLoading) {
+            UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocol detail…', true)]);
+            _lifecycleHeaderRef = null;
+            return;
+        }
 
-        editorPanel.appendChild(_buildAuthorHeader(protocolDocument));
-        editorPanel.appendChild(_buildModeNav(protocolDocument));
+        const headerEl = _lifecycleHeaderEl();
+        _lifecycleHeaderRef = headerEl;
 
         const workspace = document.createElement('div');
-        workspace.className = 'protocol-author-workspace';
-        let main = null;
-        let inspector = null;
-        if (currentSection === 'review') {
-            main = _buildReviewCanvas(protocolDocument);
-            inspector = _buildReviewInspector();
-        } else if (currentSection === 'advanced') {
-            main = _buildAdvancedCanvas(protocolDocument);
-            inspector = _buildAdvancedInspector();
-        } else {
-            main = _buildDesignCanvas(protocolDocument);
-            inspector = _buildDesignInspector(protocolDocument);
+        workspace.className = 'kit-authoring-workspace';
+        const canvasColumn = document.createElement('div');
+        canvasColumn.className = 'kit-authoring-canvas-column';
+        canvasColumn.appendChild(_canvasEl());
+        const validation = _validationEl();
+        if (validation) canvasColumn.appendChild(validation);
+        workspace.appendChild(canvasColumn);
+
+        const detailsColumn = document.createElement('div');
+        detailsColumn.className = 'kit-authoring-details-column';
+        detailsColumn.appendChild(_detailsEl());
+        if (rehearsal.runId) {
+            detailsColumn.appendChild(Kit.rehearsalPanel({
+                runId: rehearsal.runId,
+                sessions: rehearsal.sessions,
+                scenarios: rehearsal.scenarios,
+                onRespond: (payload) => { void _respondRehearsal(payload); },
+            }));
         }
-        workspace.appendChild(main);
-        workspace.appendChild(inspector);
-        editorPanel.appendChild(workspace);
-        return editorPanel;
+        workspace.appendChild(detailsColumn);
+
+        UI.reconcileChildren(contentEl, [headerEl, workspace]);
     }
 
-    function renderAuthorRoute() {
-        if (authorBoard.firstChild !== listColumnEl || authorBoard.childNodes.length !== 2) {
-            authorBoard.replaceChildren(listColumnEl, editorColumnEl);
-        }
-        if (contentEl.firstChild !== authorBoard || contentEl.childNodes.length !== 1) {
-            contentEl.replaceChildren(authorBoard);
-        }
-        UI.memoizedRender(
-            listColumnEl,
-            { protocols, protocolSearch, protocolLifecycleFilter, currentProtocolId },
-            () => _buildDefinitionPanel(),
-            { signatureFields: ['protocols', 'protocolSearch', 'protocolLifecycleFilter', 'currentProtocolId'] },
-        );
-        UI.reconcileChildren(editorColumnEl, [_buildEditorPanel()]);
-    }
-
-    async function loadProtocols() {
-        const nextProtocols = await API.listProtocols({ limit: 200 });
-        protocols = nextProtocols;
+    async function loadProtocols({ quiet = false } = {}) {
+        const next = await API.listProtocols({ limit: 200 });
+        protocols = next;
         if (currentProtocolId && !protocols.some((item) => item.protocol_id === currentProtocolId)) {
             currentProtocolId = '';
             currentProtocol = null;
         }
         _writeState();
-        renderAuthorRoute();
+        if (!quiet) render();
     }
 
     async function loadAuthoringManifest() {
@@ -2549,32 +843,27 @@ function renderProtocolWorkspace(container) {
         if (!currentProtocolId) {
             currentProtocol = null;
             protocolDetailLoading = false;
-            _clearStructuredDrafts();
-            if (!draft.definition_text) {
-                await _refreshDraftTextForCurrentFormat();
-            }
             _writeState();
-            renderAuthorRoute();
+            render();
             return;
         }
         protocolDetailLoading = true;
+        render();
         currentProtocol = await API.getProtocol(currentProtocolId);
-        _applyDraftFromProtocol(currentProtocol);
-        await _refreshDraftTextForCurrentFormat();
+        _applyServerDetail(currentProtocol);
         protocolDetailLoading = false;
         _writeState();
-        renderAuthorRoute();
+        render();
     }
 
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
-            await Promise.all([loadProtocols(), loadAuthoringManifest()]);
+            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringManifest()]);
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {
-                await _refreshDraftTextForCurrentFormat();
-                renderAuthorRoute();
+                render();
             }
         } catch (err) {
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load protocols: ' + err.message, bootstrap)]);
@@ -2584,9 +873,10 @@ function renderProtocolWorkspace(container) {
     cleanups.add(() => {
         _clearAutosaveTimer();
         currentProtocol = null;
+        _lifecycleHeaderRef = null;
     });
 
-    UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols(), 350);
+    UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols({ quiet: false }), 350);
     container.__routeReady = bootstrap();
 }
 
@@ -2654,22 +944,6 @@ function renderProtocolRuns(container) {
         });
     }
 
-    function _filteredRuns() {
-        return (runs || []).filter((item) => {
-            if (runStatusFilter && String(item.status || '') !== runStatusFilter) {
-                return false;
-            }
-            const haystack = [
-                item.problem_statement || '',
-                item.protocol_run_id || '',
-                item.current_stage_key || '',
-                item.status || '',
-                item.protocol_id || '',
-            ].join(' ').toLowerCase();
-            return !runSearch || haystack.includes(runSearch.toLowerCase());
-        });
-    }
-
     function _filteredIssues() {
         return (protocolIssues || []).filter((item) => {
             const haystack = [
@@ -2683,27 +957,6 @@ function renderProtocolRuns(container) {
             ].join(' ').toLowerCase();
             return !runSearch || haystack.includes(runSearch.toLowerCase());
         });
-    }
-
-    function _runRows() {
-        return _filteredRuns().map((item) => UI.renderListRow({
-            label: item.current_stage_key
-                ? `${item.current_stage_key} · ${item.status}`
-                : (item.status || 'queued'),
-            sublabel: item.problem_statement || item.protocol_run_id,
-            badgeText: item.protocol_id || '',
-            className: item.protocol_run_id === currentRunId ? 'is-selected' : '',
-            onClick: () => {
-                currentRunId = item.protocol_run_id;
-                currentRun = null;
-                currentIssues = [];
-                lastRunEvent = null;
-                runDetailLoading = true;
-                _writeState({ push: true });
-                renderRunsRoute();
-                void loadRunDetail();
-            },
-        }));
     }
 
     function _issueRows() {
@@ -2729,41 +982,23 @@ function renderProtocolRuns(container) {
     }
 
     function _buildRunSummaryGrid() {
-        const summaryGrid = document.createElement('div');
-        summaryGrid.className = 'protocol-run-summary-grid';
-        UI.reconcileChildren(summaryGrid, [
-            UI.renderMetadataGrid([
-                { label: 'Run id', value: currentRun.run.protocol_run_id },
-                { label: 'Status', value: currentRun.run.status },
-                { label: 'Version', value: String(currentRun.run.version || 1) },
-                { label: 'Current stage', value: currentRun.run.current_stage_key || 'n/a' },
-                {
-                    label: 'Review loop',
-                    value: `${Number(currentRun.run.current_review_rounds || 0)} / ${Number(currentRun.run.max_review_rounds || 0) || 'n/a'}`,
-                },
-                { label: 'Workspace', value: currentRun.run.workspace_ref || 'default' },
-                { label: 'Root conversation', value: currentRun.run.root_conversation_id || 'n/a' },
-            ]),
-        ]);
-        return summaryGrid;
-    }
-
-    function _buildRunNotes() {
-        const detailNotes = document.createElement('div');
-        detailNotes.className = 'protocol-run-notes';
-        if (currentRun.run.termination_summary || currentRun.run.blocked_detail) {
-            const outcomeNote = document.createElement('div');
-            outcomeNote.className = 'quiet-note';
-            outcomeNote.textContent = currentRun.run.termination_summary || currentRun.run.blocked_detail;
-            detailNotes.appendChild(outcomeNote);
-        }
-        if (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(currentRun.run.protocol_run_id || '')) {
-            const liveNote = document.createElement('div');
-            liveNote.className = 'quiet-note';
-            liveNote.textContent = `Live update: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')} · ${lastRunEvent.reason || ''}`;
-            detailNotes.appendChild(liveNote);
-        }
-        return detailNotes.childNodes.length ? detailNotes : null;
+        const run = currentRun.run;
+        const maxRounds = Number(run.max_review_rounds || 0);
+        return Kit.runSummary({
+            run: {
+                id: run.protocol_run_id,
+                status: run.status,
+                version: run.version || 1,
+                current_stage_key: run.current_stage_key,
+                review_loop: `${Number(run.current_review_rounds || 0)} / ${maxRounds || 'n/a'}`,
+                workspace_ref: run.workspace_ref || 'default',
+                root_conversation_id: run.root_conversation_id,
+                notes: run.termination_summary || run.blocked_detail || '',
+            },
+            liveEventText: (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || ''))
+                ? `Live update: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')} · ${lastRunEvent.reason || ''}`
+                : '',
+        });
     }
 
     function _runActionSpecs() {
@@ -2931,7 +1166,7 @@ function renderProtocolRuns(container) {
 
         const title = document.createElement('div');
         title.className = 'editor-section-title';
-        title.textContent = issueListActive ? 'Protocol issues' : 'Runs';
+        title.textContent = issueListActive ? 'Protocol issues' : Kit.dict.label('runs.list.title', 'Runs');
         panel.appendChild(title);
 
         const issueFilterControl = UI.createSegmentedControl(
@@ -2949,44 +1184,80 @@ function renderProtocolRuns(container) {
         );
         panel.appendChild(issueFilterControl.element);
 
-        if (!issueListActive) {
-            const runStatusControl = UI.createSegmentedControl(
-                PROTOCOL_RUN_STATUS_OPTIONS,
-                (value) => {
-                    runStatusFilter = value || '';
-                    _writeState({ push: true });
-                    renderRunsRoute();
-                },
-                { label: 'Run status filter', value: runStatusFilter || '' },
+        if (issueListActive) {
+            const searchInput = document.createElement('input');
+            searchInput.className = 'search-input';
+            searchInput.placeholder = 'Search issues';
+            searchInput.value = runSearch;
+            searchInput.addEventListener('input', () => {
+                runSearch = searchInput.value;
+                renderRunsRoute();
+            });
+            panel.appendChild(searchInput);
+
+            const list = document.createElement('div');
+            list.className = 'protocol-scroll';
+            const rows = _issueRows();
+            UI.reconcileChildren(
+                list,
+                rows.length
+                    ? rows
+                    : [UI.renderEmptyState(
+                        'No blocked runs, lease issues, contract failures, or expired timeouts match this filter.',
+                        true,
+                    )],
             );
-            panel.appendChild(runStatusControl.element);
+            panel.appendChild(list);
+            return panel;
         }
 
-        const searchInput = document.createElement('input');
-        searchInput.className = 'search-input';
-        searchInput.placeholder = issueListActive ? 'Search issues' : 'Search runs';
-        searchInput.value = runSearch;
-        searchInput.addEventListener('input', () => {
-            runSearch = searchInput.value;
-            renderRunsRoute();
-        });
-        panel.appendChild(searchInput);
+        const listRuns = (runs || []).filter((item) => {
+            if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
+            if (!runSearch) return true;
+            const haystack = [
+                item.problem_statement || '',
+                item.protocol_run_id || '',
+                item.current_stage_key || '',
+                item.status || '',
+                item.protocol_id || '',
+            ].join(' ').toLowerCase();
+            return haystack.includes(runSearch.toLowerCase());
+        }).map((item) => ({
+            id: item.protocol_run_id,
+            status: item.status,
+            title: item.current_stage_key
+                ? `${item.current_stage_key} · ${item.status}`
+                : (item.status || 'queued'),
+            subtitle: item.problem_statement || item.protocol_run_id,
+            badge: item.protocol_id || '',
+            raw: item,
+        }));
 
-        const list = document.createElement('div');
-        list.className = 'protocol-scroll';
-        const rows = issueListActive ? _issueRows() : _runRows();
-        UI.reconcileChildren(
-            list,
-            rows.length
-                ? rows
-                : [UI.renderEmptyState(
-                    issueListActive
-                        ? 'No blocked runs, lease issues, contract failures, or expired timeouts match this filter.'
-                        : 'No protocol runs match the current filter.',
-                    true,
-                )],
-        );
-        panel.appendChild(list);
+        panel.appendChild(Kit.runsList({
+            runs: listRuns,
+            search: runSearch,
+            statusFilter: runStatusFilter,
+            selectedId: currentRunId,
+            onSearch: (value) => {
+                runSearch = value;
+                renderRunsRoute();
+            },
+            onStatusFilter: (value) => {
+                runStatusFilter = value || '';
+                _writeState({ push: true });
+                renderRunsRoute();
+            },
+            onSelect: (run) => {
+                currentRunId = run.id;
+                currentRun = null;
+                currentIssues = [];
+                lastRunEvent = null;
+                runDetailLoading = true;
+                _writeState({ push: true });
+                renderRunsRoute();
+                void loadRunDetail();
+            },
+        }));
         return panel;
     }
 
@@ -3016,10 +1287,6 @@ function renderProtocolRuns(container) {
         }
 
         detailPanel.appendChild(_buildRunSummaryGrid());
-        const detailNotes = _buildRunNotes();
-        if (detailNotes) {
-            detailPanel.appendChild(detailNotes);
-        }
         detailPanel.appendChild(_buildRunActionBar());
 
         const { stageRows, transitionRows, participantOptions } = _filteredProtocolTimelineData(currentRun, timelineParticipantFilter);

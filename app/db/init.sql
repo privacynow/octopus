@@ -176,6 +176,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     management_capabilities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     version TEXT NOT NULL DEFAULT '',
     runtime_health_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    trust_tier TEXT NOT NULL DEFAULT 'community',
+    soft_deleted_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_heartbeat_at TEXT NOT NULL
@@ -335,6 +337,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
     protocol_definition_version_id TEXT NOT NULL,
     entry_agent_id TEXT NOT NULL DEFAULT '',
     entry_authority_ref TEXT NOT NULL DEFAULT '',
+    is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE,
     root_conversation_id TEXT NOT NULL DEFAULT '',
     origin_channel TEXT NOT NULL DEFAULT '',
     workspace_ref TEXT NOT NULL DEFAULT '',
@@ -364,13 +367,33 @@ ALTER TABLE agent_registry.protocol_runs
     ADD COLUMN IF NOT EXISTS started_by TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS retention_until TEXT NOT NULL DEFAULT '',
-    ADD COLUMN IF NOT EXISTS last_transition_at TEXT NOT NULL DEFAULT '';
+    ADD COLUMN IF NOT EXISTS last_transition_at TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_updated
     ON agent_registry.protocol_runs (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_status
     ON agent_registry.protocol_runs (status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_org
     ON agent_registry.protocol_runs (run_org_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_rehearsal
+    ON agent_registry.protocol_runs (is_rehearsal, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_scenarios (
+    protocol_scenario_id TEXT PRIMARY KEY,
+    protocol_id TEXT NOT NULL,
+    stage_key TEXT NOT NULL DEFAULT '',
+    participant_key TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    response_text TEXT NOT NULL DEFAULT '',
+    run_org_id TEXT NOT NULL DEFAULT 'local',
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_scenarios_protocol
+    ON agent_registry.protocol_scenarios (protocol_id, stage_key);
+CREATE INDEX IF NOT EXISTS idx_protocol_scenarios_org
+    ON agent_registry.protocol_scenarios (run_org_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_run_participants (
     protocol_run_participant_id TEXT PRIMARY KEY,

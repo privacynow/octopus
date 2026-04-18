@@ -17,6 +17,7 @@ from octopus_sdk.registry.models import RegistryJsonRecord
 
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
+from .rehearsal import RehearsalSessionManager
 from .store_base import AbstractRegistryStore
 
 _InvalidationBroadcaster = Callable[..., Awaitable[None]]
@@ -31,6 +32,7 @@ def build_protocol_router(
     protocol_access: Callable[[AuthContext], ProtocolAccessContextRecord],
     broadcast_invalidations: _InvalidationBroadcaster,
     broadcast_topic_event: _TopicEventBroadcaster,
+    get_rehearsal_manager: Callable[[], RehearsalSessionManager],
 ) -> APIRouter:
     router = APIRouter()
 
@@ -506,5 +508,118 @@ def build_protocol_router(
             reason=f"protocol.run.{action}",
         )
         return _json_payload(result)
+
+    @router.get("/v1/protocol-runs/{run_id}/rehearsal/sessions")
+    async def resource_list_rehearsal_sessions(
+        run_id: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            detail = store.get_protocol_run(run_id, access=protocol_access(auth))
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        if not detail.run.is_rehearsal:
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_RUN_NOT_REHEARSAL",
+                message="Rehearsal sessions are only available for rehearsal runs.",
+            )
+        manager = get_rehearsal_manager()
+        sessions = [session.as_dict() for session in manager.list_pending(protocol_run_id=run_id)]
+        return {"sessions": sessions, "rehearsal_agent_id": manager.agent_id}
+
+    @router.post("/v1/protocol-runs/{run_id}/rehearsal/respond")
+    async def resource_submit_rehearsal_response(
+        run_id: str,
+        payload: dict[str, Any],
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            detail = store.get_protocol_run(run_id, access=protocol_access(auth))
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        if not detail.run.is_rehearsal:
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_RUN_NOT_REHEARSAL",
+                message="Rehearsal responses are only valid on rehearsal runs.",
+            )
+        routed_task_id = str(payload.get("routed_task_id", "") or "").strip()
+        if not routed_task_id:
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_INVALID",
+                message="routed_task_id is required.",
+            )
+        response_text = str(payload.get("response_text", "") or "")
+        decision = str(payload.get("decision", "") or "done")
+        decision_summary = str(payload.get("decision_summary", "") or "")
+        manager = get_rehearsal_manager()
+        accepted = manager.respond(
+            routed_task_id=routed_task_id,
+            response_text=response_text,
+            decision=decision,
+            decision_summary=decision_summary,
+        )
+        if not accepted:
+            raise _protocol_http_error(
+                404,
+                error_code="PROTOCOL_REHEARSAL_SESSION_NOT_FOUND",
+                message="No pending rehearsal session for that routed task.",
+            )
+        await broadcast_invalidations(
+            topics=("protocols", "summary", f"protocol-run:{run_id}"),
+            reason="protocol.run.rehearsal_response",
+        )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_run.updated",
+            reason="protocol.run.rehearsal_response",
+        )
+        return {"ok": True, "routed_task_id": routed_task_id}
+
+    @router.get("/v1/protocol-scenarios")
+    def resource_list_protocol_scenarios(
+        protocol_id: str = Query(default=""),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        scenarios = store.list_protocol_scenarios(
+            protocol_id=str(protocol_id or "").strip(),
+            access=protocol_access(auth),
+        )
+        return {"scenarios": [s.model_dump(mode="json") for s in scenarios]}
+
+    @router.post("/v1/protocol-scenarios")
+    def resource_create_protocol_scenario(
+        payload: dict[str, Any],
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        scenario = store.create_protocol_scenario(
+            payload=payload,
+            access=protocol_access(auth),
+        )
+        return scenario.model_dump(mode="json")
+
+    @router.delete("/v1/protocol-scenarios/{scenario_id}")
+    def resource_delete_protocol_scenario(
+        scenario_id: str,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        ok = store.delete_protocol_scenario(
+            scenario_id=scenario_id,
+            access=protocol_access(auth),
+        )
+        if not ok:
+            raise _protocol_http_error(
+                404,
+                error_code="PROTOCOL_SCENARIO_NOT_FOUND",
+                message="Scenario not found.",
+            )
+        return {"ok": True, "scenario_id": scenario_id}
 
     return router

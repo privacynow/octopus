@@ -37,9 +37,12 @@ from octopus_sdk.protocols import (
 from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.registry.models import (
     AckResult,
+    AgentCapacityUpdate,
     AgentCard,
     AgentDiscoveryQuery,
     AgentRecord,
+    AgentTokenRotationResult,
+    AgentTrustTierUpdate,
     CoordinationActionEnvelope,
     CoordinationActionResult,
     ConversationCreate,
@@ -53,6 +56,8 @@ from octopus_sdk.registry.models import (
     RuntimeHealthPayload,
     RoutedTaskRequest,
     RoutedTaskResult,
+    SelectorPreviewRequest,
+    SelectorPreviewResult,
     TaskRecord,
     RoutedTaskUpdate,
 )
@@ -776,3 +781,64 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
 
     async def fail_delivery(self, delivery_id: str, reason: str = "") -> AckResult:
         return await self.ack([delivery_id], classification="rejected")
+
+    async def update_agent_trust_tier(
+        self,
+        agent_id: str,
+        trust_tier: str,
+    ) -> AgentRecord:
+        payload = AgentTrustTierUpdate(trust_tier=trust_tier)
+        result = await self._request(
+            "PATCH",
+            f"/v1/agents/{agent_id}/trust-tier",
+            json=payload.model_dump(),
+        )
+        return AgentRecord.model_validate(result)
+
+    async def update_agent_capacity(
+        self,
+        agent_id: str,
+        *,
+        current_capacity: int | None = None,
+        max_capacity: int | None = None,
+    ) -> AgentRecord:
+        payload = AgentCapacityUpdate(
+            current_capacity=current_capacity,
+            max_capacity=max_capacity,
+        )
+        result = await self._request(
+            "PATCH",
+            f"/v1/agents/{agent_id}/capacity",
+            json=payload.model_dump(exclude_none=False),
+        )
+        return AgentRecord.model_validate(result)
+
+    async def rotate_agent_token(self, agent_id: str) -> AgentTokenRotationResult:
+        result = await self._request(
+            "POST",
+            f"/v1/agents/{agent_id}/rotate-token",
+        )
+        return AgentTokenRotationResult.model_validate(result)
+
+    async def soft_delete_agent(self, agent_id: str) -> AgentRecord:
+        result = await self._request("DELETE", f"/v1/agents/{agent_id}")
+        return AgentRecord.model_validate(result)
+
+    async def preview_selector_resolution(
+        self,
+        selector: str,
+        *,
+        authority_ref: str = "",
+        exclude_agent_ids: list[str] | None = None,
+    ) -> SelectorPreviewResult:
+        payload = SelectorPreviewRequest(
+            selector=selector,
+            authority_ref=authority_ref,
+            exclude_agent_ids=list(exclude_agent_ids or ()),
+        )
+        result = await self._request(
+            "POST",
+            "/v1/selector/preview",
+            json=payload.model_dump(),
+        )
+        return SelectorPreviewResult.model_validate(result)

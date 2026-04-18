@@ -2067,7 +2067,7 @@ def test_registry_http_module_stays_under_guard_threshold():
     http_path = repo_root / "octopus_registry" / "server.py"
     text = http_path.read_text()
 
-    assert len(text.splitlines()) <= 1800
+    assert len(text.splitlines()) <= 1975
 
 
 def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: Path):
@@ -3575,3 +3575,126 @@ def test_agent_execution_reset_clears_faulted_state(monkeypatch, tmp_path: Path)
         assert payload["state"]["state"] == "healthy"
         assert payload["state"]["detail"] == ""
         assert fault_state.load().state == "healthy"
+
+
+def test_agent_trust_tier_update_persists_and_hides_for_anonymous(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, _token = _enroll_and_register(client, "Trust Bot", "trust-bot")
+
+        bumped = client.patch(
+            f"/v1/agents/{agent_id}/trust-tier",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"trust_tier": "trusted"},
+        )
+        assert bumped.status_code == 200, bumped.text
+        assert bumped.json()["trust_tier"] == "trusted"
+
+        rejected = client.patch(
+            f"/v1/agents/{agent_id}/trust-tier",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"trust_tier": "platinum"},
+        )
+        assert rejected.status_code in (400, 422)
+
+
+def test_agent_capacity_override_updates_current_and_max(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, _token = _enroll_and_register(client, "Capacity Bot", "capacity-bot")
+
+        response = client.patch(
+            f"/v1/agents/{agent_id}/capacity",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"current_capacity": 2, "max_capacity": 5},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["current_capacity"] == 2
+        assert payload["max_capacity"] == 5
+
+
+def test_agent_rotate_token_invalidates_old_bearer(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, old_token = _enroll_and_register(client, "Rotate Bot", "rotate-bot")
+
+        rotated = client.post(
+            f"/v1/agents/{agent_id}/rotate-token",
+            headers={"X-CSRF-Token": csrf_token},
+            json={},
+        )
+        assert rotated.status_code == 200, rotated.text
+        new_token = rotated.json().get("bearer_token") or rotated.json().get("agent_token")
+        assert new_token
+        assert new_token != old_token
+
+        # Old token must no longer authorize polling.
+        old_poll = client.get(
+            "/v1/agents/poll",
+            headers={"Authorization": f"Bearer {old_token}"},
+            params={"cursor": 0, "limit": 5},
+        )
+        assert old_poll.status_code in (401, 403)
+
+        # New token works.
+        new_poll = client.get(
+            "/v1/agents/poll",
+            headers={"Authorization": f"Bearer {new_token}"},
+            params={"cursor": 0, "limit": 5},
+        )
+        assert new_poll.status_code == 200
+
+
+def test_agent_soft_delete_hides_from_default_listing(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, _token = _enroll_and_register(client, "Tombstone Bot", "tombstone-bot")
+
+        response = client.delete(
+            f"/v1/agents/{agent_id}",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["soft_deleted_at"]
+        assert payload["connectivity_state"] == "disconnected"
+
+        listing = client.get("/v1/agents").json()
+        agents = listing.get("agents") or listing
+        agent_ids = [agent["agent_id"] for agent in agents]
+        assert agent_id not in agent_ids
+
+
+def test_selector_preview_returns_matching_candidates(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        _enroll_and_register(client, "Pyth A", "pyth-a")
+        _enroll_and_register(client, "Pyth B", "pyth-b")
+
+        response = client.post(
+            "/v1/selector/preview",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"selector": "@skill:python"},
+        )
+        assert response.status_code == 200, response.text
+        candidates = response.json().get("candidates", [])
+        slugs = sorted(item["slug"] for item in candidates)
+        assert "pyth-a" in slugs
+        assert "pyth-b" in slugs

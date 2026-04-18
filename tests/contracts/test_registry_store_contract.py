@@ -1428,3 +1428,81 @@ def test_routing_skill_override_survives_agent_deregistration(store):
 
     assert skills["go"].enabled is False
     assert skills["go"].advertised_by_agents == []
+
+
+def test_update_agent_trust_tier_updates_record(store):
+    agent_id, _ = _enroll(store, "trust-bot")
+
+    updated = store.update_agent_trust_tier(agent_id, "trusted")
+
+    assert updated.trust_tier == "trusted"
+    reread = {agent.agent_id: agent for agent in store.list_agents()}
+    assert reread[agent_id].trust_tier == "trusted"
+
+
+def test_update_agent_trust_tier_rejects_unknown_tier(store):
+    agent_id, _ = _enroll(store, "invalid-tier-bot")
+
+    with pytest.raises(ValueError):
+        store.update_agent_trust_tier(agent_id, "platinum")
+
+
+def test_update_agent_capacity_overrides_current_and_max(store):
+    agent_id, _ = _enroll(store, "capacity-bot")
+
+    updated = store.update_agent_capacity(agent_id, current_capacity=3, max_capacity=9)
+
+    assert updated.current_capacity == 3
+    assert updated.max_capacity == 9
+
+
+def test_rotate_agent_token_issues_new_token_and_invalidates_old(store):
+    agent_id, old_token = _enroll(store, "rotate-bot")
+
+    updated, new_token = store.rotate_agent_token(agent_id)
+
+    assert new_token
+    assert new_token != old_token
+    assert updated.agent_id == agent_id
+    assert _stored_agent_token(store, agent_id) == hash_agent_token(new_token)
+    assert _stored_agent_token(store, agent_id) != hash_agent_token(old_token)
+
+
+def test_soft_delete_agent_hides_from_default_listing(store):
+    agent_id, _ = _enroll(store, "tombstone-bot")
+
+    record = store.soft_delete_agent(agent_id)
+
+    assert record.soft_deleted_at
+    assert record.connectivity_state == "disconnected"
+    visible_ids = [agent.agent_id for agent in store.list_agents()]
+    assert agent_id not in visible_ids
+    all_ids = [agent.agent_id for agent in store.list_agents(include_soft_deleted=True)]
+    assert agent_id in all_ids
+
+
+def test_preview_selector_resolution_returns_all_matches(store):
+    _enroll(store, "python-a", ["python"])
+    _enroll(store, "python-b", ["python"])
+    _enroll(store, "rust-a", ["rust"])
+
+    candidates = store.preview_selector_resolution(
+        TargetSelector(kind="skill", value="python"),
+    )
+
+    slugs = sorted(str(row["slug"]) for row in candidates)
+    assert slugs == ["python-a", "python-b"]
+
+
+def test_preview_selector_resolution_exclude_filter_hides_agents(store):
+    agent_a, _ = _enroll(store, "skill-excluded", ["reviewer"])
+    agent_b, _ = _enroll(store, "skill-available", ["reviewer"])
+
+    rest = store.preview_selector_resolution(
+        TargetSelector(kind="skill", value="reviewer"),
+        exclude_agent_ids=(agent_a,),
+    )
+
+    visible_ids = [row["agent_id"] for row in rest]
+    assert agent_a not in visible_ids
+    assert agent_b in visible_ids

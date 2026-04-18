@@ -32,18 +32,27 @@ from .auth import (
     validate_settings,
 )
 from .ws import WebSocketManager
+from .rehearsal import RehearsalSessionManager
 from .routing_skill_service import RoutingSkillService
 from octopus_sdk.exact_aliases import direct_selector_aliases
 from octopus_sdk.protocols import ProtocolAccessContextRecord, ProtocolRunCreateRecord
 from octopus_sdk.registry.models import (
+    AgentCapacityUpdate,
     AgentDiscoveryQuery,
+    AgentTokenRotationResult,
+    AgentTrustTierUpdate,
     ConversationCreate,
     CoordinationActionEnvelope,
     HealthSummary,
+    SelectorPreviewCandidate,
+    SelectorPreviewRequest,
+    SelectorPreviewResult,
+    TargetSelector,
     TaskRecord,
     RoutedTaskResult,
     RoutedTaskUpdate,
     format_target_selector,
+    parse_target_selector,
     utcnow_iso,
 )
 from octopus_sdk.registry.management import ManagementResult
@@ -152,6 +161,12 @@ async def _registry_lifespan(app: FastAPI):
     del app
     validate_settings()
     stop_event = asyncio.Event()
+    global _rehearsal_manager
+    _rehearsal_manager = RehearsalSessionManager(store=get_store())
+    try:
+        await _rehearsal_manager.start()
+    except Exception:
+        log.warning("Rehearsal session manager failed to start", exc_info=True)
 
     async def _protocol_maintenance_loop() -> None:
         while not stop_event.is_set():
@@ -195,15 +210,26 @@ async def _registry_lifespan(app: FastAPI):
             await maintenance_task
         except asyncio.CancelledError:
             pass
+        try:
+            await _rehearsal_manager.stop()
+        except Exception:
+            log.warning("Rehearsal session manager failed to stop cleanly", exc_info=True)
 
 
 app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
 configure_session_middleware(app)
 _ws_manager = WebSocketManager()
+_rehearsal_manager: RehearsalSessionManager | None = None
 
 
 def get_ws_manager() -> WebSocketManager:
     return _ws_manager
+
+
+def get_rehearsal_manager() -> RehearsalSessionManager:
+    if _rehearsal_manager is None:
+        raise HTTPException(status_code=503, detail="Rehearsal service not initialized.")
+    return _rehearsal_manager
 
 
 def _protocol_access(auth: AuthContext) -> ProtocolAccessContextRecord:
@@ -285,6 +311,7 @@ app.include_router(
             event_kind=event_kind,
             reason=reason,
         ),
+        get_rehearsal_manager=get_rehearsal_manager,
     )
 )
 register_ui_routes(app, security_headers=_REGISTRY_UI_SECURITY_HEADERS)
@@ -717,6 +744,152 @@ async def api_agent_execution_reset(
         )
         return result
     except RegistryIngressError as exc: _raise_ingress_http_error(exc)
+
+
+@app.patch("/v1/agents/{agent_id}/trust-tier")
+async def api_agent_trust_tier_update(
+    agent_id: str,
+    payload: AgentTrustTierUpdate,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record = store.update_agent_trust_tier(agent_id, payload.trust_tier)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}"),
+        reason="agent.trust_tier.updated",
+        agent_id=agent_id,
+    )
+    return _json_payload(record)
+
+
+@app.patch("/v1/agents/{agent_id}/capacity")
+async def api_agent_capacity_update(
+    agent_id: str,
+    payload: AgentCapacityUpdate,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record = store.update_agent_capacity(
+            agent_id,
+            current_capacity=payload.current_capacity,
+            max_capacity=payload.max_capacity,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}"),
+        reason="agent.capacity.updated",
+        agent_id=agent_id,
+    )
+    return _json_payload(record)
+
+
+@app.post("/v1/agents/{agent_id}/rotate-token")
+async def api_agent_rotate_token(
+    agent_id: str,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record, plaintext_token = store.rotate_agent_token(agent_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}"),
+        reason="agent.token.rotated",
+        agent_id=agent_id,
+    )
+    return _json_payload(
+        AgentTokenRotationResult(
+            agent_id=record.agent_id,
+            agent_token=plaintext_token,
+            slug=record.slug,
+            registry_epoch=utcnow_iso(),
+        )
+    )
+
+
+@app.delete("/v1/agents/{agent_id}")
+async def api_agent_soft_delete(
+    agent_id: str,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record = store.soft_delete_agent(agent_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}", "summary"),
+        reason="agent.soft_deleted",
+        agent_id=agent_id,
+    )
+    return _json_payload(record)
+
+
+@app.post("/v1/selector/preview")
+def api_selector_preview(
+    payload: SelectorPreviewRequest,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: AuthContext = Depends(require_authenticated),
+) -> dict[str, Any]:
+    parsed = parse_target_selector(payload.selector)
+    if parsed is None:
+        parsed = TargetSelector(kind="agent", value=payload.selector)
+    try:
+        candidates = store.preview_selector_resolution(
+            parsed,
+            exclude_agent_ids=tuple(payload.exclude_agent_ids or ()),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    enriched: list[SelectorPreviewCandidate] = []
+    for row in candidates:
+        raw_skills = row.get("skills_json")
+        if isinstance(raw_skills, str):
+            try:
+                import json as _json
+                decoded_skills = _json.loads(raw_skills)
+            except Exception:
+                decoded_skills = []
+        elif isinstance(raw_skills, list):
+            decoded_skills = raw_skills
+        else:
+            decoded_skills = []
+        enriched.append(
+            SelectorPreviewCandidate(
+                agent_id=str(row.get("agent_id") or ""),
+                display_name=str(row.get("display_name") or ""),
+                slug=str(row.get("slug") or ""),
+                role=str(row.get("role") or ""),
+                connectivity_state=str(row.get("effective_state") or row.get("connectivity_state") or ""),
+                trust_tier=str(row.get("trust_tier") or "community"),
+                current_capacity=int(row.get("current_capacity") or 0),
+                max_capacity=int(row.get("max_capacity") or 1),
+                routing_skills=[str(s) for s in decoded_skills if isinstance(s, str)],
+                reason="",
+            )
+        )
+    return _json_payload(
+        SelectorPreviewResult(
+            selector=payload.selector,
+            authority_ref=payload.authority_ref,
+            candidates=enriched,
+            total_considered=len(enriched),
+        )
+    )
 
 
 @app.get("/v1/agents/{agent_id}/conversations")

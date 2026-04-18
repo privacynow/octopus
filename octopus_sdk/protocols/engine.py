@@ -87,6 +87,8 @@ class ProtocolRunEngine:
         run: ProtocolRunRecord,
         participant,
     ) -> TargetSelector:
+        if run.is_rehearsal:
+            return TargetSelector(kind="role", value="rehearsal")
         if participant.selector is not None:
             return participant.selector
         if participant.required_skills:

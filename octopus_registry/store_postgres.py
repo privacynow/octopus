@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolScenarioRecord,
     ProtocolTemplateSummaryRecord,
     ProtocolTextDocumentRecord,
     ProtocolTransitionRecord,
@@ -61,6 +63,7 @@ from .store_shared.agents import (
     row_to_agent as shared_row_to_agent,
     runtime_worker_rows as shared_runtime_worker_rows,
     search_agents as shared_search_agents,
+    selector_candidates as shared_selector_candidates,
 )
 from .store_shared.conversations import (
     add_conversation_action as shared_add_conversation_action,
@@ -816,6 +819,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         limit: int = 25,
         q: str = "",
         connectivity_state: str = "",
+        include_soft_deleted: bool = False,
     ) -> list[AgentRecord]:
         with self._connect() as conn:
             return shared_list_agents(
@@ -827,7 +831,137 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 limit=limit,
                 q=q,
                 connectivity_state=connectivity_state,
+                include_soft_deleted=include_soft_deleted,
             )
+
+    def update_agent_trust_tier(self, agent_id: str, trust_tier: str) -> AgentRecord:
+        normalized_id = str(agent_id or "").strip()
+        normalized_tier = str(trust_tier or "").strip().lower()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        if normalized_tier not in {"community", "trusted", "verified", "restricted"}:
+            raise ValueError("trust_tier must be community|trusted|verified|restricted")
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET trust_tier = %s, updated_at = %s
+                    WHERE agent_id = %s AND soft_deleted_at = ''
+                    RETURNING *
+                    """,
+                    (normalized_tier, now, normalized_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row)
+
+    def update_agent_capacity(
+        self,
+        agent_id: str,
+        *,
+        current_capacity: int | None = None,
+        max_capacity: int | None = None,
+    ) -> AgentRecord:
+        normalized_id = str(agent_id or "").strip()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        if current_capacity is None and max_capacity is None:
+            raise ValueError("at least one of current_capacity or max_capacity must be provided")
+        if current_capacity is not None and current_capacity < 0:
+            raise ValueError("current_capacity must be >= 0")
+        if max_capacity is not None and max_capacity < 1:
+            raise ValueError("max_capacity must be >= 1")
+        now = utcnow_iso()
+        set_parts: list[str] = []
+        params: list[object] = []
+        if current_capacity is not None:
+            set_parts.append("current_capacity = %s")
+            params.append(int(current_capacity))
+        if max_capacity is not None:
+            set_parts.append("max_capacity = %s")
+            params.append(int(max_capacity))
+        set_parts.append("updated_at = %s")
+        params.append(now)
+        params.append(normalized_id)
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET {', '.join(set_parts)}
+                    WHERE agent_id = %s AND soft_deleted_at = ''
+                    RETURNING *
+                    """,
+                    tuple(params),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row)
+
+    def rotate_agent_token(self, agent_id: str) -> tuple[AgentRecord, str]:
+        normalized_id = str(agent_id or "").strip()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        new_token = secrets.token_urlsafe(32)
+        new_token_hash = hash_agent_token(new_token)
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET agent_token = %s, updated_at = %s
+                    WHERE agent_id = %s AND soft_deleted_at = ''
+                    RETURNING *
+                    """,
+                    (new_token_hash, now, normalized_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row), new_token
+
+    def preview_selector_resolution(
+        self,
+        selector,
+        *,
+        exclude_agent_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, object]]:
+        """Return every candidate row that a selector matches, without ambiguity errors."""
+        exclude = {str(agent_id or "").strip() for agent_id in exclude_agent_ids if str(agent_id or "").strip()}
+        with self._connect() as conn:
+            candidates = shared_selector_candidates(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                selector=selector,
+            )
+        return [row for row in candidates if str(row.get("agent_id") or "").strip() not in exclude]
+
+    def soft_delete_agent(self, agent_id: str) -> AgentRecord:
+        normalized_id = str(agent_id or "").strip()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET soft_deleted_at = %s, connectivity_state = 'disconnected',
+                        updated_at = %s, last_heartbeat_at = %s
+                    WHERE agent_id = %s
+                    RETURNING *
+                    """,
+                    (now, now, now, normalized_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row)
 
     def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         with self._connect() as conn:
@@ -1222,6 +1356,36 @@ class RegistryPostgresStore(AbstractRegistryStore):
             reason=reason,
             idempotency_key=idempotency_key,
             expected_version=expected_version,
+        )
+
+    def list_protocol_scenarios(
+        self,
+        *,
+        protocol_id: str = "",
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolScenarioRecord]:
+        return self._protocol_store.list_protocol_scenarios(
+            protocol_id=protocol_id,
+            access=access,
+        )
+
+    def create_protocol_scenario(
+        self,
+        *,
+        payload: Mapping[str, object],
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolScenarioRecord:
+        return self._protocol_store.create_protocol_scenario(payload=payload, access=access)
+
+    def delete_protocol_scenario(
+        self,
+        *,
+        scenario_id: str,
+        access: ProtocolAccessContextRecord,
+    ) -> bool:
+        return self._protocol_store.delete_protocol_scenario(
+            scenario_id=scenario_id,
+            access=access,
         )
 
     def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:

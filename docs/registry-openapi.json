@@ -20,6 +20,36 @@
         "title": "ActivateConversationSkillResult",
         "type": "object"
       },
+      "AgentCapacityUpdate": {
+        "additionalProperties": false,
+        "description": "Request body for PATCH /v1/agents/{agent_id}/capacity.",
+        "properties": {
+          "current_capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Capacity"
+          },
+          "max_capacity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Capacity"
+          }
+        },
+        "title": "AgentCapacityUpdate",
+        "type": "object"
+      },
       "AgentExecutionResetRequest": {
         "properties": {
           "actor_key": {
@@ -30,6 +60,21 @@
           }
         },
         "title": "AgentExecutionResetRequest",
+        "type": "object"
+      },
+      "AgentTrustTierUpdate": {
+        "additionalProperties": false,
+        "description": "Request body for PATCH /v1/agents/{agent_id}/trust-tier.",
+        "properties": {
+          "trust_tier": {
+            "title": "Trust Tier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trust_tier"
+        ],
+        "title": "AgentTrustTierUpdate",
         "type": "object"
       },
       "ApproveCatalogSkillResult": {
@@ -1487,6 +1532,11 @@
             "title": "Entry Authority Ref",
             "type": "string"
           },
+          "is_rehearsal": {
+            "default": false,
+            "title": "Is Rehearsal",
+            "type": "boolean"
+          },
           "origin_channel": {
             "default": "",
             "title": "Origin Channel",
@@ -2856,6 +2906,33 @@
         "title": "SearchCatalogSkillsResult",
         "type": "object"
       },
+      "SelectorPreviewRequest": {
+        "additionalProperties": false,
+        "description": "Request body for POST /v1/selector/preview.",
+        "properties": {
+          "authority_ref": {
+            "default": "",
+            "title": "Authority Ref",
+            "type": "string"
+          },
+          "exclude_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclude Agent Ids",
+            "type": "array"
+          },
+          "selector": {
+            "title": "Selector",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selector"
+        ],
+        "title": "SelectorPreviewRequest",
+        "type": "object"
+      },
       "SetConversationSettingResult": {
         "additionalProperties": false,
         "properties": {
@@ -4081,6 +4158,162 @@
           }
         },
         "summary": "Routed Task Status"
+      }
+    },
+    "/v1/agents/{agent_id}": {
+      "delete": {
+        "operationId": "api_agent_soft_delete_v1_agents__agent_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api Agent Soft Delete V1 Agents  Agent Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Agent Soft Delete"
+      }
+    },
+    "/v1/agents/{agent_id}/capacity": {
+      "patch": {
+        "operationId": "api_agent_capacity_update_v1_agents__agent_id__capacity_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCapacityUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api Agent Capacity Update V1 Agents  Agent Id  Capacity Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Agent Capacity Update"
       }
     },
     "/v1/agents/{agent_id}/catalog/skills": {
@@ -7000,6 +7233,79 @@
         "summary": "Api Provider Guidance Submit"
       }
     },
+    "/v1/agents/{agent_id}/rotate-token": {
+      "post": {
+        "operationId": "api_agent_rotate_token_v1_agents__agent_id__rotate_token_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api Agent Rotate Token V1 Agents  Agent Id  Rotate Token Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Agent Rotate Token"
+      }
+    },
     "/v1/agents/{agent_id}/status": {
       "get": {
         "operationId": "resource_agent_status_v1_agents__agent_id__status_get",
@@ -7071,6 +7377,89 @@
           }
         },
         "summary": "Resource Agent Status"
+      }
+    },
+    "/v1/agents/{agent_id}/trust-tier": {
+      "patch": {
+        "operationId": "api_agent_trust_tier_update_v1_agents__agent_id__trust_tier_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTrustTierUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api Agent Trust Tier Update V1 Agents  Agent Id  Trust Tier Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Agent Trust Tier Update"
       }
     },
     "/v1/approvals": {
@@ -8915,6 +9304,164 @@
         "summary": "Resource Get Protocol Run Participants"
       }
     },
+    "/v1/protocol-runs/{run_id}/rehearsal/respond": {
+      "post": {
+        "operationId": "resource_submit_rehearsal_response_v1_protocol_runs__run_id__rehearsal_respond_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Submit Rehearsal Response V1 Protocol Runs  Run Id  Rehearsal Respond Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Submit Rehearsal Response"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/rehearsal/sessions": {
+      "get": {
+        "operationId": "resource_list_rehearsal_sessions_v1_protocol_runs__run_id__rehearsal_sessions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource List Rehearsal Sessions V1 Protocol Runs  Run Id  Rehearsal Sessions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource List Rehearsal Sessions"
+      }
+    },
     "/v1/protocol-runs/{run_id}/timeline": {
       "get": {
         "operationId": "resource_get_protocol_run_timeline_v1_protocol_runs__run_id__timeline_get",
@@ -8986,6 +9533,227 @@
           }
         },
         "summary": "Resource Get Protocol Run Timeline"
+      }
+    },
+    "/v1/protocol-scenarios": {
+      "get": {
+        "operationId": "resource_list_protocol_scenarios_v1_protocol_scenarios_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "protocol_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource List Protocol Scenarios V1 Protocol Scenarios Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource List Protocol Scenarios"
+      },
+      "post": {
+        "operationId": "resource_create_protocol_scenario_v1_protocol_scenarios_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Create Protocol Scenario V1 Protocol Scenarios Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Create Protocol Scenario"
+      }
+    },
+    "/v1/protocol-scenarios/{scenario_id}": {
+      "delete": {
+        "operationId": "resource_delete_protocol_scenario_v1_protocol_scenarios__scenario_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Delete Protocol Scenario V1 Protocol Scenarios  Scenario Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Delete Protocol Scenario"
       }
     },
     "/v1/protocol-templates": {
@@ -10269,6 +11037,80 @@
           }
         },
         "summary": "Resource Enable Routing Skill"
+      }
+    },
+    "/v1/selector/preview": {
+      "post": {
+        "operationId": "api_selector_preview_v1_selector_preview_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectorPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api Selector Preview V1 Selector Preview Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Selector Preview"
       }
     },
     "/v1/summary": {

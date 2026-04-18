@@ -38,6 +38,14 @@ PROTOCOL_DEFAULT_RETENTION_DAYS = 90
 PROTOCOL_DEFAULT_RUN_ORG_ID = "local"
 PROTOCOL_DEFAULT_OPERATOR_REF = "operator-session"
 PROTOCOL_DEFAULT_VISIBILITY: ProtocolVisibility = "org_private"
+
+REHEARSAL_AUTHORITY_REF = "rehearsal"
+"""Canonical authority ref for rehearsal runs.
+
+A protocol run whose ``entry_authority_ref`` equals this constant is a dry
+rehearsal: external egress (webhooks, outbound transports, credentialed
+provider calls) is gated at the composition layer, and only agents enrolled
+under this authority may be resolved as participants for the run."""
 PROTOCOL_SUPPORTED_RUN_STATUSES: tuple[ProtocolRunStatus, ...] = (
     "queued",
     "running",
@@ -419,6 +427,7 @@ class ProtocolRunRecord(RegistryRecordModel):
     protocol_definition_version_id: str = ""
     entry_agent_id: str = ""
     entry_authority_ref: str = ""
+    is_rehearsal: bool = False
     root_conversation_id: str = ""
     root_external_conversation_ref: str = ""
     origin_channel: str = ""
@@ -519,11 +528,27 @@ class ProtocolTransitionRecord(RegistryRecordModel):
     created_at: str = ""
 
 
+class ProtocolScenarioRecord(RegistryRecordModel):
+    """Canned author response for rehearsal runs, reusable across stages."""
+
+    protocol_scenario_id: str = ""
+    protocol_id: str = ""
+    stage_key: str = ""
+    participant_key: str = ""
+    display_name: str = ""
+    response_text: str = ""
+    run_org_id: str = PROTOCOL_DEFAULT_RUN_ORG_ID
+    created_by: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
 class ProtocolRunCreateRecord(RegistryRecordModel):
     protocol_id: str = ""
     protocol_definition_version_id: str = ""
     entry_agent_id: str = ""
     entry_authority_ref: str = ""
+    is_rehearsal: bool = False
     root_conversation_id: str = ""
     origin_channel: str = ""
     workspace_ref: str = ""
@@ -770,6 +795,7 @@ __all__ = [
         "PROTOCOL_DEFAULT_RUN_ORG_ID",
         "PROTOCOL_DEFAULT_OPERATOR_REF",
         "PROTOCOL_DEFAULT_VISIBILITY",
+        "REHEARSAL_AUTHORITY_REF",
         "PROTOCOL_SUPPORTED_RUN_STATUSES",
         "PROTOCOL_SUPPORTED_STAGE_STATUSES",
         "PROTOCOL_STAGE_KIND_OPTIONS",

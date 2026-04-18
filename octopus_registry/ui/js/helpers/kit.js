@@ -777,7 +777,7 @@ window.Kit = (() => {
         });
         controls.appendChild(searchBox);
 
-        if (secondaryAction && typeof secondaryAction.onClick === 'function') {
+        if (records.length && secondaryAction && typeof secondaryAction.onClick === 'function') {
             const secondaryBtn = document.createElement('button');
             secondaryBtn.type = 'button';
             secondaryBtn.className = 'btn';
@@ -786,7 +786,7 @@ window.Kit = (() => {
             controls.appendChild(secondaryBtn);
         }
 
-        if (createAction && typeof createAction.onClick === 'function') {
+        if (records.length && createAction && typeof createAction.onClick === 'function') {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'btn btn-primary';

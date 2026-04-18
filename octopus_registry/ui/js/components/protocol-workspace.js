@@ -1918,6 +1918,7 @@ function renderProtocolWorkspace(container) {
 
     function _fullGraphWorkflowData(projection, progress, resolvedView) {
         const doc = draft.document;
+        const isExpandedMap = resolvedView.kind === 'full';
         const stageCounts = new Map();
         (doc.stages || []).forEach((item) => {
             const key = String(item.participant_key || '').trim();
@@ -1983,9 +1984,11 @@ function renderProtocolWorkspace(container) {
                 hint: Kit.dict.label('protocol.workflow.outcomes_hint'),
             } : null,
             viewState: {
-                kind: 'full',
-                title: 'All steps',
-                subtitle: 'Expanded map of every step in the workflow.',
+                kind: isExpandedMap ? 'full' : 'focus',
+                title: isExpandedMap ? 'All steps' : 'Workflow',
+                subtitle: isExpandedMap
+                    ? 'Expanded map of every step in the workflow.'
+                    : 'Select a role, step, or transition to edit it.',
                 canReturn: false,
             },
         };

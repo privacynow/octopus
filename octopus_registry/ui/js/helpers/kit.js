@@ -20,11 +20,11 @@ window.Kit = (() => {
         // Protocol — record fields
         'protocol.display_name.label': 'Name',
         'protocol.display_name.help': 'Human-readable name for this protocol. You can change it later.',
-        'protocol.display_name.placeholder': 'Name this workflow',
+        'protocol.display_name.placeholder': 'Give this workflow a name',
 
         'protocol.slug.label': 'URL slug',
         'protocol.slug.help': 'Short identifier used in URLs. Auto-suggested from the name once you enter one.',
-        'protocol.slug.placeholder': 'URL slug appears after you name it',
+        'protocol.slug.placeholder': 'Generated from the name; editable later',
 
         'protocol.description.label': 'Description',
         'protocol.description.help': 'Optional. What this protocol is for and when to use it.',
@@ -162,7 +162,7 @@ window.Kit = (() => {
 
         // Empty / first-run / onboarding
         'protocol.canvas.empty.title': 'Design your workflow',
-        'protocol.canvas.empty.body': 'Start by adding the first participant — a person or agent who will work on this.',
+        'protocol.canvas.empty.body': 'Start by adding the first role in the workflow, then define what that role does.',
         'protocol.catalog.empty.title': 'No protocols yet',
         'protocol.catalog.empty.body': 'Create one from a template in the Gallery, or start from a blank draft.',
         'protocol.catalog.title': 'Workflow definitions',
@@ -1064,6 +1064,26 @@ window.Kit = (() => {
             body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Start by adding the first participant.'));
             card.appendChild(body);
 
+            const steps = Array.isArray(firstRun.steps) ? firstRun.steps.filter(Boolean) : [];
+            if (steps.length) {
+                const list = document.createElement('ol');
+                list.className = 'kit-workflow-first-run-steps';
+                steps.forEach((step) => {
+                    const item = document.createElement('li');
+                    item.className = `kit-workflow-first-run-step${step.state ? ` is-${String(step.state)}` : ''}`;
+                    const badge = document.createElement('span');
+                    badge.className = 'kit-workflow-first-run-step-badge';
+                    badge.textContent = step.state === 'complete' ? 'Done' : step.state === 'active' ? 'Now' : 'Later';
+                    item.appendChild(badge);
+                    const text = document.createElement('span');
+                    text.className = 'kit-workflow-first-run-step-text';
+                    text.textContent = String(step.label || '');
+                    item.appendChild(text);
+                    list.appendChild(item);
+                });
+                card.appendChild(list);
+            }
+
             const actions = document.createElement('div');
             actions.className = 'kit-workflow-first-run-actions';
             (Array.isArray(firstRun.actions) ? firstRun.actions : []).forEach((action) => {
@@ -1079,39 +1099,41 @@ window.Kit = (() => {
             root.appendChild(card);
         }
 
-        const toolbar = document.createElement('div');
-        toolbar.className = 'kit-workflow-toolbar';
-        const hint = document.createElement('div');
-        hint.className = 'kit-workflow-toolbar-hint';
-        hint.textContent = connectState?.fromStageKey
-            ? dictValue('protocol.transition.connecting', 'Click the next stage or outcome to finish this transition.')
-            : dictValue('protocol.workflow.drag_hint', 'Drag stages to reorder them in the workflow.');
-        toolbar.appendChild(hint);
-        if (connectState?.fromStageKey && typeof onCancelConnect === 'function') {
-            const cancelBtn = document.createElement('button');
-            cancelBtn.type = 'button';
-            cancelBtn.className = 'btn btn-small';
-            cancelBtn.textContent = dictValue('protocol.transition.cancel_connect', 'Cancel transition');
-            cancelBtn.addEventListener('click', onCancelConnect);
-            toolbar.appendChild(cancelBtn);
-        }
         const actions = Array.isArray(toolbarActions) ? toolbarActions.filter(Boolean) : [];
-        if (actions.length) {
-            const actionBar = document.createElement('div');
-            actionBar.className = 'kit-workflow-toolbar-actions';
-            actions.forEach((action) => {
-                if (!action || typeof action.onClick !== 'function') return;
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = ['btn', action.tone || 'btn-small'].filter(Boolean).join(' ');
-                btn.textContent = String(action.label || '');
-                btn.disabled = Boolean(action.disabled);
-                btn.addEventListener('click', action.onClick);
-                actionBar.appendChild(btn);
-            });
-            toolbar.appendChild(actionBar);
+        if (!firstRun?.active || connectState?.fromStageKey || actions.length) {
+            const toolbar = document.createElement('div');
+            toolbar.className = 'kit-workflow-toolbar';
+            const hint = document.createElement('div');
+            hint.className = 'kit-workflow-toolbar-hint';
+            hint.textContent = connectState?.fromStageKey
+                ? dictValue('protocol.transition.connecting', 'Click the next stage or outcome to finish this transition.')
+                : dictValue('protocol.workflow.drag_hint', 'Drag stages to reorder them in the workflow.');
+            toolbar.appendChild(hint);
+            if (connectState?.fromStageKey && typeof onCancelConnect === 'function') {
+                const cancelBtn = document.createElement('button');
+                cancelBtn.type = 'button';
+                cancelBtn.className = 'btn btn-small';
+                cancelBtn.textContent = dictValue('protocol.transition.cancel_connect', 'Cancel transition');
+                cancelBtn.addEventListener('click', onCancelConnect);
+                toolbar.appendChild(cancelBtn);
+            }
+            if (actions.length) {
+                const actionBar = document.createElement('div');
+                actionBar.className = 'kit-workflow-toolbar-actions';
+                actions.forEach((action) => {
+                    if (!action || typeof action.onClick !== 'function') return;
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = ['btn', action.tone || 'btn-small'].filter(Boolean).join(' ');
+                    btn.textContent = String(action.label || '');
+                    btn.disabled = Boolean(action.disabled);
+                    btn.addEventListener('click', action.onClick);
+                    actionBar.appendChild(btn);
+                });
+                toolbar.appendChild(actionBar);
+            }
+            root.appendChild(toolbar);
         }
-        root.appendChild(toolbar);
 
         function _orderedNodes() {
             return [...nodes].sort((a, b) => {

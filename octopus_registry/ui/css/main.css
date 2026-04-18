@@ -3326,7 +3326,7 @@ select {
 .kit-workflow-first-run {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-3);
     padding: var(--space-4);
     border: 1px dashed var(--accent);
     border-radius: var(--radius-md);
@@ -3343,7 +3343,152 @@ select {
     color: var(--text-muted);
 }
 
+.kit-workflow-first-run-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+}
+
+.kit-workflow-first-run-step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.58);
+    border: 1px solid rgba(149, 76, 47, 0.14);
+}
+
+.kit-workflow-first-run-step-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 3.35rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: var(--radius-pill);
+    background: rgba(17, 24, 39, 0.08);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.kit-workflow-first-run-step.is-active {
+    border-color: rgba(149, 76, 47, 0.28);
+    background: rgba(255, 243, 236, 0.9);
+}
+
+.kit-workflow-first-run-step.is-active .kit-workflow-first-run-step-badge {
+    background: rgba(149, 76, 47, 0.14);
+    color: var(--accent);
+}
+
+.kit-workflow-first-run-step.is-complete .kit-workflow-first-run-step-badge {
+    background: rgba(31, 122, 76, 0.14);
+    color: var(--success);
+}
+
+.kit-workflow-first-run-step-text {
+    color: var(--text);
+    line-height: 1.5;
+}
+
 .kit-workflow-first-run-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.protocol-starter-panel {
+    gap: var(--space-3);
+}
+
+.protocol-starter-eyebrow {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.protocol-starter-title {
+    margin: 0;
+    font-size: clamp(1.08rem, 0.5vw + 1rem, 1.32rem);
+    line-height: 1.25;
+}
+
+.protocol-starter-body,
+.protocol-starter-foot {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.protocol-starter-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+}
+
+.protocol-starter-step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+
+.protocol-starter-step.is-active {
+    border-color: rgba(149, 76, 47, 0.28);
+    background: rgba(255, 243, 236, 0.68);
+}
+
+.protocol-starter-step-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 3.2rem;
+    padding: 0.18rem 0.58rem;
+    border-radius: var(--radius-pill);
+    background: rgba(17, 24, 39, 0.08);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.protocol-starter-step.is-complete .protocol-starter-step-badge {
+    background: rgba(31, 122, 76, 0.14);
+    color: var(--success);
+}
+
+.protocol-starter-step.is-active .protocol-starter-step-badge {
+    background: rgba(149, 76, 47, 0.14);
+    color: var(--accent);
+}
+
+.protocol-starter-step-label {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.protocol-starter-suggestions-title {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.protocol-starter-suggestions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);

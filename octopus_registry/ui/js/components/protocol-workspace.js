@@ -196,6 +196,10 @@ function renderProtocolWorkspace(container) {
     contentEl.className = 'protocol-surface-shell protocol-authoring-shell';
     shell.appendChild(contentEl);
 
+    function _currentWorkflowMode() {
+        return window.innerWidth <= 960 ? 'narrow' : 'graph';
+    }
+
     function _blankDocument() {
         return {
             schema_version: 1,
@@ -224,6 +228,18 @@ function renderProtocolWorkspace(container) {
         doc.artifacts = Array.isArray(doc.artifacts) ? doc.artifacts : [];
         doc.stages = Array.isArray(doc.stages) ? doc.stages : [];
         return doc;
+    }
+
+    function _workflowProgress(doc = draft.document) {
+        const normalized = doc || _blankDocument();
+        const participantCount = Array.isArray(normalized.participants) ? normalized.participants.length : 0;
+        const stageCount = Array.isArray(normalized.stages) ? normalized.stages.length : 0;
+        const edgeCount = _transitionEntries(normalized).length;
+        let nextStep = '';
+        if (!participantCount) nextStep = 'participant';
+        else if (!stageCount) nextStep = 'stage';
+        else if (!edgeCount) nextStep = 'transition';
+        return { participantCount, stageCount, edgeCount, nextStep };
     }
 
     function _applyServerDetail(detail) {
@@ -966,8 +982,7 @@ function renderProtocolWorkspace(container) {
         }
     }
 
-    function _participantSelectorSuggestions(target) {
-        if (!target) return [];
+    function _participantSelectorSuggestions() {
         const suggestions = [];
         const seen = new Set();
         const pushSuggestion = (entry) => {
@@ -1038,6 +1053,20 @@ function renderProtocolWorkspace(container) {
         return suggestions;
     }
 
+    async function _addParticipantFromSuggestion(suggestion) {
+        const doc = _cloneDoc(draft.document);
+        const n = (doc.participants || []).length + 1;
+        const key = `participant_${n}`;
+        doc.participants = [...(doc.participants || []), {
+            participant_key: key,
+            display_name: '',
+            selector: null,
+            instructions: '',
+        }];
+        _commitDocument(doc, { nextSelection: { sectionKey: 'participants', nodeKey: key } });
+        await _applyParticipantSuggestion(key, suggestion);
+    }
+
     // -------------------------------------------------------------------
     // Rendering
     // -------------------------------------------------------------------
@@ -1048,15 +1077,16 @@ function renderProtocolWorkspace(container) {
             lifecycle_state: String(currentProtocol?.protocol?.lifecycle_state || 'draft'),
         };
         const lifecycleState = String(currentProtocol?.protocol?.lifecycle_state || '');
+        const progress = _workflowProgress();
         const hasPublishedVersion = Boolean(currentProtocol?.protocol?.current_version_id)
             || (Array.isArray(currentProtocol?.versions)
                 && currentProtocol.versions.some((v) => String(v.lifecycle_state || '') === 'published'));
         const permissions = {
-            canValidate: Boolean(currentProtocolId) && saveState.state !== 'conflict',
-            canPublish: Boolean(currentProtocolId) && saveState.state !== 'conflict',
-            canArchive: Boolean(currentProtocolId) && lifecycleState !== 'archived' && saveState.state !== 'conflict',
+            canValidate: Boolean(currentProtocolId) && progress.stageCount > 0 && saveState.state !== 'conflict',
+            canPublish: Boolean(currentProtocolId) && progress.stageCount > 0 && saveState.state !== 'conflict',
+            canArchive: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
             canRehearse: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
-            canDiscard: Boolean(currentProtocolId) && saveState.state !== 'conflict',
+            canDiscard: Boolean(currentProtocolId) && !hasPublishedVersion && saveState.state !== 'conflict',
         };
         return Kit.lifecycleHeader({
             surfaceKey: 'protocol',
@@ -1103,7 +1133,8 @@ function renderProtocolWorkspace(container) {
 
     function _workflowData() {
         const doc = draft.document;
-        const participantCount = (doc.participants || []).length;
+        const progress = _workflowProgress(doc);
+        const participantCount = progress.participantCount;
         const stageCounts = new Map();
         (doc.stages || []).forEach((item) => {
             const key = String(item.participant_key || '').trim();
@@ -1113,7 +1144,7 @@ function renderProtocolWorkspace(container) {
             String(item.participant_key || ''),
             String(item.display_name || item.participant_key || ''),
         ]));
-        const stageCount = (doc.stages || []).length;
+        const stageCount = progress.stageCount;
         const hasStages = stageCount > 0;
         const lanes = [
             ...(doc.participants || []).map((item) => ({
@@ -1170,9 +1201,10 @@ function renderProtocolWorkspace(container) {
             label: String(item.display_name || item.artifact_key || 'Artifact'),
         }));
         const firstRunActions = [];
-        if (!(doc.participants || []).length) {
+        if (!participantCount) {
             firstRunActions.push({ label: Kit.dict.label('protocol.participants.add'), onClick: () => _addNode('participants') });
-        } else if (!(doc.stages || []).length) {
+            firstRunActions.push({ label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/gallery') });
+        } else if (!stageCount) {
             firstRunActions.push({ label: Kit.dict.label('protocol.stages.add'), onClick: () => _addNode('stages') });
         } else if (!edges.length) {
             firstRunActions.push({
@@ -1184,7 +1216,7 @@ function renderProtocolWorkspace(container) {
             lanes,
             nodes,
             edges,
-            toolbarActions: [
+            toolbarActions: firstRunActions.length ? [] : [
                 {
                     label: Kit.dict.label('protocol.participants.add'),
                     tone: 'btn-small',
@@ -1215,11 +1247,25 @@ function renderProtocolWorkspace(container) {
             firstRun: {
                 active: Boolean(firstRunActions.length),
                 title: Kit.dict.label('protocol.canvas.empty.title'),
-                body: !(doc.participants || []).length
+                body: !participantCount
                     ? Kit.dict.label('protocol.firstrun.participant')
-                    : !(doc.stages || []).length
+                    : !stageCount
                         ? Kit.dict.label('protocol.firstrun.stage')
                         : Kit.dict.label('protocol.firstrun.transition'),
+                steps: [
+                    {
+                        label: 'Add the role or agent you need first.',
+                        state: participantCount ? 'complete' : 'active',
+                    },
+                    {
+                        label: 'Add the first stage that role is responsible for.',
+                        state: stageCount ? 'complete' : participantCount ? 'active' : 'pending',
+                    },
+                    {
+                        label: 'Connect the stage to the next step or a finish outcome.',
+                        state: progress.edgeCount ? 'complete' : stageCount ? 'active' : 'pending',
+                    },
+                ],
                 actions: firstRunActions,
             },
         };
@@ -1242,7 +1288,6 @@ function renderProtocolWorkspace(container) {
 
     function _canvasEl() {
         const workflow = _workflowData();
-        const mode = window.innerWidth <= 960 ? 'narrow' : 'graph';
         return Kit.workflowCanvas({
             lanes: workflow.lanes,
             nodes: workflow.nodes,
@@ -1250,7 +1295,7 @@ function renderProtocolWorkspace(container) {
             toolbarActions: workflow.toolbarActions,
             accessorySections: workflow.accessorySections,
             firstRun: workflow.firstRun,
-            mode,
+            mode: _currentWorkflowMode(),
             connectState,
             nodeStates: rehearsal.runId ? _rehearsalNodeStates() : {},
             selection: {
@@ -1303,7 +1348,11 @@ function renderProtocolWorkspace(container) {
 
     function _detailsEl() {
         const doc = draft.document;
+        const workflow = _workflowData();
         if (selection.sectionKey === 'overview' || !selection.nodeKey) {
+            if (workflow.firstRun?.active) {
+                return _starterPanelEl(workflow);
+            }
             return Kit.detailsPanel({
                 target: {
                     description: draft.description,
@@ -1467,6 +1516,85 @@ function renderProtocolWorkspace(container) {
         return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
     }
 
+    function _starterPanelEl(workflow) {
+        const progress = _workflowProgress();
+        const panel = document.createElement('aside');
+        panel.className = 'kit-details-panel protocol-starter-panel';
+
+        const eyebrow = document.createElement('div');
+        eyebrow.className = 'protocol-starter-eyebrow';
+        eyebrow.textContent = progress.participantCount ? 'Next up' : 'Blank workflow';
+        panel.appendChild(eyebrow);
+
+        const title = document.createElement('h3');
+        title.className = 'protocol-starter-title';
+        title.textContent = progress.nextStep === 'participant'
+            ? 'Start with the first role in this workflow'
+            : progress.nextStep === 'stage'
+                ? 'Add the first step that role should handle'
+                : 'Connect the workflow so it can finish clearly';
+        panel.appendChild(title);
+
+        const body = document.createElement('p');
+        body.className = 'protocol-starter-body';
+        body.textContent = progress.nextStep === 'participant'
+            ? 'Pick a participant first. You can use a connected agent, a role, or a skill-based rule, then refine it in the details panel.'
+            : progress.nextStep === 'stage'
+                ? 'Stages are the visible workflow steps. Start with one concrete step, then connect later steps only when you need them.'
+                : 'Transitions describe what happens next after a stage completes. Connect to another stage or finish outcome to make the flow readable.';
+        panel.appendChild(body);
+
+        const steps = document.createElement('ol');
+        steps.className = 'protocol-starter-steps';
+        [
+            { label: 'Participant', done: progress.participantCount > 0, active: progress.nextStep === 'participant' },
+            { label: 'Stage', done: progress.stageCount > 0, active: progress.nextStep === 'stage' },
+            { label: 'Transition', done: progress.edgeCount > 0, active: progress.nextStep === 'transition' },
+        ].forEach((step) => {
+            const item = document.createElement('li');
+            item.className = `protocol-starter-step${step.done ? ' is-complete' : ''}${step.active ? ' is-active' : ''}`;
+            const badge = document.createElement('span');
+            badge.className = 'protocol-starter-step-badge';
+            badge.textContent = step.done ? 'Done' : step.active ? 'Now' : 'Later';
+            item.appendChild(badge);
+            const text = document.createElement('span');
+            text.className = 'protocol-starter-step-label';
+            text.textContent = step.label;
+            item.appendChild(text);
+            steps.appendChild(item);
+        });
+        panel.appendChild(steps);
+
+        if (!progress.participantCount) {
+            const suggestions = _participantSelectorSuggestions().slice(0, 3);
+            if (suggestions.length) {
+                const suggestTitle = document.createElement('div');
+                suggestTitle.className = 'protocol-starter-suggestions-title';
+                suggestTitle.textContent = 'Quick starts';
+                panel.appendChild(suggestTitle);
+                const suggestRow = document.createElement('div');
+                suggestRow.className = 'protocol-starter-suggestions';
+                suggestions.forEach((suggestion) => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-small';
+                    btn.textContent = String(suggestion.label || suggestion.displayName || 'Use this role');
+                    btn.addEventListener('click', () => { void _addParticipantFromSuggestion(suggestion); });
+                    suggestRow.appendChild(btn);
+                });
+                panel.appendChild(suggestRow);
+            }
+        }
+
+        const foot = document.createElement('div');
+        foot.className = 'protocol-starter-foot';
+        foot.textContent = progress.participantCount
+            ? 'You can still rename the workflow and edit description later.'
+            : 'You can always switch to a Gallery template if a blank start feels too open-ended.';
+        panel.appendChild(foot);
+        return panel;
+    }
+
     function _validationEl() {
         const normalized = [];
         if (saveState.state === 'conflict' && draftConflict?.serverDetail?.protocol) {
@@ -1489,7 +1617,7 @@ function renderProtocolWorkspace(container) {
             });
         }
         const workflow = _workflowData();
-        if (workflow.firstRun?.active) {
+        if (workflow.firstRun?.active && !normalized.length) {
             return null;
         }
         const validation = currentProtocol?.validation;

@@ -130,6 +130,17 @@ function _protocolDecisionLabel(value) {
     return Kit.dict.label(`protocol.stage.decision.${key}`, value);
 }
 
+function _transitionTargetLabel(targetKey, doc) {
+    const key = String(targetKey || '').trim();
+    if (!key) return '';
+    const stage = (doc?.stages || []).find((item) => String(item.stage_key || '') === key);
+    if (stage) {
+        return String(stage.display_name || stage.stage_key || key);
+    }
+    const terminal = PROTOCOL_TERMINAL_TARGETS.find((item) => String(item.key || '') === key);
+    return String(terminal?.label || key);
+}
+
 function _titleCaseWords(value) {
     return String(value || '')
         .trim()
@@ -1899,7 +1910,9 @@ function renderProtocolWorkspace(container) {
             return false;
         }
         if (viewKind === 'focus') {
-            return true;
+            if (transitionCount > 1) return true;
+            if (isTerminal) return true;
+            return label !== defaultDecision;
         }
         if (transitionCount <= 1) {
             return false;
@@ -2434,6 +2447,118 @@ function renderProtocolWorkspace(container) {
         return section;
     }
 
+    function _stageEditorHero(target) {
+        const hero = document.createElement('section');
+        hero.className = 'kit-stage-editor-hero';
+
+        const title = document.createElement('h3');
+        title.className = 'kit-stage-editor-hero-title';
+        title.textContent = String(target?.display_name || target?.stage_key || 'Untitled step');
+        hero.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'kit-stage-editor-hero-meta';
+
+        [
+            _participantDisplayName(target?.participant_key, draft.document),
+            Kit.dict.label(`protocol.stage.kind.${String(target?.stage_kind || 'work')}`, _titleCaseWords(target?.stage_kind || 'work')),
+            `${Object.keys(target?.transitions || {}).length} route${Object.keys(target?.transitions || {}).length === 1 ? '' : 's'}`,
+            `${(target?.inputs || []).length} read${(target?.inputs || []).length === 1 ? '' : 's'} · ${(target?.outputs || []).length} write${(target?.outputs || []).length === 1 ? '' : 's'}`,
+        ].filter(Boolean).forEach((item) => {
+            const chip = document.createElement('span');
+            chip.className = 'kit-stage-editor-hero-chip';
+            chip.textContent = String(item || '');
+            meta.appendChild(chip);
+        });
+        hero.appendChild(meta);
+
+        const note = document.createElement('p');
+        note.className = 'kit-stage-editor-hero-note';
+        note.textContent = 'Use the graph for placement. Use this editor for content, ownership, artifacts, and routing.';
+        hero.appendChild(note);
+
+        return hero;
+    }
+
+    function _stageRoutingPanel(stage, { readOnly = false, connectAction = null } = {}) {
+        const panel = document.createElement('div');
+        panel.className = 'kit-stage-routing';
+
+        const head = document.createElement('div');
+        head.className = 'kit-stage-routing-head';
+
+        const intro = document.createElement('p');
+        intro.className = 'kit-stage-routing-copy';
+        intro.textContent = 'Routes control where this step sends the workflow next.';
+        head.appendChild(intro);
+
+        if (!readOnly && typeof connectAction === 'function') {
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'btn btn-small';
+            add.textContent = Kit.dict.label('protocol.stage.connect');
+            add.addEventListener('click', connectAction);
+            head.appendChild(add);
+        }
+        panel.appendChild(head);
+
+        const routes = _transitionEntries(draft.document)
+            .filter((item) => String(item.from_stage_key || '') === String(stage?.stage_key || ''))
+            .map((item) => ({
+                ...item,
+                decisionLabel: _protocolDecisionLabel(item.decision),
+                targetLabel: _transitionTargetLabel(item.target_key, draft.document),
+            }));
+
+        if (!routes.length) {
+            const empty = document.createElement('div');
+            empty.className = 'kit-stage-routing-empty';
+            empty.textContent = readOnly
+                ? 'No routes are defined for this step yet.'
+                : 'No routes yet. Add the next step or finish path from here.';
+            panel.appendChild(empty);
+            return panel;
+        }
+
+        const list = document.createElement('div');
+        list.className = 'kit-stage-routing-list';
+        routes.forEach((route) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = `kit-stage-routing-item${selection.sectionKey === 'transitions' && selection.nodeKey === route.id ? ' is-selected' : ''}`;
+            row.dataset.testid = `stage-route-${String(route.id || '')}`;
+            row.addEventListener('click', () => {
+                selection = { sectionKey: 'transitions', nodeKey: route.id };
+                render();
+            });
+
+            const badge = document.createElement('span');
+            badge.className = 'kit-stage-routing-badge';
+            badge.textContent = String(route.decisionLabel || route.decision || '');
+            row.appendChild(badge);
+
+            const body = document.createElement('div');
+            body.className = 'kit-stage-routing-body';
+
+            const title = document.createElement('strong');
+            title.className = 'kit-stage-routing-target';
+            title.textContent = String(route.targetLabel || route.target_key || '');
+            body.appendChild(title);
+
+            const meta = document.createElement('span');
+            meta.className = 'kit-stage-routing-meta';
+            meta.textContent = PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === route.target_key)
+                ? 'Finish outcome'
+                : 'Open route details';
+            body.appendChild(meta);
+
+            row.appendChild(body);
+            list.appendChild(row);
+        });
+        panel.appendChild(list);
+        return panel;
+    }
+
     function _stageEditorShell({
         target,
         readOnly = false,
@@ -2453,7 +2578,13 @@ function renderProtocolWorkspace(container) {
                 readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
             })));
         const shell = document.createElement('div');
-        shell.className = 'kit-stage-editor-grid';
+        shell.className = 'kit-stage-editor';
+        if (!createAction) {
+            shell.appendChild(_stageEditorHero(target));
+        }
+
+        const grid = document.createElement('div');
+        grid.className = 'kit-stage-editor-grid';
 
         const summaryActions = [];
         if (createAction) {
@@ -2473,7 +2604,11 @@ function renderProtocolWorkspace(container) {
             ]),
             actions: summaryActions,
         });
-        shell.appendChild(_stageEditorSection('Step basics', summaryPanel));
+        grid.appendChild(_stageEditorSection('Step basics', summaryPanel));
+
+        if (!createAction) {
+            grid.appendChild(_stageEditorSection('Routing', _stageRoutingPanel(target, { readOnly, connectAction }), { wide: true }));
+        }
 
         const instructionsPanel = Kit.detailsPanel({
             target,
@@ -2483,7 +2618,11 @@ function renderProtocolWorkspace(container) {
                 { key: 'instructions', kind: 'textarea', rows: 6 },
             ]),
         });
-        shell.appendChild(_stageEditorSection('Instructions', instructionsPanel, { wide: true }));
+        grid.appendChild(_stageEditorSection('Instructions', instructionsPanel, {
+            wide: true,
+            collapsible: !createAction,
+            open: createAction || Boolean(String(target?.instructions || '').trim()),
+        }));
 
         const artifactsPanel = Kit.detailsPanel({
             target,
@@ -2494,15 +2633,13 @@ function renderProtocolWorkspace(container) {
                 { key: 'outputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.outputs.label', helpKey: 'protocol.stage.outputs.help' },
             ]),
         });
-        shell.appendChild(_stageEditorSection('Artifacts', artifactsPanel, { wide: true }));
+        grid.appendChild(_stageEditorSection('Artifacts', artifactsPanel, {
+            wide: true,
+            collapsible: !createAction,
+            open: createAction || Boolean((target?.inputs || []).length || (target?.outputs || []).length),
+        }));
 
         const advancedActions = [];
-        if (connectAction) {
-            advancedActions.push({
-                label: Kit.dict.label('protocol.stage.connect'),
-                onClick: connectAction,
-            });
-        }
         if (cancelAction) {
             advancedActions.push({ label: 'Cancel', onClick: cancelAction });
         }
@@ -2517,7 +2654,8 @@ function renderProtocolWorkspace(container) {
             ]),
             actions: advancedActions,
         });
-        shell.appendChild(_stageEditorSection('Advanced', advancedPanel, { collapsible: true, open: false }));
+        grid.appendChild(_stageEditorSection('Advanced', advancedPanel, { collapsible: true, open: false }));
+        shell.appendChild(grid);
         return shell;
     }
 

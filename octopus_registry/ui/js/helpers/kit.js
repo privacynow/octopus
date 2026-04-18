@@ -1258,79 +1258,129 @@ window.Kit = (() => {
             });
             root.appendChild(process);
         } else if (mode === 'narrow') {
-            const list = document.createElement('div');
-            list.className = 'kit-workflow-narrow';
+            const stack = document.createElement('div');
+            stack.className = 'kit-workflow-compact';
             if (!nodes.length) {
-                list.appendChild(UI.renderEmptyState(dictValue('protocol.workflow.narrow.empty', 'No stages yet.')));
+                stack.appendChild(UI.renderEmptyState(dictValue('protocol.workflow.narrow.empty', 'No stages yet.')));
             } else {
-                const narrowGroups = lanes.length
-                    ? [
-                        ...lanes.map((lane) => ({
-                            key: String(lane.key || ''),
-                            label: String(lane.label || lane.key || ''),
-                            items: nodes.filter((node) => String(node.laneKey || '') === String(lane.key || '')),
-                        })),
-                        ...(outcomes ? [{
-                            key: '__outcomes__',
-                            label: String(outcomes.label || 'Outcomes'),
-                            items: nodes.filter((node) => node.isTerminal),
-                        }] : []),
-                    ]
-                    : [{
-                        key: '__overview__',
-                        label: String(viewState?.title || 'Workflow overview'),
-                        items: [...nodes].sort((a, b) => Number(a.column || 0) - Number(b.column || 0) || Number(a.row || 0) - Number(b.row || 0)),
-                    }];
-                narrowGroups.forEach((lane) => {
-                    const laneBlock = document.createElement('section');
-                    laneBlock.className = 'kit-workflow-narrow-lane';
-                    const laneHeader = document.createElement('button');
-                    laneHeader.type = 'button';
-                    laneHeader.className = `kit-workflow-lane${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
-                    laneHeader.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
-                    laneHeader.textContent = String(lane.label || lane.key || '');
-                    if (typeof onSelect === 'function' && lane.key !== '__outcomes__' && lane.key !== '__overview__') {
-                        laneHeader.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
-                    }
-                    laneBlock.appendChild(laneHeader);
+                const ordered = _orderedNodes();
+                const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
+                const edgesBySource = new Map();
+                edges.forEach((edge) => {
+                    const sourceKey = String(edge.from || '');
+                    const bucket = edgesBySource.get(sourceKey) || [];
+                    bucket.push(edge);
+                    edgesBySource.set(sourceKey, bucket);
+                });
 
-                    const laneNodes = Array.isArray(lane.items) ? lane.items : [];
-                    laneNodes.sort((a, b) => Number(a.column || 0) - Number(b.column || 0));
-                    if (!laneNodes.length) {
-                        laneBlock.appendChild(UI.renderEmptyState(String(lane.empty || 'No stages yet.')));
-                    } else {
-                        laneNodes.forEach((node) => {
-                            const item = document.createElement('div');
-                            item.className = `kit-workflow-node-wrap${selection?.id === node.id ? ' is-selected' : ''}`;
-                            const btn = document.createElement('button');
-                            btn.type = 'button';
-                            btn.className = `kit-workflow-node kit-workflow-node-${node.kind || 'stage'}`;
-                            btn.dataset.nodeId = String(node.id || '');
-                            btn.dataset.testid = `workflow-node-${String(node.id || '')}`;
-                            btn.textContent = String(node.label || node.id || '');
-                            if (typeof onSelect === 'function') {
-                                btn.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
-                            }
-                            item.appendChild(btn);
-                            const outgoing = edges.filter((edge) => String(edge.from || '') === String(node.id || ''));
-                            outgoing.forEach((edge) => {
-                                const label = document.createElement('button');
-                                label.type = 'button';
-                                label.className = `kit-workflow-edge-label${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`;
-                                label.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
-                                label.textContent = String(edge.label || '');
-                                if (typeof onSelect === 'function') {
-                                    label.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
-                                }
-                                item.appendChild(label);
-                            });
-                            laneBlock.appendChild(item);
-                        });
+                ordered.forEach((node, index) => {
+                    const roleLabel = node.isTerminal
+                        ? String(outcomes?.label || 'Outcome')
+                        : String(laneLabels[String(node.laneKey || '')]?.label || '');
+                    const card = document.createElement('section');
+                    card.className = [
+                        'kit-workflow-compact-card',
+                        selection?.kind === node.kind && selection?.id === node.id ? 'is-selected' : '',
+                        node.isTerminal ? 'is-terminal' : '',
+                        node.isContext ? 'is-context' : '',
+                        currentMode === 'connect' && String(editorMode?.sourceStageKey || '') === String(node.id || '') ? 'is-connect-source' : '',
+                        currentMode === 'connect'
+                            && String(editorMode?.sourceStageKey || '') !== String(node.id || '')
+                            && (node.kind === 'stage' || node.kind === 'terminal')
+                            ? 'is-connect-target'
+                            : '',
+                    ].filter(Boolean).join(' ');
+
+                    const trigger = document.createElement('button');
+                    trigger.type = 'button';
+                    trigger.className = `kit-workflow-compact-main kit-workflow-node-${node.kind || 'stage'}`;
+                    trigger.dataset.nodeId = String(node.id || '');
+                    trigger.dataset.testid = `workflow-node-${String(node.id || '')}`;
+                    if (typeof onSelect === 'function') {
+                        trigger.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
                     }
-                    list.appendChild(laneBlock);
+
+                    const eyebrow = document.createElement('div');
+                    eyebrow.className = 'kit-workflow-compact-eyebrow';
+                    const order = document.createElement('span');
+                    order.className = 'kit-workflow-compact-order';
+                    order.textContent = String(index + 1).padStart(2, '0');
+                    eyebrow.appendChild(order);
+                    if (roleLabel) {
+                        const role = document.createElement('span');
+                        role.className = 'kit-workflow-compact-role';
+                        role.textContent = roleLabel;
+                        eyebrow.appendChild(role);
+                    }
+                    const state = nodeStates && Object.prototype.hasOwnProperty.call(nodeStates, String(node.id || ''))
+                        ? String(nodeStates[String(node.id || '')] || '')
+                        : '';
+                    if (state) {
+                        const badge = document.createElement('span');
+                        badge.className = `kit-workflow-node-state kit-workflow-node-state-${state}`;
+                        badge.textContent = state;
+                        eyebrow.appendChild(badge);
+                    }
+                    trigger.appendChild(eyebrow);
+
+                    const label = document.createElement('div');
+                    label.className = 'kit-workflow-compact-label';
+                    label.textContent = String(node.label || node.id || '');
+                    trigger.appendChild(label);
+
+                    if (node.sublabel) {
+                        const sub = document.createElement('div');
+                        sub.className = 'kit-workflow-compact-sublabel';
+                        sub.textContent = String(node.sublabel || '');
+                        trigger.appendChild(sub);
+                    }
+
+                    const badges = (Array.isArray(node.badges) ? node.badges : []).slice(0, 2);
+                    if (badges.length) {
+                        const badgeRow = document.createElement('div');
+                        badgeRow.className = 'kit-workflow-compact-badges';
+                        badges.forEach((badge) => {
+                            const chip = document.createElement('span');
+                            chip.className = `kit-workflow-node-badge${badge?.tone ? ` is-${badge.tone}` : ''}`;
+                            chip.textContent = String(badge?.label || '');
+                            badgeRow.appendChild(chip);
+                        });
+                        trigger.appendChild(badgeRow);
+                    }
+                    card.appendChild(trigger);
+
+                    const outgoing = [...(edgesBySource.get(String(node.id || '')) || [])];
+                    if (outgoing.length) {
+                        const routes = document.createElement('div');
+                        routes.className = 'kit-workflow-compact-routes';
+                        outgoing.forEach((edge) => {
+                            const targetNode = nodeById.get(String(edge.to || ''));
+                            const route = document.createElement('button');
+                            route.type = 'button';
+                            route.className = `kit-workflow-compact-route${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`;
+                            route.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
+                            if (typeof onSelect === 'function') {
+                                route.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
+                            }
+
+                            const routeLabel = document.createElement('span');
+                            routeLabel.className = 'kit-workflow-compact-route-label';
+                            routeLabel.textContent = String(edge.label || 'Next');
+                            route.appendChild(routeLabel);
+
+                            const routeTarget = document.createElement('span');
+                            routeTarget.className = 'kit-workflow-compact-route-target';
+                            routeTarget.textContent = String(targetNode?.label || edge.to || '');
+                            route.appendChild(routeTarget);
+
+                            routes.appendChild(route);
+                        });
+                        card.appendChild(routes);
+                    }
+                    stack.appendChild(card);
                 });
             }
-            root.appendChild(list);
+            root.appendChild(stack);
         } else {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
@@ -1341,14 +1391,12 @@ window.Kit = (() => {
             const viewport = document.createElement('div');
             viewport.className = 'kit-workflow-viewport';
 
-            const rowHeight = isFull ? 80 : denseMode ? 88 : 108;
-            const rowGap = isFull ? 10 : denseMode ? 12 : 18;
-            const nodeWidth = isFull ? 176 : denseMode ? 188 : 208;
-            const stageHeight = isFull ? 80 : denseMode ? 90 : 108;
-            const terminalHeight = isFull ? 64 : denseMode ? 72 : 84;
-            const columnGap = isFull ? 18 : denseMode ? 24 : 38;
-            const leftPad = lanes.length ? (isFull ? 110 : 126) : 24;
-            const rightPad = isFull ? 18 : denseMode ? 24 : 36;
+            const rowHeight = isFull ? 74 : denseMode ? 82 : 92;
+            const rowGap = isFull ? 8 : denseMode ? 10 : 14;
+            const columnWidth = isFull ? 176 : denseMode ? 194 : 214;
+            const columnGap = isFull ? 14 : denseMode ? 18 : 24;
+            const leftPad = lanes.length ? (isFull ? 84 : denseMode ? 94 : 108) : 18;
+            const rightPad = isFull ? 16 : denseMode ? 18 : 24;
             const bottomPad = 24;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
@@ -1356,30 +1404,42 @@ window.Kit = (() => {
                 const laneRow = laneIndex.get(String(node.laneKey || ''));
                 return Number.isFinite(Number(laneRow)) ? Number(laneRow) : 0;
             };
+            const nodeBox = (node) => {
+                if (node.isTerminal) {
+                    return { width: isFull ? 132 : denseMode ? 140 : 148, height: isFull ? 54 : denseMode ? 58 : 64 };
+                }
+                if (node.isContext) {
+                    return { width: isFull ? 150 : denseMode ? 158 : 166, height: isFull ? 58 : denseMode ? 64 : 70 };
+                }
+                if (node.kind === 'segment') {
+                    return { width: isFull ? 158 : denseMode ? 168 : 178, height: isFull ? 62 : denseMode ? 68 : 74 };
+                }
+                return { width: isFull ? 168 : denseMode ? 184 : 198, height: isFull ? 76 : denseMode ? 84 : 92 };
+            };
             const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
             const backEdges = edges.filter((edge) => {
                 const fromNode = nodeById.get(String(edge.from || ''));
                 const toNode = nodeById.get(String(edge.to || ''));
                 return toNode && fromNode && Number(toNode.column || 0) <= Number(fromNode.column || 0);
             });
-            const routeHeadroom = backEdges.length ? 20 + (backEdges.length * 22) : 20;
+            const routeHeadroom = backEdges.length ? 18 + (backEdges.length * 18) : 16;
             const topPad = 18 + routeHeadroom;
             const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
             const maxRow = Math.max(0, ...nodes.map((node) => nodeRow(node)));
-            const graphWidth = leftPad + rightPad + ((maxColumn + 1) * nodeWidth) + (Math.max(0, maxColumn) * columnGap);
+            const graphWidth = leftPad + rightPad + ((maxColumn + 1) * columnWidth) + (Math.max(0, maxColumn) * columnGap);
             const graphHeight = topPad + bottomPad + ((maxRow + 1) * rowHeight) + (Math.max(0, maxRow) * rowGap);
 
             const layout = new Map();
             nodes.forEach((node) => {
                 const row = Math.max(0, nodeRow(node));
-                const height = node.isTerminal ? terminalHeight : stageHeight;
-                const x = leftPad + (Number(node.column || 0) * (nodeWidth + columnGap));
-                const y = topPad + (row * (rowHeight + rowGap)) + Math.max(0, Math.floor((rowHeight - height) / 2));
+                const size = nodeBox(node);
+                const x = leftPad + (Number(node.column || 0) * (columnWidth + columnGap)) + Math.max(0, Math.floor((columnWidth - size.width) / 2));
+                const y = topPad + (row * (rowHeight + rowGap)) + Math.max(0, Math.floor((rowHeight - size.height) / 2));
                 layout.set(String(node.id || ''), {
                     x,
                     y,
-                    width: nodeWidth,
-                    height,
+                    width: size.width,
+                    height: size.height,
                     row,
                     column: Number(node.column || 0),
                 });
@@ -1448,13 +1508,13 @@ window.Kit = (() => {
             const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
             const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
             marker.setAttribute('id', 'kit-workflow-arrow');
-            marker.setAttribute('markerWidth', '10');
-            marker.setAttribute('markerHeight', '10');
-            marker.setAttribute('refX', '8');
-            marker.setAttribute('refY', '5');
+            marker.setAttribute('markerWidth', '8');
+            marker.setAttribute('markerHeight', '8');
+            marker.setAttribute('refX', '7');
+            marker.setAttribute('refY', '4');
             marker.setAttribute('orient', 'auto');
             const markerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            markerPath.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+            markerPath.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
             markerPath.setAttribute('fill', 'currentColor');
             marker.appendChild(markerPath);
             defs.appendChild(marker);
@@ -1647,12 +1707,12 @@ window.Kit = (() => {
                         { x: entryX + 28, y: trackY - 12 },
                     ];
                 } else {
-                    const bendX = fromX + Math.max(26, Math.floor((toX - fromX) / 2));
-                    pathData = [
-                        `M ${fromX} ${fromY}`,
-                        `L ${bendX} ${fromY}`,
-                        `L ${bendX} ${toY}`,
-                        `L ${toX} ${toY}`,
+                const bendX = fromX + Math.max(22, Math.floor((toX - fromX) / 2));
+                pathData = [
+                    `M ${fromX} ${fromY}`,
+                    `L ${bendX} ${fromY}`,
+                    `L ${bendX} ${toY}`,
+                    `L ${toX} ${toY}`,
                     ].join(' ');
                     if (Math.abs(fromY - toY) < 8) {
                         const midX = fromX + ((toX - fromX) / 2);
@@ -1716,7 +1776,8 @@ window.Kit = (() => {
             }
             function computeFitZoom() {
                 const viewportWidth = Math.max(320, Number(viewport.clientWidth || 0) - 12);
-                return Math.max(minZoom, Math.min(1, viewportWidth / Math.max(graphWidth, 1)));
+                const viewportHeight = Math.max(260, Number(viewport.clientHeight || 0) - 12);
+                return Math.max(minZoom, Math.min(1, viewportWidth / Math.max(graphWidth, 1), viewportHeight / Math.max(graphHeight, 1)));
             }
             function applyZoom(nextZoom, notify = true) {
                 const zoomValue = nextZoom === 'fit'

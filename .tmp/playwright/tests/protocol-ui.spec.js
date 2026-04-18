@@ -34,8 +34,9 @@ test.describe('protocol authoring live', () => {
     const details = page.locator('.kit-details-panel').first();
     const stageEditor = page.locator('.kit-stage-editor-grid');
     await expect(details.getByLabel('Name')).toHaveValue('Plan');
-    await expect(page.locator('.kit-stage-editor-section')).toHaveCount(4);
+    await expect(page.locator('.kit-stage-editor-section')).toHaveCount(5);
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Connect step' }).first()).toBeVisible();
 
@@ -148,10 +149,19 @@ test.describe('protocol authoring live', () => {
 
     await page.getByTestId('workflow-node-segment:planning').click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
-    await expect(page.locator('.kit-workflow-narrow')).toBeVisible();
+    await expect(page.locator('.kit-workflow-compact')).toBeVisible();
     await page.getByTestId('workflow-node-planning').click();
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Back to phases' })).toBeVisible();
+    const compactOverlap = await page.evaluate(() => {
+      const cards = [...document.querySelectorAll('.kit-workflow-compact-card')].map((element) => ({
+        top: element.getBoundingClientRect().top,
+        bottom: element.getBoundingClientRect().bottom,
+      }));
+      return cards.some((card, index) => index > 0 && card.top < cards[index - 1].bottom - 2);
+    });
+    expect(compactOverlap).toBeFalsy();
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

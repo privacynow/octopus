@@ -181,6 +181,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_buildWorkflowProjection(" in workspace
     assert "_normalizeWorkflowView(" in workspace
     assert "_setFocusSegment(" in workspace
+    assert "_stageEditorHero(" in workspace
+    assert "_stageRoutingPanel(" in workspace
     assert "window.addEventListener('resize', onResize);" in workspace
 
     # Runs route (kept until Step 7)

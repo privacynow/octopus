@@ -1270,38 +1270,20 @@ window.Kit = (() => {
             const isOverview = currentView === 'overview';
             const isFull = currentView === 'full';
             const denseMode = isOverview || isFull || nodes.length >= 8;
-            const showLaneStrip = lanes.length && !isOverview;
-
-            if (showLaneStrip) {
-                const laneStrip = document.createElement('div');
-                laneStrip.className = 'kit-workflow-lane-strip';
-                lanes.forEach((lane) => {
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = `kit-workflow-lane-pill${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
-                    btn.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
-                    btn.textContent = String(lane.label || lane.key || '');
-                    if (typeof onSelect === 'function') {
-                        btn.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
-                    }
-                    laneStrip.appendChild(btn);
-                });
-                shell.appendChild(laneStrip);
-            }
 
             const controls = document.createElement('div');
             controls.className = 'kit-workflow-controls';
             const viewport = document.createElement('div');
             viewport.className = 'kit-workflow-viewport';
 
-            const rowHeight = isOverview ? 78 : denseMode ? 92 : 108;
-            const rowGap = isOverview ? 12 : denseMode ? 14 : 18;
-            const nodeWidth = isOverview ? 172 : denseMode ? 186 : 208;
-            const stageHeight = isOverview ? 78 : denseMode ? 92 : 108;
-            const terminalHeight = denseMode ? 72 : 84;
-            const columnGap = isOverview ? 18 : denseMode ? 28 : 38;
-            const leftPad = isOverview ? 28 : lanes.length ? 136 : 28;
-            const rightPad = denseMode ? 24 : 36;
+            const rowHeight = isOverview ? 72 : isFull ? 80 : denseMode ? 88 : 108;
+            const rowGap = isOverview ? 10 : isFull ? 10 : denseMode ? 12 : 18;
+            const nodeWidth = isOverview ? 160 : isFull ? 176 : denseMode ? 188 : 208;
+            const stageHeight = isOverview ? 72 : isFull ? 80 : denseMode ? 90 : 108;
+            const terminalHeight = isOverview ? 58 : isFull ? 64 : denseMode ? 72 : 84;
+            const columnGap = isOverview ? 16 : isFull ? 18 : denseMode ? 24 : 38;
+            const leftPad = isOverview ? 24 : lanes.length ? (isFull ? 110 : 126) : 24;
+            const rightPad = isFull ? 18 : denseMode ? 24 : 36;
             const bottomPad = 24;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
@@ -1367,7 +1349,7 @@ window.Kit = (() => {
                     label.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
                 }
                 guide.appendChild(label);
-                if (laneMeta.sublabel && !denseMode) {
+                if (laneMeta.sublabel && !denseMode && !isFull) {
                     const sub = document.createElement('div');
                     sub.className = 'kit-workflow-lane-guide-sublabel';
                     sub.textContent = String(laneMeta.sublabel || '');
@@ -1527,12 +1509,42 @@ window.Kit = (() => {
                     backEdgeOrder.set(String(edge.id || ''), backEdgeOrder.size);
                 }
             });
-            const labelSlots = new Map();
-            function reserveLabelPosition(x, y) {
-                const key = `${Math.round(Number(x || 0) / 56)}:${Math.round(Number(y || 0) / 28)}`;
-                const count = Number(labelSlots.get(key) || 0);
-                labelSlots.set(key, count + 1);
-                return { x, y: Number(y || 0) + (count * 18) };
+            const nodeBoxes = Array.from(layout.values()).map((item) => ({
+                left: item.x - 10,
+                right: item.x + item.width + 10,
+                top: item.y - 10,
+                bottom: item.y + item.height + 10,
+            }));
+            const labelBoxes = [];
+            function estimateLabelBox(text, x, y) {
+                const width = Math.min(isFull ? 128 : 176, Math.max(48, (String(text || '').length * 7) + 28));
+                const height = isOverview ? 22 : 24;
+                return {
+                    width,
+                    height,
+                    left: Number(x || 0) - (width / 2),
+                    right: Number(x || 0) + (width / 2),
+                    top: Number(y || 0) - (height / 2),
+                    bottom: Number(y || 0) + (height / 2),
+                };
+            }
+            function overlapsBox(left, right, top, bottom, target) {
+                return left < target.right
+                    && right > target.left
+                    && top < target.bottom
+                    && bottom > target.top;
+            }
+            function placeLabel(text, candidates) {
+                for (const candidate of candidates) {
+                    const box = estimateLabelBox(text, candidate.x, candidate.y);
+                    const nodeCollision = nodeBoxes.some((target) => overlapsBox(box.left, box.right, box.top, box.bottom, target));
+                    const labelCollision = labelBoxes.some((target) => overlapsBox(box.left, box.right, box.top, box.bottom, target));
+                    if (!nodeCollision && !labelCollision) {
+                        labelBoxes.push(box);
+                        return candidate;
+                    }
+                }
+                return null;
             }
 
             edges.forEach((edge) => {
@@ -1548,8 +1560,7 @@ window.Kit = (() => {
                 const isBackEdge = toLayout.column <= fromLayout.column;
 
                 let pathData = '';
-                let labelX = 0;
-                let labelY = 0;
+                let labelCandidates = [];
 
                 if (isBackEdge) {
                     const bandIndex = Number(backEdgeOrder.get(String(edge.id || '')) || 0);
@@ -1564,8 +1575,12 @@ window.Kit = (() => {
                         `L ${entryX} ${toY}`,
                         `L ${toX} ${toY}`,
                     ].join(' ');
-                    labelX = entryX + ((exitX - entryX) / 2);
-                    labelY = trackY;
+                    const centerX = entryX + ((exitX - entryX) / 2);
+                    labelCandidates = [
+                        { x: centerX, y: trackY - 12 },
+                        { x: centerX, y: trackY + 14 },
+                        { x: entryX + 28, y: trackY - 12 },
+                    ];
                 } else {
                     const bendX = fromX + Math.max(26, Math.floor((toX - fromX) / 2));
                     pathData = [
@@ -1575,11 +1590,20 @@ window.Kit = (() => {
                         `L ${toX} ${toY}`,
                     ].join(' ');
                     if (Math.abs(fromY - toY) < 8) {
-                        labelX = fromX + ((toX - fromX) / 2);
-                        labelY = fromY - 18;
+                        const midX = fromX + ((toX - fromX) / 2);
+                        labelCandidates = [
+                            { x: midX, y: fromY - 18 },
+                            { x: midX, y: fromY + 20 },
+                            { x: bendX - 26, y: fromY - 18 },
+                        ];
                     } else {
-                        labelX = bendX;
-                        labelY = fromY + ((toY - fromY) / 2);
+                        const midY = fromY + ((toY - fromY) / 2);
+                        labelCandidates = [
+                            { x: bendX + 24, y: midY },
+                            { x: bendX - 24, y: midY },
+                            { x: bendX, y: midY - 18 },
+                            { x: bendX, y: midY + 18 },
+                        ];
                     }
                 }
 
@@ -1587,12 +1611,20 @@ window.Kit = (() => {
                 path.setAttribute('class', `kit-workflow-edge-path${selected ? ' is-selected' : ''}`);
                 path.setAttribute('d', pathData);
                 path.setAttribute('marker-end', 'url(#kit-workflow-arrow)');
+                if (typeof onSelect === 'function') {
+                    path.style.pointerEvents = 'visibleStroke';
+                    path.style.cursor = 'pointer';
+                    path.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
+                }
                 svg.appendChild(path);
 
                 if (edge.showLabel === false || !String(edge.label || '').trim()) {
                     return;
                 }
-                const reserved = reserveLabelPosition(labelX, labelY);
+                const reserved = placeLabel(String(edge.label || ''), labelCandidates);
+                if (!reserved) {
+                    return;
+                }
                 const label = document.createElement('button');
                 label.type = 'button';
                 label.className = `kit-workflow-edge-label${selected ? ' is-selected' : ''}`;
@@ -1609,22 +1641,25 @@ window.Kit = (() => {
             const defaultZoom = Object.prototype.hasOwnProperty.call(viewportState || {}, 'zoom')
                 ? viewportState.zoom
                 : (isOverview || isFull ? 'fit' : 1);
+            const minZoom = isFull ? 0.32 : isOverview ? 0.42 : 0.55;
+            const maxZoom = isOverview ? 1 : isFull ? 1.15 : 1.5;
             function resolvedZoomValue() {
-                return Math.max(0.55, Math.min(1.5, Number(graph.dataset.zoomResolved || 1) || 1));
+                return Math.max(minZoom, Math.min(maxZoom, Number(graph.dataset.zoomResolved || 1) || 1));
             }
             function computeFitZoom() {
                 const viewportWidth = Math.max(320, Number(viewport.clientWidth || 0) - 12);
-                return Math.max(0.55, Math.min(1, viewportWidth / Math.max(graphWidth, 1)));
+                return Math.max(minZoom, Math.min(1, viewportWidth / Math.max(graphWidth, 1)));
             }
             function applyZoom(nextZoom, notify = true) {
                 const zoomValue = nextZoom === 'fit'
                     ? computeFitZoom()
-                    : Math.max(0.55, Math.min(1.5, Number(nextZoom || 1) || 1));
+                    : Math.max(minZoom, Math.min(maxZoom, Number(nextZoom || 1) || 1));
                 graph.dataset.zoomResolved = String(zoomValue);
                 graph.style.transform = `scale(${zoomValue})`;
                 graphFrame.style.width = `${graphWidth * zoomValue}px`;
                 graphFrame.style.height = `${graphHeight * zoomValue}px`;
                 controls.dataset.zoom = nextZoom === 'fit' ? 'fit' : String(zoomValue);
+                zoomReset.textContent = `${Math.round(zoomValue * 100)}%`;
                 if (notify && typeof onViewportChange === 'function') {
                     onViewportChange(nextZoom === 'fit' ? 'fit' : zoomValue);
                 }

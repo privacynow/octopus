@@ -1878,6 +1878,38 @@ function renderProtocolWorkspace(container) {
         return parts.join(' · ');
     }
 
+    function _stageNodeBadges(stage, viewKind = 'focus') {
+        const stageKind = String(stage?.stage_kind || 'work');
+        if (viewKind === 'full' && stageKind === 'work') {
+            return [];
+        }
+        return [{
+            tone: stageKind,
+            label: Kit.dict.label(`protocol.stage.kind.${stageKind}`),
+        }];
+    }
+
+    function _showEdgeLabel(edge, sourceStage, viewKind = 'focus') {
+        const label = String(edge?.decision || '').trim().toLowerCase();
+        const targetKey = String(edge?.target_key || '').trim();
+        const transitionCount = Object.keys(sourceStage?.transitions || {}).length;
+        const defaultDecision = _defaultDecisionForStageKind(sourceStage?.stage_kind || 'work');
+        const isTerminal = PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === targetKey);
+        if (viewKind === 'overview') {
+            return false;
+        }
+        if (viewKind === 'focus') {
+            return true;
+        }
+        if (transitionCount <= 1) {
+            return false;
+        }
+        if (label === defaultDecision && !isTerminal) {
+            return false;
+        }
+        return true;
+    }
+
     function _artifactAccessorySections() {
         const artifactItems = (draft.document.artifacts || []).map((item) => ({
             id: String(item.artifact_key || ''),
@@ -1990,7 +2022,7 @@ function renderProtocolWorkspace(container) {
                 row: Number(segment.row || 0),
                 column: Number(segment.column || 0),
                 label: segment.label,
-                sublabel: [segment.stepSummary, segment.roleSummary].filter(Boolean).join(' · '),
+                sublabel: segment.stepSummary,
                 badges: terminalCount
                     ? [{ tone: 'context', label: `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` }]
                     : [],
@@ -2000,13 +2032,12 @@ function renderProtocolWorkspace(container) {
         projection.segments.forEach((segment) => {
             segment.outgoingEdges.forEach((edge) => {
                 if (edge.targetKind !== 'segment') return;
-                const showLabel = (segment.outgoingEdges || []).length > 1;
                 edges.push({
                     id: `overview::${edge.id}`,
                     from: segment.id,
                     to: edge.targetKey,
                     label: edge.label,
-                    showLabel,
+                    showLabel: false,
                 });
             });
         });
@@ -2057,12 +2088,7 @@ function renderProtocolWorkspace(container) {
                     column: Number(columns.get(String(item.stage_key || '')) || 0),
                     label: String(item.display_name || item.stage_key || 'Untitled step'),
                     sublabel: _stageNodeSublabel(item),
-                    badges: [
-                        {
-                            tone: String(item.stage_kind || 'work'),
-                            label: Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
-                        },
-                    ],
+                    badges: _stageNodeBadges(item, isExpandedMap ? 'full' : 'focus'),
                 })),
                 ...(progress.stageCount ? PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
                     id: item.key,
@@ -2083,7 +2109,10 @@ function renderProtocolWorkspace(container) {
                     from: edge.from_stage_key,
                     to: edge.target_key,
                     label: _protocolDecisionLabel(edge.decision),
-                    showLabel: progress.stageCount <= 6 || sourceTransitionCount > 1 || PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === String(edge.target_key || '')),
+                    showLabel: progress.stageCount <= 6
+                        ? _showEdgeLabel(edge, sourceStage, 'focus')
+                        : _showEdgeLabel(edge, sourceStage, 'full'),
+                    isBranch: sourceTransitionCount > 1,
                 };
             }),
             toolbarActions: _baseToolbarActions(progress, resolvedView, projection),
@@ -2179,12 +2208,7 @@ function renderProtocolWorkspace(container) {
                 column: focusOffset + Number(stageColumns.get(String(item.stage_key || '')) || 0),
                 label: String(item.display_name || item.stage_key || 'Untitled step'),
                 sublabel: _stageNodeSublabel(item),
-                badges: [
-                    {
-                        tone: String(item.stage_kind || 'work'),
-                        label: Kit.dict.label(`protocol.stage.kind.${item.stage_kind || 'work'}`),
-                    },
-                ],
+                badges: _stageNodeBadges(item, 'focus'),
             })),
             ...successorSegments.map((item) => ({
                 id: item.id,

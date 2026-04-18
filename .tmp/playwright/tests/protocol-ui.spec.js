@@ -32,8 +32,12 @@ test.describe('protocol authoring live', () => {
 
     const planKey = await createStep(page, { name: 'Plan', key: 'plan', ownerRole: plannerKey });
     const details = page.locator('.kit-details-panel').first();
+    const stageEditor = page.locator('.kit-stage-editor-grid');
     await expect(details.getByLabel('Name')).toHaveValue('Plan');
-    await expect(details.getByRole('button', { name: 'Connect step' })).toBeVisible();
+    await expect(page.locator('.kit-stage-editor-section')).toHaveCount(4);
+    await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
+    await expect(stageEditor.getByRole('button', { name: 'Connect step' })).toBeVisible();
 
     const reviewerKey = await createRole(page, { name: 'Reviewer', key: 'reviewer' });
     const reviewKey = await createStep(page, {
@@ -90,10 +94,16 @@ test.describe('protocol authoring live', () => {
     await page.getByTestId('workflow-node-segment:planning').click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
     await expect(page.getByRole('button', { name: 'Back to overview' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'All steps' })).toBeVisible();
     await expect(page.getByTestId('workflow-node-planning')).toBeVisible();
     await expect(page.getByTestId('workflow-node-plan_review')).toBeVisible();
     await expect(page.getByTestId('workflow-node-segment:architecture')).toBeVisible();
     await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
+
+    await page.getByRole('button', { name: 'All steps' }).click();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('All steps');
+    await expect(page.getByTestId('workflow-node-implementation')).toBeVisible();
+    await expect(page.getByTestId('workflow-node-acceptance')).toBeVisible();
 
     await page.getByRole('button', { name: 'Back to overview' }).click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');

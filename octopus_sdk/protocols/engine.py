@@ -93,7 +93,9 @@ class ProtocolRunEngine:
             if participant.selector.kind == "skill" and not str(participant.selector.preferred_agent_id or "").strip():
                 return participant.selector.model_copy(update={"preferred_agent_id": str(run.entry_agent_id or "").strip()})
             return participant.selector
-        return TargetSelector(kind="agent", value=run.entry_agent_id)
+        raise ValueError(
+            f"Participant {str(participant.participant_key or '').strip() or '<unknown>'} is missing an assignment rule."
+        )
 
     def build_dispatch_request(
         self,

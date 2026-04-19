@@ -125,6 +125,22 @@ def test_protocol_run_engine_uses_participant_selector_for_dispatch() -> None:
     assert selector.preferred_agent_id == "agent-1"
 
 
+def test_protocol_run_engine_requires_explicit_assignment_rule() -> None:
+    document = canonical_protocol_document({
+        **protocol_document(),
+        "participants": [
+            {"participant_key": "worker", "display_name": "Worker"},
+            {"participant_key": "reviewer", "display_name": "Reviewer", "selector": {"kind": "skill", "value": "review"}},
+        ],
+    })
+
+    with pytest.raises(ValueError, match="missing an assignment rule"):
+        _engine().dispatch_target_selector(
+            run=_run().model_copy(update={"entry_agent_id": "agent-1"}),
+            participant=document.participant("worker"),
+        )
+
+
 def test_protocol_run_engine_evaluates_dispatch_with_shared_request_contract() -> None:
     document = _document()
     run = _run().model_copy(

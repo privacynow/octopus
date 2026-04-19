@@ -101,25 +101,25 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('software engineering template uses process view first and focuses local flow', async ({ page }) => {
+  test('software engineering template opens into overview and keeps topology explicit', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
     await openTemplateDraft(page, 'Software Engineering');
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
     await expect(page.getByTestId('workflow-node-segment:planning')).toBeVisible({ timeout: 15000 });
 
     await page.getByTestId('workflow-node-segment:planning').click();
     await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');
-    await expect(page.getByRole('button', { name: 'Back to phases' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Visual map' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Back to overview' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Topology' })).toBeVisible();
     await expect(page.getByTestId('workflow-step-planning')).toBeVisible();
     await expect(page.getByTestId('workflow-step-plan_review')).toBeVisible();
     await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
     await expect(page.locator('.kit-stage-editor')).toContainText('Currently resolves via Required skill · Product Definition.');
 
-    await page.getByRole('button', { name: 'Visual map' }).click();
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Visual map');
+    await page.getByRole('button', { name: 'Topology' }).click();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Topology');
     await expect(page.getByRole('button', { name: 'Fit' })).toBeVisible();
     await expect(page.getByRole('button', { name: '100%' })).toBeVisible();
     const labelOverlaps = await page.evaluate(() => {
@@ -181,7 +181,7 @@ test.describe('protocol authoring live', () => {
 
     await login(page);
     await openTemplateDraft(page, 'Software Engineering');
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
     await expect(page.locator('.kit-workflow-process')).toBeVisible();
     const processOverflow = await page.locator('.kit-workflow-process').evaluate((element) => ({
       scrollWidth: element.scrollWidth,
@@ -195,7 +195,7 @@ test.describe('protocol authoring live', () => {
     await page.getByTestId('workflow-step-planning').click();
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Back to phases' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Back to overview' })).toBeVisible();
     const compactOverlap = await page.evaluate(() => {
       const cards = [...document.querySelectorAll('.kit-protocol-step-card')].map((element) => ({
         top: element.getBoundingClientRect().top,

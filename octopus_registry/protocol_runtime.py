@@ -135,10 +135,18 @@ def evaluate_protocol_dispatch(
             error_code=dispatch.error_code,
             error_detail=dispatch.error_detail,
         )
-    selector = protocol_engine.dispatch_target_selector(
-        run=run,
-        participant=document.participant(stage.participant_key),
-    )
+    try:
+        selector = protocol_engine.dispatch_target_selector(
+            run=run,
+            participant=document.participant(stage.participant_key),
+        )
+    except ValueError as exc:
+        return protocol_engine.dispatch_blocked(
+            run=run,
+            stage_execution=stage_execution,
+            error_code="PARTICIPANT_SELECTOR_REQUIRED",
+            error_detail=str(exc),
+        )
     resolution = resolve_protocol_participant(selector=selector, resolve_selector=resolve_selector)
     return protocol_engine.evaluate_dispatch_resolution(
         document=document,

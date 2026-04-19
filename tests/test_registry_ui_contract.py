@@ -193,6 +193,10 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "window.addEventListener('resize', onResize);" in workspace
     assert "Assignment rule" in workspace
     assert "Runtime role tag" in workspace
+    assert "Workflow overview" in workspace
+    assert "Topology" in workspace
+    assert "Visual map" not in workspace
+    assert "Workflow phases" not in workspace
     assert "Planner role" not in workspace
     assert "Reviewer role" not in workspace
 

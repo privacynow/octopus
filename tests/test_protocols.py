@@ -129,7 +129,7 @@ def test_canonical_protocol_document_synthesizes_selector_from_legacy_required_s
     assert participant.selector is not None
     assert participant.selector.kind == "skill"
     assert participant.selector.value == "planning"
-    assert participant.required_skills == []
+    assert "required_skills" not in document.model_dump(mode="json")["participants"][0]
 
 
 def test_validate_protocol_document_requires_assignment_rule_for_participants() -> None:
@@ -160,7 +160,7 @@ def test_builtin_protocol_templates_use_selector_backed_assignment() -> None:
         assert document.participants
         for participant in document.participants:
             assert participant.selector is not None, f"{slug} participant {participant.participant_key} must declare a selector"
-            assert participant.required_skills == []
+            assert "required_skills" not in participant.model_dump(mode="json")
 
 
 def test_parse_protocol_stage_decision_requires_explicit_review_decision() -> None:

@@ -139,7 +139,6 @@ def protocol_retention_until(now: str | None = None, *, days: int = PROTOCOL_DEF
 class ProtocolParticipantDefinitionRecord(RegistryRecordModel):
     participant_key: str = Field(..., min_length=1)
     display_name: str = ""
-    required_skills: list[str] = Field(default_factory=list)
     selector: TargetSelector | None = None
     instructions: str = ""
 
@@ -147,15 +146,6 @@ class ProtocolParticipantDefinitionRecord(RegistryRecordModel):
     @classmethod
     def _participant_key(cls, value: object) -> str:
         return _normalize_key(value, field_name="participant_key")
-
-    @field_validator("required_skills", mode="before")
-    @classmethod
-    def _required_skills(cls, value: object) -> list[str]:
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return _normalize_slug_list(part.strip() for part in value.split(","))
-        return _normalize_slug_list(value)
 
 
 class ProtocolArtifactDefinitionRecord(RegistryRecordModel):

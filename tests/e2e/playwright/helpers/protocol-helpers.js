@@ -170,8 +170,8 @@ async function connectStep(page, sourceStageKey, targetNodeId) {
     const segmentTab = page.getByTestId(`workflow-segment-tab-${sourceStageKey}`);
     if (await segmentTab.isVisible().catch(() => false)) {
       await segmentTab.click();
-    } else if (await page.getByRole('button', { name: 'Back to phases' }).count()) {
-      await page.getByRole('button', { name: 'Back to phases' }).click();
+    } else if (await page.getByRole('button', { name: 'Back to overview' }).count()) {
+      await page.getByRole('button', { name: 'Back to overview' }).click();
       const segmentNode = page.getByTestId(`workflow-node-segment:${sourceStageKey}`);
       if (await segmentNode.isVisible().catch(() => false)) {
         await segmentNode.click();

@@ -4022,16 +4022,40 @@ button.kit-protocol-step-owner {
 }
 
 .kit-workflow-process {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: var(--space-3);
+}
+
+.kit-workflow-process-row {
+    display: grid;
+    grid-template-columns: 2.4rem minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: stretch;
+}
+
+.kit-workflow-process-rail {
+    position: relative;
+    display: flex;
+    justify-content: center;
+}
+
+.kit-workflow-process-connector {
+    position: absolute;
+    top: 2.65rem;
+    bottom: calc(var(--space-3) * -1);
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: linear-gradient(180deg, rgba(23, 110, 166, 0.28), rgba(23, 110, 166, 0.05));
+    border-radius: 999px;
 }
 
 .kit-workflow-process-card {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    min-height: 180px;
+    min-height: 0;
     padding: var(--space-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -4061,8 +4085,8 @@ button.kit-protocol-step-owner {
 
 .kit-workflow-process-card-top {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    align-items: flex-start;
+    justify-content: flex-end;
     gap: var(--space-2);
 }
 
@@ -4107,6 +4131,51 @@ button.kit-protocol-step-owner {
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+}
+
+.kit-workflow-process-stages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.kit-workflow-process-stage {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 0.05rem 0.5rem;
+    border-radius: var(--radius-pill);
+    background: rgba(17, 24, 39, 0.06);
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.kit-workflow-process-stage.is-muted {
+    background: rgba(17, 24, 39, 0.04);
+    color: var(--text-muted);
+}
+
+.kit-workflow-process-routes {
+    display: grid;
+    gap: var(--space-1-5);
+    margin-top: var(--space-1);
+    padding-top: var(--space-2);
+    border-top: 1px solid rgba(17, 24, 39, 0.08);
+}
+
+.kit-workflow-process-route {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.kit-workflow-process-route-body {
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    line-height: 1.45;
 }
 
 .kit-workflow-process-footnote {
@@ -4546,11 +4615,16 @@ button.kit-protocol-step-owner {
     }
 
     .kit-workflow-process {
-        grid-template-columns: 1fr;
+        gap: var(--space-2);
     }
 
     .kit-workflow-process-card {
         min-height: 0;
+    }
+
+    .kit-workflow-process-row {
+        grid-template-columns: 2rem minmax(0, 1fr);
+        gap: var(--space-2);
     }
 
     .kit-workflow-graph {

@@ -120,7 +120,6 @@ def _normalized_participant_records(items: Sequence[object]) -> list[dict[str, o
         participants.append({
             "participant_key": str(raw.get("participant_key", "") or "").strip(),
             "display_name": str(raw.get("display_name", "") or "").strip(),
-            "required_skills": [],
             "selector": _participant_selector_from_source(raw),
             "instructions": str(raw.get("instructions", "") or ""),
         })

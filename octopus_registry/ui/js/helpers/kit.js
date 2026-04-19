@@ -1166,7 +1166,7 @@ window.Kit = (() => {
             viewBar.className = 'kit-workflow-viewbar';
             const title = document.createElement('strong');
             title.className = 'kit-workflow-viewbar-title';
-            title.textContent = String(viewState?.title || (isProcess ? 'Workflow phases' : 'Workflow'));
+            title.textContent = String(viewState?.title || (isProcess ? 'Workflow overview' : 'Workflow'));
             viewBar.appendChild(title);
             if (viewState?.subtitle) {
                 const subtitle = document.createElement('span');
@@ -1213,6 +1213,13 @@ window.Kit = (() => {
 
         function _orderedNodes() {
             return [...nodes].sort((a, b) => {
+                const aOrder = Number(a.order);
+                const bOrder = Number(b.order);
+                if (Number.isFinite(aOrder) || Number.isFinite(bOrder)) {
+                    if (!Number.isFinite(aOrder)) return 1;
+                    if (!Number.isFinite(bOrder)) return -1;
+                    if (aOrder !== bOrder) return aOrder - bOrder;
+                }
                 const aCol = Number(a.column || 0);
                 const bCol = Number(b.column || 0);
                 if (aCol !== bCol) return aCol - bCol;
@@ -1261,6 +1268,24 @@ window.Kit = (() => {
             const process = document.createElement('div');
             process.className = 'kit-workflow-process';
             ordered.forEach((node, index) => {
+                const row = document.createElement('div');
+                row.className = 'kit-workflow-process-row';
+
+                const rail = document.createElement('div');
+                rail.className = 'kit-workflow-process-rail';
+
+                const order = document.createElement('span');
+                order.className = 'kit-workflow-process-order';
+                order.textContent = String(index + 1).padStart(2, '0');
+                rail.appendChild(order);
+
+                if (index < ordered.length - 1) {
+                    const connector = document.createElement('span');
+                    connector.className = 'kit-workflow-process-connector';
+                    rail.appendChild(connector);
+                }
+                row.appendChild(rail);
+
                 const card = document.createElement('button');
                 card.type = 'button';
                 card.className = `kit-workflow-process-card${selection?.kind === 'segment' && selection?.id === node.id ? ' is-selected' : ''}`;
@@ -1272,11 +1297,6 @@ window.Kit = (() => {
 
                 const top = document.createElement('div');
                 top.className = 'kit-workflow-process-card-top';
-
-                const order = document.createElement('span');
-                order.className = 'kit-workflow-process-order';
-                order.textContent = String(index + 1).padStart(2, '0');
-                top.appendChild(order);
 
                 const badges = (Array.isArray(node.badges) ? node.badges : []).slice(0, 2);
                 if (badges.length) {
@@ -1311,6 +1331,48 @@ window.Kit = (() => {
                     card.appendChild(preview);
                 }
 
+                const stageNames = Array.isArray(node.stageNames) ? node.stageNames.filter(Boolean) : [];
+                if (stageNames.length) {
+                    const sequence = document.createElement('div');
+                    sequence.className = 'kit-workflow-process-stages';
+                    stageNames.slice(0, 5).forEach((name) => {
+                        const pill = document.createElement('span');
+                        pill.className = 'kit-workflow-process-stage';
+                        pill.textContent = String(name || '');
+                        sequence.appendChild(pill);
+                    });
+                    if (stageNames.length > 5) {
+                        const extra = document.createElement('span');
+                        extra.className = 'kit-workflow-process-stage is-muted';
+                        extra.textContent = `+ ${stageNames.length - 5} more`;
+                        sequence.appendChild(extra);
+                    }
+                    card.appendChild(sequence);
+                }
+
+                const routes = Array.isArray(node.routes) ? node.routes.filter(Boolean) : [];
+                if (routes.length) {
+                    const routeList = document.createElement('div');
+                    routeList.className = 'kit-workflow-process-routes';
+                    routes.forEach((route) => {
+                        const routeRow = document.createElement('div');
+                        routeRow.className = 'kit-workflow-process-route';
+
+                        const decision = document.createElement('span');
+                        decision.className = 'kit-workflow-node-badge is-context';
+                        decision.textContent = String(route.label || 'Next');
+                        routeRow.appendChild(decision);
+
+                        const routeBody = document.createElement('span');
+                        routeBody.className = 'kit-workflow-process-route-body';
+                        routeBody.textContent = `${String(route.targetLabel || '')} · ${String(route.metaLabel || '')}`;
+                        routeRow.appendChild(routeBody);
+
+                        routeList.appendChild(routeRow);
+                    });
+                    card.appendChild(routeList);
+                }
+
                 if (node.footnote) {
                     const foot = document.createElement('div');
                     foot.className = 'kit-workflow-process-footnote';
@@ -1318,7 +1380,8 @@ window.Kit = (() => {
                     card.appendChild(foot);
                 }
 
-                process.appendChild(card);
+                row.appendChild(card);
+                process.appendChild(row);
             });
             root.appendChild(process);
         } else {

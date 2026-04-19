@@ -58,7 +58,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await discardDraft(page);
 
   await openTemplateDraft(page, 'Software Engineering');
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-page.png', fullPage: true });
   await page.locator('.kit-workflow-process').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-focus.png',
@@ -71,16 +71,16 @@ test('capture protocol authoring states', async ({ page }) => {
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-detail.png',
   });
 
-  await page.getByRole('button', { name: 'Visual map' }).click();
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Visual map');
+  await page.getByRole('button', { name: 'Topology' }).click();
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Topology');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-page.png', fullPage: true });
   await page.locator('.kit-workflow-shell').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-graph.png',
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: 'Back to phases' }).click();
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
+  await page.getByRole('button', { name: 'Back to overview' }).click();
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png', fullPage: true });
   await page.getByTestId('workflow-node-segment:planning').click();
   await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');

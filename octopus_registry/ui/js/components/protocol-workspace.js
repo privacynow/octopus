@@ -139,12 +139,13 @@ function _titleCaseWords(value) {
 }
 
 /*
- * Protocol authoring workspace — detail-first, kit-driven surface.
+ * Protocol authoring workspace — overview-first, detail-first editing, and
+ * explicit advanced topology inspection.
  *
- * Process orients, Detail is the primary editor, and Map is the optional
- * topology view. Participants own steps; assignment rules resolve participants
- * to runtime agents. No raw JSON tab, no viewport-specific editor fork, and no
- * second authoring pipeline.
+ * Overview explains the whole workflow, Detail is the primary editor, and
+ * Topology is the optional full-routes graph. Participants own steps;
+ * assignment rules resolve participants to runtime agents. No raw JSON tab,
+ * no viewport-specific editor fork, and no second authoring pipeline.
  */
 function renderProtocolWorkspace(container) {
     const cleanups = UI.beginCleanupScope();
@@ -2414,7 +2415,9 @@ function renderProtocolWorkspace(container) {
         if (viewKind !== 'map') {
             return false;
         }
-        return false;
+        const decision = String(edge?.decision || '').trim().toLowerCase();
+        const transitionCount = Object.keys(sourceStage?.transitions || {}).length;
+        return transitionCount > 1 || decision !== 'completed';
     }
 
     function _firstRunState(progress) {
@@ -2452,6 +2455,12 @@ function renderProtocolWorkspace(container) {
         return `${names.slice(0, 3).join(' -> ')} + ${names.length - 3} more`;
     }
 
+    function _segmentStageNames(segment) {
+        return (segment?.stages || [])
+            .map((item) => String(item.display_name || item.stage_key || '').trim())
+            .filter(Boolean);
+    }
+
     function _segmentProcessFootnote(segment) {
         const segmentTargets = (segment?.outgoingEdges || []).filter((edge) => edge.targetKind === 'segment').length;
         const terminalTargets = (segment?.outgoingEdges || []).filter((edge) => edge.targetKind === 'terminal').length;
@@ -2467,6 +2476,25 @@ function renderProtocolWorkspace(container) {
         return 'Open detail';
     }
 
+    function _segmentRouteTargetLabel(edge, projection) {
+        if (String(edge?.targetKind || '') === 'segment') {
+            return String(projection.segmentsById.get(String(edge?.targetKey || ''))?.label || 'Next section');
+        }
+        return String(PROTOCOL_TERMINAL_TARGETS.find((item) => item.key === String(edge?.targetKey || ''))?.label || 'Finish');
+    }
+
+    function _segmentRouteMetaLabel(segment, edge, projection) {
+        if (String(edge?.targetKind || '') === 'terminal') {
+            return 'Finish outcome';
+        }
+        const target = projection.segmentsById.get(String(edge?.targetKey || ''));
+        if (!target) return 'Next section';
+        if (Number(target.column || 0) <= Number(segment?.column || 0)) {
+            return 'Returns earlier';
+        }
+        return 'Continue';
+    }
+
     function _surfaceToolbarActions(progress, resolvedView, projection) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
         const selectedStage = _selectionStage(draft.document);
@@ -2474,17 +2502,17 @@ function renderProtocolWorkspace(container) {
         const returnSurface = projection.segments.length > 1 ? 'process' : 'detail';
         return [
             ...(resolvedView.kind === 'map' ? [{
-                label: returnSurface === 'process' ? 'Back to phases' : 'Back to detail',
+                label: returnSurface === 'process' ? 'Back to overview' : 'Back to detail',
                 tone: 'btn-small',
                 onClick: () => _setWorkflowView({ kind: returnSurface, segmentId: activeSegmentId }),
             }] : []),
             ...(resolvedView.kind === 'process' && progress.stageCount ? [{
-                label: 'Visual map',
+                label: 'Topology',
                 tone: 'btn-small',
                 onClick: () => _setWorkflowView({ kind: 'map', segmentId: activeSegmentId }),
             }] : []),
             ...(resolvedView.kind === 'detail' && projection.segments.length > 1 ? [{
-                label: 'Back to phases',
+                label: 'Back to overview',
                 tone: 'btn-small',
                 onClick: () => _setWorkflowView({ kind: 'process', segmentId: activeSegmentId }),
             }] : []),
@@ -2501,7 +2529,7 @@ function renderProtocolWorkspace(container) {
                 disabled: !canMutate || !progress.participantCount,
             },
             ...(resolvedView.kind === 'map' && selectedStage && editorMode.kind === 'idle' && canMutate ? [{
-                label: 'Connect in map',
+                label: 'Connect in topology',
                 tone: 'btn-small',
                 onClick: () => _startConnectMode(selectedStage.stage_key),
             }] : []),
@@ -2516,18 +2544,28 @@ function renderProtocolWorkspace(container) {
     }
 
     function _processWorkflowData(projection, progress, resolvedView) {
-        const nodes = projection.segments.map((segment) => {
+        const nodes = projection.segments.map((segment, index) => {
             const terminalCount = segment.outgoingEdges.filter((edge) => edge.targetKind === 'terminal').length;
+            const routes = (segment.outgoingEdges || []).map((edge) => ({
+                id: String(edge.id || ''),
+                label: String(edge.label || ''),
+                targetLabel: _segmentRouteTargetLabel(edge, projection),
+                metaLabel: _segmentRouteMetaLabel(segment, edge, projection),
+                targetKind: String(edge.targetKind || ''),
+            }));
             return {
                 id: segment.id,
                 kind: 'segment',
                 laneKey: '',
                 row: Number(segment.row || 0),
                 column: Number(segment.column || 0),
+                order: index,
                 label: segment.label,
                 sublabel: segment.participantSummary,
                 preview: _segmentStagePreview(segment),
+                stageNames: _segmentStageNames(segment),
                 footnote: _segmentProcessFootnote(segment),
+                routes,
                 badges: [
                     { tone: 'phase', label: segment.stepSummary },
                     ...(terminalCount ? [{ tone: 'context', label: `${terminalCount} finish path${terminalCount === 1 ? '' : 's'}` }] : []),
@@ -2545,8 +2583,8 @@ function renderProtocolWorkspace(container) {
             outcomes: null,
             viewState: {
                 kind: 'process',
-                title: 'Workflow phases',
-                subtitle: 'Open a phase to build and edit its steps. Use Visual map only when you need the full topology.',
+                title: 'Workflow overview',
+                subtitle: 'Read the main flow here. Open Detail to edit a section, or Topology only when you need every route.',
                 canReturn: false,
             },
         };
@@ -2666,8 +2704,8 @@ function renderProtocolWorkspace(container) {
             } : null,
             viewState: {
                 kind: 'map',
-                title: 'Visual map',
-                subtitle: 'Inspect the full workflow topology here. Use Detail for ordinary editing and route authoring.',
+                title: 'Topology',
+                subtitle: 'Inspect every step and route here. Use Overview for the whole workflow story and Detail for ordinary editing.',
                 canReturn: false,
             },
         };
@@ -2679,12 +2717,12 @@ function renderProtocolWorkspace(container) {
         const selectedStage = _selectionStage(draft.document);
         return [
             ...(projection.segments.length > 1 ? [{
-                label: 'Back to phases',
+                label: 'Back to overview',
                 tone: 'btn-small',
                 onClick: () => _setWorkflowView({ kind: 'process', segmentId: String(segment?.id || '') }),
             }] : []),
             ...(progress.stageCount ? [{
-                label: 'Visual map',
+                label: 'Topology',
                 tone: 'btn-small',
                 onClick: () => _setWorkflowView({ kind: 'map', segmentId: String(segment?.id || '') }),
             }] : []),
@@ -3201,7 +3239,7 @@ function renderProtocolWorkspace(container) {
 
         const note = document.createElement('p');
         note.className = 'kit-stage-editor-hero-note';
-        note.textContent = 'Edit this step here: ownership, instructions, artifacts, and routes. Open Visual map only when you need the full topology.';
+        note.textContent = 'Edit this step here: ownership, instructions, artifacts, and routes. Open Topology only when you need the full route graph.';
         hero.appendChild(note);
 
         return hero;

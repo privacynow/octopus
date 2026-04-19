@@ -97,45 +97,39 @@ async function openTemplateDraft(page, templateName) {
 }
 
 async function createParticipant(page, { name, key = '', selectorKind = 'skill', selectorValue = '' }) {
-  await page.getByRole('button', { name: /\+ Add participant/i }).first().click();
-  const editor = page.locator('.kit-stage-editor').first();
-  const details = editor.locator('.kit-details-panel').first();
-  await expect(details).toBeVisible();
-  await details.getByLabel('Name').fill(name);
-  if (key) {
-    await details.getByLabel('Key').fill(key);
+  const participantKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!selectorValue) {
+    throw new Error(`selectorValue is required when creating participant ${participantKey}`);
   }
-  const strategy = editor.getByLabel('Strategy', { exact: true });
-  await strategy.selectOption(selectorKind);
-  const valueSelect = editor.locator('.kit-selector-editor-field select.kit-details-control').first();
-  if (await valueSelect.count()) {
-    if (selectorValue) {
-      await valueSelect.selectOption(selectorValue);
-    } else {
-      const valueOptions = await valueSelect.locator('option').evaluateAll((options) =>
-        options.map((option) => String(option.value || '')).filter(Boolean));
-      if (!valueOptions.length) {
-        throw new Error(`No assignment values available for selector kind ${selectorKind}`);
-      }
-      await valueSelect.selectOption(valueOptions[0]);
-    }
-  } else if (selectorValue) {
-    await editor.locator('.kit-selector-editor-field input.kit-details-control').first().fill(selectorValue);
-  } else {
-    throw new Error(`Assignment value is required for selector kind ${selectorKind}`);
+  const protocolId = protocolIdFromUrl(page.url());
+  const api = page.context().request;
+  const draftPending = await page.locator('.kit-draft-chip[data-state="editing"], .kit-draft-chip[data-state="saving"]').count();
+  if (draftPending) {
+    await waitForSaved(page);
   }
-  await page.waitForTimeout(150);
-  await page.evaluate(() => {
-    const button = Array.from(document.querySelectorAll('.kit-details-panel button'))
-      .find((node) => String(node.textContent || '').trim() === 'Create participant');
-    if (!button) {
-      throw new Error('Create participant button not found');
-    }
-    button.click();
+  const detail = await apiGetProtocol(api, protocolId);
+  const definition = JSON.parse(JSON.stringify(detail.draft_definition_json || {}));
+  definition.participants = Array.isArray(definition.participants) ? definition.participants : [];
+  definition.participants.push({
+    participant_key: participantKey,
+    display_name: name,
+    selector: {
+      kind: selectorKind,
+      value: selectorValue,
+    },
+    instructions: '',
   });
-  const laneKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue(name);
-  return laneKey;
+  const save = await apiSaveProtocolDraft(api, protocolId, {
+    slug: detail.protocol.slug,
+    display_name: detail.protocol.display_name,
+    description: detail.protocol.description,
+    definition_json: definition,
+  }, detail.protocol.draft_revision);
+  expect(save.status).toBe(200);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.kit-lifecycle-header')).toBeVisible();
+  await expect(page.locator('.kit-protocol-detail, .kit-workflow-canvas')).toBeVisible();
+  return participantKey;
 }
 
 async function createStep(page, { name, key = '', ownerParticipant = '', stageKind = '' }) {

@@ -50,7 +50,7 @@ test.describe('protocol authoring live', () => {
     const details = page.locator('.kit-details-panel').first();
     const stageEditor = page.locator('.kit-stage-editor-grid');
     await expect(details.getByLabel('Name')).toHaveValue('Plan');
-    await expect(page.locator('.kit-stage-editor-section')).toHaveCount(5);
+    await expect(page.locator('.kit-stage-editor-section')).toHaveCount(6);
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Runtime assignment' })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');

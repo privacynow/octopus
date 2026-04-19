@@ -2613,10 +2613,12 @@ function renderProtocolWorkspace(container) {
             _persistWorkflowView();
         }
         const progress = _workflowProgress(draft.document);
+        const nodeStates = rehearsal.runId ? _rehearsalNodeStates() : {};
         return {
             projection,
             progress,
             resolvedView,
+            nodeStates,
             ...(
                 resolvedView.kind === 'process'
                     ? _processWorkflowData(projection, progress, resolvedView)
@@ -2657,7 +2659,7 @@ function renderProtocolWorkspace(container) {
             viewState: workflow.viewState,
             viewportState: { zoom: _workflowViewportValue(workflow.viewState.kind) },
             onViewportChange: (zoom) => _setWorkflowViewport(workflow.viewState.kind, zoom),
-            nodeStates: rehearsal.runId ? _rehearsalNodeStates() : {},
+            nodeStates: workflow.nodeStates || {},
             selection: {
                 kind: selection.sectionKey === 'transitions'
                     ? 'transition'
@@ -2822,6 +2824,7 @@ function renderProtocolWorkspace(container) {
         list.className = 'kit-protocol-step-list';
         (workflow.stepCards || []).forEach((item) => {
             const stage = item.stage;
+            const stageState = String(workflow.nodeStates?.[String(stage.stage_key || '')] || '');
             const card = document.createElement('section');
             card.className = `kit-protocol-step-card${item.expanded ? ' is-selected' : ''}`;
 
@@ -2857,6 +2860,12 @@ function renderProtocolWorkspace(container) {
                 render();
             });
             eyebrow.appendChild(owner);
+            if (stageState) {
+                const stateBadge = document.createElement('span');
+                stateBadge.className = `kit-workflow-node-state kit-workflow-node-state-${stageState}`;
+                stateBadge.textContent = stageState;
+                eyebrow.appendChild(stateBadge);
+            }
             main.appendChild(eyebrow);
 
             const label = document.createElement('div');

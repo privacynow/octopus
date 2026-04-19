@@ -86,7 +86,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await expect(page.getByTestId('workflow-step-draft_document')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-page.png', fullPage: true });
   await page.getByRole('button', { name: 'Author' }).first().click();
-  await expect(page.locator('.kit-details-panel').first().getByText('Assignment rule')).toBeVisible();
+  await expect(page.locator('.kit-stage-editor').first().getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-participant-page.png', fullPage: true });
 
   await discardDraft(page);

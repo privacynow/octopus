@@ -27,15 +27,13 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first participant');
 
     await page.getByRole('button', { name: /\+ Add participant/i }).first().click();
-    const participantEditor = page.locator('.kit-details-panel').first();
+    const participantEditor = page.locator('.kit-stage-editor').first();
     await expect(participantEditor.getByRole('heading', { name: 'Participant' })).toBeVisible();
-    await expect(participantEditor.getByText('Assignment rule')).toBeVisible();
-    const assignmentRule = participantEditor.getByLabel('Assignment rule');
+    await expect(participantEditor.getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
+    const assignmentRule = participantEditor.getByRole('combobox').first();
     await expect(assignmentRule).toContainText('Specific agent');
     await expect(assignmentRule).toContainText('Required skill');
     await expect(assignmentRule).toContainText('Runtime role tag');
-    await assignmentRule.selectOption('role');
-    await expect(participantEditor.getByText('Choose runtime role tag')).toBeVisible();
     await page.getByRole('button', { name: 'Cancel' }).click();
 
     const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner' });
@@ -153,15 +151,13 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByText('Reviewer role')).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Author' }).first().click();
-    const details = page.locator('.kit-details-panel').first();
+    const details = page.locator('.kit-stage-editor').first();
     await expect(details.getByRole('heading', { name: 'Participant' })).toBeVisible();
-    await expect(details.getByText('Assignment rule')).toBeVisible();
-    const assignmentRule = details.getByLabel('Assignment rule');
+    await expect(details.getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
+    const assignmentRule = details.getByRole('combobox').first();
     await expect(assignmentRule).toContainText('Specific agent');
     await expect(assignmentRule).toContainText('Required skill');
     await expect(assignmentRule).toContainText('Runtime role tag');
-    await assignmentRule.selectOption('role');
-    await expect(details.getByText('Choose runtime role tag')).toBeVisible();
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

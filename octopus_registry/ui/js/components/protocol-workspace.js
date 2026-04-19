@@ -1932,10 +1932,6 @@ function renderProtocolWorkspace(container) {
 
         const heading = document.createElement('div');
         heading.className = 'kit-selector-editor-head';
-        const title = document.createElement('h4');
-        title.className = 'kit-stage-editor-title';
-        title.textContent = 'Assignment rule';
-        heading.appendChild(title);
         const copy = document.createElement('p');
         copy.className = 'kit-stage-routing-copy';
         copy.textContent = 'Choose how this participant resolves at run time. Start with known agents, skills, or runtime role tags; use manual override only when needed.';

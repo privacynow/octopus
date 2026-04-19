@@ -140,7 +140,7 @@ async function createStep(page, { name, key = '', ownerRole = '', stageKind = ''
     button.click();
   });
   const stageKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const node = page.getByTestId(`workflow-node-${stageKey}`);
+  const node = page.getByTestId(`workflow-step-${stageKey}`);
   await expect(node).toBeVisible();
   return stageKey;
 }

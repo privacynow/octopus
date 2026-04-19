@@ -2254,21 +2254,10 @@ function renderProtocolWorkspace(container) {
     }
 
     function _showEdgeLabel(edge, sourceStage, viewKind = 'detail') {
-        const label = String(edge?.decision || '').trim().toLowerCase();
-        const targetKey = String(edge?.target_key || '').trim();
-        const transitionCount = Object.keys(sourceStage?.transitions || {}).length;
-        const defaultDecision = _defaultDecisionForStageKind(sourceStage?.stage_kind || 'work');
-        const isTerminal = PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === targetKey);
         if (viewKind !== 'map') {
             return false;
         }
-        if (transitionCount <= 1) {
-            return false;
-        }
-        if (label === defaultDecision && !isTerminal) {
-            return false;
-        }
-        return true;
+        return false;
     }
 
     function _firstRunState(progress) {

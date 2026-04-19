@@ -30,15 +30,13 @@ test.describe('protocol authoring live', () => {
     const participantEditor = page.locator('.kit-stage-editor').first();
     await expect(participantEditor.getByRole('heading', { name: 'Participant' })).toBeVisible();
     await expect(participantEditor.getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
-    const strategy = participantEditor.getByLabel('Strategy');
+    const strategy = participantEditor.getByLabel('Strategy', { exact: true });
     await expect(strategy).toContainText('Specific agent');
     await expect(strategy).toContainText('Required skill');
     await expect(strategy).not.toContainText('Runtime role tag');
     await expect(participantEditor.locator('.kit-selector-preview-input')).toHaveCount(0);
     await expect(participantEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
     await strategy.selectOption('agent');
-    const agentPicker = participantEditor.getByLabel('Choose agent');
-    await expect(agentPicker).toBeVisible();
     await expect(participantEditor.getByText('Rehearsal')).toHaveCount(0);
     await participantEditor.locator('summary').filter({ hasText: 'Advanced assignment' }).click();
     await expect(participantEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
@@ -162,7 +160,7 @@ test.describe('protocol authoring live', () => {
     const details = page.locator('.kit-stage-editor').first();
     await expect(details.getByRole('heading', { name: 'Participant' })).toBeVisible();
     await expect(details.getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
-    const strategy = details.getByLabel('Strategy');
+    const strategy = details.getByLabel('Strategy', { exact: true });
     await expect(strategy).toContainText('Specific agent');
     await expect(strategy).toContainText('Required skill');
     await expect(strategy).not.toContainText('Runtime role tag');

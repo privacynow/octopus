@@ -79,6 +79,7 @@ window.Kit = (() => {
         'protocol.participant.selector_kind.label': 'Assignment rule',
         'protocol.participant.selector_kind.help': 'How this protocol should find someone for this participant at runtime.',
         'protocol.participant.selector_kind.placeholder': 'Choose how to assign this participant…',
+        'protocol.participant.selector_strategy.label': 'Strategy',
         'protocol.participant.selector_value.label': 'Rule value',
         'protocol.participant.selector_value.help': 'For example: a skill slug, a runtime role tag, or an agent slug.',
         'protocol.participant.selector_value.placeholder': 'e.g. legal-review, approver, m1',
@@ -87,6 +88,9 @@ window.Kit = (() => {
         'protocol.participant.selector_none': 'No rule yet',
         'protocol.participant.selector_current': 'Currently matches',
         'protocol.participant.selector_hint': 'Build a rule first, then preview who currently matches it.',
+        'protocol.participant.selector_advanced.label': 'Advanced assignment',
+        'protocol.participant.selector_advanced.strategy': 'Advanced strategy',
+        'protocol.participant.selector_override.label': 'Custom value',
 
         // Details — stages
         'protocol.stages.section': 'Steps',
@@ -2288,53 +2292,65 @@ window.Kit = (() => {
         currentAgentId = '',
         suggestions = [],
         onSuggestionSelect = null,
+        title = '',
+        help = '',
+        showForm = true,
+        showSuggestions = true,
+        emptyHint = '',
+        resultTitle = '',
     } = {}) {
         const root = document.createElement('section');
         root.className = 'kit-selector-preview';
 
         const header = document.createElement('div');
         header.className = 'kit-selector-preview-header';
-        const title = document.createElement('strong');
-        title.textContent = dictValue('agents.selector.title', 'Selector resolution preview');
-        header.appendChild(title);
-        const help = document.createElement('p');
-        help.className = 'quiet-note';
-        help.textContent = dictValue('agents.selector.help', '');
-        header.appendChild(help);
+        const titleNode = document.createElement('strong');
+        titleNode.textContent = String(title || dictValue('agents.selector.title', 'Selector resolution preview'));
+        header.appendChild(titleNode);
+        const helpText = String(help || dictValue('agents.selector.help', ''));
+        if (helpText) {
+            const helpNode = document.createElement('p');
+            helpNode.className = 'quiet-note';
+            helpNode.textContent = helpText;
+            header.appendChild(helpNode);
+        }
         root.appendChild(header);
 
-        const form = document.createElement('div');
-        form.className = 'kit-selector-preview-form';
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'kit-selector-preview-input';
-        input.placeholder = dictValue('agents.selector.placeholder', '@skill:name');
-        input.value = String(selector || '');
-        form.appendChild(input);
+        let input = null;
+        if (showForm) {
+            const form = document.createElement('div');
+            form.className = 'kit-selector-preview-form';
+            input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'kit-selector-preview-input';
+            input.placeholder = dictValue('agents.selector.placeholder', '@skill:name');
+            input.value = String(selector || '');
+            form.appendChild(input);
 
-        const resolveBtn = document.createElement('button');
-        resolveBtn.type = 'button';
-        resolveBtn.className = 'btn btn-sm btn-primary';
-        resolveBtn.textContent = dictValue('agents.selector.run', 'Resolve');
-        resolveBtn.disabled = Boolean(busy);
-        if (typeof onResolve === 'function') {
-            const submit = () => {
-                const value = String(input.value || '').trim();
-                if (value) onResolve(value);
-            };
-            resolveBtn.addEventListener('click', submit);
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    submit();
-                }
-            });
+            const resolveBtn = document.createElement('button');
+            resolveBtn.type = 'button';
+            resolveBtn.className = 'btn btn-sm btn-primary';
+            resolveBtn.textContent = dictValue('agents.selector.run', 'Resolve');
+            resolveBtn.disabled = Boolean(busy);
+            if (typeof onResolve === 'function') {
+                const submit = () => {
+                    const value = String(input.value || '').trim();
+                    if (value) onResolve(value);
+                };
+                resolveBtn.addEventListener('click', submit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        submit();
+                    }
+                });
+            }
+            form.appendChild(resolveBtn);
+            root.appendChild(form);
         }
-        form.appendChild(resolveBtn);
-        root.appendChild(form);
 
-        const quickPicks = Array.isArray(suggestions) ? suggestions.filter(Boolean) : [];
-        if (quickPicks.length) {
+        const quickPicks = showSuggestions && Array.isArray(suggestions) ? suggestions.filter(Boolean) : [];
+        if (quickPicks.length && input) {
             const picker = document.createElement('div');
             picker.className = 'kit-selector-preview-suggestions';
             const pickerLabel = document.createElement('div');
@@ -2367,26 +2383,25 @@ window.Kit = (() => {
             root.appendChild(picker);
         }
 
-        if (message) {
+        const list = document.createElement('div');
+        list.className = 'kit-selector-preview-results';
+        const rows = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+        if (message && rows.length) {
             const note = document.createElement('div');
             note.className = 'kit-selector-preview-message quiet-note';
             note.textContent = String(message);
             root.appendChild(note);
         }
-
-        const list = document.createElement('div');
-        list.className = 'kit-selector-preview-results';
-        const rows = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
         if (rows.length === 0) {
             list.appendChild(UI.renderEmptyState(
                 selector
-                    ? dictValue('agents.selector.no_matches', 'No connected agents match this selector.')
-                    : dictValue('agents.selector.empty', 'No candidates yet — enter a selector and press Resolve.'),
+                    ? String(message || emptyHint || dictValue('agents.selector.no_matches', 'No connected agents match this selector.'))
+                    : String(emptyHint || dictValue('agents.selector.empty', 'No candidates yet — enter a selector and press Resolve.')),
             ));
         } else {
             const resultsLabel = document.createElement('div');
             resultsLabel.className = 'detail-label';
-            resultsLabel.textContent = dictValue('agents.selector.result_title', 'Candidates');
+            resultsLabel.textContent = String(resultTitle || dictValue('agents.selector.result_title', 'Candidates'));
             list.appendChild(resultsLabel);
             rows.forEach((candidate) => {
                 const row = document.createElement('div');

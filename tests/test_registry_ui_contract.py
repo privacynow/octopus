@@ -172,9 +172,12 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "outputs: (stage.outputs || []).map" in workspace
     assert "_stageTransitionId(" in workspace
     assert "_transitionEntries(" in workspace
-    assert "_applyParticipantSuggestion(" in workspace
+    assert "_isAuthoringAssignableAgent(" in workspace
+    assert "_authoringAssignableAgents(" in workspace
     assert "_selectorCatalogEntries(" in workspace
     assert "_selectorEditor(" in workspace
+    assert "showForm: false" in workspace
+    assert "showSuggestions: false" in workspace
     assert "let workflowView = { kind: 'detail'" in workspace
     assert "let workflowViewport = { map: 'fit' }" in workspace
     assert "_workflowViewportValue(" in workspace
@@ -227,6 +230,10 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
         "_addNode(",
         "connectState",
         "_addParticipantFromSuggestion(",
+        "_applyParticipantSuggestion(",
+        "_applyParticipantDraftSuggestion(",
+        "_participantSelectorSuggestions(",
+        "_selectorFieldsFromString(",
         "_saveNew(",
         "_startRoleInsert(",
         "_confirmRoleInsert(",

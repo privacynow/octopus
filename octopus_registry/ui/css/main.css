@@ -3579,6 +3579,18 @@ button.kit-protocol-step-owner {
     gap: var(--space-1);
 }
 
+.kit-selector-editor-field {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.kit-selector-editor-note {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+}
+
 .kit-selector-editor-override {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -3586,8 +3598,29 @@ button.kit-protocol-step-owner {
     overflow: hidden;
 }
 
+.kit-selector-editor-override[open] .kit-stage-editor-summary,
+.kit-selector-editor-preview[open] .kit-stage-editor-summary {
+    border-bottom: 1px solid var(--border);
+}
+
 .kit-selector-editor-override-body {
     padding: 0 var(--space-4) var(--space-4);
+    display: grid;
+    gap: var(--space-3);
+}
+
+.kit-selector-editor-preview {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    overflow: hidden;
+}
+
+.kit-selector-editor-preview .kit-selector-preview {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
 .kit-stage-editor {

@@ -95,6 +95,8 @@ const PROTOCOL_TERMINAL_TARGETS = [
     { key: '__cancelled__', label: 'Finish as cancelled' },
 ];
 
+const PRIMARY_SELECTOR_KINDS = ['agent', 'skill'];
+
 function _selectorString(selector) {
     if (!selector || !selector.kind || !selector.value) return '';
     const kind = String(selector.kind || '').trim();
@@ -108,20 +110,6 @@ function _selectorFromFields(kind, value) {
     const selectorValue = String(value || '').trim();
     if (!selectorKind || !selectorValue) return null;
     return { kind: selectorKind, value: selectorValue };
-}
-
-function _selectorFieldsFromString(value) {
-    const text = String(value || '').trim();
-    if (!text) return { kind: '', value: '' };
-    const normalized = text.startsWith('@') ? text.slice(1) : text;
-    const divider = normalized.indexOf(':');
-    if (divider < 0) {
-        return { kind: 'agent', value: normalized };
-    }
-    return {
-        kind: normalized.slice(0, divider).trim(),
-        value: normalized.slice(divider + 1).trim(),
-    };
 }
 
 function _protocolDecisionLabel(value) {
@@ -151,12 +139,12 @@ function _titleCaseWords(value) {
 }
 
 /*
- * Protocol authoring workspace — kit-driven surface.
+ * Protocol authoring workspace — detail-first, kit-driven surface.
  *
- * This route is the reference implementation of the authoring kit (see
- * telegram-agent-bot/protocol_kit_plan.md). The workflow graph is the primary
- * authoring surface; details, validation, and rehearsal hang off the same
- * selection model. No section-tab maze, no raw JSON tab, and no second canvas.
+ * Process orients, Detail is the primary editor, and Map is the optional
+ * topology view. Participants own steps; assignment rules resolve participants
+ * to runtime agents. No raw JSON tab, no viewport-specific editor fork, and no
+ * second authoring pipeline.
  */
 function renderProtocolWorkspace(container) {
     const cleanups = UI.beginCleanupScope();
@@ -882,7 +870,7 @@ function renderProtocolWorkspace(container) {
         draftRevision = Number(detail?.protocol?.draft_revision || 0) || 0;
         draftConflict = null;
         documentHistory = { undo: [], redo: [] };
-        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        _resetSelectorPreview('', '');
         workflowViewport = { map: 'fit' };
         if (previousProtocolId && previousProtocolId !== String(detail?.protocol?.protocol_id || '')) {
             _stopRehearsalPolling();
@@ -1129,7 +1117,7 @@ function renderProtocolWorkspace(container) {
         rehearsal.scenarios = [];
         rehearsal.runDetail = null;
         documentHistory = { undo: [], redo: [] };
-        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        _resetSelectorPreview('', '');
         draft = { slug: '', display_name: '', description: '', document: _blankDocument() };
         selection = { sectionKey: 'overview', nodeKey: '' };
         saveState = { state: 'idle', lastSavedAt: '', error: '' };
@@ -1402,64 +1390,18 @@ function renderProtocolWorkspace(container) {
         }
         items[idx] = next;
         doc[plural] = items;
-        if (kind === 'participant' && String(nextNodeKey || '') === selectorPreview.participantKey) {
+        const previewTracksParticipant = kind === 'participant' && String(selectorPreview.participantKey || '') === String(nodeKey || '');
+        if (previewTracksParticipant) {
+            selectorPreview.participantKey = String(nextNodeKey || '');
             selectorPreview.query = _selectorString(next.selector || null);
             selectorPreview.message = '';
         }
         _commitDocument(doc, {
             nextSelection: { sectionKey: plural, nodeKey: String(nextNodeKey || '') },
         });
-    }
-
-    async function _applyParticipantSuggestion(participantKey, suggestion) {
-        const doc = _cloneDoc(draft.document);
-        const items = [...(doc.participants || [])];
-        const idx = items.findIndex((item) => String(item.participant_key || '') === String(participantKey || ''));
-        if (idx < 0) return;
-
-        const next = { ...items[idx] };
-        const selectorKind = String(suggestion?.selectorKind || '').trim();
-        const selectorValue = String(suggestion?.selectorValue || '').trim();
-        const selector = _selectorFromFields(selectorKind, selectorValue);
-        if (!selector) return;
-
-        next.selector = selector;
-        if (!String(next.display_name || '').trim()) {
-            next.display_name = String(suggestion?.displayName || suggestion?.label || '').trim();
+        if (kind === 'participant' && (key === 'selector_kind' || key === 'selector_value')) {
+            _syncSelectorPreview(String(nextNodeKey || ''), String(next.selector?.kind || ''), String(next.selector?.value || ''));
         }
-
-        let nextParticipantKey = String(participantKey || '').trim();
-        if (!nextParticipantKey || /^participant_\d+$/i.test(nextParticipantKey)) {
-            const preferredKey = String(suggestion?.preferredKey || suggestion?.displayName || suggestion?.label || 'participant').trim();
-            const rewritten = _nextAvailableKey(items, 'participant_key', preferredKey, nextParticipantKey);
-            next.participant_key = rewritten;
-            _rewriteKeyReferences(doc, 'participant', nextParticipantKey, rewritten);
-            nextParticipantKey = rewritten;
-        }
-
-        items[idx] = next;
-        doc.participants = items;
-        selectorPreview = {
-            participantKey: nextParticipantKey,
-            query: _selectorString(selector),
-            candidates: [],
-            busy: false,
-            message: '',
-        };
-        _commitDocument(doc, {
-            nextSelection: { sectionKey: 'participants', nodeKey: nextParticipantKey },
-        });
-        await _resolveSelectorPreview(nextParticipantKey, _selectorString(selector));
-    }
-
-    function _participantDraftFromSuggestion(suggestion) {
-        const displayName = String(suggestion?.displayName || suggestion?.label || '').trim();
-        return _blankParticipantDraft({
-            display_name: displayName,
-            participant_key: _slugSuggestion(String(suggestion?.preferredKey || displayName || 'participant')),
-            selector_kind: String(suggestion?.selectorKind || ''),
-            selector_value: String(suggestion?.selectorValue || ''),
-        });
     }
 
     function _commitPendingParticipantField(_target, key, value) {
@@ -1476,26 +1418,16 @@ function renderProtocolWorkspace(container) {
             pendingParticipant[key] = String(value || '');
         }
         render();
-    }
-
-    function _applyParticipantDraftSuggestion(suggestion) {
-        pendingParticipant = _participantDraftFromSuggestion(suggestion);
-        render();
-        const selectorText = _selectorString(_selectorFromFields(pendingParticipant.selector_kind, pendingParticipant.selector_value));
-        if (selectorText) {
-            void _resolveSelectorPreview('__draft__', selectorText);
+        if (key === 'selector_kind' || key === 'selector_value') {
+            _syncSelectorPreview('__draft__', pendingParticipant.selector_kind, pendingParticipant.selector_value);
         }
     }
 
-    function _startParticipantInsert(prefill = null) {
-        pendingParticipant = prefill ? _participantDraftFromSuggestion(prefill) : _blankParticipantDraft();
-        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+    function _startParticipantInsert() {
+        pendingParticipant = _blankParticipantDraft();
+        _resetSelectorPreview('__draft__', '');
         editorMode = { kind: 'insert-participant', sourceStageKey: '', decision: '' };
         render();
-        const selectorText = _selectorString(_selectorFromFields(pendingParticipant.selector_kind, pendingParticipant.selector_value));
-        if (selectorText) {
-            void _resolveSelectorPreview('__draft__', selectorText);
-        }
     }
 
     function _confirmParticipantInsert() {
@@ -1517,15 +1449,18 @@ function renderProtocolWorkspace(container) {
             selector: _selectorFromFields(pendingParticipant.selector_kind, pendingParticipant.selector_value),
             instructions: String(pendingParticipant.instructions || ''),
         }];
-        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        _resetSelectorPreview(participantKey, '');
         _resetEditorMode();
         _commitDocument(doc, {
             nextSelection: { sectionKey: 'participants', nodeKey: participantKey },
         });
+        if (pendingParticipant.selector_kind && pendingParticipant.selector_value) {
+            _syncSelectorPreview(participantKey, pendingParticipant.selector_kind, pendingParticipant.selector_value);
+        }
     }
 
     function _cancelParticipantInsert() {
-        selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
+        _resetSelectorPreview('', '');
         _resetEditorMode();
         render();
     }
@@ -1780,7 +1715,7 @@ function renderProtocolWorkspace(container) {
         render();
         try {
             const result = await API.previewSelectorResolution({ selector: selectorValue });
-            selectorPreview.candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+            selectorPreview.candidates = _authoringAssignableCandidates(result?.candidates);
             selectorPreview.message = selectorPreview.candidates.length
                 ? ''
                 : Kit.dict.label('agents.selector.no_matches');
@@ -1792,71 +1727,43 @@ function renderProtocolWorkspace(container) {
         }
     }
 
-    function _participantSelectorSuggestions() {
-        const suggestions = [];
-        const seen = new Set();
-        const pushSuggestion = (entry) => {
-            const value = String(entry?.value || '').trim();
-            if (!value || seen.has(value)) return;
-            seen.add(value);
-            suggestions.push(entry);
+    function _resetSelectorPreview(participantKey = '', query = '') {
+        selectorPreview = {
+            participantKey: String(participantKey || ''),
+            query: String(query || ''),
+            candidates: [],
+            busy: false,
+            message: '',
         };
-        (connectedAgents || []).forEach((agent) => {
-            const selectorValue = String(agent?.selector || '').trim();
-            const selectorRef = selectorValue.startsWith('@') ? selectorValue.slice(1) : selectorValue;
-            const normalizedSelector = selectorRef.startsWith('agent:') ? selectorRef.slice('agent:'.length) : selectorRef;
-            const agentSlug = String(agent?.slug || normalizedSelector || '').trim();
-            const displayName = String(
-                agent.display_name
-                || (agentSlug ? _titleCaseWords(agentSlug) : '')
-                || 'Assigned agent'
-            ).trim();
-            const selectorQuery = selectorValue || (agentSlug ? `@${agentSlug}` : '');
-            if (!selectorQuery) return;
-            pushSuggestion({
-                label: displayName,
-                value: selectorQuery,
-                selectorKind: 'agent',
-                selectorValue: agentSlug,
-                displayName,
-                preferredKey: agentSlug || _slugSuggestion(agent.display_name || ''),
-            });
-        });
-        const skillSet = new Set();
-        (connectedAgents || []).forEach((agent) => {
-            (agent?.routing_skills || []).forEach((skill) => {
-                const normalized = String(skill || '').trim();
-                if (!normalized || skillSet.has(normalized)) return;
-                skillSet.add(normalized);
-                pushSuggestion({
-                    label: `Skill · ${_titleCaseWords(normalized)}`,
-                    value: `@skill:${normalized}`,
-                    selectorKind: 'skill',
-                    selectorValue: normalized,
-                    displayName: _titleCaseWords(normalized),
-                    preferredKey: _slugSuggestion(normalized),
-                });
-            });
-        });
-        const roleMap = new Map();
-        (connectedAgents || []).forEach((agent) => {
-            const role = String(agent?.role || '').trim();
-            if (!role || roleMap.has(role)) return;
-            roleMap.set(role, agent);
-        });
-        Array.from(roleMap.entries()).slice(0, 4).forEach(([role, agent]) => {
-            const roleSelector = String(agent?.role_selector || '').trim();
-            if (!roleSelector) return;
-            pushSuggestion({
-                label: `Runtime tag · ${_titleCaseWords(role)}`,
-                value: roleSelector,
-                selectorKind: 'role',
-                selectorValue: role,
-                displayName: _titleCaseWords(role),
-                preferredKey: _slugSuggestion(role),
-            });
-        });
-        return suggestions;
+    }
+
+    function _syncSelectorPreview(participantKey, selectorKind, selectorValue) {
+        const query = _selectorString(_selectorFromFields(selectorKind, selectorValue));
+        if (!query) {
+            _resetSelectorPreview(participantKey, '');
+            render();
+            return;
+        }
+        void _resolveSelectorPreview(participantKey || '__draft__', query);
+    }
+
+    function _isAuthoringAssignableAgent(agent) {
+        const slug = String(agent?.slug || '').trim().toLowerCase();
+        const role = String(agent?.role || '').trim().toLowerCase();
+        const botKey = String(agent?.bot_key || '').trim().toLowerCase();
+        const tags = Array.isArray(agent?.tags)
+            ? agent.tags.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+            : [];
+        if (tags.includes('rehearsal') || tags.includes('system')) return false;
+        return slug !== 'rehearsal' && role !== 'rehearsal' && botKey !== 'registry.rehearsal';
+    }
+
+    function _authoringAssignableAgents() {
+        return (connectedAgents || []).filter((agent) => _isAuthoringAssignableAgent(agent));
+    }
+
+    function _authoringAssignableCandidates(candidates) {
+        return (Array.isArray(candidates) ? candidates : []).filter((candidate) => _isAuthoringAssignableAgent(candidate));
     }
 
     function _selectorKindLabel(kind) {
@@ -1875,11 +1782,51 @@ function renderProtocolWorkspace(container) {
         return normalized || 'value';
     }
 
-    function _selectorKindOptions() {
-        return (authoringManifest?.selector_kind_options || ['skill', 'role', 'agent']).map((value) => ({
+    function _selectorAvailableKinds() {
+        const manifestKinds = Array.isArray(authoringManifest?.selector_kind_options) && authoringManifest.selector_kind_options.length
+            ? authoringManifest.selector_kind_options
+            : ['agent', 'skill', 'role'];
+        const seen = new Set();
+        const ordered = [];
+        [...PRIMARY_SELECTOR_KINDS, ...manifestKinds].forEach((value) => {
+            const normalized = String(value || '').trim().toLowerCase();
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            ordered.push(normalized);
+        });
+        return ordered;
+    }
+
+    function _selectorPrimaryKinds() {
+        const available = _selectorAvailableKinds();
+        const primary = available.filter((value) => PRIMARY_SELECTOR_KINDS.includes(value));
+        return primary.length ? primary : available;
+    }
+
+    function _selectorAdvancedKinds() {
+        const primary = new Set(_selectorPrimaryKinds());
+        return _selectorAvailableKinds().filter((value) => !primary.has(value));
+    }
+
+    function _isPrimarySelectorKind(kind) {
+        return _selectorPrimaryKinds().includes(String(kind || '').trim().toLowerCase());
+    }
+
+    function _selectorKindOptions(kinds = _selectorAvailableKinds()) {
+        return kinds.map((value) => ({
             value: String(value || ''),
             label: _selectorKindLabel(value),
         }));
+    }
+
+    function _nextSelectorValueForKind(kind, currentValue = '') {
+        const normalized = String(kind || '').trim().toLowerCase();
+        if (!normalized) return '';
+        const catalog = _selectorCatalogEntries(normalized);
+        const current = String(currentValue || '').trim();
+        if (catalog.some((item) => item.value === current)) return current;
+        if (catalog.length) return String(catalog[0].value || '');
+        return current;
     }
 
     function _selectorCatalogEntries(kind) {
@@ -1897,97 +1844,88 @@ function renderProtocolWorkspace(container) {
             });
         };
         if (normalized === 'agent') {
-            (connectedAgents || []).forEach((agent) => {
+            _authoringAssignableAgents().forEach((agent) => {
                 const slug = String(agent?.slug || '').trim();
                 if (!slug) return;
                 push(slug, String(agent?.display_name || _titleCaseWords(slug) || slug), String(agent?.role || ''));
             });
         } else if (normalized === 'skill') {
-            (connectedAgents || []).forEach((agent) => {
+            _authoringAssignableAgents().forEach((agent) => {
                 (agent?.routing_skills || []).forEach((skill) => push(skill, _titleCaseWords(skill)));
             });
         } else if (normalized === 'role') {
-            (connectedAgents || []).forEach((agent) => {
+            _authoringAssignableAgents().forEach((agent) => {
                 push(agent?.role, _titleCaseWords(agent?.role || ''));
             });
         }
-        _participantSelectorSuggestions().forEach((suggestion) => {
-            if (String(suggestion?.selectorKind || '') === normalized) {
-                push(suggestion?.selectorValue, suggestion?.displayName || suggestion?.label || suggestion?.selectorValue);
-            }
-        });
         return entries.sort((left, right) => String(left.label || '').localeCompare(String(right.label || '')));
     }
 
-    function _selectorEditor({
+    function _selectorCatalogEmptyHint(kind) {
+        const normalized = String(kind || '').trim().toLowerCase();
+        if (normalized === 'agent') {
+            return 'No connected assignable agents are available right now. Enter an agent slug only if you need to pin one anyway.';
+        }
+        if (normalized === 'skill') {
+            return 'No connected agents are advertising skills right now. Enter a skill slug only if you already know it.';
+        }
+        if (normalized === 'role') {
+            return 'No runtime role tags are visible from connected agents right now. Enter one manually only if you need this advanced path.';
+        }
+        return 'Enter the exact value you want to match at runtime.';
+    }
+
+    function _selectorPreviewState(participantKey, query) {
+        if (String(participantKey || '') === String(selectorPreview.participantKey || '')) {
+            return {
+                query: String(selectorPreview.query || query || ''),
+                candidates: selectorPreview.candidates || [],
+                busy: Boolean(selectorPreview.busy),
+                message: String(selectorPreview.message || ''),
+            };
+        }
+        return {
+            query: String(query || ''),
+            candidates: [],
+            busy: false,
+            message: query ? Kit.dict.label('protocol.participant.selector_hint') : '',
+        };
+    }
+
+    function _selectorPreviewSummary(previewState) {
+        if (!previewState?.query) return 'Build an assignment rule first, then check who currently matches it.';
+        if (previewState.busy) return 'Checking current matches…';
+        if (Array.isArray(previewState.candidates) && previewState.candidates.length) {
+            const count = previewState.candidates.length;
+            return `${count} connected agent${count === 1 ? '' : 's'} match right now.`;
+        }
+        if (previewState.message) return String(previewState.message || '');
+        return Kit.dict.label('protocol.participant.selector_hint');
+    }
+
+    function _buildSelectorValueField({
         selectorKind = '',
         selectorValue = '',
-        participantKey = '',
         readOnly = false,
         onChange = null,
-        onSuggestionSelect = null,
+        label = '',
     } = {}) {
-        const wrap = document.createElement('section');
-        wrap.className = 'kit-selector-editor';
-
-        const heading = document.createElement('div');
-        heading.className = 'kit-selector-editor-head';
-        const copy = document.createElement('p');
-        copy.className = 'kit-stage-routing-copy';
-        copy.textContent = 'Choose how this participant resolves at run time. Start with known agents, skills, or runtime role tags; use manual override only when needed.';
-        heading.appendChild(copy);
-        wrap.appendChild(heading);
-
-        const kindRow = document.createElement('div');
-        kindRow.className = 'kit-details-row';
-        const kindLabel = document.createElement('label');
-        kindLabel.className = 'kit-details-label';
-        kindLabel.textContent = Kit.dict.label('protocol.participant.selector_kind.label', 'Assignment rule');
-        kindRow.appendChild(kindLabel);
-        const kindControl = document.createElement('select');
-        kindControl.className = 'kit-details-control';
-        const blankKind = document.createElement('option');
-        blankKind.value = '';
-        blankKind.textContent = '(choose assignment type)';
-        kindControl.appendChild(blankKind);
-        _selectorKindOptions().forEach((item) => {
-            const option = document.createElement('option');
-            option.value = String(item.value || '');
-            option.textContent = String(item.label || item.value || '');
-            if (String(selectorKind || '') === String(item.value || '')) option.selected = true;
-            kindControl.appendChild(option);
-        });
-        kindControl.disabled = Boolean(readOnly);
-        if (typeof onChange === 'function' && !readOnly) {
-            kindControl.addEventListener('change', () => {
-                const nextKind = String(kindControl.value || '');
-                onChange('selector_kind', nextKind);
-                const catalog = _selectorCatalogEntries(nextKind);
-                if (!catalog.some((item) => item.value === String(selectorValue || '')) && catalog.length) {
-                    onChange('selector_value', catalog[0].value);
-                } else if (!catalog.length) {
-                    onChange('selector_value', '');
-                }
-            });
-        }
-        kindRow.appendChild(kindControl);
-        wrap.appendChild(kindRow);
-
-        const catalog = _selectorCatalogEntries(selectorKind);
-        const valueRow = document.createElement('div');
-        valueRow.className = 'kit-details-row';
+        const normalized = String(selectorKind || '').trim().toLowerCase();
+        const block = document.createElement('div');
+        block.className = 'kit-selector-editor-field';
+        const row = document.createElement('div');
+        row.className = 'kit-details-row';
         const valueLabel = document.createElement('label');
         valueLabel.className = 'kit-details-label';
-        valueLabel.textContent = catalog.length
-            ? `Choose ${_selectorValueLabel(selectorKind)}`
-            : Kit.dict.label('protocol.participant.selector_value.label', 'Selector value');
-        valueRow.appendChild(valueLabel);
+        valueLabel.textContent = label || `Choose ${_selectorValueLabel(normalized)}`;
+        row.appendChild(valueLabel);
+        const catalog = _selectorCatalogEntries(normalized);
         if (catalog.length) {
             const select = document.createElement('select');
             select.className = 'kit-details-control';
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = `(choose ${String(selectorKind || 'value')})`;
+            placeholder.textContent = `(choose ${_selectorValueLabel(normalized)})`;
             select.appendChild(placeholder);
             catalog.forEach((item) => {
                 const option = document.createElement('option');
@@ -2007,7 +1945,8 @@ function renderProtocolWorkspace(container) {
             if (typeof onChange === 'function' && !readOnly) {
                 select.addEventListener('change', () => onChange('selector_value', select.value));
             }
-            valueRow.appendChild(select);
+            select.setAttribute('aria-label', valueLabel.textContent);
+            row.appendChild(select);
         } else {
             const input = document.createElement('input');
             input.type = 'text';
@@ -2020,28 +1959,29 @@ function renderProtocolWorkspace(container) {
                 input.addEventListener('change', commit);
                 input.addEventListener('blur', commit);
             }
-            valueRow.appendChild(input);
+            input.setAttribute('aria-label', valueLabel.textContent);
+            row.appendChild(input);
+            const hint = document.createElement('p');
+            hint.className = 'kit-selector-editor-note';
+            hint.textContent = _selectorCatalogEmptyHint(normalized);
+            block.appendChild(hint);
         }
-        wrap.appendChild(valueRow);
+        block.prepend(row);
+        return { element: block, catalog };
+    }
 
-        const override = document.createElement('details');
-        override.className = 'kit-selector-editor-override';
-        override.open = Boolean(selectorValue && catalog.length && !catalog.some((item) => item.value === String(selectorValue || '')));
-        const summary = document.createElement('summary');
-        summary.className = 'kit-stage-editor-summary';
-        const summaryTitle = document.createElement('h4');
-        summaryTitle.className = 'kit-stage-editor-title';
-        summaryTitle.textContent = 'Manual override';
-        summary.appendChild(summaryTitle);
-        override.appendChild(summary);
-        const overrideBody = document.createElement('div');
-        overrideBody.className = 'kit-selector-editor-override-body';
-        const overrideRow = document.createElement('div');
-        overrideRow.className = 'kit-details-row';
+    function _buildSelectorManualOverrideField({
+        selectorValue = '',
+        readOnly = false,
+        onChange = null,
+        label = 'Custom value',
+    } = {}) {
+        const row = document.createElement('div');
+        row.className = 'kit-details-row';
         const overrideLabel = document.createElement('label');
         overrideLabel.className = 'kit-details-label';
-        overrideLabel.textContent = 'Custom selector value';
-        overrideRow.appendChild(overrideLabel);
+        overrideLabel.textContent = label;
+        row.appendChild(overrideLabel);
         const overrideInput = document.createElement('input');
         overrideInput.type = 'text';
         overrideInput.className = 'kit-details-control';
@@ -2053,25 +1993,201 @@ function renderProtocolWorkspace(container) {
             overrideInput.addEventListener('change', commit);
             overrideInput.addEventListener('blur', commit);
         }
-        overrideRow.appendChild(overrideInput);
-        overrideBody.appendChild(overrideRow);
-        override.appendChild(overrideBody);
-        wrap.appendChild(override);
+        overrideInput.setAttribute('aria-label', overrideLabel.textContent);
+        row.appendChild(overrideInput);
+        return row;
+    }
 
-        const query = participantKey && participantKey === selectorPreview.participantKey
-            ? selectorPreview.query
-            : _selectorString(_selectorFromFields(selectorKind, selectorValue));
-        wrap.appendChild(Kit.selectorResolutionPreview({
-            selector: query,
-            candidates: participantKey && participantKey === selectorPreview.participantKey ? selectorPreview.candidates : [],
-            busy: participantKey && participantKey === selectorPreview.participantKey ? selectorPreview.busy : false,
-            message: participantKey && participantKey === selectorPreview.participantKey
-                ? selectorPreview.message
-                : Kit.dict.label('protocol.participant.selector_hint'),
-            suggestions: _participantSelectorSuggestions(),
-            onSuggestionSelect: readOnly ? null : onSuggestionSelect,
-            onResolve: (value) => { void _resolveSelectorPreview(participantKey || '__draft__', value); },
-        }));
+    function _selectorEditor({
+        selectorKind = '',
+        selectorValue = '',
+        participantKey = '',
+        readOnly = false,
+        onChange = null,
+    } = {}) {
+        const wrap = document.createElement('section');
+        wrap.className = 'kit-selector-editor';
+
+        const heading = document.createElement('div');
+        heading.className = 'kit-selector-editor-head';
+        const copy = document.createElement('p');
+        copy.className = 'kit-stage-routing-copy';
+        copy.textContent = 'Choose how this participant is fulfilled at run time. Start with a specific agent or required skill, then use Advanced assignment only when the default path is not enough.';
+        heading.appendChild(copy);
+        wrap.appendChild(heading);
+
+        const normalizedKind = String(selectorKind || '').trim().toLowerCase();
+        const primaryKinds = _selectorPrimaryKinds();
+        const advancedKinds = _selectorAdvancedKinds();
+        const primaryKind = _isPrimarySelectorKind(normalizedKind) ? normalizedKind : '';
+        const primaryCatalog = primaryKind ? _selectorCatalogEntries(primaryKind) : [];
+        const currentValueIsCustom = Boolean(
+            primaryKind
+            && primaryCatalog.length
+            && selectorValue
+            && !primaryCatalog.some((item) => item.value === String(selectorValue || '')),
+        );
+
+        const strategyRow = document.createElement('div');
+        strategyRow.className = 'kit-details-row';
+        const strategyLabel = document.createElement('label');
+        strategyLabel.className = 'kit-details-label';
+        strategyLabel.textContent = Kit.dict.label('protocol.participant.selector_strategy.label', 'Strategy');
+        strategyRow.appendChild(strategyLabel);
+        const strategyControl = document.createElement('select');
+        strategyControl.className = 'kit-details-control';
+        const blankStrategy = document.createElement('option');
+        blankStrategy.value = '';
+        blankStrategy.textContent = '(choose assignment strategy)';
+        strategyControl.appendChild(blankStrategy);
+        _selectorKindOptions(primaryKinds).forEach((item) => {
+            const option = document.createElement('option');
+            option.value = String(item.value || '');
+            option.textContent = String(item.label || item.value || '');
+            if (primaryKind === String(item.value || '')) option.selected = true;
+            strategyControl.appendChild(option);
+        });
+        strategyControl.disabled = Boolean(readOnly);
+        strategyControl.setAttribute('aria-label', strategyLabel.textContent);
+        if (typeof onChange === 'function' && !readOnly) {
+            strategyControl.addEventListener('change', () => {
+                const nextKind = String(strategyControl.value || '');
+                onChange('selector_kind', nextKind);
+                onChange('selector_value', _nextSelectorValueForKind(nextKind, nextKind === normalizedKind ? selectorValue : ''));
+            });
+        }
+        strategyRow.appendChild(strategyControl);
+        wrap.appendChild(strategyRow);
+
+        if (primaryKind) {
+            const { element } = _buildSelectorValueField({
+                selectorKind: primaryKind,
+                selectorValue,
+                readOnly,
+                onChange,
+                label: `Choose ${_selectorValueLabel(primaryKind)}`,
+            });
+            wrap.appendChild(element);
+        } else {
+            const note = document.createElement('p');
+            note.className = 'kit-selector-editor-note';
+            note.textContent = normalizedKind
+                ? 'This participant currently uses an advanced assignment. Edit it below.'
+                : 'Choose a strategy above to start assigning this participant.';
+            wrap.appendChild(note);
+        }
+
+        const advanced = document.createElement('details');
+        advanced.className = 'kit-selector-editor-override';
+        advanced.open = Boolean((normalizedKind && !_isPrimarySelectorKind(normalizedKind)) || currentValueIsCustom);
+        const advancedSummary = document.createElement('summary');
+        advancedSummary.className = 'kit-stage-editor-summary';
+        const advancedTitle = document.createElement('h4');
+        advancedTitle.className = 'kit-stage-editor-title';
+        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Advanced assignment');
+        advancedSummary.appendChild(advancedTitle);
+        advanced.appendChild(advancedSummary);
+        const advancedBody = document.createElement('div');
+        advancedBody.className = 'kit-selector-editor-override-body';
+        const advancedNote = document.createElement('p');
+        advancedNote.className = 'kit-selector-editor-note';
+        advancedNote.textContent = 'Use this only when you need a runtime role tag or a custom value that is not in the default picker.';
+        advancedBody.appendChild(advancedNote);
+
+        if (advancedKinds.length) {
+            const advancedKindRow = document.createElement('div');
+            advancedKindRow.className = 'kit-details-row';
+            const advancedKindLabel = document.createElement('label');
+            advancedKindLabel.className = 'kit-details-label';
+            advancedKindLabel.textContent = Kit.dict.label('protocol.participant.selector_advanced.strategy', 'Advanced strategy');
+            advancedKindRow.appendChild(advancedKindLabel);
+            const advancedKindControl = document.createElement('select');
+            advancedKindControl.className = 'kit-details-control';
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = '(use the default strategy above)';
+            advancedKindControl.appendChild(defaultOption);
+            _selectorKindOptions(advancedKinds).forEach((item) => {
+                const option = document.createElement('option');
+                option.value = String(item.value || '');
+                option.textContent = String(item.label || item.value || '');
+                if (String(normalizedKind || '') === String(item.value || '')) option.selected = true;
+                advancedKindControl.appendChild(option);
+            });
+            advancedKindControl.disabled = Boolean(readOnly);
+            advancedKindControl.setAttribute('aria-label', advancedKindLabel.textContent);
+            if (typeof onChange === 'function' && !readOnly) {
+                advancedKindControl.addEventListener('change', () => {
+                    const nextKind = String(advancedKindControl.value || '').trim();
+                    const fallbackKind = primaryKind || _selectorPrimaryKinds()[0] || '';
+                    const targetKind = nextKind || fallbackKind;
+                    onChange('selector_kind', targetKind);
+                    onChange('selector_value', _nextSelectorValueForKind(targetKind, targetKind === normalizedKind ? selectorValue : ''));
+                });
+            }
+            advancedKindRow.appendChild(advancedKindControl);
+            advancedBody.appendChild(advancedKindRow);
+        }
+
+        const advancedKind = normalizedKind && !_isPrimarySelectorKind(normalizedKind) ? normalizedKind : '';
+        if (advancedKind) {
+            const { element, catalog } = _buildSelectorValueField({
+                selectorKind: advancedKind,
+                selectorValue,
+                readOnly,
+                onChange,
+                label: `Choose ${_selectorValueLabel(advancedKind)}`,
+            });
+            advancedBody.appendChild(element);
+            if (catalog.length) {
+                advancedBody.appendChild(_buildSelectorManualOverrideField({
+                    selectorValue,
+                    readOnly,
+                    onChange,
+                    label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
+                }));
+            }
+        } else if (primaryKind && primaryCatalog.length) {
+            advancedBody.appendChild(_buildSelectorManualOverrideField({
+                selectorValue,
+                readOnly,
+                onChange,
+                label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
+            }));
+        }
+        advanced.appendChild(advancedBody);
+        wrap.appendChild(advanced);
+
+        const query = _selectorString(_selectorFromFields(selectorKind, selectorValue));
+        if (query) {
+            const previewState = _selectorPreviewState(participantKey || '__draft__', query);
+            const previewWrap = document.createElement('details');
+            previewWrap.className = 'kit-selector-editor-preview';
+            const previewSummary = document.createElement('summary');
+            previewSummary.className = 'kit-stage-editor-summary';
+            const previewTitle = document.createElement('h4');
+            previewTitle.className = 'kit-stage-editor-title';
+            previewTitle.textContent = Kit.dict.label('protocol.participant.selector_preview.label', 'Who matches right now');
+            previewSummary.appendChild(previewTitle);
+            const previewStatus = document.createElement('p');
+            previewStatus.className = 'kit-selector-editor-note';
+            previewStatus.textContent = _selectorPreviewSummary(previewState);
+            previewSummary.appendChild(previewStatus);
+            previewWrap.appendChild(previewSummary);
+            previewWrap.appendChild(Kit.selectorResolutionPreview({
+                selector: previewState.query,
+                candidates: previewState.candidates,
+                busy: previewState.busy,
+                message: previewState.message,
+                showForm: false,
+                showSuggestions: false,
+                title: Kit.dict.label('protocol.participant.selector_preview.label', 'Who matches right now'),
+                help: Kit.dict.help('protocol.participant.selector_preview.help'),
+                emptyHint: Kit.dict.label('protocol.participant.selector_hint'),
+                resultTitle: 'Matching agents',
+            }));
+            wrap.appendChild(previewWrap);
+        }
 
         return wrap;
     }
@@ -2083,7 +2199,6 @@ function renderProtocolWorkspace(container) {
         createAction = null,
         cancelAction = null,
         participantKey = '',
-        onSuggestionSelect = null,
     } = {}) {
         const shell = document.createElement('div');
         shell.className = 'kit-stage-editor';
@@ -2107,7 +2222,6 @@ function renderProtocolWorkspace(container) {
             participantKey,
             readOnly,
             onChange: onCommit,
-            onSuggestionSelect,
         }), { wide: true }));
         const instructions = Kit.detailsPanel({
             target,
@@ -2480,6 +2594,7 @@ function renderProtocolWorkspace(container) {
 
     function _detailToolbarActions(progress, resolvedView, projection, segment) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
+        const showCreateActions = editorMode.kind === 'idle';
         const selectedStage = _selectionStage(draft.document);
         return [
             ...(projection.segments.length > 1 ? [{
@@ -2492,19 +2607,18 @@ function renderProtocolWorkspace(container) {
                 tone: 'btn-small',
                 onClick: () => _setWorkflowView({ kind: 'map', segmentId: String(segment?.id || '') }),
             }] : []),
-            {
+            ...(showCreateActions ? [{
                 label: Kit.dict.label('protocol.participants.add'),
                 tone: 'btn-small',
                 onClick: () => _startParticipantInsert(),
                 disabled: !canMutate,
-            },
-            {
+            }, {
                 label: Kit.dict.label('protocol.stages.add'),
                 tone: 'btn-small',
                 onClick: () => _startStageInsert(),
                 disabled: !canMutate || !progress.participantCount,
-            },
-            ...(selectedStage && editorMode.kind === 'idle' && canMutate ? [{
+            }] : []),
+            ...(selectedStage && showCreateActions && canMutate ? [{
                 label: 'Add route',
                 tone: 'btn-small',
                 onClick: () => _startRouteInsert(selectedStage.stage_key),
@@ -3222,7 +3336,6 @@ function renderProtocolWorkspace(container) {
                 onCommit: _commitPendingParticipantField,
                 createAction: _confirmParticipantInsert,
                 cancelAction: _cancelParticipantInsert,
-                onSuggestionSelect: (value) => { _applyParticipantDraftSuggestion(value); },
             });
         }
 
@@ -3309,7 +3422,6 @@ function renderProtocolWorkspace(container) {
                 participantKey: String(selection.nodeKey || ''),
                 readOnly,
                 onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('participant', selection.nodeKey, key, value),
-                onSuggestionSelect: readOnly ? null : (value) => { void _applyParticipantSuggestion(selection.nodeKey, value); },
             });
         }
         if (selection.sectionKey === 'stages') {

@@ -72,6 +72,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
     await expect.poll(async () => page.locator('.kit-workflow-node-state').count(), { timeout: 15000 }).toBeGreaterThan(0);
 
+    await lifecycle.getByRole('button', { name: 'Protocol' }).click();
     await page.getByRole('button', { name: 'Archive' }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Archived' })).toBeVisible({ timeout: 15000 });

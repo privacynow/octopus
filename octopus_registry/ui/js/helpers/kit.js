@@ -452,6 +452,8 @@ window.Kit = (() => {
             const overflowSummary = document.createElement('summary');
             overflowSummary.className = 'btn btn-small';
             overflowSummary.textContent = 'Protocol';
+            overflowSummary.setAttribute('role', 'button');
+            overflowSummary.setAttribute('aria-label', 'Protocol');
             overflow.appendChild(overflowSummary);
             const overflowBody = document.createElement('div');
             overflowBody.className = 'kit-lifecycle-overflow-body';

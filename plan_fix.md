@@ -1,182 +1,270 @@
-**Target State**
+**Strict Plan**
 
-One coherent product:
+Current state is not acceptable.
 
-- `Overview`: the single whole-workflow comprehension surface
-- `Detail`: the only primary editing surface
-- `Topology`: explicit advanced inspection
+- Desktop `Topology` is still a debug graph, not a usable inspection surface.
+- Mobile `Topology` is broken enough that it should not be treated as a feature.
+- `Overview` is improved, but still not proven to carry the full workflow story on its own.
+- Internal naming, coverage audits, and test breadth are still unfinished debt.
+- Static code alignment does not change any of that.
 
-And one coherent assignment contract:
+This plan assumes the visual evidence is the source of truth.
 
-- `stage -> participant -> selector -> runtime resolution`
+## 1. Non-Negotiable Product Decisions
 
-No parallel overview surfaces. No parallel assignment mechanisms. No legacy shims left active.
+1. `Overview` is the only default whole-workflow comprehension surface.
+2. `Detail` is the only primary editor.
+3. `Topology` is advanced inspection only.
+4. Full-graph topology is not a mobile feature unless it becomes genuinely usable.
+5. No duplicate overview surfaces.
+6. No duplicate assignment pipelines.
+7. No shipping with “internally still transitional” debt left in place if it directly affects future reasoning or tests.
+8. Small-screen topology behavior must be controlled by one explicit, testable rule in product code and tests; no vague “mobile-ish” behavior.
 
-**Current Starting Point**
+## 2. Immediate Reality Check
 
-The current code already gives us the right raw materials:
-- [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js) has `process | detail | map`, segment projection, participant-first editing, selector editor, and authoring-safe agent filtering.
-- [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js) has one `workflowCanvas`, lifecycle header, and selector preview primitive.
-- [documents.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/documents.py) is already the right boundary for canonicalization and validation.
-- [engine.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/engine.py) is already close to selector-first dispatch, but still carries entry-agent preference/fallback semantics.
-- [builtins.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/builtins.py) and [protocol_store.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/protocol_store.py) still need to fully align with the one-contract story.
+Treat these as open defects, not polish:
 
-**Phase 0: Freeze the Product Contract**
+- `Overview` still may not answer flow, gates, and endings strongly enough on its own.
+- Desktop `Topology` is still visually poor.
+- Mobile `Topology` is unusable.
+- Internal `process` / `map` naming is stale conceptual debt.
+- Assignment summary coverage is not exhaustively verified.
+- Validation/publish issue surfacing is not exhaustively verified in UI.
+- Tests do not yet lock the real product contract tightly enough.
 
-- Replace the current conceptual model `Process / Detail / Map` with end-state product language: `Overview / Detail / Topology`.
-- Lock the rule that `Overview` is the only default whole-workflow comprehension surface.
-- Lock the rule that `Topology` is advanced inspection only, not a second editor and not a second overview.
-- Lock the rule that `participant.selector` is the one canonical authored assignment field.
-- Lock the rule that `required_skills` is legacy input only.
-- Lock the rule that incomplete assignment is explicit and publish-blocking.
-- Update [plan_fix.md](/Users/tinker/output/bots/telegram-agent-bot/plan_fix.md) and any stale top-of-file comments so the repo no longer describes two overview surfaces or multiple assignment contracts.
+Nothing in this list should be deferred as “later polish.”
 
-**Phase 1: Finish Assignment Canonicalization**
+## 3. Phase 0: Stop Lying To Ourselves
 
-- In [documents.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/documents.py), make canonicalization authoritative:
-  - if `selector` exists, keep it
-  - else if `required_skills` exists, synthesize `selector = { kind: "skill", value: first_skill }`
-  - else leave selector empty and let validation fail
-- Remove `required_skills` from the canonical in-memory/output document shape so round-tripping does not preserve two active fields.
-- Define multi-skill legacy policy explicitly:
-  - first skill becomes selector
-  - additional skills trigger a validation/migration warning
-  - no silent multi-skill runtime behavior remains
-- Update [builtins.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/builtins.py) so all built-ins use explicit selectors only.
-- Update any store/snapshot shaping in [protocol_store.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/protocol_store.py) so downstream persisted views derive skill summaries from selector, not legacy fields.
+Before more implementation, lock these truths in [plan_fix.md](/Users/tinker/output/bots/telegram-agent-bot/plan_fix.md) and code comments where needed:
 
-**Phase 2: Simplify Runtime to One Non-Rehearsal Contract**
+- Desktop topology is still bad.
+- Mobile topology is not shippable in current form.
+- Overview is still under acceptance review, not “done.”
+- Static code review does not override live visual review.
+- No further work should assume current topology is “good enough.”
 
-- In [engine.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/engine.py), keep rehearsal override intact.
-- Remove live non-rehearsal dependence on `required_skills`.
-- Make non-rehearsal dispatch use canonical `participant.selector` only.
-- Make `requested_skills` derive from selector only:
-  - `skill` selector -> `[selector.value]`
-  - otherwise `[]`
-- Make `preferred_agent_id` behavior explicit:
-  - either remove implicit entry-agent preference for normal skill routing
-  - or keep it only as an explicit, documented runtime policy
-- End state: no invisible entry-agent fallback as the normal publishable product path.
+This matters because completion theater is how debt survives.
 
-**Phase 3: Validation and Incomplete-State Enforcement**
+## 4. Phase 1: Finish Overview Properly
 
-- Extend protocol validation in [documents.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/documents.py) so these are first-class issues:
-  - participant missing selector
-  - invalid selector kind/value
-  - multi-skill legacy warning/error
-- Wire those issues into publish/activate gating so “cannot publish” is enforced by the same validation contract the UI shows.
-- Ensure `Detail` and `Overview` both surface incomplete assignment clearly as `Unassigned` or equivalent.
-- Remove any UI or runtime behavior that quietly makes incomplete assignment look valid.
+This is the primary visual repair phase. Not a rename. Not a copy pass.
 
-**Phase 4: Consolidate Whole-Workflow Comprehension into One Overview**
+In [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js), [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js), and [main.css](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/css/main.css):
 
-- Evolve the current `process` surface in [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js) into the final `Overview`.
-- This is not a rename-only phase. It is the primary visual-repair phase for whole-workflow comprehension.
-- Do not add a second flow-first map. Absorb any useful “mainline continuity” ideas into `Overview` itself.
-- `Overview` should answer:
-  - what are the ordered sections?
-  - what is the mainline flow?
-  - where are review/branch points?
-  - how can it end?
-- Keep the unit of comprehension primarily segment/section-based, but enrich it enough that it feels like one coherent whole-workflow picture rather than a disconnected card list.
-- `Overview` must be visually reworked so it reads as one workflow narrative:
-  - clear ordered mainline
-  - visible continuity between sections
-  - review and branch points visible but visually secondary
-  - endings shown near the sections or decisions that can reach them
-  - enough connective structure that a user can answer “what is the flow?” without opening `Topology`
-- The current process-card strip is not sufficient as the final answer unless it is upgraded to meet the comprehension bar above.
-- Participant ownership stays annotation-level in `Overview`, not the main layout axis.
-- Outcomes should be shown near relevant sections, not as a remote detached concept.
-- `Overview` must not turn into a disguised mini-graph. The goal is flow comprehension, not another topology rendering.
+- Strengthen the current overview so the workflow reads as one coherent narrative, not improved cards.
+- Make mainline order dominant.
+- Make review/branch points visible but visually secondary.
+- Make endings contextual and local to the relevant section, not abstract summary residue.
+- Make participant ownership readable without becoming the primary layout axis.
+- Ensure the user can answer:
+  - what happens first
+  - where are the review gates
+  - what can loop back
+  - how can this workflow finish
+- Do not rely on topology for any of those answers.
 
-**Phase 5: Keep Detail as the Only Editor**
+Acceptance gate:
+- If a user still needs `Topology` to understand the Software Engineering template, `Overview` is not finished.
 
-- Leave `Detail` as the sole primary authoring surface in [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js).
-- Reuse one shared assignment summary formatter across:
-  - participant cards
-  - stage owner lines
+## 5. Phase 2: Remove Mobile Topology As Shipped Today
+
+Do not keep the current mobile topology path alive while pretending it is merely rough.
+
+In [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js) and [main.css](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/css/main.css):
+
+- Define one explicit small-screen rule for topology behavior and use it consistently in code and tests.
+- Default outcome for this phase: remove or suppress full-graph topology on small screens immediately.
+- Remove topology connect/edit affordances on mobile entirely.
+- Replace with one honest near-term state:
+  - explicit message that full topology is desktop-only and Overview/Detail should be used on mobile
+- Treat focused local topology on mobile as a later addition only if it clears the same usability bar as desktop focused topology.
+
+Do not keep:
+- cropped desktop graph
+- scroll-box graph hunting
+- tiny zoom controls
+- dense graph actions in a narrow viewport
+
+Acceptance gate:
+- Mobile must not expose an unusable full graph.
+
+## 6. Phase 3: Rebuild Topology As One Focus-First Design Unit
+
+Do not treat topology scope and topology geometry as separate design problems. In the current code, projection and layout are too tightly coupled for that to be efficient or correct.
+
+The current topology fails because it defaults to full-graph inspection.
+
+In [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js):
+
+- Replace full-graph-first topology data with focus-aware topology data designed together with the new layout rules.
+- Support explicit scopes:
+  - `focus`
+  - `segment`
+  - `full`
+- Default to `focus`, not `full`.
+- Scope should include:
+  - selected step or segment
+  - immediate predecessors
+  - immediate successors
+  - local branch targets
+  - nearby outcomes
+
+In [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js):
+
+- Keep one topology renderer.
+- Stop assuming topology is always a giant global graph.
+- Make the default layout selection-centric and local.
+- Design layout semantics together with the scope model:
+  - primary spine
+  - local branch attachments
+  - contextual outcomes
+  - selected path emphasis
+  - de-emphasized distant context
+
+Acceptance gate:
+- Opening topology from a selected stage should show a readable local route picture first, not a wall of wiring.
+
+Delivery slices for this phase:
+- Slice A: define and ship focus/segment/full topology data model with the new layout contract.
+- Slice B: ship desktop rendering against that contract and make `focus` the default opening state.
+
+## 7. Phase 4: Replace The Desktop Topology Geometry
+
+Do not waste time tweaking spacing on the current fixed-grid graph. That path is exhausted.
+
+In [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js):
+
+- Replace the current full-graph geometry assumptions:
+  - fixed column/row dominance
+  - top back-edge bands
+  - far-right terminal rail
+  - oversized empty canvas regions
+- Compute topology layout from:
+  - primary spine
+  - local branch attachments
+  - contextual outcomes
+  - selected path emphasis
+- Keep branch labels only where they add meaning.
+- De-emphasize non-selected edges and distant context in focus mode.
+
+Acceptance gate:
+- Desktop topology must become readable as an inspection tool, not just “less misleading than before.”
+
+## 8. Phase 5: Internal Naming Debt Must Be Removed
+
+Do not leave `process` / `map` scattered through the code once the product model is stable.
+
+In [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js), [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js), tests, and related strings:
+
+- Rename internal view kinds from `process` to `overview`.
+- Rename internal view kinds from `map` to `topology`.
+- Update helpers, comments, state persistence keys, and test names.
+- Handle persisted workflow-view state once:
+  - migrate old stored values once, or
+  - invalidate/reset old stored values once
+- Do not keep dual-key or dual-value compatibility paths alive after the rename.
+- Delete stale transitional terminology.
+- Do this only after behavior is correct enough to avoid churn, but do not defer it indefinitely.
+
+Acceptance gate:
+- No active code path should still conceptually describe the product with obsolete surface names.
+
+## 9. Phase 6: Exhaustive Assignment And Validation Audit
+
+Do not assume the selector/assignment story is fully finished just because the runtime path improved.
+
+In [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js), [documents.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/documents.py), [engine.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/engine.py), and related tests:
+
+- Grep and audit every user-visible assignment summary.
+- Ensure the same summary logic is used everywhere it should be:
+  - overview rows
   - detail headers
-  - overview summaries
-  - topology node labels where useful
-- Keep route editing in `Detail`.
-- Ensure `Topology` adds no unique authoring requirement. At most it may keep expert shortcuts, but nothing ordinary depends on it.
+  - step owner lines
+  - participant editor
+  - topology node sublabels where appropriate
+- Audit every UI path that surfaces validation issues.
+- Ensure `participant.selector_required` appears consistently where users need it.
+- Decide and document the product meaning of `preferred_agent_id` for skill selectors.
+- Remove any remaining ambiguity between authored assignment and runtime hinting.
+- Produce a checked audit artifact in the repo or review notes that lists:
+  - surface
+  - assignment summary formatter/helper used
+  - validation issue entry point
+  - expected user-visible output/state
 
-**Phase 6: Demote Map to Explicit Topology**
+Acceptance gate:
+- A user must never wonder how a stage resolves, and the answer must not vary by surface.
 
-- Reframe current `map` as `Topology` in [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js).
-- Change labels and entry points so users understand this is an advanced all-routes view.
-- Keep one graph engine in [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js); do not build a second graph renderer.
-- Topology remains step-level and full-edge, but now it is honest about its job: inspection/debugging, not first understanding.
-- Improve Topology only enough to be usable as an expert tool:
-  - better fit/zoom defaults
-  - clearer labeling for selected/branch routes
-  - less dead space if easy to win
-  - but do not spend effort trying to make it the primary narrative view
-- Visual success for the product is judged first by `Overview`, not by whether `Topology` becomes beautiful.
+## 10. Phase 7: Delete Dead Paths, Don’t Just Ignore Them
 
-**Phase 7: Remove Dead Paths and Naming Debt**
+Once the new Overview/Topology contract is in place:
 
-- Once `Overview / Detail / Topology` is live, remove old `process/map` naming where it only reflects outdated product semantics.
-- Delete stale strings, tests, and comments that still imply:
-  - two default overview surfaces
-  - `Map` as a normal comprehension surface
-  - `required_skills` as a normal authored field
-  - invisible entry-agent fallback as ordinary behavior
-- Audit [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js) and [main.css](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/css/main.css) for dead branches tied to the old story.
-- Keep one active pipeline per capability.
+- Remove any dead topology-mobile assumptions.
+- Remove obsolete tests that validate the old full-graph-first behavior as default.
+- Remove any stale CSS that only exists to support dead graph behaviors.
+- Remove stale comments and stale plan text.
+- Remove dead route/connect affordances that only made sense for the old topology-first assumptions.
 
-**Phase 8: Test the Product Contract**
+No passive debt parking.
 
-- Update Python tests:
-  - [tests/test_protocols.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_protocols.py)
-  - [tests/test_protocol_engine.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_protocol_engine.py)
-  - [tests/test_registry_ui_contract.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_registry_ui_contract.py)
-  - [tests/test_registry_ui_kit_contract.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_registry_ui_kit_contract.py)
-- Add assertions for:
-  - canonical selector-first document shape
-  - multi-skill legacy warning behavior
-  - selector-derived `requested_skills`
-  - no publish-ready participant without selector
-  - overview/topology terminology and button labels
-- Update Playwright flows:
-  - whole workflow opens into `Overview`
-  - `Detail` remains the only editor
-  - `Topology` is explicit and advanced
-  - assignment summaries are visible and understandable
-- Treat screenshots as manual review support, not the only truth. Structural assertions should carry most of the contract.
+## 11. Phase 8: Tests Must Match The Real Product, Not The Intent
 
-**Phase 9: Rollout and Data Handling**
+Update:
+- [tests/e2e/playwright/protocol-ui.spec.js](/Users/tinker/output/bots/telegram-agent-bot/tests/e2e/playwright/protocol-ui.spec.js)
+- [tests/e2e/playwright/protocol-ui-capture.spec.js](/Users/tinker/output/bots/telegram-agent-bot/tests/e2e/playwright/protocol-ui-capture.spec.js)
+- [tests/test_registry_ui_contract.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_registry_ui_contract.py)
+- [tests/test_registry_ui_kit_contract.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_registry_ui_kit_contract.py)
+- [tests/test_protocols.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_protocols.py)
+- [tests/test_protocol_engine.py](/Users/tinker/output/bots/telegram-agent-bot/tests/test_protocol_engine.py)
 
-- Because backward compatibility is not a goal, do not add compatibility shims.
-- Use one clean migration boundary in [documents.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/documents.py).
-- For dev/staging data, choose explicitly:
-  - migrate in place through canonicalization on load/save
-  - or reset known test fixtures if that is cleaner
-- Do not preserve two behaviors just to avoid touching old data.
+Add hard assertions for:
+- overview is the default whole-workflow surface
+- topology is explicit advanced inspection
+- mobile does not expose unusable full topology
+- the small-screen topology rule behaves deterministically at the chosen breakpoint
+- topology defaults to focused inspection, not full graph
+- assignment summaries are consistent across surfaces
+- selector-required validation is surfaced consistently
+- internal surface names and visible strings are aligned after cleanup
 
-**Acceptance Criteria**
+Use screenshots as hard review inputs, not vanity artifacts.
 
-- There is one default whole-workflow comprehension surface: `Overview`.
-- There is one primary editor: `Detail`.
-- There is one advanced all-routes inspection surface: `Topology`.
-- `Overview` itself provides the visual repair of the default whole-workflow experience; it is not merely a renamed `Process`.
-- A new user can answer “what is the flow, where are the review gates, and how can it end?” from `Overview` without needing `Topology`.
-- A user can tell how any stage resolves from the UI without understanding internal selector mechanics.
-- `participant.selector` is the only canonical authored assignment rule.
-- `required_skills` is migration-only and no longer an active parallel contract.
-- Incomplete assignment is explicit and blocks publish.
-- Topology is discoverable for experts but no longer pretending to be the main explanation of the workflow.
-- No duplicate overview UIs, no duplicate assignment pipelines, no legacy UI/runtime branches left active.
+## 12. Hard Ship Blockers
 
-**Execution Order**
+Do not ship while any of these remain true:
 
-1. Freeze terminology and product contract.
-2. Canonicalize documents and built-ins to selector-first.
-3. Simplify engine/runtime payloads to selector-first.
-4. Enforce validation/publish rules for incomplete assignment.
-5. Add shared assignment summaries everywhere.
-6. Upgrade `process` into the final `Overview` and complete the whole-workflow visual repair there.
-7. Reframe `map` into explicit `Topology` and limit its work to expert usability.
-8. Delete dead code, dead labels, and stale tests.
-9. Run contract tests, browser tests, visual review, and deploy.
+- Software Engineering still requires topology for normal comprehension
+- desktop topology is still dominated by edge soup and dead space
+- mobile shows a cropped desktop graph
+- topology opens full graph by default
+- `process` / `map` naming debt is still active in the core surface model
+- assignment summaries differ across surfaces
+- validation issues are inconsistently surfaced
+- dead topology-first code paths remain
+
+## 13. Execution Order
+
+1. Lock the harsh current-state assessment in the plan and comments.
+2. Finish `Overview` to the actual acceptance bar.
+3. Remove or suppress mobile full topology immediately.
+4. Rebuild topology as focus-first.
+5. Replace desktop topology geometry.
+6. Audit and unify assignment/validation surfacing.
+7. Rename internal surface model to `overview` / `topology`.
+8. Delete dead paths.
+9. Expand tests and visual review gates.
+10. Only then call it complete.
+
+## 14. Definition Of Done
+
+This work is done only when:
+
+- `Overview` fully carries the workflow story
+- `Detail` remains the sole editor
+- `Topology` is genuinely useful as advanced inspection on desktop
+- mobile no longer exposes unusable topology
+- internal naming matches the product model
+- assignment and validation are consistent everywhere
+- stale topology-first debt is deleted, not tolerated

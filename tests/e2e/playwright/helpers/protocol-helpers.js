@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { expect } = require('@playwright/test');
+const { expect } = require('../playwright-runtime');
 
 function registryUiToken() {
   const direct = String(process.env.REGISTRY_UI_TOKEN || '').trim();
@@ -146,6 +146,19 @@ async function createStep(page, { name, key = '', ownerRole = '', stageKind = ''
 }
 
 async function connectStep(page, sourceStageKey, targetNodeId) {
+  const sourceStep = page.getByTestId(`workflow-step-${sourceStageKey}`);
+  if (!await sourceStep.isVisible().catch(() => false)) {
+    const segmentTab = page.getByTestId(`workflow-segment-tab-${sourceStageKey}`);
+    if (await segmentTab.isVisible().catch(() => false)) {
+      await segmentTab.click();
+    } else if (await page.getByRole('button', { name: 'Back to phases' }).count()) {
+      await page.getByRole('button', { name: 'Back to phases' }).click();
+      const segmentNode = page.getByTestId(`workflow-node-segment:${sourceStageKey}`);
+      if (await segmentNode.isVisible().catch(() => false)) {
+        await segmentNode.click();
+      }
+    }
+  }
   await page.getByTestId(`workflow-step-${sourceStageKey}`).click();
   const addRoute = page.getByRole('button', { name: 'Add route' }).first();
   await expect(addRoute).toBeVisible();

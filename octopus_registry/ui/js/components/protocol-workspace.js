@@ -2562,6 +2562,13 @@ function renderProtocolWorkspace(container) {
                 title: String(segment?.label || 'Workflow builder'),
                 subtitle: segment ? `${segment.stepSummary} · ${segment.roleSummary}` : 'Build roles, steps, and routes here.',
             },
+            segmentChips: projection.segments.length > 1
+                ? projection.segments.map((item) => ({
+                    id: String(item.id || ''),
+                    label: String(item.label || item.id || 'Untitled section'),
+                    selected: String(item.id || '') === String(segment?.id || ''),
+                }))
+                : [],
             roleChips: (segment?.roleKeys || []).map((roleKey) => ({
                 key: String(roleKey || ''),
                 label: _participantDisplayName(roleKey, draft.document),
@@ -2766,6 +2773,17 @@ function renderProtocolWorkspace(container) {
 
         const meta = document.createElement('div');
         meta.className = 'kit-protocol-detail-meta';
+        (workflow.segmentChips || []).forEach((item) => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = `kit-protocol-detail-chip${item.selected ? ' is-selected' : ''}`;
+            chip.dataset.testid = `workflow-segment-tab-${String(item.id || '')}`;
+            chip.textContent = String(item.label || '');
+            chip.addEventListener('click', () => {
+                _setDetailSegment(workflow.projection, item.id);
+            });
+            meta.appendChild(chip);
+        });
         (workflow.roleChips || []).forEach((role) => {
             const chip = document.createElement('button');
             chip.type = 'button';

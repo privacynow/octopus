@@ -2543,7 +2543,7 @@ function renderProtocolWorkspace(container) {
             return segment.stageKeys.includes(sourceKey);
         }
         if (selection.sectionKey === 'participants') {
-            return segment.roleKeys.includes(String(selection.nodeKey || ''));
+            return true;
         }
         return selection.sectionKey === 'artifacts';
     }

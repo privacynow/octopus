@@ -1122,8 +1122,9 @@ window.Kit = (() => {
         ].join('|');
         root.tabIndex = 0;
         const currentView = String(viewState?.kind || 'detail');
-        const isProcess = currentView === 'process';
-        const isMap = currentView === 'map';
+        const isOverview = currentView === 'overview';
+        const isTopology = currentView === 'topology';
+        const topologyScope = String(viewState?.scope || 'full');
 
         if (firstRun && firstRun.active) {
             const card = document.createElement('div');
@@ -1166,7 +1167,7 @@ window.Kit = (() => {
             viewBar.className = 'kit-workflow-viewbar';
             const title = document.createElement('strong');
             title.className = 'kit-workflow-viewbar-title';
-            title.textContent = String(viewState?.title || (isProcess ? 'Workflow overview' : 'Workflow'));
+            title.textContent = String(viewState?.title || (isOverview ? 'Workflow overview' : 'Workflow'));
             viewBar.appendChild(title);
             if (viewState?.subtitle) {
                 const subtitle = document.createElement('span');
@@ -1263,32 +1264,32 @@ window.Kit = (() => {
 
         if (!nodes.length && !lanes.length) {
             // True blank-first-run state: no fake graph, no decorative lanes.
-        } else if (isProcess) {
+        } else if (isOverview) {
             const ordered = _orderedNodes();
-            const process = document.createElement('div');
-            process.className = 'kit-workflow-process';
+            const overview = document.createElement('div');
+            overview.className = 'kit-workflow-overview';
             ordered.forEach((node, index) => {
                 const row = document.createElement('div');
-                row.className = 'kit-workflow-process-row';
+                row.className = 'kit-workflow-overview-row';
 
                 const rail = document.createElement('div');
-                rail.className = 'kit-workflow-process-rail';
+                rail.className = 'kit-workflow-overview-rail';
 
                 const order = document.createElement('span');
-                order.className = 'kit-workflow-process-order';
+                order.className = 'kit-workflow-overview-order';
                 order.textContent = String(index + 1).padStart(2, '0');
                 rail.appendChild(order);
 
                 if (index < ordered.length - 1) {
                     const connector = document.createElement('span');
-                    connector.className = 'kit-workflow-process-connector';
+                    connector.className = 'kit-workflow-overview-connector';
                     rail.appendChild(connector);
                 }
                 row.appendChild(rail);
 
                 const card = document.createElement('button');
                 card.type = 'button';
-                card.className = `kit-workflow-process-card${selection?.kind === 'segment' && selection?.id === node.id ? ' is-selected' : ''}`;
+                card.className = `kit-workflow-overview-card${selection?.kind === 'segment' && selection?.id === node.id ? ' is-selected' : ''}`;
                 card.dataset.testid = `workflow-node-${String(node.id || '')}`;
                 card.dataset.nodeId = String(node.id || '');
                 if (typeof onSelect === 'function') {
@@ -1296,12 +1297,12 @@ window.Kit = (() => {
                 }
 
                 const top = document.createElement('div');
-                top.className = 'kit-workflow-process-card-top';
+                top.className = 'kit-workflow-overview-card-top';
 
                 const badges = (Array.isArray(node.badges) ? node.badges : []).slice(0, 2);
                 if (badges.length) {
                     const badgeRow = document.createElement('div');
-                    badgeRow.className = 'kit-workflow-process-badges';
+                    badgeRow.className = 'kit-workflow-overview-badges';
                     badges.forEach((badge) => {
                         const chip = document.createElement('span');
                         chip.className = `kit-workflow-node-badge${badge?.tone ? ` is-${badge.tone}` : ''}`;
@@ -1313,20 +1314,20 @@ window.Kit = (() => {
                 card.appendChild(top);
 
                 const label = document.createElement('div');
-                label.className = 'kit-workflow-process-label';
+                label.className = 'kit-workflow-overview-label';
                 label.textContent = String(node.label || node.id || '');
                 card.appendChild(label);
 
                 if (node.sublabel) {
                     const sub = document.createElement('div');
-                    sub.className = 'kit-workflow-process-sublabel';
+                    sub.className = 'kit-workflow-overview-sublabel';
                     sub.textContent = String(node.sublabel || '');
                     card.appendChild(sub);
                 }
 
                 if (node.preview) {
                     const preview = document.createElement('div');
-                    preview.className = 'kit-workflow-process-preview';
+                    preview.className = 'kit-workflow-overview-preview';
                     preview.textContent = String(node.preview || '');
                     card.appendChild(preview);
                 }
@@ -1334,16 +1335,16 @@ window.Kit = (() => {
                 const stageNames = Array.isArray(node.stageNames) ? node.stageNames.filter(Boolean) : [];
                 if (stageNames.length) {
                     const sequence = document.createElement('div');
-                    sequence.className = 'kit-workflow-process-stages';
+                    sequence.className = 'kit-workflow-overview-stages';
                     stageNames.slice(0, 5).forEach((name) => {
                         const pill = document.createElement('span');
-                        pill.className = 'kit-workflow-process-stage';
+                        pill.className = 'kit-workflow-overview-stage';
                         pill.textContent = String(name || '');
                         sequence.appendChild(pill);
                     });
                     if (stageNames.length > 5) {
                         const extra = document.createElement('span');
-                        extra.className = 'kit-workflow-process-stage is-muted';
+                        extra.className = 'kit-workflow-overview-stage is-muted';
                         extra.textContent = `+ ${stageNames.length - 5} more`;
                         sequence.appendChild(extra);
                     }
@@ -1353,10 +1354,10 @@ window.Kit = (() => {
                 const routes = Array.isArray(node.routes) ? node.routes.filter(Boolean) : [];
                 if (routes.length) {
                     const routeList = document.createElement('div');
-                    routeList.className = 'kit-workflow-process-routes';
+                    routeList.className = 'kit-workflow-overview-routes';
                     routes.forEach((route) => {
                         const routeRow = document.createElement('div');
-                        routeRow.className = 'kit-workflow-process-route';
+                        routeRow.className = 'kit-workflow-overview-route';
 
                         const decision = document.createElement('span');
                         decision.className = 'kit-workflow-node-badge is-context';
@@ -1364,7 +1365,7 @@ window.Kit = (() => {
                         routeRow.appendChild(decision);
 
                         const routeBody = document.createElement('span');
-                        routeBody.className = 'kit-workflow-process-route-body';
+                        routeBody.className = 'kit-workflow-overview-route-body';
                         routeBody.textContent = `${String(route.targetLabel || '')} · ${String(route.metaLabel || '')}`;
                         routeRow.appendChild(routeBody);
 
@@ -1375,31 +1376,31 @@ window.Kit = (() => {
 
                 if (node.footnote) {
                     const foot = document.createElement('div');
-                    foot.className = 'kit-workflow-process-footnote';
+                    foot.className = 'kit-workflow-overview-footnote';
                     foot.textContent = String(node.footnote || '');
                     card.appendChild(foot);
                 }
 
                 row.appendChild(card);
-                process.appendChild(row);
+                overview.appendChild(row);
             });
-            root.appendChild(process);
+            root.appendChild(overview);
         } else {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
-            const denseMode = isMap || nodes.length >= 8;
+            const denseMode = (isTopology && topologyScope === 'full') || nodes.length >= 8;
 
             const controls = document.createElement('div');
             controls.className = 'kit-workflow-controls';
             const viewport = document.createElement('div');
             viewport.className = 'kit-workflow-viewport';
 
-            const rowHeight = isMap ? 88 : denseMode ? 82 : 92;
-            const rowGap = isMap ? 14 : denseMode ? 10 : 14;
-            const columnWidth = isMap ? 208 : denseMode ? 194 : 214;
-            const columnGap = isMap ? 24 : denseMode ? 18 : 24;
-            const leftPad = lanes.length ? (isMap ? 84 : denseMode ? 94 : 108) : (isMap ? 28 : 18);
-            const rightPad = isMap ? 24 : denseMode ? 18 : 24;
+            const rowHeight = isTopology ? (topologyScope === 'full' ? 88 : 96) : denseMode ? 82 : 92;
+            const rowGap = isTopology ? (topologyScope === 'full' ? 18 : 14) : denseMode ? 10 : 14;
+            const columnWidth = isTopology ? (topologyScope === 'full' ? 214 : 224) : denseMode ? 194 : 214;
+            const columnGap = isTopology ? (topologyScope === 'full' ? 28 : 24) : denseMode ? 18 : 24;
+            const leftPad = lanes.length ? (isTopology ? 84 : denseMode ? 94 : 108) : (isTopology ? 34 : 18);
+            const rightPad = isTopology ? 34 : denseMode ? 18 : 24;
             const bottomPad = 24;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
@@ -1409,15 +1410,15 @@ window.Kit = (() => {
             };
             const nodeBox = (node) => {
                 if (node.isTerminal) {
-                    return { width: isMap ? 148 : denseMode ? 140 : 148, height: isMap ? 58 : denseMode ? 58 : 64 };
+                    return { width: isTopology ? (topologyScope === 'full' ? 154 : 168) : denseMode ? 140 : 148, height: isTopology ? (topologyScope === 'full' ? 60 : 66) : denseMode ? 58 : 64 };
                 }
                 if (node.isContext) {
-                    return { width: isMap ? 168 : denseMode ? 158 : 166, height: isMap ? 64 : denseMode ? 64 : 70 };
+                    return { width: isTopology ? (topologyScope === 'full' ? 170 : 182) : denseMode ? 158 : 166, height: isTopology ? (topologyScope === 'full' ? 64 : 72) : denseMode ? 64 : 70 };
                 }
                 if (node.kind === 'segment') {
-                    return { width: isMap ? 176 : denseMode ? 168 : 178, height: isMap ? 68 : denseMode ? 68 : 74 };
+                    return { width: isTopology ? (topologyScope === 'full' ? 178 : 190) : denseMode ? 168 : 178, height: isTopology ? (topologyScope === 'full' ? 68 : 76) : denseMode ? 68 : 74 };
                 }
-                return { width: isMap ? 196 : denseMode ? 184 : 198, height: isMap ? 88 : denseMode ? 84 : 92 };
+                return { width: isTopology ? (topologyScope === 'full' ? 198 : 220) : denseMode ? 184 : 198, height: isTopology ? (topologyScope === 'full' ? 88 : 102) : denseMode ? 84 : 92 };
             };
             const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
             const backEdges = edges.filter((edge) => {
@@ -1425,8 +1426,10 @@ window.Kit = (() => {
                 const toNode = nodeById.get(String(edge.to || ''));
                 return toNode && fromNode && Number(toNode.column || 0) <= Number(fromNode.column || 0);
             });
-            const routeHeadroom = backEdges.length ? 14 + (backEdges.length * 18) : 14;
-            const topPad = 18 + routeHeadroom;
+            const routeHeadroom = backEdges.length
+                ? (isTopology && topologyScope !== 'full' ? 8 + (backEdges.length * 8) : 14 + (backEdges.length * 18))
+                : (isTopology && topologyScope !== 'full' ? 8 : 14);
+            const topPad = (isTopology && topologyScope !== 'full' ? 14 : 18) + routeHeadroom;
             const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
             const maxRow = Math.max(0, ...nodes.map((node) => nodeRow(node)));
             const graphWidth = leftPad + rightPad + ((maxColumn + 1) * columnWidth) + (Math.max(0, maxColumn) * columnGap);
@@ -1477,7 +1480,7 @@ window.Kit = (() => {
                     label.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
                 }
                 guide.appendChild(label);
-                if (laneMeta.sublabel && !denseMode && !isMap) {
+                if (laneMeta.sublabel && !denseMode && !isTopology) {
                     const sub = document.createElement('div');
                     sub.className = 'kit-workflow-lane-guide-sublabel';
                     sub.textContent = String(laneMeta.sublabel || '');
@@ -1645,7 +1648,7 @@ window.Kit = (() => {
             }));
             const labelBoxes = [];
             function estimateLabelBox(text, x, y) {
-                const width = Math.min(isMap ? 128 : 176, Math.max(48, (String(text || '').length * 7) + 28));
+                    const width = Math.min(isTopology ? 128 : 176, Math.max(48, (String(text || '').length * 7) + 28));
                 const height = 24;
                 return {
                     width,
@@ -1736,7 +1739,7 @@ window.Kit = (() => {
                 }
 
                 const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                path.setAttribute('class', `kit-workflow-edge-path${selected ? ' is-selected' : ''}`);
+                path.setAttribute('class', `kit-workflow-edge-path${edge?.tone ? ` is-${edge.tone}` : ''}${selected ? ' is-selected' : ''}`);
                 path.setAttribute('d', pathData);
                 path.setAttribute('marker-end', 'url(#kit-workflow-arrow)');
                 if (typeof onSelect === 'function') {
@@ -1751,7 +1754,7 @@ window.Kit = (() => {
                 }
                 let reserved = placeLabel(String(edge.label || ''), labelCandidates);
                 if (!reserved) {
-                    if (isMap || !labelCandidates.length) {
+                    if (isTopology || !labelCandidates.length) {
                         return;
                     }
                     reserved = labelCandidates[0];
@@ -1771,16 +1774,20 @@ window.Kit = (() => {
 
             const defaultZoom = Object.prototype.hasOwnProperty.call(viewportState || {}, 'zoom')
                 ? viewportState.zoom
-                : (isMap ? 'fit' : 1);
-            const minZoom = isMap ? 0.4 : 0.55;
-            const maxZoom = isMap ? 1.2 : 1.5;
+                : (isTopology ? 'fit' : 1);
+            const minZoom = isTopology ? (topologyScope === 'full' ? 0.4 : 0.55) : 0.55;
+            const maxZoom = isTopology ? (topologyScope === 'full' ? 1.2 : 1.3) : 1.5;
             function resolvedZoomValue() {
                 return Math.max(minZoom, Math.min(maxZoom, Number(graph.dataset.zoomResolved || 1) || 1));
             }
             function computeFitZoom() {
                 const viewportWidth = Math.max(320, Number(viewport.clientWidth || 0) - 12);
                 const viewportHeight = Math.max(260, Number(viewport.clientHeight || 0) - 12);
-                return Math.max(minZoom, Math.min(1, viewportWidth / Math.max(graphWidth, 1), viewportHeight / Math.max(graphHeight, 1)));
+                const fitCap = isTopology && topologyScope !== 'full' ? maxZoom : 1;
+                return Math.max(
+                    minZoom,
+                    Math.min(fitCap, viewportWidth / Math.max(graphWidth, 1), viewportHeight / Math.max(graphHeight, 1)),
+                );
             }
             function applyZoom(nextZoom, notify = true) {
                 const zoomValue = nextZoom === 'fit'

@@ -105,6 +105,19 @@ def resolve_protocol_participant(
     )
 
 
+def runtime_protocol_selector(
+    *,
+    selector: TargetSelector,
+    entry_agent_id: str = "",
+) -> TargetSelector:
+    preferred = str(entry_agent_id or "").strip()
+    if selector.kind != "skill" or not preferred or str(selector.preferred_agent_id or "").strip():
+        return selector
+    # Skill selectors stay authored as capabilities, but runtime resolution
+    # prefers the run entry agent when that agent satisfies the selector.
+    return selector.model_copy(update={"preferred_agent_id": preferred})
+
+
 def evaluate_protocol_dispatch(
     *,
     protocol_engine: ProtocolRunEngine,
@@ -147,6 +160,7 @@ def evaluate_protocol_dispatch(
             error_code="PARTICIPANT_SELECTOR_REQUIRED",
             error_detail=str(exc),
         )
+    selector = runtime_protocol_selector(selector=selector, entry_agent_id=run.entry_agent_id)
     resolution = resolve_protocol_participant(selector=selector, resolve_selector=resolve_selector)
     return protocol_engine.evaluate_dispatch_resolution(
         document=document,

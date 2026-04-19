@@ -4021,26 +4021,26 @@ button.kit-protocol-step-owner {
     box-shadow: var(--focus-ring);
 }
 
-.kit-workflow-process {
+.kit-workflow-overview {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
 }
 
-.kit-workflow-process-row {
+.kit-workflow-overview-row {
     display: grid;
     grid-template-columns: 2.4rem minmax(0, 1fr);
     gap: var(--space-3);
     align-items: stretch;
 }
 
-.kit-workflow-process-rail {
+.kit-workflow-overview-rail {
     position: relative;
     display: flex;
     justify-content: center;
 }
 
-.kit-workflow-process-connector {
+.kit-workflow-overview-connector {
     position: absolute;
     top: 2.65rem;
     bottom: calc(var(--space-3) * -1);
@@ -4051,7 +4051,7 @@ button.kit-protocol-step-owner {
     border-radius: 999px;
 }
 
-.kit-workflow-process-card {
+.kit-workflow-overview-card {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -4071,26 +4071,26 @@ button.kit-protocol-step-owner {
     transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
-.kit-workflow-process-card:hover,
-.kit-workflow-process-card:focus-visible {
+.kit-workflow-overview-card:hover,
+.kit-workflow-overview-card:focus-visible {
     border-color: rgba(149, 76, 47, 0.35);
     box-shadow: 0 22px 42px rgba(17, 24, 39, 0.14);
     transform: translateY(-1px);
 }
 
-.kit-workflow-process-card.is-selected {
+.kit-workflow-overview-card.is-selected {
     border-color: var(--accent);
     box-shadow: var(--focus-ring), 0 22px 42px rgba(17, 24, 39, 0.14);
 }
 
-.kit-workflow-process-card-top {
+.kit-workflow-overview-card-top {
     display: flex;
     align-items: flex-start;
     justify-content: flex-end;
     gap: var(--space-2);
 }
 
-.kit-workflow-process-order {
+.kit-workflow-overview-order {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -4104,26 +4104,26 @@ button.kit-protocol-step-owner {
     letter-spacing: 0.08em;
 }
 
-.kit-workflow-process-badges {
+.kit-workflow-overview-badges {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: var(--space-1);
 }
 
-.kit-workflow-process-label {
+.kit-workflow-overview-label {
     font-size: 1.05rem;
     font-weight: 800;
     line-height: 1.3;
 }
 
-.kit-workflow-process-sublabel {
+.kit-workflow-overview-sublabel {
     color: var(--text-secondary);
     font-size: var(--text-sm);
     line-height: 1.45;
 }
 
-.kit-workflow-process-preview {
+.kit-workflow-overview-preview {
     color: var(--text-muted);
     font-size: var(--text-sm);
     line-height: 1.5;
@@ -4133,13 +4133,13 @@ button.kit-protocol-step-owner {
     overflow: hidden;
 }
 
-.kit-workflow-process-stages {
+.kit-workflow-overview-stages {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);
 }
 
-.kit-workflow-process-stage {
+.kit-workflow-overview-stage {
     display: inline-flex;
     align-items: center;
     min-height: 22px;
@@ -4152,12 +4152,12 @@ button.kit-protocol-step-owner {
     letter-spacing: 0.01em;
 }
 
-.kit-workflow-process-stage.is-muted {
+.kit-workflow-overview-stage.is-muted {
     background: rgba(17, 24, 39, 0.04);
     color: var(--text-muted);
 }
 
-.kit-workflow-process-routes {
+.kit-workflow-overview-routes {
     display: grid;
     gap: var(--space-1-5);
     margin-top: var(--space-1);
@@ -4165,20 +4165,20 @@ button.kit-protocol-step-owner {
     border-top: 1px solid rgba(17, 24, 39, 0.08);
 }
 
-.kit-workflow-process-route {
+.kit-workflow-overview-route {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-1);
 }
 
-.kit-workflow-process-route-body {
+.kit-workflow-overview-route-body {
     color: var(--text-secondary);
     font-size: var(--text-sm);
     line-height: 1.45;
 }
 
-.kit-workflow-process-footnote {
+.kit-workflow-overview-footnote {
     margin-top: auto;
     color: var(--color-info, #176ea6);
     font-size: var(--text-xs);
@@ -4194,6 +4194,7 @@ button.kit-protocol-step-owner {
 
 .kit-workflow-frame {
     position: relative;
+    margin-inline: auto;
 }
 
 .kit-workflow-graph {
@@ -4362,7 +4363,7 @@ button.kit-protocol-step-owner {
     background: linear-gradient(180deg, rgba(244, 247, 250, 0.96), rgba(255, 255, 255, 0.96));
 }
 
-.kit-workflow-view-map .kit-workflow-node {
+.kit-workflow-view-topology .kit-workflow-node {
     padding: var(--space-2-5) var(--space-3);
 }
 
@@ -4467,6 +4468,15 @@ button.kit-protocol-step-owner {
     stroke-width: 4;
 }
 
+.kit-workflow-edge-path.is-muted {
+    stroke: color-mix(in srgb, var(--accent) 28%, var(--border));
+    opacity: 0.66;
+}
+
+.kit-workflow-edge-path.is-primary {
+    stroke: color-mix(in srgb, var(--accent) 66%, var(--border));
+}
+
 .kit-workflow-edge-labels {
     pointer-events: none;
 }
@@ -4495,35 +4505,35 @@ button.kit-protocol-step-owner {
     color: var(--accent);
 }
 
-.kit-workflow-view-map .kit-workflow-node {
+.kit-workflow-view-topology .kit-workflow-node {
     min-height: 88px;
     padding: var(--space-2-5) var(--space-3);
     gap: var(--space-1-5);
 }
 
-.kit-workflow-view-map .kit-workflow-node-label {
+.kit-workflow-view-topology .kit-workflow-node-label {
     font-size: 0.95rem;
     -webkit-line-clamp: 2;
 }
 
-.kit-workflow-view-map .kit-workflow-node-sublabel {
+.kit-workflow-view-topology .kit-workflow-node-sublabel {
     font-size: 0.72rem;
     -webkit-line-clamp: 2;
 }
 
-.kit-workflow-view-map .kit-workflow-node-badge {
+.kit-workflow-view-topology .kit-workflow-node-badge {
     min-height: 22px;
     padding: 0.05rem 0.45rem;
     font-size: 0.66rem;
 }
 
-.kit-workflow-view-map .kit-workflow-edge-label {
+.kit-workflow-view-topology .kit-workflow-edge-label {
     max-width: 7.25rem;
     padding: 0.12rem 0.45rem;
     font-size: 0.63rem;
 }
 
-.kit-workflow-view-map .kit-workflow-graph {
+.kit-workflow-view-topology .kit-workflow-graph {
     background:
         radial-gradient(circle at top left, rgba(23, 110, 166, 0.08), transparent 34%),
         linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
@@ -4614,15 +4624,15 @@ button.kit-protocol-step-owner {
         justify-content: flex-start;
     }
 
-    .kit-workflow-process {
+    .kit-workflow-overview {
         gap: var(--space-2);
     }
 
-    .kit-workflow-process-card {
+    .kit-workflow-overview-card {
         min-height: 0;
     }
 
-    .kit-workflow-process-row {
+    .kit-workflow-overview-row {
         grid-template-columns: 2rem minmax(0, 1fr);
         gap: var(--space-2);
     }
@@ -4655,11 +4665,11 @@ button.kit-protocol-step-owner {
         padding-right: var(--space-1);
     }
 
-    .kit-authoring-workspace-map {
+    .kit-authoring-workspace-topology {
         grid-template-columns: 1fr;
     }
 
-    .kit-authoring-workspace-map .kit-authoring-details-column {
+    .kit-authoring-workspace-topology .kit-authoring-details-column {
         position: static;
         top: auto;
         max-height: none;

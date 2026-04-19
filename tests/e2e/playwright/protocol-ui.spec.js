@@ -120,8 +120,15 @@ test.describe('protocol authoring live', () => {
 
     await page.getByRole('button', { name: 'Topology' }).click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Topology');
-    await expect(page.getByRole('button', { name: 'Fit' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '100%' })).toBeVisible();
+    const topologyToolbar = page.locator('.kit-workflow-toolbar');
+    await expect(topologyToolbar.getByRole('button', { name: 'Focus', exact: true })).toBeVisible();
+    await expect(topologyToolbar.getByRole('button', { name: 'Section', exact: true })).toBeVisible();
+    await expect(topologyToolbar.getByRole('button', { name: 'Full graph', exact: true })).toBeVisible();
+    await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
+    await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: '100%', exact: true })).toBeVisible();
+    const focusedNodeCount = await page.locator('.kit-workflow-node').count();
+    expect(focusedNodeCount).toBeGreaterThan(0);
+    expect(focusedNodeCount).toBeLessThan(8);
     const labelOverlaps = await page.evaluate(() => {
       const edgeLabels = [...document.querySelectorAll('.kit-workflow-edge-label')].map((element) => ({
         id: element.getAttribute('data-testid') || element.textContent || 'edge-label',
@@ -141,6 +148,9 @@ test.describe('protocol authoring live', () => {
           .map((node) => `${label.id}:${node.id}`));
     });
     expect(labelOverlaps).toEqual([]);
+    await topologyToolbar.getByRole('button', { name: 'Full graph', exact: true }).click();
+    const fullGraphNodeCount = await page.locator('.kit-workflow-node').count();
+    expect(fullGraphNodeCount).toBeGreaterThan(focusedNodeCount);
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
@@ -182,8 +192,10 @@ test.describe('protocol authoring live', () => {
     await login(page);
     await openTemplateDraft(page, 'Software Engineering');
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
-    await expect(page.locator('.kit-workflow-process')).toBeVisible();
-    const processOverflow = await page.locator('.kit-workflow-process').evaluate((element) => ({
+    await expect(page.locator('.kit-workflow-overview')).toBeVisible();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('desktop only');
+    await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
+    const processOverflow = await page.locator('.kit-workflow-overview').evaluate((element) => ({
       scrollWidth: element.scrollWidth,
       clientWidth: element.clientWidth,
     }));
@@ -196,6 +208,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Back to overview' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
     const compactOverlap = await page.evaluate(() => {
       const cards = [...document.querySelectorAll('.kit-protocol-step-card')].map((element) => ({
         top: element.getBoundingClientRect().top,

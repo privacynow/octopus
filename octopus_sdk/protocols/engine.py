@@ -90,8 +90,6 @@ class ProtocolRunEngine:
         if run.is_rehearsal:
             return TargetSelector(kind="role", value="rehearsal")
         if participant.selector is not None:
-            if participant.selector.kind == "skill" and not str(participant.selector.preferred_agent_id or "").strip():
-                return participant.selector.model_copy(update={"preferred_agent_id": str(run.entry_agent_id or "").strip()})
             return participant.selector
         raise ValueError(
             f"Participant {str(participant.participant_key or '').strip() or '<unknown>'} is missing an assignment rule."

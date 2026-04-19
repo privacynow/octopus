@@ -171,9 +171,9 @@ def test_main_css_carries_kit_primitive_classes() -> None:
         ".kit-workflow-canvas",
         ".kit-workflow-viewbar",
         ".kit-workflow-viewbar-title",
-        ".kit-workflow-process",
-        ".kit-workflow-process-card",
-        ".kit-workflow-process-label",
+        ".kit-workflow-overview",
+        ".kit-workflow-overview-card",
+        ".kit-workflow-overview-label",
         ".kit-workflow-controls",
         ".kit-workflow-viewport",
         ".kit-workflow-frame",
@@ -212,7 +212,7 @@ def test_main_css_carries_kit_primitive_classes() -> None:
     assert "@media (max-width: 720px)" in css
     assert ".kit-lifecycle-header-top" in css
     assert "position: absolute;" in css
-    assert ".kit-workflow-view-map .kit-workflow-node" in css
+    assert ".kit-workflow-view-topology .kit-workflow-node" in css
     assert ".kit-workflow-view-full" not in css
     assert ".kit-workflow-view-focus" not in css
     assert ".kit-workflow-compact" not in css

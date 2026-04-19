@@ -178,9 +178,13 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorEditor(" in workspace
     assert "showForm: false" in workspace
     assert "showSuggestions: false" in workspace
-    assert "let workflowView = { kind: 'detail'" in workspace
-    assert "let workflowViewport = { map: 'fit' }" in workspace
+    assert "let workflowView = { kind: 'detail', segmentId: '', scope: 'focus' }" in workspace
+    assert "let workflowViewport = { topology: 'fit' }" in workspace
     assert "_workflowViewportValue(" in workspace
+    assert "TOPOLOGY_MOBILE_MEDIA_QUERY" in workspace
+    assert "_isSmallScreenTopologyViewport()" in workspace
+    assert "_topologyScopeActions(" in workspace
+    assert "_topologyScopedGraph(" in workspace
     assert "_buildWorkflowProjection(" in workspace
     assert "_normalizeWorkflowView(" in workspace
     assert "_setDetailSegment(" in workspace
@@ -307,9 +311,9 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".kit-authoring-workspace" in css
     assert ".kit-workflow-canvas" in css
     assert ".kit-workflow-graph" in css
-    assert ".kit-workflow-process" in css
-    assert ".kit-workflow-process-card" in css
-    assert ".kit-workflow-process-label" in css
+    assert ".kit-workflow-overview" in css
+    assert ".kit-workflow-overview-card" in css
+    assert ".kit-workflow-overview-label" in css
     assert ".kit-workflow-controls" in css
     assert ".kit-workflow-lane-guide-label" in css
     assert ".kit-workflow-lane-guide-sublabel" in css

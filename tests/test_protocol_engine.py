@@ -122,7 +122,7 @@ def test_protocol_run_engine_uses_participant_selector_for_dispatch() -> None:
 
     assert selector.kind == "skill"
     assert selector.value == "planning"
-    assert selector.preferred_agent_id == "agent-1"
+    assert selector.preferred_agent_id == ""
 
 
 def test_protocol_run_engine_requires_explicit_assignment_rule() -> None:

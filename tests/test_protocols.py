@@ -14,6 +14,7 @@ from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolDraftCreateRecord,
     ProtocolStageDefinitionRecord,
+    TargetSelector,
     canonical_protocol_document,
     parse_protocol_stage_decision,
     protocol_document_to_text,
@@ -22,6 +23,7 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
+from octopus_registry.protocol_runtime import runtime_protocol_selector
 from octopus_registry.postgres import get_connection
 from octopus_registry.store_postgres import RegistryPostgresStore
 from psycopg.types.json import Jsonb
@@ -161,6 +163,17 @@ def test_builtin_protocol_templates_use_selector_backed_assignment() -> None:
         for participant in document.participants:
             assert participant.selector is not None, f"{slug} participant {participant.participant_key} must declare a selector"
             assert "required_skills" not in participant.model_dump(mode="json")
+
+
+def test_runtime_protocol_selector_prefers_entry_agent_for_skill_selectors() -> None:
+    selector = runtime_protocol_selector(
+        selector=TargetSelector(kind="skill", value="planning"),
+        entry_agent_id="agent-1",
+    )
+
+    assert selector.kind == "skill"
+    assert selector.value == "planning"
+    assert selector.preferred_agent_id == "agent-1"
 
 
 def test_parse_protocol_stage_decision_requires_explicit_review_decision() -> None:

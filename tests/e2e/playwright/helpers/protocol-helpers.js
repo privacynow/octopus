@@ -88,8 +88,16 @@ async function openBlankDraft(page) {
   await expect(page.locator('.kit-protocol-detail, .kit-workflow-canvas')).toBeVisible();
 }
 
-async function createRole(page, { name, key = '', selectorValue = '' }) {
-  await page.getByRole('button', { name: /\+ Add role/i }).first().click();
+async function openTemplateDraft(page, templateName) {
+  await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
+  const templateCard = page.locator('.protocol-template-card').filter({ hasText: templateName }).first();
+  await expect(templateCard).toBeVisible();
+  await templateCard.getByRole('button', { name: 'Use template' }).click();
+  await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
+}
+
+async function createParticipant(page, { name, key = '', selectorValue = '' }) {
+  await page.getByRole('button', { name: /\+ Add participant/i }).first().click();
   const details = page.locator('.kit-details-panel').first();
   await expect(details).toBeVisible();
   await details.getByLabel('Name').fill(name);
@@ -102,9 +110,9 @@ async function createRole(page, { name, key = '', selectorValue = '' }) {
   await page.waitForTimeout(150);
   await page.evaluate(() => {
     const button = Array.from(document.querySelectorAll('.kit-details-panel button'))
-      .find((node) => String(node.textContent || '').trim() === 'Create role');
+      .find((node) => String(node.textContent || '').trim() === 'Create participant');
     if (!button) {
-      throw new Error('Create role button not found');
+      throw new Error('Create participant button not found');
     }
     button.click();
   });
@@ -113,7 +121,7 @@ async function createRole(page, { name, key = '', selectorValue = '' }) {
   return laneKey;
 }
 
-async function createStep(page, { name, key = '', ownerRole = '', stageKind = '' }) {
+async function createStep(page, { name, key = '', ownerParticipant = '', stageKind = '' }) {
   await page.getByRole('button', { name: /\+ Add step/i }).first().click();
   const stageEditor = page.locator('.kit-stage-editor-grid');
   await expect(stageEditor).toBeVisible();
@@ -124,8 +132,8 @@ async function createStep(page, { name, key = '', ownerRole = '', stageKind = ''
     });
     await stageEditor.getByLabel('Key').fill(key);
   }
-  if (ownerRole) {
-    await stageEditor.getByLabel('Owning role').selectOption(ownerRole);
+  if (ownerParticipant) {
+    await stageEditor.getByLabel('Owning participant').selectOption(ownerParticipant);
   }
   if (stageKind) {
     await stageEditor.getByLabel('Stage type').selectOption(stageKind);
@@ -183,11 +191,12 @@ module.exports = {
   apiSaveProtocolDraft,
   attachErrorCapture,
   connectStep,
-  createRole,
+  createParticipant,
   createStep,
   discardDraft,
   login,
   openBlankDraft,
+  openTemplateDraft,
   protocolIdFromUrl,
   waitForSaved,
 };

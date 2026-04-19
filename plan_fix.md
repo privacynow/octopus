@@ -24,12 +24,16 @@ That has to end. The product needs one editing surface with one mental model acr
 - Viewport width must never decide whether the user gets a different product.
 - Ordinary authoring must work without opening `Map`.
 - `Map` is optional and advanced, not required.
+- Semantic drift is a product-model bug, not just a copy bug.
+- `participant` is the durable workflow actor in the protocol document.
+- `selector` is a runtime assignment rule for a participant.
+- templates are examples only; they must not become the product ontology.
 
 ### 1.2 Success bar
 A non-technical user should be able to:
 - open a workflow
 - understand where they are
-- add a role
+- add a participant
 - add a step
 - add a route
 - edit a step
@@ -72,6 +76,22 @@ For this pass:
 - ordinary route authoring must be possible in `Detail`
 - `Map` may offer advanced connect as a shortcut, but never as the only path
 
+### 2.5 Semantic contract
+- `participant`
+  - protocol-defined workflow actor
+  - stages point to `participant_key`
+- `assignment rule`
+  - runtime selector for a participant
+  - may match agent, skill, or runtime role tag
+- `template`
+  - example content only
+  - not a source of default ontology or vocabulary
+
+For this pass:
+- use `participant` as the primary workflow noun in the UI
+- use `assignment rule` for selector editing
+- reserve plain `role` for selector matching or a future explicit catalog
+
 ## 3. Product Architecture
 
 ## 3.1 Process
@@ -98,7 +118,7 @@ Purpose:
 - everything an ordinary user needs to build and maintain the workflow
 
 Must support:
-- role creation/editing
+- participant creation/editing
 - step creation/editing
 - route creation/editing
 - artifact assignment
@@ -132,7 +152,7 @@ Lock the defaults now so they do not drift.
 
 ### 4.1 Empty protocols
 - default surface: `Detail`
-- current task: `create-role`
+- current task: `create-participant`
 - graph/map hidden by default
 
 ### 4.2 Small protocols
@@ -160,7 +180,7 @@ Persist only:
 ### 5.2 Selection
 Keep:
 - selected segment
-- selected role
+- selected participant
 - selected step
 - selected route
 
@@ -174,8 +194,8 @@ It should not become another independent long-lived state machine unless necessa
 
 ### 5.4 Allowed tasks
 Inside `Detail`, tasks are:
-- `create-role`
-- `edit-role`
+- `create-participant`
+- `edit-participant`
 - `create-step`
 - `edit-step`
 - `create-route`
@@ -189,7 +209,7 @@ Rationalize it instead of duplicating it.
 Target:
 - `editorMode` survives only for short-lived interaction substates
 - examples:
-  - `create-role`
+  - `create-participant`
   - `create-step`
   - `create-route`
   - `rehearse`
@@ -214,7 +234,7 @@ Each segment card shows only:
 Allowed:
 - open detail
 - open map
-- add role
+- add participant
 - add segment entry step if needed
 - global validate/publish via compressed header
 
@@ -247,7 +267,7 @@ The main content is a structured flow of step cards, not a graph.
 
 Each step card shows:
 - name
-- owner role
+- owning participant
 - kind
 - route summary
 - input/output summary
@@ -256,14 +276,14 @@ Each step card shows:
 ### 7.3 Selection behavior
 - click step -> select step and open step editor
 - click route summary -> select route and open route editor
-- click role indicator -> open role editor if applicable
+- click participant indicator -> open participant editor if applicable
 
 No hidden modes. No click should silently switch product behavior.
 
 ## 7.4 Editor pane
 Selected entity opens a contextual editor:
 - step editor
-- role editor
+- participant editor
 - route editor
 
 Desktop:
@@ -386,6 +406,7 @@ This needs a real product treatment.
 
 ## 11.1 Principle
 Picker-first, manual override second.
+The UI must teach that this is an assignment rule for a participant, not participant identity.
 
 ### 11.2 Data sources
 Lock the source of options before implementation.
@@ -395,7 +416,7 @@ Lock the source of options before implementation.
 - `skill`
   - source: manifest/catalog/registry-backed known skills, whatever is already authoritative in the product
 - `role`
-  - source: curated manifest-backed options or an explicit small in-repo taxonomy for this pass
+  - source: curated manifest-backed runtime role-tag options or an explicit small in-repo taxonomy for this pass
 
 If a source does not exist, define it before building the UI.
 
@@ -411,7 +432,7 @@ If `selector_kind = skill`
 - advanced: manual override
 
 If `selector_kind = role`
-- primary control: searchable role/archetype picker
+- primary control: searchable runtime role-tag picker
 - secondary: preview if applicable
 - advanced: manual override
 
@@ -423,9 +444,15 @@ Create one shared selector control path, for example:
 or equivalent shared module
 
 Use it in:
-- role creation
+- participant creation
 - participant editing
 - anywhere else selector authoring appears
+
+### 11.5 Terminology rules
+- participant UI uses `participant`, `owner`, or `workflow actor`
+- selector UI uses `assignment rule`
+- selector kind `role` must be labeled as a runtime tag concept, not as a workflow participant
+- do not let Software Engineering labels define generic copy
 
 ## 12. Detail vs Compact Reuse
 
@@ -469,7 +496,7 @@ These are not optional.
 
 ## 14.1 Undo/redo
 - `Detail` must preserve undo/redo semantics
-- step edits, role edits, route edits all participate in the same draft history
+- step edits, participant edits, route edits all participate in the same draft history
 
 ## 14.2 Conflict state
 - conflict must still block validate/publish/archive/rehearse where appropriate
@@ -515,6 +542,10 @@ Work:
 - define Map authority as advanced only
 - define selector data sources
 - define rehearsal behavior per surface
+- define terminology contract:
+  - participant vs assignment rule
+  - runtime role tag vs workflow participant
+  - template as example only
 
 Acceptance:
 - all structural decisions above are locked before UI churn
@@ -537,6 +568,7 @@ Work:
 - route summaries inline
 - contextual editor pane
 - no dependency on graph for normal edits
+- participant and assignment rule are visually separated in the editor
 
 Acceptance:
 - desktop and mobile drill-in feel like the same product
@@ -551,9 +583,9 @@ Work:
 Acceptance:
 - no ordinary route operation requires `Map`
 
-## Phase E: Role and step creation flows
+## Phase E: Participant and step creation flows
 Work:
-- progressive `create-role`
+- progressive `create-participant`
 - progressive `create-step`
 - land in contextual editor after creation
 - reduce toolbar noise during create flows
@@ -567,6 +599,7 @@ Work:
 - picker-first controls
 - advanced manual override
 - integrated preview
+- selector kind labels that distinguish runtime role tags from workflow participants
 
 Acceptance:
 - selector authoring is intuitive
@@ -603,6 +636,7 @@ Work:
 - remove width-based editor product split
 - remove stale CSS/JS/tests
 - keep one coherent authoring story
+- add at least one non-Software-Engineering acceptance fixture/template so product semantics are not taught through a single example
 
 Acceptance:
 - code and product no longer describe two or three competing editors
@@ -622,6 +656,7 @@ Must cover:
 - small workflow
 - medium branching workflow
 - Software Engineering template
+- non-Software-Engineering template
 - selector flows
 - rehearsal flows
 
@@ -629,12 +664,13 @@ Must cover:
 - large workflow opens in `Process`
 - segment opens `Detail`
 - small workflow opens `Detail`
-- create role
+- create participant
 - create step
 - create route
 - edit route
 - selector skill picker
 - selector agent picker
+- selector runtime-role-tag picker
 - conflict block/reload/overwrite
 - rehearsal in `Detail`
 - explicit `Map` open
@@ -654,6 +690,7 @@ Do not ship if:
 - desktop and mobile Detail are different products
 - graph is still required for normal route editing
 - selector still defaults to raw text
+- participant vs assignment rule language is still conflated
 - top chrome still dominates the viewport
 - creation is still busy and non-progressive
 - conflict/revision handling regresses
@@ -703,10 +740,12 @@ The work is done when:
 - `Map` is explicit and advanced
 - route authoring works in `Detail`, including cross-segment routes
 - selector authoring is picker-first and understandable
+- participants are clearly distinct from assignment rules in both copy and structure
+- selector `role` reads as a runtime matching tag, not as the same object as a workflow participant
+- the product no longer leans on Software Engineering as hidden ontology
 - header/admin chrome no longer overwhelms the workflow
 - creation flows are progressive
 - rehearsal feels native in `Detail`
 - width no longer decides which editing product the user gets
 - old competing detailed-editor paths are removed
 - the product can be shown without apologizing for how it works
-

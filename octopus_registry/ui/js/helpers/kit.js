@@ -64,24 +64,24 @@ window.Kit = (() => {
         'protocol.stage.decision.fail': 'Reject',
 
         // Details — participants
-        'protocol.participants.section': 'Roles',
-        'protocol.participants.firstrun': 'Add the first role in the workflow.',
-        'protocol.participants.add': '+ Add role',
+        'protocol.participants.section': 'Participants',
+        'protocol.participants.firstrun': 'Add the first participant in the workflow.',
+        'protocol.participants.add': '+ Add participant',
         'protocol.participant.display_name.label': 'Name',
-        'protocol.participant.display_name.help': 'Name the reusable role that owns one or more steps.',
-        'protocol.participant.display_name.placeholder': 'e.g. Reviewer',
+        'protocol.participant.display_name.help': 'Name the reusable participant that owns one or more steps.',
+        'protocol.participant.display_name.placeholder': 'e.g. Approver',
         'protocol.participant.participant_key.label': 'Key',
-        'protocol.participant.participant_key.help': 'Internal reference for this role. It is usually generated from the name.',
-        'protocol.participant.participant_key.placeholder': 'reviewer',
+        'protocol.participant.participant_key.help': 'Internal reference for this participant. It is usually generated from the name.',
+        'protocol.participant.participant_key.placeholder': 'approver',
         'protocol.participant.instructions.label': 'Instructions',
-        'protocol.participant.instructions.help': 'Guidance shared across every step this role owns.',
-        'protocol.participant.instructions.placeholder': 'Instructions shared with this role…',
+        'protocol.participant.instructions.help': 'Guidance shared across every step this participant owns.',
+        'protocol.participant.instructions.placeholder': 'Instructions shared with this participant…',
         'protocol.participant.selector_kind.label': 'Assignment rule',
-        'protocol.participant.selector_kind.help': 'How this protocol should find someone for this role at runtime.',
-        'protocol.participant.selector_kind.placeholder': 'Choose how to match this participant…',
+        'protocol.participant.selector_kind.help': 'How this protocol should find someone for this participant at runtime.',
+        'protocol.participant.selector_kind.placeholder': 'Choose how to assign this participant…',
         'protocol.participant.selector_value.label': 'Rule value',
-        'protocol.participant.selector_value.help': 'For example: a skill slug, a role name, or an agent slug.',
-        'protocol.participant.selector_value.placeholder': 'e.g. planning, reviewer, m1',
+        'protocol.participant.selector_value.help': 'For example: a skill slug, a runtime role tag, or an agent slug.',
+        'protocol.participant.selector_value.placeholder': 'e.g. legal-review, approver, m1',
         'protocol.participant.selector_preview.label': 'Who matches right now',
         'protocol.participant.selector_preview.help': 'Preview uses the shared registry selector resolution path. It is informational while you author the protocol.',
         'protocol.participant.selector_none': 'No rule yet',
@@ -98,8 +98,8 @@ window.Kit = (() => {
         'protocol.stage.stage_key.label': 'Key',
         'protocol.stage.stage_key.placeholder': 'planning',
         'protocol.stage.stage_key.help': 'Internal reference for this step. It is usually generated from the name.',
-        'protocol.stage.participant_key.label': 'Owning role',
-        'protocol.stage.participant_key.help': 'Which role owns this step.',
+        'protocol.stage.participant_key.label': 'Owning participant',
+        'protocol.stage.participant_key.help': 'Which participant owns this step.',
         'protocol.stage.stage_kind.label': 'Stage type',
         'protocol.stage.stage_kind.help': 'Work produces output; review evaluates output; acceptance signs off.',
         'protocol.stage.instructions.label': 'Instructions',
@@ -157,26 +157,25 @@ window.Kit = (() => {
         'protocol.policy.max_review_rounds.help': 'How many review loops the protocol allows before it must finish or fail.',
 
         // Details — overview
-        'protocol.details.overview.empty': 'Select a participant, stage, or artifact in the canvas — or edit the name and slug above.',
+        'protocol.details.overview.empty': 'Select a participant, step, or artifact in the workspace — or edit the name and slug above.',
         'protocol.details.transition.empty': 'Select a transition to edit what happens next.',
 
         // Empty / first-run / onboarding
         'protocol.canvas.empty.title': 'Start the workflow',
-        'protocol.canvas.empty.body': 'Add the first role in the workflow, then define the first step it owns.',
+        'protocol.canvas.empty.body': 'Add the first participant in the workflow, then define the first step it owns.',
         'protocol.catalog.empty.title': 'No protocols yet',
         'protocol.catalog.empty.body': 'Create one from a template in the Gallery, or start from a blank draft.',
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',
         'protocol.catalog.gallery': 'Browse template gallery',
-        'protocol.firstrun.participant': 'Add the first role.',
-        'protocol.firstrun.stage': 'Add the first step for that role.',
+        'protocol.firstrun.participant': 'Add the first participant.',
+        'protocol.firstrun.stage': 'Add the first step for that participant.',
         'protocol.firstrun.transition': 'Connect the step to the next step or an outcome.',
         'protocol.workflow.outcomes': 'Outcomes',
         'protocol.workflow.artifacts': 'Artifacts',
-        'protocol.workflow.narrow.empty': 'No stages yet.',
         'protocol.workflow.drag_hint': 'Select a step to edit it, or drag it to reorganize the workflow.',
-        'protocol.workflow.lane_hint': 'Roles in this workflow',
+        'protocol.workflow.lane_hint': 'Participants in this workflow',
         'protocol.workflow.outcomes_hint': 'How the workflow can finish',
 
         // Draft state chip
@@ -1103,7 +1102,7 @@ window.Kit = (() => {
         onViewportChange = null,
     } = {}) {
         const root = document.createElement('section');
-        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode} kit-workflow-view-${String(viewState?.kind || 'focus')}`;
+        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode} kit-workflow-view-${String(viewState?.kind || 'detail')}`;
         root.dataset.key = [
             'workflow-canvas',
             mode,
@@ -1118,9 +1117,9 @@ window.Kit = (() => {
             String(editorMode?.decision || ''),
         ].join('|');
         root.tabIndex = 0;
-        const currentView = String(viewState?.kind || 'focus');
+        const currentView = String(viewState?.kind || 'detail');
         const isProcess = currentView === 'process';
-        const isFull = currentView === 'full';
+        const isMap = currentView === 'map';
 
         if (firstRun && firstRun.active) {
             const card = document.createElement('div');
@@ -1318,146 +1317,22 @@ window.Kit = (() => {
                 process.appendChild(card);
             });
             root.appendChild(process);
-        } else if (mode === 'narrow') {
-            const stack = document.createElement('div');
-            stack.className = 'kit-workflow-compact';
-            if (!nodes.length) {
-                stack.appendChild(UI.renderEmptyState(dictValue('protocol.workflow.narrow.empty', 'No stages yet.')));
-            } else {
-                const ordered = _orderedNodes();
-                const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
-                const edgesBySource = new Map();
-                edges.forEach((edge) => {
-                    const sourceKey = String(edge.from || '');
-                    const bucket = edgesBySource.get(sourceKey) || [];
-                    bucket.push(edge);
-                    edgesBySource.set(sourceKey, bucket);
-                });
-
-                ordered.forEach((node, index) => {
-                    const roleLabel = node.isTerminal
-                        ? String(outcomes?.label || 'Outcome')
-                        : String(laneLabels[String(node.laneKey || '')]?.label || '');
-                    const card = document.createElement('section');
-                    card.className = [
-                        'kit-workflow-compact-card',
-                        selection?.kind === node.kind && selection?.id === node.id ? 'is-selected' : '',
-                        node.isTerminal ? 'is-terminal' : '',
-                        node.isContext ? 'is-context' : '',
-                        currentMode === 'connect' && String(editorMode?.sourceStageKey || '') === String(node.id || '') ? 'is-connect-source' : '',
-                        currentMode === 'connect'
-                            && String(editorMode?.sourceStageKey || '') !== String(node.id || '')
-                            && (node.kind === 'stage' || node.kind === 'terminal')
-                            ? 'is-connect-target'
-                            : '',
-                    ].filter(Boolean).join(' ');
-
-                    const trigger = document.createElement('button');
-                    trigger.type = 'button';
-                    trigger.className = `kit-workflow-compact-main kit-workflow-node-${node.kind || 'stage'}`;
-                    trigger.dataset.nodeId = String(node.id || '');
-                    trigger.dataset.testid = `workflow-node-${String(node.id || '')}`;
-                    if (typeof onSelect === 'function') {
-                        trigger.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
-                    }
-
-                    const eyebrow = document.createElement('div');
-                    eyebrow.className = 'kit-workflow-compact-eyebrow';
-                    const order = document.createElement('span');
-                    order.className = 'kit-workflow-compact-order';
-                    order.textContent = String(index + 1).padStart(2, '0');
-                    eyebrow.appendChild(order);
-                    if (roleLabel) {
-                        const role = document.createElement('span');
-                        role.className = 'kit-workflow-compact-role';
-                        role.textContent = roleLabel;
-                        eyebrow.appendChild(role);
-                    }
-                    const state = nodeStates && Object.prototype.hasOwnProperty.call(nodeStates, String(node.id || ''))
-                        ? String(nodeStates[String(node.id || '')] || '')
-                        : '';
-                    if (state) {
-                        const badge = document.createElement('span');
-                        badge.className = `kit-workflow-node-state kit-workflow-node-state-${state}`;
-                        badge.textContent = state;
-                        eyebrow.appendChild(badge);
-                    }
-                    trigger.appendChild(eyebrow);
-
-                    const label = document.createElement('div');
-                    label.className = 'kit-workflow-compact-label';
-                    label.textContent = String(node.label || node.id || '');
-                    trigger.appendChild(label);
-
-                    if (node.sublabel) {
-                        const sub = document.createElement('div');
-                        sub.className = 'kit-workflow-compact-sublabel';
-                        sub.textContent = String(node.sublabel || '');
-                        trigger.appendChild(sub);
-                    }
-
-                    const badges = (Array.isArray(node.badges) ? node.badges : []).slice(0, 2);
-                    if (badges.length) {
-                        const badgeRow = document.createElement('div');
-                        badgeRow.className = 'kit-workflow-compact-badges';
-                        badges.forEach((badge) => {
-                            const chip = document.createElement('span');
-                            chip.className = `kit-workflow-node-badge${badge?.tone ? ` is-${badge.tone}` : ''}`;
-                            chip.textContent = String(badge?.label || '');
-                            badgeRow.appendChild(chip);
-                        });
-                        trigger.appendChild(badgeRow);
-                    }
-                    card.appendChild(trigger);
-
-                    const outgoing = [...(edgesBySource.get(String(node.id || '')) || [])];
-                    if (outgoing.length) {
-                        const routes = document.createElement('div');
-                        routes.className = 'kit-workflow-compact-routes';
-                        outgoing.forEach((edge) => {
-                            const targetNode = nodeById.get(String(edge.to || ''));
-                            const route = document.createElement('button');
-                            route.type = 'button';
-                            route.className = `kit-workflow-compact-route${selection?.kind === 'transition' && selection?.id === edge.id ? ' is-selected' : ''}`;
-                            route.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
-                            if (typeof onSelect === 'function') {
-                                route.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
-                            }
-
-                            const routeLabel = document.createElement('span');
-                            routeLabel.className = 'kit-workflow-compact-route-label';
-                            routeLabel.textContent = String(edge.label || 'Next');
-                            route.appendChild(routeLabel);
-
-                            const routeTarget = document.createElement('span');
-                            routeTarget.className = 'kit-workflow-compact-route-target';
-                            routeTarget.textContent = String(targetNode?.label || edge.to || '');
-                            route.appendChild(routeTarget);
-
-                            routes.appendChild(route);
-                        });
-                        card.appendChild(routes);
-                    }
-                    stack.appendChild(card);
-                });
-            }
-            root.appendChild(stack);
         } else {
             const shell = document.createElement('div');
             shell.className = 'kit-workflow-shell';
-            const denseMode = isFull || nodes.length >= 8;
+            const denseMode = isMap || nodes.length >= 8;
 
             const controls = document.createElement('div');
             controls.className = 'kit-workflow-controls';
             const viewport = document.createElement('div');
             viewport.className = 'kit-workflow-viewport';
 
-            const rowHeight = isFull ? 74 : denseMode ? 82 : 92;
-            const rowGap = isFull ? 8 : denseMode ? 10 : 14;
-            const columnWidth = isFull ? 176 : denseMode ? 194 : 214;
-            const columnGap = isFull ? 14 : denseMode ? 18 : 24;
-            const leftPad = lanes.length ? (isFull ? 84 : denseMode ? 94 : 108) : 18;
-            const rightPad = isFull ? 16 : denseMode ? 18 : 24;
+            const rowHeight = isMap ? 74 : denseMode ? 82 : 92;
+            const rowGap = isMap ? 8 : denseMode ? 10 : 14;
+            const columnWidth = isMap ? 176 : denseMode ? 194 : 214;
+            const columnGap = isMap ? 14 : denseMode ? 18 : 24;
+            const leftPad = lanes.length ? (isMap ? 84 : denseMode ? 94 : 108) : 18;
+            const rightPad = isMap ? 16 : denseMode ? 18 : 24;
             const bottomPad = 24;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
@@ -1467,15 +1342,15 @@ window.Kit = (() => {
             };
             const nodeBox = (node) => {
                 if (node.isTerminal) {
-                    return { width: isFull ? 132 : denseMode ? 140 : 148, height: isFull ? 54 : denseMode ? 58 : 64 };
+                    return { width: isMap ? 132 : denseMode ? 140 : 148, height: isMap ? 54 : denseMode ? 58 : 64 };
                 }
                 if (node.isContext) {
-                    return { width: isFull ? 150 : denseMode ? 158 : 166, height: isFull ? 58 : denseMode ? 64 : 70 };
+                    return { width: isMap ? 150 : denseMode ? 158 : 166, height: isMap ? 58 : denseMode ? 64 : 70 };
                 }
                 if (node.kind === 'segment') {
-                    return { width: isFull ? 158 : denseMode ? 168 : 178, height: isFull ? 62 : denseMode ? 68 : 74 };
+                    return { width: isMap ? 158 : denseMode ? 168 : 178, height: isMap ? 62 : denseMode ? 68 : 74 };
                 }
-                return { width: isFull ? 168 : denseMode ? 184 : 198, height: isFull ? 76 : denseMode ? 84 : 92 };
+                return { width: isMap ? 168 : denseMode ? 184 : 198, height: isMap ? 76 : denseMode ? 84 : 92 };
             };
             const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
             const backEdges = edges.filter((edge) => {
@@ -1535,7 +1410,7 @@ window.Kit = (() => {
                     label.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
                 }
                 guide.appendChild(label);
-                if (laneMeta.sublabel && !denseMode && !isFull) {
+                if (laneMeta.sublabel && !denseMode && !isMap) {
                     const sub = document.createElement('div');
                     sub.className = 'kit-workflow-lane-guide-sublabel';
                     sub.textContent = String(laneMeta.sublabel || '');
@@ -1703,7 +1578,7 @@ window.Kit = (() => {
             }));
             const labelBoxes = [];
             function estimateLabelBox(text, x, y) {
-                const width = Math.min(isFull ? 128 : 176, Math.max(48, (String(text || '').length * 7) + 28));
+                const width = Math.min(isMap ? 128 : 176, Math.max(48, (String(text || '').length * 7) + 28));
                 const height = 24;
                 return {
                     width,
@@ -1809,7 +1684,7 @@ window.Kit = (() => {
                 }
                 let reserved = placeLabel(String(edge.label || ''), labelCandidates);
                 if (!reserved) {
-                    if (isFull || !labelCandidates.length) {
+                    if (isMap || !labelCandidates.length) {
                         return;
                     }
                     reserved = labelCandidates[0];
@@ -1829,9 +1704,9 @@ window.Kit = (() => {
 
             const defaultZoom = Object.prototype.hasOwnProperty.call(viewportState || {}, 'zoom')
                 ? viewportState.zoom
-                : (isFull ? 'fit' : 1);
-            const minZoom = isFull ? 0.32 : 0.55;
-            const maxZoom = isFull ? 1.15 : 1.5;
+                : (isMap ? 'fit' : 1);
+            const minZoom = isMap ? 0.32 : 0.55;
+            const maxZoom = isMap ? 1.15 : 1.5;
             function resolvedZoomValue() {
                 return Math.max(minZoom, Math.min(maxZoom, Number(graph.dataset.zoomResolved || 1) || 1));
             }

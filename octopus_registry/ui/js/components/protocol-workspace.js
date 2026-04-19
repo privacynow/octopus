@@ -182,7 +182,7 @@ function renderProtocolWorkspace(container) {
         message: '',
     };
     let editorMode = { kind: 'idle', sourceStageKey: '', decision: '' };
-    let pendingRole = {
+    let pendingParticipant = {
         display_name: '',
         participant_key: '',
         selector_kind: '',
@@ -343,7 +343,7 @@ function renderProtocolWorkspace(container) {
         };
     }
 
-    function _blankRoleDraft(seed = {}) {
+    function _blankParticipantDraft(seed = {}) {
         return {
             display_name: '',
             participant_key: '',
@@ -394,7 +394,7 @@ function renderProtocolWorkspace(container) {
 
     function _resetEditorMode() {
         editorMode = { kind: _baseEditorModeKind(), sourceStageKey: '', decision: '' };
-        pendingRole = _blankRoleDraft();
+        pendingParticipant = _blankParticipantDraft();
         pendingStage = _blankStageDraft(_defaultStageParticipantKey());
         pendingRoute = _blankRouteDraft();
     }
@@ -483,17 +483,17 @@ function renderProtocolWorkspace(container) {
 
     function _participantDisplayName(participantKey, doc = draft.document) {
         const participant = (doc.participants || []).find((item) => String(item.participant_key || '') === String(participantKey || ''));
-        return String(participant?.display_name || participant?.participant_key || participantKey || 'Role').trim();
+        return String(participant?.display_name || participant?.participant_key || participantKey || 'Participant').trim();
     }
 
-    function _segmentRoleSummary(roleLabels) {
-        const labels = Array.isArray(roleLabels)
-            ? roleLabels.map((item) => String(item || '').trim()).filter(Boolean)
+    function _segmentParticipantSummary(participantLabels) {
+        const labels = Array.isArray(participantLabels)
+            ? participantLabels.map((item) => String(item || '').trim()).filter(Boolean)
             : [];
-        if (!labels.length) return 'Unassigned role';
+        if (!labels.length) return 'Unassigned participant';
         if (labels.length === 1) return labels[0];
         if (labels.length === 2) return `${labels[0]} + ${labels[1]}`;
-        return `${labels[0]} + ${labels.length - 1} more roles`;
+        return `${labels[0]} + ${labels.length - 1} more participants`;
     }
 
     function _segmentId(stageKey) {
@@ -708,23 +708,23 @@ function renderProtocolWorkspace(container) {
             const segmentStages = stageKeys
                 .map((key) => topology.stageByKey.get(key))
                 .filter(Boolean);
-            const roleKeys = Array.from(new Set(segmentStages.map((item) => String(item.participant_key || '')).filter(Boolean)));
-            const roleLabels = roleKeys.map((key) => _participantDisplayName(key, doc));
+            const participantKeys = Array.from(new Set(segmentStages.map((item) => String(item.participant_key || '')).filter(Boolean)));
+            const participantLabels = participantKeys.map((key) => _participantDisplayName(key, doc));
             const primaryStage = segmentStages.find((item) => String(item.stage_kind || 'work') === 'work') || segmentStages[0] || stage;
             const stepSummary = `${stageKeys.length} step${stageKeys.length === 1 ? '' : 's'}`;
-            const roleSummary = _segmentRoleSummary(roleLabels);
+            const participantSummary = _segmentParticipantSummary(participantLabels);
             const segment = {
                 id: _segmentId(stageKeys[0]),
                 startStageKey: stageKeys[0],
                 endStageKey: stageKeys[stageKeys.length - 1],
                 stageKeys,
                 stages: segmentStages,
-                roleKeys,
+                participantKeys,
                 primaryParticipantKey: String(primaryStage?.participant_key || segmentStages[0]?.participant_key || ''),
                 label: String(primaryStage?.display_name || primaryStage?.stage_key || stageKeys[0] || 'Step'),
-                sublabel: roleSummary,
+                sublabel: participantSummary,
                 stepSummary,
-                roleSummary,
+                participantSummary,
                 badges: [
                     {
                         tone: 'phase',
@@ -1452,56 +1452,56 @@ function renderProtocolWorkspace(container) {
         await _resolveSelectorPreview(nextParticipantKey, _selectorString(selector));
     }
 
-    function _roleDraftFromSuggestion(suggestion) {
+    function _participantDraftFromSuggestion(suggestion) {
         const displayName = String(suggestion?.displayName || suggestion?.label || '').trim();
-        return _blankRoleDraft({
+        return _blankParticipantDraft({
             display_name: displayName,
-            participant_key: _slugSuggestion(String(suggestion?.preferredKey || displayName || 'role')),
+            participant_key: _slugSuggestion(String(suggestion?.preferredKey || displayName || 'participant')),
             selector_kind: String(suggestion?.selectorKind || ''),
             selector_value: String(suggestion?.selectorValue || ''),
         });
     }
 
-    function _commitPendingRoleField(_target, key, value) {
+    function _commitPendingParticipantField(_target, key, value) {
         if (key === 'display_name') {
-            pendingRole.display_name = String(value || '');
-            if (!String(pendingRole.participant_key || '').trim()) {
-                pendingRole.participant_key = _slugSuggestion(pendingRole.display_name);
+            pendingParticipant.display_name = String(value || '');
+            if (!String(pendingParticipant.participant_key || '').trim()) {
+                pendingParticipant.participant_key = _slugSuggestion(pendingParticipant.display_name);
             }
         } else if (key === 'participant_key') {
-            pendingRole.participant_key = _slugSuggestion(value);
+            pendingParticipant.participant_key = _slugSuggestion(value);
         } else if (key === 'selector_kind' || key === 'selector_value') {
-            pendingRole[key] = String(value || '');
+            pendingParticipant[key] = String(value || '');
         } else {
-            pendingRole[key] = String(value || '');
+            pendingParticipant[key] = String(value || '');
         }
         render();
     }
 
-    function _applyRoleDraftSuggestion(suggestion) {
-        pendingRole = _roleDraftFromSuggestion(suggestion);
+    function _applyParticipantDraftSuggestion(suggestion) {
+        pendingParticipant = _participantDraftFromSuggestion(suggestion);
         render();
-        const selectorText = _selectorString(_selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value));
+        const selectorText = _selectorString(_selectorFromFields(pendingParticipant.selector_kind, pendingParticipant.selector_value));
         if (selectorText) {
             void _resolveSelectorPreview('__draft__', selectorText);
         }
     }
 
-    function _startRoleInsert(prefill = null) {
-        pendingRole = prefill ? _roleDraftFromSuggestion(prefill) : _blankRoleDraft();
+    function _startParticipantInsert(prefill = null) {
+        pendingParticipant = prefill ? _participantDraftFromSuggestion(prefill) : _blankParticipantDraft();
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
-        editorMode = { kind: 'insert-role', sourceStageKey: '', decision: '' };
+        editorMode = { kind: 'insert-participant', sourceStageKey: '', decision: '' };
         render();
-        const selectorText = _selectorString(_selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value));
+        const selectorText = _selectorString(_selectorFromFields(pendingParticipant.selector_kind, pendingParticipant.selector_value));
         if (selectorText) {
             void _resolveSelectorPreview('__draft__', selectorText);
         }
     }
 
-    function _confirmRoleInsert() {
-        const displayName = String(pendingRole.display_name || '').trim();
+    function _confirmParticipantInsert() {
+        const displayName = String(pendingParticipant.display_name || '').trim();
         if (!displayName) {
-            UI.notify('Give this role a name before adding it to the workflow.', 'warning');
+            UI.notify('Give this participant a name before adding it to the workflow.', 'warning');
             return;
         }
         const doc = _cloneDoc(draft.document);
@@ -1509,13 +1509,13 @@ function renderProtocolWorkspace(container) {
         const participantKey = _nextAvailableKey(
             items,
             'participant_key',
-            String(pendingRole.participant_key || displayName || 'role'),
+            String(pendingParticipant.participant_key || displayName || 'participant'),
         );
         doc.participants = [...items, {
             participant_key: participantKey,
             display_name: displayName,
-            selector: _selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value),
-            instructions: String(pendingRole.instructions || ''),
+            selector: _selectorFromFields(pendingParticipant.selector_kind, pendingParticipant.selector_value),
+            instructions: String(pendingParticipant.instructions || ''),
         }];
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
         _resetEditorMode();
@@ -1524,7 +1524,7 @@ function renderProtocolWorkspace(container) {
         });
     }
 
-    function _cancelRoleInsert() {
+    function _cancelParticipantInsert() {
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
         _resetEditorMode();
         render();
@@ -1554,7 +1554,7 @@ function renderProtocolWorkspace(container) {
 
     function _startStageInsert() {
         if (!(draft.document.participants || []).length) {
-            UI.notify('Add a role before adding a step.', 'warning');
+            UI.notify('Add a participant before adding a step.', 'warning');
             return;
         }
         pendingStage = _blankStageDraft(_defaultStageParticipantKey());
@@ -1822,6 +1822,22 @@ function renderProtocolWorkspace(container) {
                 preferredKey: agentSlug || _slugSuggestion(agent.display_name || ''),
             });
         });
+        const skillSet = new Set();
+        (connectedAgents || []).forEach((agent) => {
+            (agent?.routing_skills || []).forEach((skill) => {
+                const normalized = String(skill || '').trim();
+                if (!normalized || skillSet.has(normalized)) return;
+                skillSet.add(normalized);
+                pushSuggestion({
+                    label: `Skill · ${_titleCaseWords(normalized)}`,
+                    value: `@skill:${normalized}`,
+                    selectorKind: 'skill',
+                    selectorValue: normalized,
+                    displayName: _titleCaseWords(normalized),
+                    preferredKey: _slugSuggestion(normalized),
+                });
+            });
+        });
         const roleMap = new Map();
         (connectedAgents || []).forEach((agent) => {
             const role = String(agent?.role || '').trim();
@@ -1832,7 +1848,7 @@ function renderProtocolWorkspace(container) {
             const roleSelector = String(agent?.role_selector || '').trim();
             if (!roleSelector) return;
             pushSuggestion({
-                label: `Any ${_titleCaseWords(role)}`,
+                label: `Runtime tag · ${_titleCaseWords(role)}`,
                 value: roleSelector,
                 selectorKind: 'role',
                 selectorValue: role,
@@ -1840,31 +1856,29 @@ function renderProtocolWorkspace(container) {
                 preferredKey: _slugSuggestion(role),
             });
         });
-        [
-            {
-                label: 'Planner role',
-                value: '@skill:planning',
-                selectorKind: 'skill',
-                selectorValue: 'planning',
-                displayName: 'Planner',
-                preferredKey: 'planner',
-            },
-            {
-                label: 'Reviewer role',
-                value: '@role:reviewer',
-                selectorKind: 'role',
-                selectorValue: 'reviewer',
-                displayName: 'Reviewer',
-                preferredKey: 'reviewer',
-            },
-        ].forEach(pushSuggestion);
         return suggestions;
+    }
+
+    function _selectorKindLabel(kind) {
+        const normalized = String(kind || '').trim().toLowerCase();
+        if (normalized === 'agent') return 'Specific agent';
+        if (normalized === 'skill') return 'Required skill';
+        if (normalized === 'role') return 'Runtime role tag';
+        return _titleCaseWords(normalized);
+    }
+
+    function _selectorValueLabel(kind) {
+        const normalized = String(kind || '').trim().toLowerCase();
+        if (normalized === 'agent') return 'agent';
+        if (normalized === 'skill') return 'skill';
+        if (normalized === 'role') return 'runtime role tag';
+        return normalized || 'value';
     }
 
     function _selectorKindOptions() {
         return (authoringManifest?.selector_kind_options || ['skill', 'role', 'agent']).map((value) => ({
             value: String(value || ''),
-            label: _titleCaseWords(value),
+            label: _selectorKindLabel(value),
         }));
     }
 
@@ -1924,7 +1938,7 @@ function renderProtocolWorkspace(container) {
         heading.appendChild(title);
         const copy = document.createElement('p');
         copy.className = 'kit-stage-routing-copy';
-        copy.textContent = 'Choose how this role resolves at run time. Start with known agents, skills, or roles; use manual override only when needed.';
+        copy.textContent = 'Choose how this participant resolves at run time. Start with known agents, skills, or runtime role tags; use manual override only when needed.';
         heading.appendChild(copy);
         wrap.appendChild(heading);
 
@@ -1932,7 +1946,7 @@ function renderProtocolWorkspace(container) {
         kindRow.className = 'kit-details-row';
         const kindLabel = document.createElement('label');
         kindLabel.className = 'kit-details-label';
-        kindLabel.textContent = Kit.dict.label('protocol.participant.selector_kind.label', 'Selector type');
+        kindLabel.textContent = Kit.dict.label('protocol.participant.selector_kind.label', 'Assignment rule');
         kindRow.appendChild(kindLabel);
         const kindControl = document.createElement('select');
         kindControl.className = 'kit-details-control';
@@ -1969,7 +1983,7 @@ function renderProtocolWorkspace(container) {
         const valueLabel = document.createElement('label');
         valueLabel.className = 'kit-details-label';
         valueLabel.textContent = catalog.length
-            ? `Choose ${String(selectorKind || 'value')}`
+            ? `Choose ${_selectorValueLabel(selectorKind)}`
             : Kit.dict.label('protocol.participant.selector_value.label', 'Selector value');
         valueRow.appendChild(valueLabel);
         if (catalog.length) {
@@ -2002,7 +2016,7 @@ function renderProtocolWorkspace(container) {
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'kit-details-control';
-            input.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', '@skill:name');
+            input.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', 'e.g. legal-review, approver, m1');
             input.value = String(selectorValue || '');
             input.readOnly = Boolean(readOnly);
             if (typeof onChange === 'function' && !readOnly) {
@@ -2035,7 +2049,7 @@ function renderProtocolWorkspace(container) {
         const overrideInput = document.createElement('input');
         overrideInput.type = 'text';
         overrideInput.className = 'kit-details-control';
-        overrideInput.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', '@skill:name');
+        overrideInput.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', 'e.g. legal-review, approver, m1');
         overrideInput.value = String(selectorValue || '');
         overrideInput.readOnly = Boolean(readOnly);
         if (typeof onChange === 'function' && !readOnly) {
@@ -2066,7 +2080,7 @@ function renderProtocolWorkspace(container) {
         return wrap;
     }
 
-    function _roleEditorShell({
+    function _participantEditorShell({
         target,
         readOnly = false,
         onCommit = null,
@@ -2086,12 +2100,12 @@ function renderProtocolWorkspace(container) {
                 { key: 'participant_key', kind: 'text', readOnly },
             ],
             actions: createAction ? [
-                { label: 'Create role', tone: 'btn-primary', onClick: createAction },
+                { label: 'Create participant', tone: 'btn-primary', onClick: createAction },
                 ...(cancelAction ? [{ label: 'Cancel', onClick: cancelAction }] : []),
             ] : [],
         });
-        shell.appendChild(_stageEditorSection('Role basics', basics));
-        shell.appendChild(_stageEditorSection('Assignment', _selectorEditor({
+        shell.appendChild(_stageEditorSection('Participant', basics));
+        shell.appendChild(_stageEditorSection('Assignment rule', _selectorEditor({
             selectorKind: String(target?.selector_kind || ''),
             selectorValue: String(target?.selector_value || ''),
             participantKey,
@@ -2267,9 +2281,9 @@ function renderProtocolWorkspace(container) {
             ? {
                 active: true,
                 title: Kit.dict.label('protocol.canvas.empty.title'),
-                body: 'Start by adding the first role in this workflow. A role is the reusable owner for one or more steps.',
+                body: 'Start by adding the first participant in this workflow. A participant is the reusable actor that owns one or more steps.',
                 actions: [
-                    { label: Kit.dict.label('protocol.participants.add'), onClick: () => _startRoleInsert() },
+                    { label: Kit.dict.label('protocol.participants.add'), onClick: () => _startParticipantInsert() },
                     { label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/gallery') },
                 ],
             }
@@ -2277,7 +2291,7 @@ function renderProtocolWorkspace(container) {
                 ? {
                     active: true,
                     title: 'Add the first step',
-                    body: 'Create the first step, choose which role owns it, and then connect it to the next step or an outcome.',
+                    body: 'Create the first step, choose which participant owns it, and then connect it to the next step or an outcome.',
                     actions: [
                         { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
                     ],
@@ -2334,7 +2348,7 @@ function renderProtocolWorkspace(container) {
             {
                 label: Kit.dict.label('protocol.participants.add'),
                 tone: 'btn-small',
-                onClick: () => _startRoleInsert(),
+                onClick: () => _startParticipantInsert(),
                 disabled: !canMutate,
             },
             {
@@ -2368,7 +2382,7 @@ function renderProtocolWorkspace(container) {
                 row: Number(segment.row || 0),
                 column: Number(segment.column || 0),
                 label: segment.label,
-                sublabel: segment.roleSummary,
+                sublabel: segment.participantSummary,
                 preview: _segmentStagePreview(segment),
                 footnote: _segmentProcessFootnote(segment),
                 badges: [
@@ -2404,10 +2418,11 @@ function renderProtocolWorkspace(container) {
         });
         const lanes = (doc.participants || []).map((item) => ({
             key: String(item.participant_key || ''),
-            label: String(item.display_name || item.participant_key || 'Role'),
+            label: String(item.display_name || item.participant_key || 'Participant'),
             sublabel: _selectorString(item.selector || null)
-                || `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} step${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
-            empty: 'No steps in this role yet.',
+                ? `Assignment · ${_selectorString(item.selector || null)}`
+                : `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} step${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
+            empty: 'No steps for this participant yet.',
         }));
         const stageKeys = (doc.stages || []).map((item) => String(item.stage_key || ''));
         const columns = _stageColumns(stageKeys, projection.topology);
@@ -2484,7 +2499,7 @@ function renderProtocolWorkspace(container) {
             {
                 label: Kit.dict.label('protocol.participants.add'),
                 tone: 'btn-small',
-                onClick: () => _startRoleInsert(),
+                onClick: () => _startParticipantInsert(),
                 disabled: !canMutate,
             },
             {
@@ -2560,7 +2575,7 @@ function renderProtocolWorkspace(container) {
             viewState: {
                 kind: 'detail',
                 title: String(segment?.label || 'Workflow builder'),
-                subtitle: segment ? `${segment.stepSummary} · ${segment.roleSummary}` : 'Build roles, steps, and routes here.',
+                subtitle: segment ? `${segment.stepSummary} · ${segment.participantSummary}` : 'Build participants, steps, and routes here.',
             },
             segmentChips: projection.segments.length > 1
                 ? projection.segments.map((item) => ({
@@ -2569,10 +2584,10 @@ function renderProtocolWorkspace(container) {
                     selected: String(item.id || '') === String(segment?.id || ''),
                 }))
                 : [],
-            roleChips: (segment?.roleKeys || []).map((roleKey) => ({
-                key: String(roleKey || ''),
-                label: _participantDisplayName(roleKey, draft.document),
-                selected: selection.sectionKey === 'participants' && selection.nodeKey === String(roleKey || ''),
+            participantChips: (segment?.participantKeys || []).map((participantKey) => ({
+                key: String(participantKey || ''),
+                label: _participantDisplayName(participantKey, draft.document),
+                selected: selection.sectionKey === 'participants' && selection.nodeKey === String(participantKey || ''),
             })),
             incomingSections: (segment?.incomingSegments || [])
                 .map((segmentId) => projection.segmentsById.get(segmentId))
@@ -2786,13 +2801,13 @@ function renderProtocolWorkspace(container) {
             });
             meta.appendChild(chip);
         });
-        (workflow.roleChips || []).forEach((role) => {
+        (workflow.participantChips || []).forEach((participant) => {
             const chip = document.createElement('button');
             chip.type = 'button';
-            chip.className = `kit-protocol-detail-chip${role.selected ? ' is-selected' : ''}`;
-            chip.textContent = String(role.label || '');
+            chip.className = `kit-protocol-detail-chip${participant.selected ? ' is-selected' : ''}`;
+            chip.textContent = String(participant.label || '');
             chip.addEventListener('click', () => {
-                selection = { sectionKey: 'participants', nodeKey: role.key };
+                selection = { sectionKey: 'participants', nodeKey: participant.key };
                 render();
             });
             meta.appendChild(chip);
@@ -3189,7 +3204,7 @@ function renderProtocolWorkspace(container) {
                 readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
             })));
         const participantOptions = [
-            { value: '', label: '(choose a role)' },
+            { value: '', label: '(choose a participant)' },
             ...((doc.participants || []).map((p) => ({
                 value: String(p.participant_key || ''),
                 label: String(p.display_name || p.participant_key || ''),
@@ -3204,14 +3219,14 @@ function renderProtocolWorkspace(container) {
             label: String(item.display_name || item.artifact_key || ''),
         }));
 
-        if (editorMode.kind === 'insert-role') {
-            return _roleEditorShell({
-                target: pendingRole,
+        if (editorMode.kind === 'insert-participant') {
+            return _participantEditorShell({
+                target: pendingParticipant,
                 participantKey: '__draft__',
-                onCommit: _commitPendingRoleField,
-                createAction: _confirmRoleInsert,
-                cancelAction: _cancelRoleInsert,
-                onSuggestionSelect: (value) => { _applyRoleDraftSuggestion(value); },
+                onCommit: _commitPendingParticipantField,
+                createAction: _confirmParticipantInsert,
+                cancelAction: _cancelParticipantInsert,
+                onSuggestionSelect: (value) => { _applyParticipantDraftSuggestion(value); },
             });
         }
 
@@ -3289,7 +3304,7 @@ function renderProtocolWorkspace(container) {
         if (selection.sectionKey === 'participants') {
             const target = (doc.participants || []).find((item) => String(item.participant_key) === selection.nodeKey);
             if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            return _roleEditorShell({
+            return _participantEditorShell({
                 target: {
                     ...target,
                     selector_kind: String(target.selector?.kind || ''),

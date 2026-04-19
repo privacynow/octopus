@@ -162,8 +162,80 @@ def software_engineering_protocol_document() -> ProtocolDefinitionDocumentRecord
     )
 
 
+def document_approval_protocol_document() -> ProtocolDefinitionDocumentRecord:
+    return canonical_protocol_document(
+        {
+            "schema_version": PROTOCOL_SCHEMA_VERSION,
+            "metadata": {
+                "slug": "document-approval",
+                "display_name": "Document Approval",
+                "description": "Draft, review, and approve a document before completion.",
+            },
+            "participants": [
+                {"participant_key": "author", "display_name": "Author", "required_skills": ["writing"]},
+                {"participant_key": "reviewer", "display_name": "Reviewer", "required_skills": ["review"]},
+                {"participant_key": "approver", "display_name": "Approver", "required_skills": ["approval"]},
+            ],
+            "artifacts": [
+                {
+                    "artifact_key": "document",
+                    "kind": "workspace_file",
+                    "path": "protocol/document.md",
+                    "description": "The draft document being prepared for approval.",
+                    "verify": True,
+                },
+            ],
+            "stages": [
+                {
+                    "stage_key": "draft_document",
+                    "display_name": "Draft Document",
+                    "participant_key": "author",
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "strict_completion": True,
+                    "require_output_verification": True,
+                    "timeout_seconds": 1800,
+                    "inputs": ["document"],
+                    "outputs": ["document"],
+                    "transitions": {"completed": "review_document"},
+                    "instructions": "Draft or revise the document so it is ready for review.",
+                },
+                {
+                    "stage_key": "review_document",
+                    "display_name": "Review Document",
+                    "participant_key": "reviewer",
+                    "stage_kind": "review",
+                    "timeout_seconds": 1800,
+                    "inputs": ["document"],
+                    "outputs": [],
+                    "transitions": {"accept": "approve_document", "revise": "draft_document", "fail": "__failed__"},
+                    "instructions": "Review the document for completeness, correctness, and clarity.",
+                },
+                {
+                    "stage_key": "approve_document",
+                    "display_name": "Approve Document",
+                    "participant_key": "approver",
+                    "stage_kind": "acceptance",
+                    "timeout_seconds": 1800,
+                    "inputs": ["document"],
+                    "outputs": [],
+                    "transitions": {"accept": "__complete__", "revise": "draft_document", "fail": "__failed__"},
+                    "instructions": "Approve the document, send it back for revision, or fail the workflow.",
+                },
+            ],
+            "policies": {
+                "single_active_writer": True,
+                "max_review_rounds": 3,
+            },
+        }
+    )
+
+
 def builtin_protocol_documents() -> tuple[ProtocolDefinitionDocumentRecord, ...]:
-    return (software_engineering_protocol_document(),)
+    return (
+        software_engineering_protocol_document(),
+        document_approval_protocol_document(),
+    )
 
 
 def builtin_protocol_template_summaries() -> tuple[ProtocolTemplateSummaryRecord, ...]:
@@ -229,6 +301,7 @@ def new_protocol_definition(
 
 __all__ = [
     "software_engineering_protocol_document",
+    "document_approval_protocol_document",
     "builtin_protocol_documents",
     "builtin_protocol_template_summaries",
     "builtin_protocol_document",

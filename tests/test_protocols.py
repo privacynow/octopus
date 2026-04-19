@@ -796,6 +796,9 @@ def test_registry_store_sources_builtin_protocol_templates_from_code_not_authore
     template = store.get_protocol_template("software-engineering", access=operator_access())
     assert template.slug == "software-engineering"
     assert template.display_name
+    approval = store.get_protocol_template("document-approval", access=operator_access())
+    assert approval.slug == "document-approval"
+    assert approval.display_name == "Document Approval"
 
 
 def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres_registry_truncated: str) -> None:
@@ -810,6 +813,7 @@ def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres
 
     assert manifest.templates
     assert any(item.slug == "software-engineering" for item in manifest.templates)
+    assert any(item.slug == "document-approval" for item in manifest.templates)
     assert "design" in manifest.sections
     assert "advanced" in manifest.sections
     assert "review" in manifest.stage_kind_options
@@ -856,6 +860,19 @@ def test_registry_store_create_template_protocol_draft_clones_builtin_template(p
     assert created.draft_definition_json["stages"]
     assert created.validation is not None
     assert created.validation.ok is True
+
+    approval_created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "document-approval"}),
+        access=operator_access(),
+    )
+
+    assert approval_created.ok is True
+    assert approval_created.protocol is not None
+    assert approval_created.protocol.slug != "document-approval"
+    assert approval_created.draft_definition_json["metadata"]["display_name"].startswith("Document Approval")
+    assert approval_created.draft_definition_json["stages"]
+    assert approval_created.validation is not None
+    assert approval_created.validation.ok is True
 
 
 def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_registry_truncated: str) -> None:

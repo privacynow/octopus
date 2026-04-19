@@ -160,8 +160,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_reloadServerDraftConflict" in workspace
     assert "_overwriteServerDraftConflict" in workspace
     assert "let editorMode = { kind: 'idle'" in workspace
-    assert "_startRoleInsert(" in workspace
-    assert "_confirmRoleInsert(" in workspace
+    assert "_startParticipantInsert(" in workspace
+    assert "_confirmParticipantInsert(" in workspace
     assert "_startStageInsert(" in workspace
     assert "_confirmStageInsert(" in workspace
     assert "_startConnectMode(" in workspace
@@ -183,11 +183,15 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_setDetailSegment(" in workspace
     assert "_detailSurfaceEl(" in workspace
     assert "_surfaceCanvasEl(" in workspace
-    assert "_roleEditorShell(" in workspace
+    assert "_participantEditorShell(" in workspace
     assert "_routeEditorPanel(" in workspace
     assert "_stageEditorHero(" in workspace
     assert "_stageRoutingPanel(" in workspace
     assert "window.addEventListener('resize', onResize);" in workspace
+    assert "Assignment rule" in workspace
+    assert "Runtime role tag" in workspace
+    assert "Planner role" not in workspace
+    assert "Reviewer role" not in workspace
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
@@ -224,6 +228,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
         "connectState",
         "_addParticipantFromSuggestion(",
         "_saveNew(",
+        "_startRoleInsert(",
+        "_confirmRoleInsert(",
+        "_roleEditorShell(",
         "PROTOCOL_AUTHORING_MODE_OPTIONS",
         "PROTOCOL_CATALOG_STATUS_OPTIONS",
         "single_active_writer: true",

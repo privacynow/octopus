@@ -150,6 +150,7 @@ def test_index_html_loads_kit_between_ui_helpers_and_components() -> None:
 
 def test_main_css_carries_kit_primitive_classes() -> None:
     css = _read("css", "main.css")
+    kit = _read("js", "helpers", "kit.js")
     for cls in (
         ".kit-lifecycle-header",
         ".kit-lifecycle-chip",
@@ -181,9 +182,6 @@ def test_main_css_carries_kit_primitive_classes() -> None:
         ".kit-workflow-node-wrap",
         ".kit-workflow-node-segment",
         ".kit-workflow-edge-label",
-        ".kit-workflow-compact",
-        ".kit-workflow-compact-card",
-        ".kit-workflow-compact-route",
         ".kit-workflow-accessory",
         ".kit-rehearsal-panel",
         ".kit-rehearsal-session",
@@ -207,6 +205,11 @@ def test_main_css_carries_kit_primitive_classes() -> None:
     assert "@media (max-width: 720px)" in css
     assert ".kit-lifecycle-header-top" in css
     assert "position: absolute;" in css
+    assert ".kit-workflow-view-map .kit-workflow-node" in css
+    assert ".kit-workflow-view-full" not in css
+    assert ".kit-workflow-view-focus" not in css
+    assert ".kit-workflow-compact" not in css
+    assert "'protocol.workflow.narrow.empty'" not in kit
 
 
 def test_kit_draft_chip_states_are_exhaustive() -> None:

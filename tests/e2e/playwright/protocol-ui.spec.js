@@ -4,17 +4,18 @@ const {
   apiSaveProtocolDraft,
   attachErrorCapture,
   connectStep,
-  createRole,
+  createParticipant,
   createStep,
   discardDraft,
   login,
   openBlankDraft,
+  openTemplateDraft,
   protocolIdFromUrl,
   waitForSaved,
 } = require('./helpers/protocol-helpers');
 
 test.describe('protocol authoring live', () => {
-  test('blank draft uses role-first and step-first authoring flows', async ({ page }) => {
+  test('blank draft uses participant-first and step-first authoring flows', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
@@ -23,13 +24,25 @@ test.describe('protocol authoring live', () => {
     const lifecycle = page.locator('.kit-lifecycle-header');
     await expect(lifecycle.getByLabel('Name')).toHaveValue('');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start the workflow');
-    await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first role');
+    await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first participant');
 
-    const plannerKey = await createRole(page, { name: 'Planner', key: 'planner' });
+    await page.getByRole('button', { name: /\+ Add participant/i }).first().click();
+    const participantEditor = page.locator('.kit-details-panel').first();
+    await expect(participantEditor.getByRole('heading', { name: 'Participant' })).toBeVisible();
+    await expect(participantEditor.getByText('Assignment rule')).toBeVisible();
+    const assignmentRule = participantEditor.getByLabel('Assignment rule');
+    await expect(assignmentRule).toContainText('Specific agent');
+    await expect(assignmentRule).toContainText('Required skill');
+    await expect(assignmentRule).toContainText('Runtime role tag');
+    await assignmentRule.selectOption('role');
+    await expect(participantEditor.getByText('Choose runtime role tag')).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
+    const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner' });
     await expect(page.getByText(/^participant_[0-9]+$/i)).toHaveCount(0);
     await expect(page.getByText(/^stage_[0-9]+$/i)).toHaveCount(0);
 
-    const planKey = await createStep(page, { name: 'Plan', key: 'plan', ownerRole: plannerKey });
+    const planKey = await createStep(page, { name: 'Plan', key: 'plan', ownerParticipant: plannerKey });
     const details = page.locator('.kit-details-panel').first();
     const stageEditor = page.locator('.kit-stage-editor-grid');
     await expect(details.getByLabel('Name')).toHaveValue('Plan');
@@ -39,11 +52,11 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add route' }).first()).toBeVisible();
 
-    const reviewerKey = await createRole(page, { name: 'Reviewer', key: 'reviewer' });
+    const reviewerKey = await createParticipant(page, { name: 'Reviewer', key: 'reviewer' });
     const reviewKey = await createStep(page, {
       name: 'Review',
       key: 'review',
-      ownerRole: reviewerKey,
+      ownerParticipant: reviewerKey,
       stageKind: 'review',
     });
 
@@ -85,12 +98,7 @@ test.describe('protocol authoring live', () => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
-    await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
-    const templateCard = page.locator('.protocol-template-card').filter({ hasText: 'Software Engineering' }).first();
-    await expect(templateCard).toBeVisible();
-    await templateCard.getByRole('button', { name: 'Use template' }).click();
-
-    await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
+    await openTemplateDraft(page, 'Software Engineering');
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
     await expect(page.getByTestId('workflow-node-segment:planning')).toBeVisible({ timeout: 15000 });
 
@@ -131,16 +139,41 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
+  test('document approval template teaches participants and assignment rules without software ontology', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openTemplateDraft(page, 'Document Approval');
+
+    await expect(page.locator('.kit-protocol-detail-title')).toContainText('Draft Document');
+    await expect(page.locator('.kit-workflow-viewbar')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /\+ Add participant/i })).toBeVisible();
+    await expect(page.getByTestId('workflow-step-draft_document')).toBeVisible();
+    await expect(page.getByText('Planner role')).toHaveCount(0);
+    await expect(page.getByText('Reviewer role')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Author' }).first().click();
+    const details = page.locator('.kit-details-panel').first();
+    await expect(details.getByRole('heading', { name: 'Participant' })).toBeVisible();
+    await expect(details.getByText('Assignment rule')).toBeVisible();
+    const assignmentRule = details.getByLabel('Assignment rule');
+    await expect(assignmentRule).toContainText('Specific agent');
+    await expect(assignmentRule).toContainText('Required skill');
+    await expect(assignmentRule).toContainText('Runtime role tag');
+    await assignmentRule.selectOption('role');
+    await expect(details.getByText('Choose runtime role tag')).toBeVisible();
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
   test('software engineering template stays usable on mobile', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
-    await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
-    const templateCard = page.locator('.protocol-template-card').filter({ hasText: 'Software Engineering' }).first();
-    await expect(templateCard).toBeVisible();
-    await templateCard.getByRole('button', { name: 'Use template' }).click();
-
+    await openTemplateDraft(page, 'Software Engineering');
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
     await expect(page.locator('.kit-workflow-process')).toBeVisible();
     const processOverflow = await page.locator('.kit-workflow-process').evaluate((element) => ({

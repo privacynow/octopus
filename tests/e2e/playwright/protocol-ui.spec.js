@@ -42,7 +42,7 @@ test.describe('protocol authoring live', () => {
     await expect(participantEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
     await page.getByRole('button', { name: 'Cancel' }).click();
 
-    const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner' });
+    const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner', selectorKind: 'skill', selectorValue: 'planning' });
     await expect(page.getByText(/^participant_[0-9]+$/i)).toHaveCount(0);
     await expect(page.getByText(/^stage_[0-9]+$/i)).toHaveCount(0);
 
@@ -52,11 +52,14 @@ test.describe('protocol authoring live', () => {
     await expect(details.getByLabel('Name')).toHaveValue('Plan');
     await expect(page.locator('.kit-stage-editor-section')).toHaveCount(5);
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Runtime assignment' })).toBeVisible();
+    await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
+    await expect(page.locator('.kit-stage-editor')).toContainText('Currently resolves via Required skill · Planning.');
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add route' }).first()).toBeVisible();
 
-    const reviewerKey = await createParticipant(page, { name: 'Reviewer', key: 'reviewer' });
+    const reviewerKey = await createParticipant(page, { name: 'Reviewer', key: 'reviewer', selectorKind: 'skill', selectorValue: 'review' });
     const reviewKey = await createStep(page, {
       name: 'Review',
       key: 'review',
@@ -113,6 +116,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByTestId('workflow-step-planning')).toBeVisible();
     await expect(page.getByTestId('workflow-step-plan_review')).toBeVisible();
     await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
+    await expect(page.locator('.kit-stage-editor')).toContainText('Currently resolves via Required skill · Product Definition.');
 
     await page.getByRole('button', { name: 'Visual map' }).click();
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Visual map');

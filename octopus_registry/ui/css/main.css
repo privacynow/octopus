@@ -3784,6 +3784,17 @@ button.kit-protocol-step-owner {
     transform: translateY(-1px);
 }
 
+.kit-stage-routing-item[role="group"] {
+    cursor: default;
+}
+
+.kit-stage-routing-item[role="group"]:hover,
+.kit-stage-routing-item[role="group"]:focus-visible {
+    border-color: var(--border);
+    box-shadow: none;
+    transform: none;
+}
+
 .kit-stage-routing-item.is-selected {
     border-color: var(--accent);
     box-shadow: var(--focus-ring);
@@ -4416,23 +4427,23 @@ button.kit-protocol-step-owner {
 }
 
 .kit-workflow-view-map .kit-workflow-node {
-    min-height: 80px;
-    padding: var(--space-2) var(--space-2-5);
-    gap: var(--space-1);
+    min-height: 88px;
+    padding: var(--space-2-5) var(--space-3);
+    gap: var(--space-1-5);
 }
 
 .kit-workflow-view-map .kit-workflow-node-label {
-    font-size: 0.92rem;
-    -webkit-line-clamp: 1;
+    font-size: 0.95rem;
+    -webkit-line-clamp: 2;
 }
 
 .kit-workflow-view-map .kit-workflow-node-sublabel {
-    font-size: 0.7rem;
-    -webkit-line-clamp: 1;
+    font-size: 0.72rem;
+    -webkit-line-clamp: 2;
 }
 
 .kit-workflow-view-map .kit-workflow-node-badge {
-    min-height: 20px;
+    min-height: 22px;
     padding: 0.05rem 0.45rem;
     font-size: 0.66rem;
 }
@@ -4441,6 +4452,14 @@ button.kit-protocol-step-owner {
     max-width: 7.25rem;
     padding: 0.12rem 0.45rem;
     font-size: 0.63rem;
+}
+
+.kit-workflow-view-map .kit-workflow-graph {
+    background:
+        radial-gradient(circle at top left, rgba(23, 110, 166, 0.08), transparent 34%),
+        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
+        var(--bg);
+    background-size: auto;
 }
 
 .kit-workflow-accessories {
@@ -4560,6 +4579,18 @@ button.kit-protocol-step-owner {
         max-height: calc(100vh - (var(--space-4) * 2));
         overflow: auto;
         padding-right: var(--space-1);
+    }
+
+    .kit-authoring-workspace-map {
+        grid-template-columns: 1fr;
+    }
+
+    .kit-authoring-workspace-map .kit-authoring-details-column {
+        position: static;
+        top: auto;
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
     }
 }
 

@@ -108,11 +108,12 @@ def test_protocol_run_engine_builds_dispatch_request_from_shared_contract() -> N
     assert request.project_id_override == "workspace-a"
     assert request.context["protocol_run_id"] == "run-1"
     assert request.internal_context["protocol_stage_contract"]["stage_key"] == "planning"
+    assert request.requested_skills == ["planning"]
 
 
-def test_protocol_run_engine_prefers_required_skill_for_dispatch_selector() -> None:
+def test_protocol_run_engine_uses_participant_selector_for_dispatch() -> None:
     document = _document()
-    participant = document.participant("worker").model_copy(update={"required_skills": ["planning"]})
+    participant = document.participant("worker")
 
     selector = _engine().dispatch_target_selector(
         run=_run().model_copy(update={"entry_agent_id": "agent-1"}),

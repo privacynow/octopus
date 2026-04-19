@@ -17,7 +17,7 @@ def agent_card(*, bot_key: str = "m1") -> AgentCard:
         slug=bot_key,
         role="assistant",
         registry_scope="full",
-        routing_skills=["planning"],
+        routing_skills=["planning", "review", "writing", "approval", "product-definition", "architecture", "implementation"],
         tags=[],
         description="",
         provider="codex",
@@ -47,8 +47,8 @@ def protocol_document() -> dict[str, object]:
             "description": "Minimal protocol for test coverage.",
         },
         "participants": [
-            {"participant_key": "worker", "display_name": "Worker"},
-            {"participant_key": "reviewer", "display_name": "Reviewer"},
+            {"participant_key": "worker", "display_name": "Worker", "selector": {"kind": "skill", "value": "planning"}},
+            {"participant_key": "reviewer", "display_name": "Reviewer", "selector": {"kind": "skill", "value": "review"}},
         ],
         "artifacts": [
             {

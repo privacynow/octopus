@@ -29,7 +29,7 @@ from .core import (
     stage_target_for_decision,
     utcnow_iso,
 )
-from octopus_sdk.registry.models import RoutedTaskRequest
+from octopus_sdk.registry.models import RoutedTaskRequest, normalized_requested_skills
 
 
 class ProtocolRunEngine:
@@ -90,13 +90,9 @@ class ProtocolRunEngine:
         if run.is_rehearsal:
             return TargetSelector(kind="role", value="rehearsal")
         if participant.selector is not None:
+            if participant.selector.kind == "skill" and not str(participant.selector.preferred_agent_id or "").strip():
+                return participant.selector.model_copy(update={"preferred_agent_id": str(run.entry_agent_id or "").strip()})
             return participant.selector
-        if participant.required_skills:
-            return TargetSelector(
-                kind="skill",
-                value=participant.required_skills[0],
-                preferred_agent_id=run.entry_agent_id,
-            )
         return TargetSelector(kind="agent", value=run.entry_agent_id)
 
     def build_dispatch_request(
@@ -146,7 +142,7 @@ class ProtocolRunEngine:
                 stage=stage,
             ),
             constraints=run.constraints_json,
-            requested_skills=participant.required_skills,
+            requested_skills=normalized_requested_skills(selector=participant.selector),
             session_key_override=protocol_participant_session_key(run.protocol_run_id, participant.participant_key),
             project_id_override=run.workspace_ref,
             file_policy_override="edit" if stage.write_capable else "",

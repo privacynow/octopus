@@ -62,7 +62,7 @@ from octopus_sdk.protocols import (
 from octopus_sdk.protocols.documents import draft_protocol_document_data
 from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
-from octopus_sdk.registry.models import utcnow_iso
+from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 
 from .config import RegistryConfig
 from .postgres import get_connection
@@ -2338,7 +2338,7 @@ class ProtocolPostgresAdapter:
                             run_id,
                             participant.participant_key,
                             participant.display_name or participant.participant_key,
-                            jsonb(participant.required_skills),
+                            jsonb(normalized_requested_skills(selector=participant.selector)),
                             jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),
                             protocol_participant_session_key(run_id, participant.participant_key),
                             jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),

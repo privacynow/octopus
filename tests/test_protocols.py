@@ -20,6 +20,7 @@ from octopus_sdk.protocols import (
     protocol_review_edge_key,
     validate_protocol_document,
 )
+from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
 from octopus_registry.postgres import get_connection
 from octopus_registry.store_postgres import RegistryPostgresStore
@@ -75,7 +76,7 @@ def _generated_linear_protocol(seed: int) -> dict[str, object]:
             "display_name": f"Generated {seed}",
             "description": "Generated protocol for validator coverage.",
         },
-        "participants": [{"participant_key": "worker", "display_name": "Worker"}],
+        "participants": [{"participant_key": "worker", "display_name": "Worker", "selector": {"kind": "skill", "value": "planning"}}],
         "artifacts": artifacts,
         "stages": stages,
         "policies": {
@@ -115,6 +116,51 @@ def test_validate_protocol_document_accepts_minimal_protocol() -> None:
     assert result.ok is True
     assert result.normalized_document is not None
     assert result.normalized_document.first_stage_key == "planning"
+
+
+def test_canonical_protocol_document_synthesizes_selector_from_legacy_required_skill() -> None:
+    legacy = protocol_document()
+    legacy["participants"][0].pop("selector", None)
+    legacy["participants"][0]["required_skills"] = ["planning"]
+
+    document = canonical_protocol_document(legacy)
+
+    participant = document.participant("worker")
+    assert participant.selector is not None
+    assert participant.selector.kind == "skill"
+    assert participant.selector.value == "planning"
+    assert participant.required_skills == []
+
+
+def test_validate_protocol_document_requires_assignment_rule_for_participants() -> None:
+    invalid = protocol_document()
+    invalid["participants"][0].pop("selector", None)
+
+    result = validate_protocol_document(invalid)
+
+    assert result.ok is False
+    assert result.issues
+    assert any(item.code == "participant.selector_required" for item in result.issues)
+
+
+def test_validate_protocol_document_warns_when_legacy_required_skills_has_multiple_values() -> None:
+    legacy = protocol_document()
+    legacy["participants"][0].pop("selector", None)
+    legacy["participants"][0]["required_skills"] = ["planning", "review"]
+
+    result = validate_protocol_document(legacy, mode="draft")
+
+    assert result.ok is True
+    assert any(item.code == "participant.legacy_multi_skill" and item.blocking is False for item in result.issues)
+
+
+def test_builtin_protocol_templates_use_selector_backed_assignment() -> None:
+    for slug in ("software-engineering", "document-approval"):
+        document = builtin_protocol_document(slug)
+        assert document.participants
+        for participant in document.participants:
+            assert participant.selector is not None, f"{slug} participant {participant.participant_key} must declare a selector"
+            assert participant.required_skills == []
 
 
 def test_parse_protocol_stage_decision_requires_explicit_review_decision() -> None:

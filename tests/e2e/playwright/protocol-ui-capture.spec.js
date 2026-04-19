@@ -25,11 +25,11 @@ test('capture protocol authoring states', async ({ page }) => {
   await lifecycle.getByLabel('Name').blur();
   await waitForSaved(page);
 
-  const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner' });
+  const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner', selectorKind: 'skill', selectorValue: 'planning' });
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-participant-page.png', fullPage: true });
 
   const planKey = await createStep(page, { name: 'Plan', key: 'plan', ownerParticipant: plannerKey });
-  const reviewerKey = await createParticipant(page, { name: 'Reviewer', key: 'reviewer' });
+  const reviewerKey = await createParticipant(page, { name: 'Reviewer', key: 'reviewer', selectorKind: 'skill', selectorValue: 'review' });
   const reviewKey = await createStep(page, {
     name: 'Review',
     key: 'review',

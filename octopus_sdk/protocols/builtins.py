@@ -15,21 +15,21 @@ def software_engineering_protocol_document() -> ProtocolDefinitionDocumentRecord
                 "description": "Plan, review, architect, implement, review, and accept a software delivery run.",
             },
             "participants": [
-                {"participant_key": "planner", "display_name": "Planner", "required_skills": ["product-definition"]},
-                {"participant_key": "plan_reviewer", "display_name": "Plan Reviewer", "required_skills": ["review"]},
-                {"participant_key": "architect", "display_name": "Architect", "required_skills": ["architecture"]},
+                {"participant_key": "planner", "display_name": "Planner", "selector": {"kind": "skill", "value": "product-definition"}},
+                {"participant_key": "plan_reviewer", "display_name": "Plan Reviewer", "selector": {"kind": "skill", "value": "review"}},
+                {"participant_key": "architect", "display_name": "Architect", "selector": {"kind": "skill", "value": "architecture"}},
                 {
                     "participant_key": "architecture_reviewer",
                     "display_name": "Architecture Reviewer",
-                    "required_skills": ["review"],
+                    "selector": {"kind": "skill", "value": "review"},
                 },
-                {"participant_key": "implementer", "display_name": "Implementer", "required_skills": ["implementation"]},
+                {"participant_key": "implementer", "display_name": "Implementer", "selector": {"kind": "skill", "value": "implementation"}},
                 {
                     "participant_key": "implementation_reviewer",
                     "display_name": "Implementation Reviewer",
-                    "required_skills": ["review"],
+                    "selector": {"kind": "skill", "value": "review"},
                 },
-                {"participant_key": "acceptance", "display_name": "Acceptance", "required_skills": ["review"]},
+                {"participant_key": "acceptance", "display_name": "Acceptance", "selector": {"kind": "skill", "value": "review"}},
             ],
             "artifacts": [
                 {
@@ -172,9 +172,9 @@ def document_approval_protocol_document() -> ProtocolDefinitionDocumentRecord:
                 "description": "Draft, review, and approve a document before completion.",
             },
             "participants": [
-                {"participant_key": "author", "display_name": "Author", "required_skills": ["writing"]},
-                {"participant_key": "reviewer", "display_name": "Reviewer", "required_skills": ["review"]},
-                {"participant_key": "approver", "display_name": "Approver", "required_skills": ["approval"]},
+                {"participant_key": "author", "display_name": "Author", "selector": {"kind": "skill", "value": "writing"}},
+                {"participant_key": "reviewer", "display_name": "Reviewer", "selector": {"kind": "skill", "value": "review"}},
+                {"participant_key": "approver", "display_name": "Approver", "selector": {"kind": "skill", "value": "approval"}},
             ],
             "artifacts": [
                 {

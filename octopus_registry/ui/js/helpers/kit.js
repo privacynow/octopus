@@ -1331,12 +1331,12 @@ window.Kit = (() => {
             const viewport = document.createElement('div');
             viewport.className = 'kit-workflow-viewport';
 
-            const rowHeight = isMap ? 74 : denseMode ? 82 : 92;
-            const rowGap = isMap ? 8 : denseMode ? 10 : 14;
-            const columnWidth = isMap ? 176 : denseMode ? 194 : 214;
-            const columnGap = isMap ? 14 : denseMode ? 18 : 24;
-            const leftPad = lanes.length ? (isMap ? 84 : denseMode ? 94 : 108) : 18;
-            const rightPad = isMap ? 16 : denseMode ? 18 : 24;
+            const rowHeight = isMap ? 88 : denseMode ? 82 : 92;
+            const rowGap = isMap ? 14 : denseMode ? 10 : 14;
+            const columnWidth = isMap ? 208 : denseMode ? 194 : 214;
+            const columnGap = isMap ? 24 : denseMode ? 18 : 24;
+            const leftPad = lanes.length ? (isMap ? 84 : denseMode ? 94 : 108) : (isMap ? 28 : 18);
+            const rightPad = isMap ? 24 : denseMode ? 18 : 24;
             const bottomPad = 24;
             const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
             const nodeRow = (node) => {
@@ -1346,15 +1346,15 @@ window.Kit = (() => {
             };
             const nodeBox = (node) => {
                 if (node.isTerminal) {
-                    return { width: isMap ? 132 : denseMode ? 140 : 148, height: isMap ? 54 : denseMode ? 58 : 64 };
+                    return { width: isMap ? 148 : denseMode ? 140 : 148, height: isMap ? 58 : denseMode ? 58 : 64 };
                 }
                 if (node.isContext) {
-                    return { width: isMap ? 150 : denseMode ? 158 : 166, height: isMap ? 58 : denseMode ? 64 : 70 };
+                    return { width: isMap ? 168 : denseMode ? 158 : 166, height: isMap ? 64 : denseMode ? 64 : 70 };
                 }
                 if (node.kind === 'segment') {
-                    return { width: isMap ? 158 : denseMode ? 168 : 178, height: isMap ? 62 : denseMode ? 68 : 74 };
+                    return { width: isMap ? 176 : denseMode ? 168 : 178, height: isMap ? 68 : denseMode ? 68 : 74 };
                 }
-                return { width: isMap ? 168 : denseMode ? 184 : 198, height: isMap ? 76 : denseMode ? 84 : 92 };
+                return { width: isMap ? 196 : denseMode ? 184 : 198, height: isMap ? 88 : denseMode ? 84 : 92 };
             };
             const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
             const backEdges = edges.filter((edge) => {
@@ -1362,7 +1362,7 @@ window.Kit = (() => {
                 const toNode = nodeById.get(String(edge.to || ''));
                 return toNode && fromNode && Number(toNode.column || 0) <= Number(fromNode.column || 0);
             });
-            const routeHeadroom = backEdges.length ? 18 + (backEdges.length * 18) : 16;
+            const routeHeadroom = backEdges.length ? 14 + (backEdges.length * 18) : 14;
             const topPad = 18 + routeHeadroom;
             const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
             const maxRow = Math.max(0, ...nodes.map((node) => nodeRow(node)));
@@ -1709,8 +1709,8 @@ window.Kit = (() => {
             const defaultZoom = Object.prototype.hasOwnProperty.call(viewportState || {}, 'zoom')
                 ? viewportState.zoom
                 : (isMap ? 'fit' : 1);
-            const minZoom = isMap ? 0.32 : 0.55;
-            const maxZoom = isMap ? 1.15 : 1.5;
+            const minZoom = isMap ? 0.4 : 0.55;
+            const maxZoom = isMap ? 1.2 : 1.5;
             function resolvedZoomValue() {
                 return Math.max(minZoom, Math.min(maxZoom, Number(graph.dataset.zoomResolved || 1) || 1));
             }

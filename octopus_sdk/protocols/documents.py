@@ -89,6 +89,44 @@ def _coerce_selector(value: object) -> dict[str, object] | None:
     return selector or None
 
 
+def _participant_selector_from_source(raw: dict[str, object]) -> dict[str, object] | None:
+    selector = _coerce_selector(raw.get("selector"))
+    if selector is not None:
+        return selector
+    required_skills = _coerce_slug_list(raw.get("required_skills"))
+    if required_skills:
+        return {
+            "kind": "skill",
+            "value": required_skills[0],
+        }
+    return None
+
+
+def _source_selector_parts(raw: dict[str, object]) -> tuple[bool, str, str]:
+    selector = _coerce_mapping(raw.get("selector"))
+    if not selector:
+        return False, "", ""
+    return (
+        True,
+        str(selector.get("kind", "") or "").strip().lower(),
+        str(selector.get("value", "") or "").strip(),
+    )
+
+
+def _normalized_participant_records(items: Sequence[object]) -> list[dict[str, object]]:
+    participants: list[dict[str, object]] = []
+    for item in items:
+        raw = _coerce_mapping(item)
+        participants.append({
+            "participant_key": str(raw.get("participant_key", "") or "").strip(),
+            "display_name": str(raw.get("display_name", "") or "").strip(),
+            "required_skills": [],
+            "selector": _participant_selector_from_source(raw),
+            "instructions": str(raw.get("instructions", "") or ""),
+        })
+    return participants
+
+
 def draft_protocol_document_data(value: object) -> dict[str, object]:
     migrated = migrate_protocol_document_data(value)
     metadata = _coerce_mapping(migrated.get("metadata"))
@@ -96,16 +134,7 @@ def draft_protocol_document_data(value: object) -> dict[str, object]:
     metadata["display_name"] = str(metadata.get("display_name", "") or "").strip()
     metadata["description"] = str(metadata.get("description", "") or "").strip()
 
-    participants: list[dict[str, object]] = []
-    for item in _coerce_sequence(migrated.get("participants")):
-        raw = _coerce_mapping(item)
-        participants.append({
-            "participant_key": str(raw.get("participant_key", "") or "").strip(),
-            "display_name": str(raw.get("display_name", "") or "").strip(),
-            "required_skills": _coerce_slug_list(raw.get("required_skills")),
-            "selector": _coerce_selector(raw.get("selector")),
-            "instructions": str(raw.get("instructions", "") or ""),
-        })
+    participants = _normalized_participant_records(_coerce_sequence(migrated.get("participants")))
 
     artifacts: list[dict[str, object]] = []
     for item in _coerce_sequence(migrated.get("artifacts")):
@@ -177,10 +206,15 @@ def _validation_issue(
     )
 
 
-def _draft_validation_issues(document: dict[str, object]) -> list[ProtocolValidationIssueRecord]:
+def _draft_validation_issues(
+    document: dict[str, object],
+    *,
+    source_document: dict[str, object] | None = None,
+) -> list[ProtocolValidationIssueRecord]:
     issues: list[ProtocolValidationIssueRecord] = []
     metadata = _coerce_mapping(document.get("metadata"))
     participants = [_coerce_mapping(item) for item in _coerce_sequence(document.get("participants"))]
+    source_participants = [_coerce_mapping(item) for item in _coerce_sequence((source_document or document).get("participants"))]
     artifacts = [_coerce_mapping(item) for item in _coerce_sequence(document.get("artifacts"))]
     stages = [_coerce_mapping(item) for item in _coerce_sequence(document.get("stages"))]
 
@@ -242,6 +276,64 @@ def _draft_validation_issues(document: dict[str, object]) -> list[ProtocolValida
     participant_set = {item for item in participant_keys if item}
     artifact_set = {item for item in artifact_keys if item}
     stage_set = {item for item in stage_keys if item}
+
+    for index, participant in enumerate(participants):
+        participant_key = str(participant.get("participant_key", "") or "").strip()
+        participant_label = participant_key or f"participant {index + 1}"
+        source_participant = source_participants[index] if index < len(source_participants) else participant
+        has_raw_selector, selector_kind, selector_value = _source_selector_parts(source_participant)
+        required_skills = _coerce_slug_list(source_participant.get("required_skills"))
+        effective_selector = _coerce_selector(participant.get("selector"))
+
+        if has_raw_selector and not selector_kind:
+            issues.append(_validation_issue(
+                "participant.selector_kind_required",
+                f"Add an assignment strategy for {participant_label}.",
+                section="participants",
+                entity_kind="participant",
+                entity_key=participant_key,
+                path=f"participants.{index}.selector.kind",
+            ))
+        elif selector_kind and selector_kind not in PROTOCOL_SELECTOR_KIND_OPTIONS:
+            issues.append(_validation_issue(
+                "participant.selector_kind_invalid",
+                f"{participant_label} uses unsupported assignment strategy {selector_kind!r}.",
+                section="participants",
+                entity_kind="participant",
+                entity_key=participant_key,
+                path=f"participants.{index}.selector.kind",
+            ))
+
+        if has_raw_selector and not selector_value:
+            issues.append(_validation_issue(
+                "participant.selector_value_required",
+                f"Add an assignment value for {participant_label}.",
+                section="participants",
+                entity_kind="participant",
+                entity_key=participant_key,
+                path=f"participants.{index}.selector.value",
+            ))
+
+        if not has_raw_selector and len(required_skills) > 1:
+            issues.append(_validation_issue(
+                "participant.legacy_multi_skill",
+                f"{participant_label} declares multiple legacy skills. Only the first skill can be migrated into one assignment rule.",
+                section="participants",
+                entity_kind="participant",
+                entity_key=participant_key,
+                path=f"participants.{index}.required_skills",
+                blocking=False,
+            ))
+
+        if effective_selector is None and not has_raw_selector:
+            issues.append(_validation_issue(
+                "participant.selector_required",
+                f"Add an assignment rule for {participant_label} before review or publish.",
+                section="participants",
+                entity_kind="participant",
+                entity_key=participant_key,
+                path=f"participants.{index}.selector",
+            ))
 
     for index, artifact in enumerate(artifacts):
         artifact_key = str(artifact.get("artifact_key", "") or "").strip()
@@ -343,6 +435,8 @@ def _next_required_actions(issues: Sequence[ProtocolValidationIssueRecord]) -> l
             actions.append("participants.add_first")
         elif issue.code == "stages.required" and "stages.add_first" not in actions:
             actions.append("stages.add_first")
+        elif issue.code.startswith("participant.selector_") and "participants.assign_selector" not in actions:
+            actions.append("participants.assign_selector")
         elif issue.code in {"stage.participant_required", "stage.participant_missing"} and "stages.assign_participant" not in actions:
             actions.append("stages.assign_participant")
     return actions
@@ -399,7 +493,7 @@ def migrate_protocol_document_data(value: object) -> dict[str, object]:
 def canonical_protocol_document(value: object) -> ProtocolDefinitionDocumentRecord:
     if isinstance(value, ProtocolDefinitionDocumentRecord):
         return value
-    return ProtocolDefinitionDocumentRecord.model_validate(migrate_protocol_document_data(value))
+    return ProtocolDefinitionDocumentRecord.model_validate(draft_protocol_document_data(value))
 
 
 def protocol_definition_content_hash(document: ProtocolDefinitionDocumentRecord) -> str:
@@ -412,45 +506,72 @@ def validate_protocol_document(
     *,
     mode: ProtocolValidationMode = "strict",
 ) -> ProtocolValidationResultRecord:
+    try:
+        migrated = migrate_protocol_document_data(value)
+    except Exception as exc:
+        migrated = {}
+        if mode == "strict":
+            return ProtocolValidationResultRecord(mode="strict", ok=False, errors=[str(exc)])
     if mode == "draft":
         try:
-            document = draft_protocol_document_data(value)
+            document = draft_protocol_document_data(migrated or value)
         except Exception as exc:
             return ProtocolValidationResultRecord(mode="draft", ok=False, errors=[str(exc)])
-        issues = _draft_validation_issues(document)
+        issues = _draft_validation_issues(document, source_document=migrated or document)
+        blocking = [item for item in issues if item.blocking]
         payload = json.dumps(document, sort_keys=True, separators=(",", ":"))
         return ProtocolValidationResultRecord(
             mode="draft",
-            ok=not issues,
-            errors=[item.message for item in issues],
+            ok=not blocking,
+            errors=[item.message for item in blocking],
             issues=issues,
-            next_required_actions=_next_required_actions(issues),
+            next_required_actions=_next_required_actions(blocking or issues),
             normalized_document=None,
             content_hash=hashlib.sha256(payload.encode("utf-8")).hexdigest(),
         )
     try:
-        document = canonical_protocol_document(value)
+        draft_document = draft_protocol_document_data(migrated or value)
     except Exception as exc:
         try:
-            draft_document = draft_protocol_document_data(value)
+            draft_document = draft_protocol_document_data(migrated or value)
         except Exception:
             return ProtocolValidationResultRecord(mode="strict", ok=False, errors=[str(exc)])
-        issues = _draft_validation_issues(draft_document)
+        issues = _draft_validation_issues(draft_document, source_document=migrated or draft_document)
         if issues:
             return ProtocolValidationResultRecord(
                 mode="strict",
                 ok=False,
-                errors=[item.message for item in issues],
+                errors=[item.message for item in issues if item.blocking],
                 issues=issues,
                 next_required_actions=_next_required_actions(issues),
             )
         return ProtocolValidationResultRecord(mode="strict", ok=False, errors=[str(exc)])
+    issues = _draft_validation_issues(draft_document, source_document=migrated or draft_document)
+    blocking = [item for item in issues if item.blocking]
+    if blocking:
+        return ProtocolValidationResultRecord(
+            mode="strict",
+            ok=False,
+            errors=[item.message for item in blocking],
+            issues=issues,
+            next_required_actions=_next_required_actions(blocking),
+        )
+    try:
+        document = ProtocolDefinitionDocumentRecord.model_validate(draft_document)
+    except Exception as exc:
+        return ProtocolValidationResultRecord(
+            mode="strict",
+            ok=False,
+            errors=[str(exc)],
+            issues=issues,
+            next_required_actions=_next_required_actions(issues),
+        )
     return ProtocolValidationResultRecord(
         mode="strict",
         ok=True,
         errors=[],
-        issues=[],
-        next_required_actions=[],
+        issues=issues,
+        next_required_actions=_next_required_actions(issues),
         normalized_document=document,
         content_hash=protocol_definition_content_hash(document),
     )

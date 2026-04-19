@@ -96,16 +96,33 @@ async function openTemplateDraft(page, templateName) {
   await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
 }
 
-async function createParticipant(page, { name, key = '', selectorValue = '' }) {
+async function createParticipant(page, { name, key = '', selectorKind = 'skill', selectorValue = '' }) {
   await page.getByRole('button', { name: /\+ Add participant/i }).first().click();
-  const details = page.locator('.kit-details-panel').first();
+  const editor = page.locator('.kit-stage-editor').first();
+  const details = editor.locator('.kit-details-panel').first();
   await expect(details).toBeVisible();
   await details.getByLabel('Name').fill(name);
   if (key) {
     await details.getByLabel('Key').fill(key);
   }
-  if (selectorValue) {
-    await details.getByLabel('Rule value').fill(selectorValue);
+  const strategy = editor.getByLabel('Strategy', { exact: true });
+  await strategy.selectOption(selectorKind);
+  const valueSelect = editor.locator('.kit-selector-editor-field select.kit-details-control').first();
+  if (await valueSelect.count()) {
+    if (selectorValue) {
+      await valueSelect.selectOption(selectorValue);
+    } else {
+      const valueOptions = await valueSelect.locator('option').evaluateAll((options) =>
+        options.map((option) => String(option.value || '')).filter(Boolean));
+      if (!valueOptions.length) {
+        throw new Error(`No assignment values available for selector kind ${selectorKind}`);
+      }
+      await valueSelect.selectOption(valueOptions[0]);
+    }
+  } else if (selectorValue) {
+    await editor.locator('.kit-selector-editor-field input.kit-details-control').first().fill(selectorValue);
+  } else {
+    throw new Error(`Assignment value is required for selector kind ${selectorKind}`);
   }
   await page.waitForTimeout(150);
   await page.evaluate(() => {

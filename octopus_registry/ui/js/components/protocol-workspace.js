@@ -474,6 +474,36 @@ function renderProtocolWorkspace(container) {
         return String(participant?.display_name || participant?.participant_key || participantKey || 'Participant').trim();
     }
 
+    function _participantRecord(participantKey, doc = draft.document) {
+        return (doc.participants || []).find((item) => String(item.participant_key || '') === String(participantKey || '')) || null;
+    }
+
+    function _selectorSummary(selector, { empty = 'Unassigned', prefix = '' } = {}) {
+        if (!selector || !selector.kind || !selector.value) {
+            return prefix ? `${prefix}${empty}` : empty;
+        }
+        const kind = String(selector.kind || '').trim().toLowerCase();
+        const value = String(selector.value || '').trim();
+        const valueLabel = kind === 'skill' || kind === 'role' ? _titleCaseWords(value) : value;
+        const label = `${_selectorKindLabel(kind)} · ${valueLabel}`;
+        return prefix ? `${prefix}${label}` : label;
+    }
+
+    function _participantAssignmentSummary(participantKey, doc = draft.document, options = {}) {
+        return _selectorSummary(_participantRecord(participantKey, doc)?.selector || null, options);
+    }
+
+    function _participantRuntimeLabel(participantKey, doc = draft.document, options = {}) {
+        const display = _participantDisplayName(participantKey, doc);
+        const assignment = _participantAssignmentSummary(participantKey, doc, options);
+        const labels = [display, assignment].map((item) => String(item || '').trim()).filter(Boolean);
+        return labels.join(' · ');
+    }
+
+    function _hasSelectorAssignment(selectorKind = '', selectorValue = '') {
+        return Boolean(_selectorFromFields(selectorKind, selectorValue));
+    }
+
     function _segmentParticipantSummary(participantLabels) {
         const labels = Array.isArray(participantLabels)
             ? participantLabels.map((item) => String(item || '').trim()).filter(Boolean)
@@ -2202,6 +2232,7 @@ function renderProtocolWorkspace(container) {
     } = {}) {
         const shell = document.createElement('div');
         shell.className = 'kit-stage-editor';
+        const assignmentReady = _hasSelectorAssignment(target?.selector_kind, target?.selector_value);
         const basics = Kit.detailsPanel({
             target,
             surfaceKey: 'protocol.participant',
@@ -2211,7 +2242,7 @@ function renderProtocolWorkspace(container) {
                 { key: 'participant_key', kind: 'text', readOnly },
             ],
             actions: createAction ? [
-                { label: 'Create participant', tone: 'btn-primary', onClick: createAction },
+                { label: 'Create participant', tone: 'btn-primary', onClick: createAction, disabled: !assignmentReady },
                 ...(cancelAction ? [{ label: 'Cancel', onClick: cancelAction }] : []),
             ] : [],
         });
@@ -2360,6 +2391,8 @@ function renderProtocolWorkspace(container) {
         const reads = Number((stage.inputs || []).length || 0);
         const writes = Number((stage.outputs || []).length || 0);
         const parts = [];
+        const assignment = _participantAssignmentSummary(stage?.participant_key, draft.document, { empty: '' });
+        if (assignment) parts.push(assignment);
         if (reads) parts.push(`Reads ${reads}`);
         if (writes) parts.push(`Writes ${writes}`);
         if (!parts.length && String(stage.instructions || '').trim()) parts.push('Instructions ready');
@@ -2521,40 +2554,81 @@ function renderProtocolWorkspace(container) {
 
     function _mapWorkflowData(projection, progress, resolvedView) {
         const doc = draft.document;
-        const stageCounts = new Map();
+        const participantByKey = new Map((doc.participants || []).map((item) => [String(item.participant_key || ''), item]));
+        const stageCounts = new Map((doc.participants || []).map((item) => [String(item.participant_key || ''), 0]));
         (doc.stages || []).forEach((item) => {
             const key = String(item.participant_key || '').trim();
             stageCounts.set(key, Number(stageCounts.get(key) || 0) + 1);
         });
-        const lanes = (doc.participants || []).map((item) => ({
-            key: String(item.participant_key || ''),
-            label: String(item.display_name || item.participant_key || 'Participant'),
-            sublabel: _selectorString(item.selector || null)
-                ? `Assignment · ${_selectorString(item.selector || null)}`
-                : `${Number(stageCounts.get(String(item.participant_key || '')) || 0)} step${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
-            empty: 'No steps for this participant yet.',
-        }));
         const stageKeys = (doc.stages || []).map((item) => String(item.stage_key || ''));
         const columns = _stageColumns(stageKeys, projection.topology);
         const maxStageColumn = Math.max(0, ...Array.from(columns.values(), (value) => Number(value || 0)));
+        const localIndexByStage = new Map();
+        projection.segments.forEach((segment) => {
+            segment.stageKeys.forEach((stageKey, index) => {
+                localIndexByStage.set(String(stageKey || ''), index);
+            });
+        });
+        const documentIndex = new Map((doc.stages || []).map((item, index) => [String(item.stage_key || ''), index]));
+        const mapRows = new Map();
+        const lastRowByColumn = new Map();
+        [...(doc.stages || [])]
+            .sort((left, right) => {
+                const leftKey = String(left?.stage_key || '');
+                const rightKey = String(right?.stage_key || '');
+                const leftColumn = Number(columns.get(leftKey) || 0);
+                const rightColumn = Number(columns.get(rightKey) || 0);
+                if (leftColumn !== rightColumn) return leftColumn - rightColumn;
+                const leftSegment = projection.segmentsById.get(projection.stageToSegment.get(leftKey) || '');
+                const rightSegment = projection.segmentsById.get(projection.stageToSegment.get(rightKey) || '');
+                const leftRow = Number(leftSegment?.row || 0);
+                const rightRow = Number(rightSegment?.row || 0);
+                if (leftRow !== rightRow) return leftRow - rightRow;
+                return Number(documentIndex.get(leftKey) || 0) - Number(documentIndex.get(rightKey) || 0);
+            })
+            .forEach((item, index) => {
+                const stageKey = String(item.stage_key || '');
+                const segmentId = projection.stageToSegment.get(stageKey) || '';
+                const segment = projection.segmentsById.get(segmentId);
+                const localIndex = Number(localIndexByStage.get(stageKey) || 0);
+                const column = Number(columns.get(stageKey) || 0);
+                const preferredRow = Math.max(0, Number(segment?.row || index) + (localIndex * 0.78));
+                const previousRow = Number(lastRowByColumn.get(column));
+                const row = Number.isFinite(previousRow)
+                    ? Math.max(preferredRow, previousRow + 0.86)
+                    : preferredRow;
+                lastRowByColumn.set(column, row);
+                mapRows.set(stageKey, row);
+        });
+        const participantAccessories = (doc.participants || []).map((item) => ({
+            kind: 'participant',
+            id: String(item.participant_key || ''),
+            label: `${_participantRuntimeLabel(item.participant_key, doc)} · ${Number(stageCounts.get(String(item.participant_key || '')) || 0)} step${Number(stageCounts.get(String(item.participant_key || '')) || 0) === 1 ? '' : 's'}`,
+        }));
         return {
-            lanes,
+            lanes: [],
             nodes: [
                 ...(doc.stages || []).map((item) => ({
                     id: String(item.stage_key || ''),
                     kind: 'stage',
-                    laneKey: String(item.participant_key || ''),
-                    row: _stageLaneRow(item.participant_key, doc),
+                    laneKey: '',
+                    row: Number(mapRows.get(String(item.stage_key || '')) || 0),
                     column: Number(columns.get(String(item.stage_key || '')) || 0),
                     label: String(item.display_name || item.stage_key || 'Untitled step'),
-                    sublabel: _stageNodeSublabel(item),
-                    badges: _stageNodeBadges(item, 'map'),
+                    sublabel: _participantRuntimeLabel(item.participant_key, doc, { empty: 'Unassigned' }),
+                    badges: [
+                        ..._stageNodeBadges(item, 'map'),
+                        {
+                            tone: participantByKey.get(String(item.participant_key || ''))?.selector ? 'context' : 'warning',
+                            label: _participantDisplayName(item.participant_key, doc),
+                        },
+                    ],
                 })),
                 ...(progress.stageCount ? PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
                     id: item.key,
                     kind: 'terminal',
                     laneKey: '',
-                    row: lanes.length + index,
+                    row: (Math.max(0, ...Array.from(mapRows.values(), (value) => Number(value || 0))) + 1.05) + (index * 0.92),
                     column: maxStageColumn + 1,
                     label: item.label,
                     sublabel: 'Ends the workflow',
@@ -2574,11 +2648,18 @@ function renderProtocolWorkspace(container) {
                 };
             }),
             toolbarActions: _surfaceToolbarActions(progress, resolvedView, projection),
-            accessorySections: [],
+            accessorySections: participantAccessories.length ? [{
+                title: 'Participants',
+                items: participantAccessories,
+                onSelect: (item) => {
+                    selection = { sectionKey: 'participants', nodeKey: String(item.id || '') };
+                    render();
+                },
+            }] : [],
             firstRun: _firstRunState(progress),
-            laneLabels: Object.fromEntries(lanes.map((lane, index) => [lane.key, { ...lane, row: index }])),
+            laneLabels: {},
             outcomes: progress.stageCount ? {
-                startRow: lanes.length,
+                startRow: Math.max(0, ...Array.from(mapRows.values(), (value) => Number(value || 0))) + 1.05,
                 count: PROTOCOL_TERMINAL_TARGETS.length,
                 label: Kit.dict.label('protocol.workflow.outcomes'),
                 hint: Kit.dict.label('protocol.workflow.outcomes_hint'),
@@ -2696,7 +2777,7 @@ function renderProtocolWorkspace(container) {
                 : [],
             participantChips: (segment?.participantKeys || []).map((participantKey) => ({
                 key: String(participantKey || ''),
-                label: _participantDisplayName(participantKey, draft.document),
+                label: _participantRuntimeLabel(participantKey, draft.document),
                 selected: selection.sectionKey === 'participants' && selection.nodeKey === String(participantKey || ''),
             })),
             incomingSections: (segment?.incomingSegments || [])
@@ -2985,6 +3066,10 @@ function renderProtocolWorkspace(container) {
                 render();
             });
             eyebrow.appendChild(owner);
+            const assignment = document.createElement('span');
+            assignment.className = 'kit-stage-editor-hero-chip';
+            assignment.textContent = _participantAssignmentSummary(stage.participant_key, draft.document);
+            eyebrow.appendChild(assignment);
             if (stageState) {
                 const stateBadge = document.createElement('span');
                 stateBadge.className = `kit-workflow-node-state kit-workflow-node-state-${stageState}`;
@@ -3102,6 +3187,7 @@ function renderProtocolWorkspace(container) {
 
         [
             _participantDisplayName(target?.participant_key, draft.document),
+            _participantAssignmentSummary(target?.participant_key, draft.document),
             Kit.dict.label(`protocol.stage.kind.${String(target?.stage_kind || 'work')}`, _titleCaseWords(target?.stage_kind || 'work')),
             `${Object.keys(target?.transitions || {}).length} route${Object.keys(target?.transitions || {}).length === 1 ? '' : 's'}`,
             `${(target?.inputs || []).length} read${(target?.inputs || []).length === 1 ? '' : 's'} · ${(target?.outputs || []).length} write${(target?.outputs || []).length === 1 ? '' : 's'}`,
@@ -3119,6 +3205,68 @@ function renderProtocolWorkspace(container) {
         hero.appendChild(note);
 
         return hero;
+    }
+
+    function _stageAssignmentPanel(stage, { readOnly = false } = {}) {
+        const panel = document.createElement('div');
+        panel.className = 'kit-stage-routing';
+
+        const participantKey = String(stage?.participant_key || '').trim();
+        const participantName = _participantDisplayName(participantKey, draft.document);
+        const assignmentSummary = _participantAssignmentSummary(participantKey, draft.document, { empty: 'Unassigned' });
+
+        const head = document.createElement('div');
+        head.className = 'kit-stage-routing-head';
+        const intro = document.createElement('p');
+        intro.className = 'kit-stage-routing-copy';
+        intro.textContent = participantKey
+            ? `This step resolves through ${participantName}. The participant assignment decides whether a specific agent or a skill-matched agent runs it.`
+            : 'Choose an owning participant above. Steps always resolve through the owning participant assignment.';
+        head.appendChild(intro);
+        if (participantKey && !readOnly) {
+            const edit = document.createElement('button');
+            edit.type = 'button';
+            edit.className = 'btn btn-small';
+            edit.textContent = 'Edit participant assignment';
+            edit.addEventListener('click', () => {
+                selection = { sectionKey: 'participants', nodeKey: participantKey };
+                render();
+            });
+            head.appendChild(edit);
+        }
+        panel.appendChild(head);
+
+        if (!participantKey) {
+            const empty = document.createElement('div');
+            empty.className = 'kit-stage-routing-empty';
+            empty.textContent = 'No owning participant is selected yet, so this step cannot resolve at run time.';
+            panel.appendChild(empty);
+            return panel;
+        }
+
+        const summary = document.createElement('div');
+        summary.className = 'kit-stage-routing-item';
+        summary.setAttribute('role', 'group');
+        const badge = document.createElement('span');
+        badge.className = 'kit-stage-routing-badge';
+        badge.textContent = 'Participant';
+        summary.appendChild(badge);
+        const body = document.createElement('div');
+        body.className = 'kit-stage-routing-body';
+        const title = document.createElement('strong');
+        title.className = 'kit-stage-routing-target';
+        title.textContent = participantName;
+        body.appendChild(title);
+        const meta = document.createElement('span');
+        meta.className = 'kit-stage-routing-meta';
+        meta.textContent = assignmentSummary === 'Unassigned'
+            ? 'No assignment rule yet. Set a specific agent or required skill before publishing.'
+            : `Currently resolves via ${assignmentSummary}.`;
+        body.appendChild(meta);
+        summary.appendChild(body);
+        panel.appendChild(summary);
+
+        return panel;
     }
 
     function _stageRoutingPanel(stage, { readOnly = false, connectAction = null } = {}) {
@@ -3246,6 +3394,7 @@ function renderProtocolWorkspace(container) {
             actions: summaryActions,
         });
         grid.appendChild(_stageEditorSection('Step basics', summaryPanel));
+        grid.appendChild(_stageEditorSection('Runtime assignment', _stageAssignmentPanel(target, { readOnly }), { wide: true }));
 
         if (!createAction) {
             grid.appendChild(_stageEditorSection('Routing', _stageRoutingPanel(target, { readOnly, connectAction }), { wide: true }));

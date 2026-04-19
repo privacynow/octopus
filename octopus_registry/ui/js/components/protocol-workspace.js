@@ -200,9 +200,14 @@ function renderProtocolWorkspace(container) {
         max_rounds: 0,
         timeout_seconds: 0,
     };
+    let pendingRoute = {
+        source_stage_key: '',
+        decision: '',
+        target_key: '',
+    };
     let documentHistory = { undo: [], redo: [] };
-    let workflowView = { kind: 'focus', segmentId: '' };
-    let workflowViewport = { process: 'fit', focus: 1, full: 'fit' };
+    let workflowView = { kind: 'detail', segmentId: '' };
+    let workflowViewport = { map: 'fit' };
     let workflowViewExplicit = false;
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
@@ -250,7 +255,7 @@ function renderProtocolWorkspace(container) {
             const kind = String(parsed?.kind || fallback.kind);
             workflowViewExplicit = true;
             return {
-                kind: kind === 'process' || kind === 'full' ? kind : 'focus',
+                kind: kind === 'process' || kind === 'map' ? kind : 'detail',
                 segmentId: String(parsed?.segmentId || ''),
             };
         } catch (_err) {
@@ -263,9 +268,9 @@ function renderProtocolWorkspace(container) {
         const storageKey = _workflowViewStorageKey(protocolId);
         if (!storageKey) return;
         try {
-            const kind = String(workflowView.kind || 'focus');
+            const kind = String(workflowView.kind || 'detail');
             window.localStorage.setItem(storageKey, JSON.stringify({
-                kind: kind === 'process' || kind === 'full' ? kind : 'focus',
+                kind: kind === 'process' || kind === 'map' ? kind : 'detail',
                 segmentId: String(workflowView.segmentId || ''),
             }));
         } catch (_err) {
@@ -274,18 +279,18 @@ function renderProtocolWorkspace(container) {
     }
 
     function _defaultWorkflowZoom(kind) {
-        return String(kind || 'focus') === 'focus' ? 1 : 'fit';
+        return String(kind || 'map') === 'map' ? 'fit' : 1;
     }
 
     function _workflowViewportValue(kind = workflowView.kind) {
-        const key = String(kind || 'focus');
+        const key = String(kind || 'map');
         return Object.prototype.hasOwnProperty.call(workflowViewport, key)
             ? workflowViewport[key]
             : _defaultWorkflowZoom(key);
     }
 
     function _setWorkflowViewport(kind, zoom, { renderNow = false } = {}) {
-        const key = String(kind || workflowView.kind || 'focus');
+        const key = String(kind || workflowView.kind || 'map');
         workflowViewport = {
             ...workflowViewport,
             [key]: zoom === 'fit' ? 'fit' : Math.max(0.55, Math.min(1.5, Number(zoom || 1) || 1)),
@@ -295,11 +300,11 @@ function renderProtocolWorkspace(container) {
 
     function _setWorkflowView(next, { renderNow = true, persist = true } = {}) {
         workflowView = {
-            kind: 'focus',
+            kind: 'detail',
             segmentId: '',
             ...(next || {}),
         };
-        workflowView.kind = workflowView.kind === 'process' || workflowView.kind === 'full' ? workflowView.kind : 'focus';
+        workflowView.kind = workflowView.kind === 'process' || workflowView.kind === 'map' ? workflowView.kind : 'detail';
         workflowView.segmentId = String(workflowView.segmentId || '');
         if (workflowView.kind === 'process') {
             selection = { sectionKey: 'overview', nodeKey: '' };
@@ -325,10 +330,6 @@ function renderProtocolWorkspace(container) {
     const contentEl = document.createElement('div');
     contentEl.className = 'protocol-surface-shell protocol-authoring-shell';
     shell.appendChild(contentEl);
-
-    function _currentWorkflowMode() {
-        return window.innerWidth <= 960 ? 'narrow' : 'graph';
-    }
 
     function _blankDocument() {
         return {
@@ -368,6 +369,15 @@ function renderProtocolWorkspace(container) {
         };
     }
 
+    function _blankRouteDraft(stageKey = '', stageKind = 'work', seed = {}) {
+        return {
+            source_stage_key: String(stageKey || ''),
+            decision: _defaultDecisionForStageKind(stageKind),
+            target_key: '',
+            ...seed,
+        };
+    }
+
     function _baseEditorModeKind() {
         return rehearsal.runId ? 'rehearse' : 'idle';
     }
@@ -386,6 +396,7 @@ function renderProtocolWorkspace(container) {
         editorMode = { kind: _baseEditorModeKind(), sourceStageKey: '', decision: '' };
         pendingRole = _blankRoleDraft();
         pendingStage = _blankStageDraft(_defaultStageParticipantKey());
+        pendingRoute = _blankRouteDraft();
     }
 
     function _defaultDecisionForStageKind(stageKind) {
@@ -465,7 +476,7 @@ function renderProtocolWorkspace(container) {
     function _defaultWorkflowView(doc = draft.document) {
         const stageCount = Array.isArray(doc?.stages) ? doc.stages.length : 0;
         return {
-            kind: stageCount >= 6 ? 'process' : stageCount > 0 ? 'full' : 'focus',
+            kind: stageCount >= 6 ? 'process' : 'detail',
             segmentId: '',
         };
     }
@@ -822,7 +833,7 @@ function renderProtocolWorkspace(container) {
             return { kind: defaultView.kind, segmentId: '' };
         }
         let next = {
-            kind: workflowView.kind === 'process' || workflowView.kind === 'full' ? workflowView.kind : 'focus',
+            kind: workflowView.kind === 'process' || workflowView.kind === 'map' ? workflowView.kind : 'detail',
             segmentId: String(workflowView.segmentId || ''),
         };
         const selectedSegmentId = currentSelection.sectionKey === 'stages'
@@ -830,21 +841,18 @@ function renderProtocolWorkspace(container) {
             : currentSelection.sectionKey === 'transitions'
                 ? projection.stageToSegment.get(String(currentSelection.nodeKey || '').split('::')[0] || '') || ''
                 : '';
-        if (selectedSegmentId && next.kind === 'focus') next.segmentId = selectedSegmentId;
-        if (next.kind === 'focus' && !projection.segmentsById.has(next.segmentId)) {
+        if (selectedSegmentId && next.kind === 'detail') next.segmentId = selectedSegmentId;
+        if (next.kind === 'detail' && !projection.segmentsById.has(next.segmentId)) {
             next.segmentId = selectedSegmentId || projection.segments[0]?.id || '';
         }
         if (next.kind === 'process' && segmentCount < 2) {
-            next = { kind: defaultView.kind === 'focus' ? 'focus' : 'full', segmentId: '' };
+            next = { kind: 'detail', segmentId: projection.segments[0]?.id || '' };
         }
-        if (next.kind === 'focus' && !next.segmentId) {
+        if (next.kind === 'detail' && !next.segmentId) {
             next.segmentId = projection.segments[0]?.id || '';
         }
-        if (next.kind === 'full' && segmentCount >= 4 && !workflowViewExplicit) {
-            next = { kind: 'process', segmentId: '' };
-        }
-        if (next.kind !== 'focus') {
-            next.segmentId = next.kind === 'full' ? '' : next.segmentId;
+        if (next.kind !== 'detail') {
+            next.segmentId = next.kind === 'map' ? String(next.segmentId || selectedSegmentId || projection.segments[0]?.id || '') : next.segmentId;
         }
         return next;
     }
@@ -856,10 +864,10 @@ function renderProtocolWorkspace(container) {
         return stageKey ? { sectionKey: 'stages', nodeKey: stageKey } : { sectionKey: 'overview', nodeKey: '' };
     }
 
-    function _setFocusSegment(projection, segmentId, { preserveSelection = false } = {}) {
+    function _setDetailSegment(projection, segmentId, { preserveSelection = false } = {}) {
         const nextSegmentId = String(segmentId || '');
         if (!nextSegmentId || !projection.segmentsById.has(nextSegmentId)) return;
-        workflowView = { kind: 'focus', segmentId: nextSegmentId };
+        workflowView = { kind: 'detail', segmentId: nextSegmentId };
         workflowViewExplicit = true;
         _persistWorkflowView();
         if (!preserveSelection) {
@@ -875,7 +883,7 @@ function renderProtocolWorkspace(container) {
         draftConflict = null;
         documentHistory = { undo: [], redo: [] };
         selectorPreview = { participantKey: '', query: '', candidates: [], busy: false, message: '' };
-        workflowViewport = { process: 'fit', focus: 1, full: 'fit' };
+        workflowViewport = { map: 'fit' };
         if (previousProtocolId && previousProtocolId !== String(detail?.protocol?.protocol_id || '')) {
             _stopRehearsalPolling();
             rehearsal.runId = '';
@@ -1196,7 +1204,7 @@ function renderProtocolWorkspace(container) {
         }
         editorMode = { kind: 'rehearse', sourceStageKey: '', decision: '' };
         workflowView = _normalizeWorkflowView(_buildWorkflowProjection(draft.document), selection);
-        workflowView.kind = 'focus';
+        workflowView.kind = 'detail';
         _persistWorkflowView();
         UI.notify('Rehearsal started — dry run, external transports gated.', 'success');
         render();
@@ -1638,6 +1646,54 @@ function renderProtocolWorkspace(container) {
         render();
     }
 
+    function _startRouteInsert(stageKey) {
+        const stage = (draft.document.stages || []).find((item) => String(item.stage_key || '') === String(stageKey || ''));
+        if (!stage) return;
+        pendingRoute = _blankRouteDraft(stage.stage_key, stage.stage_kind);
+        selection = { sectionKey: 'stages', nodeKey: String(stage.stage_key || '') };
+        editorMode = { kind: 'create-route', sourceStageKey: String(stage.stage_key || ''), decision: String(pendingRoute.decision || '') };
+        render();
+    }
+
+    function _commitPendingRouteField(_target, key, value) {
+        if (key === 'decision') {
+            pendingRoute.decision = String(value || '').trim().toLowerCase();
+        } else if (key === 'target_key') {
+            pendingRoute.target_key = String(value || '').trim();
+        }
+        render();
+    }
+
+    function _confirmRouteInsert() {
+        const sourceStageKey = String(pendingRoute.source_stage_key || '').trim();
+        const decision = String(pendingRoute.decision || '').trim().toLowerCase();
+        const targetKey = String(pendingRoute.target_key || '').trim();
+        if (!sourceStageKey || !decision || !targetKey) {
+            UI.notify('Choose a decision and a next step or finish outcome before adding this route.', 'warning');
+            return;
+        }
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.stages || [])];
+        const idx = items.findIndex((item) => String(item.stage_key || '') === sourceStageKey);
+        if (idx < 0) return;
+        const stage = { ...items[idx] };
+        stage.transitions = Object.assign({}, stage.transitions || {}, {
+            [decision]: targetKey,
+        });
+        items[idx] = stage;
+        doc.stages = items;
+        const edgeId = _stageTransitionId(sourceStageKey, decision);
+        _resetEditorMode();
+        _commitDocument(doc, {
+            nextSelection: { sectionKey: 'transitions', nodeKey: edgeId },
+        });
+    }
+
+    function _cancelRouteInsert() {
+        _resetEditorMode();
+        render();
+    }
+
     function _commitConnectField(_target, key, value) {
         if (key === 'decision') {
             editorMode = {
@@ -1805,6 +1861,300 @@ function renderProtocolWorkspace(container) {
         return suggestions;
     }
 
+    function _selectorKindOptions() {
+        return (authoringManifest?.selector_kind_options || ['skill', 'role', 'agent']).map((value) => ({
+            value: String(value || ''),
+            label: _titleCaseWords(value),
+        }));
+    }
+
+    function _selectorCatalogEntries(kind) {
+        const normalized = String(kind || '').trim().toLowerCase();
+        const entries = [];
+        const seen = new Set();
+        const push = (value, label, meta = '') => {
+            const nextValue = String(value || '').trim();
+            if (!nextValue || seen.has(nextValue)) return;
+            seen.add(nextValue);
+            entries.push({
+                value: nextValue,
+                label: String(label || nextValue).trim() || nextValue,
+                meta: String(meta || '').trim(),
+            });
+        };
+        if (normalized === 'agent') {
+            (connectedAgents || []).forEach((agent) => {
+                const slug = String(agent?.slug || '').trim();
+                if (!slug) return;
+                push(slug, String(agent?.display_name || _titleCaseWords(slug) || slug), String(agent?.role || ''));
+            });
+        } else if (normalized === 'skill') {
+            (connectedAgents || []).forEach((agent) => {
+                (agent?.routing_skills || []).forEach((skill) => push(skill, _titleCaseWords(skill)));
+            });
+        } else if (normalized === 'role') {
+            (connectedAgents || []).forEach((agent) => {
+                push(agent?.role, _titleCaseWords(agent?.role || ''));
+            });
+        }
+        _participantSelectorSuggestions().forEach((suggestion) => {
+            if (String(suggestion?.selectorKind || '') === normalized) {
+                push(suggestion?.selectorValue, suggestion?.displayName || suggestion?.label || suggestion?.selectorValue);
+            }
+        });
+        return entries.sort((left, right) => String(left.label || '').localeCompare(String(right.label || '')));
+    }
+
+    function _selectorEditor({
+        selectorKind = '',
+        selectorValue = '',
+        participantKey = '',
+        readOnly = false,
+        onChange = null,
+        onSuggestionSelect = null,
+    } = {}) {
+        const wrap = document.createElement('section');
+        wrap.className = 'kit-selector-editor';
+
+        const heading = document.createElement('div');
+        heading.className = 'kit-selector-editor-head';
+        const title = document.createElement('h4');
+        title.className = 'kit-stage-editor-title';
+        title.textContent = 'Assignment rule';
+        heading.appendChild(title);
+        const copy = document.createElement('p');
+        copy.className = 'kit-stage-routing-copy';
+        copy.textContent = 'Choose how this role resolves at run time. Start with known agents, skills, or roles; use manual override only when needed.';
+        heading.appendChild(copy);
+        wrap.appendChild(heading);
+
+        const kindRow = document.createElement('div');
+        kindRow.className = 'kit-details-row';
+        const kindLabel = document.createElement('label');
+        kindLabel.className = 'kit-details-label';
+        kindLabel.textContent = Kit.dict.label('protocol.participant.selector_kind.label', 'Selector type');
+        kindRow.appendChild(kindLabel);
+        const kindControl = document.createElement('select');
+        kindControl.className = 'kit-details-control';
+        const blankKind = document.createElement('option');
+        blankKind.value = '';
+        blankKind.textContent = '(choose assignment type)';
+        kindControl.appendChild(blankKind);
+        _selectorKindOptions().forEach((item) => {
+            const option = document.createElement('option');
+            option.value = String(item.value || '');
+            option.textContent = String(item.label || item.value || '');
+            if (String(selectorKind || '') === String(item.value || '')) option.selected = true;
+            kindControl.appendChild(option);
+        });
+        kindControl.disabled = Boolean(readOnly);
+        if (typeof onChange === 'function' && !readOnly) {
+            kindControl.addEventListener('change', () => {
+                const nextKind = String(kindControl.value || '');
+                onChange('selector_kind', nextKind);
+                const catalog = _selectorCatalogEntries(nextKind);
+                if (!catalog.some((item) => item.value === String(selectorValue || '')) && catalog.length) {
+                    onChange('selector_value', catalog[0].value);
+                } else if (!catalog.length) {
+                    onChange('selector_value', '');
+                }
+            });
+        }
+        kindRow.appendChild(kindControl);
+        wrap.appendChild(kindRow);
+
+        const catalog = _selectorCatalogEntries(selectorKind);
+        const valueRow = document.createElement('div');
+        valueRow.className = 'kit-details-row';
+        const valueLabel = document.createElement('label');
+        valueLabel.className = 'kit-details-label';
+        valueLabel.textContent = catalog.length
+            ? `Choose ${String(selectorKind || 'value')}`
+            : Kit.dict.label('protocol.participant.selector_value.label', 'Selector value');
+        valueRow.appendChild(valueLabel);
+        if (catalog.length) {
+            const select = document.createElement('select');
+            select.className = 'kit-details-control';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = `(choose ${String(selectorKind || 'value')})`;
+            select.appendChild(placeholder);
+            catalog.forEach((item) => {
+                const option = document.createElement('option');
+                option.value = String(item.value || '');
+                option.textContent = item.meta ? `${item.label} · ${item.meta}` : item.label;
+                if (String(selectorValue || '') === String(item.value || '')) option.selected = true;
+                select.appendChild(option);
+            });
+            if (selectorValue && !catalog.some((item) => item.value === String(selectorValue || ''))) {
+                const custom = document.createElement('option');
+                custom.value = String(selectorValue || '');
+                custom.textContent = `Custom · ${String(selectorValue || '')}`;
+                custom.selected = true;
+                select.appendChild(custom);
+            }
+            select.disabled = Boolean(readOnly);
+            if (typeof onChange === 'function' && !readOnly) {
+                select.addEventListener('change', () => onChange('selector_value', select.value));
+            }
+            valueRow.appendChild(select);
+        } else {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'kit-details-control';
+            input.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', '@skill:name');
+            input.value = String(selectorValue || '');
+            input.readOnly = Boolean(readOnly);
+            if (typeof onChange === 'function' && !readOnly) {
+                const commit = () => onChange('selector_value', input.value);
+                input.addEventListener('change', commit);
+                input.addEventListener('blur', commit);
+            }
+            valueRow.appendChild(input);
+        }
+        wrap.appendChild(valueRow);
+
+        const override = document.createElement('details');
+        override.className = 'kit-selector-editor-override';
+        override.open = Boolean(selectorValue && catalog.length && !catalog.some((item) => item.value === String(selectorValue || '')));
+        const summary = document.createElement('summary');
+        summary.className = 'kit-stage-editor-summary';
+        const summaryTitle = document.createElement('h4');
+        summaryTitle.className = 'kit-stage-editor-title';
+        summaryTitle.textContent = 'Manual override';
+        summary.appendChild(summaryTitle);
+        override.appendChild(summary);
+        const overrideBody = document.createElement('div');
+        overrideBody.className = 'kit-selector-editor-override-body';
+        const overrideRow = document.createElement('div');
+        overrideRow.className = 'kit-details-row';
+        const overrideLabel = document.createElement('label');
+        overrideLabel.className = 'kit-details-label';
+        overrideLabel.textContent = 'Custom selector value';
+        overrideRow.appendChild(overrideLabel);
+        const overrideInput = document.createElement('input');
+        overrideInput.type = 'text';
+        overrideInput.className = 'kit-details-control';
+        overrideInput.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', '@skill:name');
+        overrideInput.value = String(selectorValue || '');
+        overrideInput.readOnly = Boolean(readOnly);
+        if (typeof onChange === 'function' && !readOnly) {
+            const commit = () => onChange('selector_value', overrideInput.value);
+            overrideInput.addEventListener('change', commit);
+            overrideInput.addEventListener('blur', commit);
+        }
+        overrideRow.appendChild(overrideInput);
+        overrideBody.appendChild(overrideRow);
+        override.appendChild(overrideBody);
+        wrap.appendChild(override);
+
+        const query = participantKey && participantKey === selectorPreview.participantKey
+            ? selectorPreview.query
+            : _selectorString(_selectorFromFields(selectorKind, selectorValue));
+        wrap.appendChild(Kit.selectorResolutionPreview({
+            selector: query,
+            candidates: participantKey && participantKey === selectorPreview.participantKey ? selectorPreview.candidates : [],
+            busy: participantKey && participantKey === selectorPreview.participantKey ? selectorPreview.busy : false,
+            message: participantKey && participantKey === selectorPreview.participantKey
+                ? selectorPreview.message
+                : Kit.dict.label('protocol.participant.selector_hint'),
+            suggestions: _participantSelectorSuggestions(),
+            onSuggestionSelect: readOnly ? null : onSuggestionSelect,
+            onResolve: (value) => { void _resolveSelectorPreview(participantKey || '__draft__', value); },
+        }));
+
+        return wrap;
+    }
+
+    function _roleEditorShell({
+        target,
+        readOnly = false,
+        onCommit = null,
+        createAction = null,
+        cancelAction = null,
+        participantKey = '',
+        onSuggestionSelect = null,
+    } = {}) {
+        const shell = document.createElement('div');
+        shell.className = 'kit-stage-editor';
+        const basics = Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.participant',
+            onCommit,
+            schema: [
+                { key: 'display_name', kind: 'text', required: true, readOnly },
+                { key: 'participant_key', kind: 'text', readOnly },
+            ],
+            actions: createAction ? [
+                { label: 'Create role', tone: 'btn-primary', onClick: createAction },
+                ...(cancelAction ? [{ label: 'Cancel', onClick: cancelAction }] : []),
+            ] : [],
+        });
+        shell.appendChild(_stageEditorSection('Role basics', basics));
+        shell.appendChild(_stageEditorSection('Assignment', _selectorEditor({
+            selectorKind: String(target?.selector_kind || ''),
+            selectorValue: String(target?.selector_value || ''),
+            participantKey,
+            readOnly,
+            onChange: onCommit,
+            onSuggestionSelect,
+        }), { wide: true }));
+        const instructions = Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.participant',
+            onCommit,
+            schema: [
+                { key: 'instructions', kind: 'textarea', rows: 4, readOnly },
+            ],
+            actions: !createAction && cancelAction ? [{ label: 'Cancel', onClick: cancelAction }] : [],
+        });
+        shell.appendChild(_stageEditorSection('Instructions', instructions, { wide: true, collapsible: !createAction, open: Boolean(String(target?.instructions || '').trim()) }));
+        return shell;
+    }
+
+    function _routeTargetOptions(sourceStageKey, projection) {
+        const currentSegmentId = projection.stageToSegment.get(String(sourceStageKey || '')) || '';
+        const options = [
+            { value: '', label: '(choose next step or finish outcome)' },
+            ...(draft.document.stages || []).map((stage) => ({
+                value: String(stage.stage_key || ''),
+                label: `${_routeScopeLabel(stage.stage_key, projection, currentSegmentId)} · ${String(stage.display_name || stage.stage_key || '')}`,
+            })),
+            ...PROTOCOL_TERMINAL_TARGETS.map((item) => ({
+                value: item.key,
+                label: `Finish outcome · ${item.label}`,
+            })),
+        ];
+        return options;
+    }
+
+    function _routeEditorPanel({
+        target,
+        sourceStage,
+        projection,
+        readOnly = false,
+        onCommit = null,
+        createAction = null,
+        deleteAction = null,
+        cancelAction = null,
+    } = {}) {
+        return Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.transition',
+            onCommit,
+            schema: [
+                { key: 'source_stage', kind: 'text', label: 'From step', help: 'This route leaves the selected step.', readOnly: true },
+                { key: 'decision', kind: 'select', options: _decisionOptionsForStage(sourceStage, target?.decision), disabled: readOnly, labelKey: 'protocol.transition.decision.label', helpKey: 'protocol.transition.decision.help' },
+                { key: 'target_key', kind: 'select', options: _routeTargetOptions(sourceStage?.stage_key || target?.source_stage_key || '', projection), disabled: readOnly, labelKey: 'protocol.transition.target.label', helpKey: 'protocol.transition.target.help' },
+            ],
+            actions: [
+                ...(createAction ? [{ label: 'Create route', tone: 'btn-primary', onClick: createAction }] : []),
+                ...(deleteAction ? [{ label: Kit.dict.label('protocol.transition.delete'), tone: 'btn-danger', onClick: deleteAction }] : []),
+                ...(cancelAction ? [{ label: 'Cancel', onClick: cancelAction }] : []),
+            ],
+        });
+    }
+
     // -------------------------------------------------------------------
     // Rendering
     // -------------------------------------------------------------------
@@ -1831,6 +2181,9 @@ function renderProtocolWorkspace(container) {
             record,
             saveState,
             permissions,
+            compact: true,
+            primaryActions: ['validate', 'publish', 'rehearse'],
+            secondaryActions: ['archive', 'discard'],
             actions: {
                 validate: () => void _validateNow().catch((err) => UI.reportError('Validation failed', err)),
                 publish: () => void _publishNow().catch((err) => UI.reportError('Publish failed', err)),
@@ -1889,9 +2242,9 @@ function renderProtocolWorkspace(container) {
         return parts.join(' · ');
     }
 
-    function _stageNodeBadges(stage, viewKind = 'focus') {
+    function _stageNodeBadges(stage, viewKind = 'detail') {
         const stageKind = String(stage?.stage_kind || 'work');
-        if (viewKind === 'full' && stageKind === 'work') {
+        if (viewKind === 'map' && stageKind === 'work') {
             return [];
         }
         return [{
@@ -1900,19 +2253,14 @@ function renderProtocolWorkspace(container) {
         }];
     }
 
-    function _showEdgeLabel(edge, sourceStage, viewKind = 'focus') {
+    function _showEdgeLabel(edge, sourceStage, viewKind = 'detail') {
         const label = String(edge?.decision || '').trim().toLowerCase();
         const targetKey = String(edge?.target_key || '').trim();
         const transitionCount = Object.keys(sourceStage?.transitions || {}).length;
         const defaultDecision = _defaultDecisionForStageKind(sourceStage?.stage_kind || 'work');
         const isTerminal = PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === targetKey);
-        if (viewKind === 'process') {
+        if (viewKind !== 'map') {
             return false;
-        }
-        if (viewKind === 'focus') {
-            if (transitionCount > 1) return true;
-            if (isTerminal) return true;
-            return label !== defaultDecision;
         }
         if (transitionCount <= 1) {
             return false;
@@ -1921,30 +2269,6 @@ function renderProtocolWorkspace(container) {
             return false;
         }
         return true;
-    }
-
-    function _artifactAccessorySections() {
-        const artifactItems = (draft.document.artifacts || []).map((item) => ({
-            id: String(item.artifact_key || ''),
-            kind: 'artifact',
-            label: String(item.display_name || item.artifact_key || 'Artifact'),
-        }));
-        return artifactItems.length
-            ? [
-                {
-                    key: 'artifacts',
-                    title: Kit.dict.label('protocol.workflow.artifacts'),
-                    addLabel: Kit.dict.label('protocol.artifacts.add'),
-                    onAdd: () => _addArtifact(),
-                    onSelect: (item) => {
-                        selection = { sectionKey: 'artifacts', nodeKey: item.id };
-                        render();
-                    },
-                    empty: Kit.dict.label('protocol.artifacts.firstrun'),
-                    items: artifactItems,
-                },
-            ]
-            : [];
     }
 
     function _firstRunState(progress) {
@@ -1994,28 +2318,29 @@ function renderProtocolWorkspace(container) {
         if (terminalTargets > 0) {
             return `${terminalTargets} finish path${terminalTargets === 1 ? '' : 's'}`;
         }
-        return 'Open section';
+        return 'Open detail';
     }
 
-    function _baseToolbarActions(progress, resolvedView, projection) {
+    function _surfaceToolbarActions(progress, resolvedView, projection) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
         const selectedStage = _selectionStage(draft.document);
-        const showExpandedMap = projection.segments.length > 1 && progress.stageCount >= 6;
+        const activeSegmentId = String(resolvedView.segmentId || projection.segments[0]?.id || '');
+        const returnSurface = projection.segments.length > 1 ? 'process' : 'detail';
         return [
-            ...(resolvedView.kind === 'focus' && projection.segments.length > 1 ? [{
+            ...(resolvedView.kind === 'map' ? [{
+                label: returnSurface === 'process' ? 'Back to phases' : 'Back to detail',
+                tone: 'btn-small',
+                onClick: () => _setWorkflowView({ kind: returnSurface, segmentId: activeSegmentId }),
+            }] : []),
+            ...(resolvedView.kind === 'process' && progress.stageCount ? [{
+                label: 'Visual map',
+                tone: 'btn-small',
+                onClick: () => _setWorkflowView({ kind: 'map', segmentId: activeSegmentId }),
+            }] : []),
+            ...(resolvedView.kind === 'detail' && projection.segments.length > 1 ? [{
                 label: 'Back to phases',
                 tone: 'btn-small',
-                onClick: () => _setWorkflowView({ kind: 'process', segmentId: resolvedView.segmentId }),
-            }] : []),
-            ...(showExpandedMap && resolvedView.kind !== 'full' ? [{
-                label: 'All steps',
-                tone: 'btn-small',
-                onClick: () => _setWorkflowView({ kind: 'full', segmentId: '' }),
-            }] : []),
-            ...(showExpandedMap && resolvedView.kind === 'full' ? [{
-                label: 'Back to phases',
-                tone: 'btn-small',
-                onClick: () => _setWorkflowView({ kind: 'process', segmentId: '' }),
+                onClick: () => _setWorkflowView({ kind: 'process', segmentId: activeSegmentId }),
             }] : []),
             {
                 label: Kit.dict.label('protocol.participants.add'),
@@ -2029,14 +2354,8 @@ function renderProtocolWorkspace(container) {
                 onClick: () => _startStageInsert(),
                 disabled: !canMutate || !progress.participantCount,
             },
-            ...(progress.stageCount ? [{
-                label: Kit.dict.label('protocol.artifacts.add'),
-                tone: 'btn-small',
-                onClick: () => _addArtifact(),
-                disabled: !canMutate,
-            }] : []),
-            ...(resolvedView.kind === 'focus' && selectedStage && editorMode.kind === 'idle' && canMutate ? [{
-                label: Kit.dict.label('protocol.stage.connect'),
+            ...(resolvedView.kind === 'map' && selectedStage && editorMode.kind === 'idle' && canMutate ? [{
+                label: 'Connect in map',
                 tone: 'btn-small',
                 onClick: () => _startConnectMode(selectedStage.stage_key),
             }] : []),
@@ -2073,23 +2392,22 @@ function renderProtocolWorkspace(container) {
             lanes: [],
             nodes,
             edges: [],
-            toolbarActions: _baseToolbarActions(progress, resolvedView, projection),
-            accessorySections: _artifactAccessorySections(),
+            toolbarActions: _surfaceToolbarActions(progress, resolvedView, projection),
+            accessorySections: [],
             firstRun: _firstRunState(progress),
             laneLabels: {},
             outcomes: null,
             viewState: {
                 kind: 'process',
                 title: 'Workflow phases',
-                subtitle: 'Review the major phases first. Open a phase for local step editing or switch to All steps.',
+                subtitle: 'Open a phase to build and edit its steps. Use Visual map only when you need the full topology.',
                 canReturn: false,
             },
         };
     }
 
-    function _fullGraphWorkflowData(projection, progress, resolvedView) {
+    function _mapWorkflowData(projection, progress, resolvedView) {
         const doc = draft.document;
-        const isExpandedMap = resolvedView.kind === 'full';
         const stageCounts = new Map();
         (doc.stages || []).forEach((item) => {
             const key = String(item.participant_key || '').trim();
@@ -2116,7 +2434,7 @@ function renderProtocolWorkspace(container) {
                     column: Number(columns.get(String(item.stage_key || '')) || 0),
                     label: String(item.display_name || item.stage_key || 'Untitled step'),
                     sublabel: _stageNodeSublabel(item),
-                    badges: _stageNodeBadges(item, isExpandedMap ? 'full' : 'focus'),
+                    badges: _stageNodeBadges(item, 'map'),
                 })),
                 ...(progress.stageCount ? PROTOCOL_TERMINAL_TARGETS.map((item, index) => ({
                     id: item.key,
@@ -2137,14 +2455,12 @@ function renderProtocolWorkspace(container) {
                     from: edge.from_stage_key,
                     to: edge.target_key,
                     label: _protocolDecisionLabel(edge.decision),
-                    showLabel: progress.stageCount <= 6
-                        ? _showEdgeLabel(edge, sourceStage, 'focus')
-                        : _showEdgeLabel(edge, sourceStage, 'full'),
+                    showLabel: _showEdgeLabel(edge, sourceStage, 'map'),
                     isBranch: sourceTransitionCount > 1,
                 };
             }),
-            toolbarActions: _baseToolbarActions(progress, resolvedView, projection),
-            accessorySections: _artifactAccessorySections(),
+            toolbarActions: _surfaceToolbarActions(progress, resolvedView, projection),
+            accessorySections: [],
             firstRun: _firstRunState(progress),
             laneLabels: Object.fromEntries(lanes.map((lane, index) => [lane.key, { ...lane, row: index }])),
             outcomes: progress.stageCount ? {
@@ -2154,170 +2470,142 @@ function renderProtocolWorkspace(container) {
                 hint: Kit.dict.label('protocol.workflow.outcomes_hint'),
             } : null,
             viewState: {
-                kind: isExpandedMap ? 'full' : 'focus',
-                title: isExpandedMap ? 'All steps' : 'Workflow',
-                subtitle: isExpandedMap
-                    ? 'Expanded map of every step in the workflow. Use fit/zoom controls to scan the whole graph.'
-                    : 'Select a role, step, or transition to edit it.',
+                kind: 'map',
+                title: 'Visual map',
+                subtitle: 'Inspect the full workflow topology here. Use Detail for ordinary editing and route authoring.',
                 canReturn: false,
             },
         };
     }
 
-    function _focusWorkflowData(projection, progress, resolvedView) {
-        const doc = draft.document;
-        if (progress.stageCount < 6) {
-            return _fullGraphWorkflowData(projection, progress, resolvedView);
-        }
-        const segment = projection.segmentsById.get(resolvedView.segmentId) || projection.segments[0];
-        if (!segment) {
-            return _processWorkflowData(projection, progress, { kind: 'process', segmentId: '' });
-        }
-        const topology = projection.topology;
-        const stageKeys = segment.stageKeys;
-        const stageColumns = _stageColumns(stageKeys, topology);
-        const predecessorSegments = segment.incomingSegments
-            .map((segmentId) => projection.segmentsById.get(segmentId))
-            .filter(Boolean);
-        const successorSegments = Array.from(new Set(segment.outgoingEdges
-            .filter((edge) => edge.targetKind === 'segment')
-            .map((edge) => edge.targetKey)))
-            .map((segmentId) => projection.segmentsById.get(segmentId))
-            .filter(Boolean);
-        const terminalTargets = Array.from(new Set(segment.outgoingEdges
-            .filter((edge) => edge.targetKind === 'terminal')
-            .map((edge) => edge.targetKey)));
+    function _detailToolbarActions(progress, resolvedView, projection, segment) {
+        const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
+        const selectedStage = _selectionStage(draft.document);
+        return [
+            ...(projection.segments.length > 1 ? [{
+                label: 'Back to phases',
+                tone: 'btn-small',
+                onClick: () => _setWorkflowView({ kind: 'process', segmentId: String(segment?.id || '') }),
+            }] : []),
+            ...(progress.stageCount ? [{
+                label: 'Visual map',
+                tone: 'btn-small',
+                onClick: () => _setWorkflowView({ kind: 'map', segmentId: String(segment?.id || '') }),
+            }] : []),
+            {
+                label: Kit.dict.label('protocol.participants.add'),
+                tone: 'btn-small',
+                onClick: () => _startRoleInsert(),
+                disabled: !canMutate,
+            },
+            {
+                label: Kit.dict.label('protocol.stages.add'),
+                tone: 'btn-small',
+                onClick: () => _startStageInsert(),
+                disabled: !canMutate || !progress.participantCount,
+            },
+            ...(selectedStage && editorMode.kind === 'idle' && canMutate ? [{
+                label: 'Add route',
+                tone: 'btn-small',
+                onClick: () => _startRouteInsert(selectedStage.stage_key),
+            }] : []),
+            ...(rehearsal.runId ? [{
+                label: editorMode.kind === 'rehearse' ? 'Back to authoring' : 'View rehearsal',
+                tone: 'btn-small',
+                onClick: () => {
+                    _setEditorMode({ kind: editorMode.kind === 'rehearse' ? 'idle' : 'rehearse' });
+                },
+            }] : []),
+        ];
+    }
 
-        const involvedParticipantKeys = Array.from(new Set([
-            ...stageKeys.map((key) => String(topology.stageByKey.get(key)?.participant_key || '')),
-            ...predecessorSegments.map((item) => String(item.primaryParticipantKey || '')),
-            ...successorSegments.map((item) => String(item.primaryParticipantKey || '')),
-        ].filter(Boolean)));
-        const participantsByKey = new Map((doc.participants || []).map((item) => [String(item.participant_key || ''), item]));
-        const lanes = involvedParticipantKeys
-            .map((key) => participantsByKey.get(key))
-            .filter(Boolean)
+    function _routeScopeLabel(targetKey, projection, currentSegmentId) {
+        const normalized = String(targetKey || '').trim();
+        if (!normalized) return '';
+        if (PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === normalized)) {
+            return 'Finish outcome';
+        }
+        const targetSegmentId = projection.stageToSegment.get(normalized) || '';
+        if (targetSegmentId && targetSegmentId === String(currentSegmentId || '')) {
+            return 'This section';
+        }
+        const targetSegment = projection.segmentsById.get(targetSegmentId);
+        return targetSegment ? `Other section · ${targetSegment.label}` : 'Other section';
+    }
+
+    function _detailRouteEntries(stage, projection, currentSegmentId) {
+        return _transitionEntries(draft.document)
+            .filter((item) => String(item.from_stage_key || '') === String(stage?.stage_key || ''))
             .map((item) => ({
-                key: String(item.participant_key || ''),
-                label: String(item.display_name || item.participant_key || 'Role'),
-                sublabel: _selectorString(item.selector || null)
-                    || `${(doc.stages || []).filter((stage) => String(stage.participant_key || '') === String(item.participant_key || '')).length} steps`,
-                empty: 'No steps in this role yet.',
+                ...item,
+                decisionLabel: _protocolDecisionLabel(item.decision),
+                targetLabel: _transitionTargetLabel(item.target_key, draft.document),
+                scopeLabel: _routeScopeLabel(item.target_key, projection, currentSegmentId),
             }));
-        const laneLabels = Object.fromEntries(lanes.map((lane, index) => [lane.key, { ...lane, row: index }]));
-        const laneRowForParticipant = (participantKey) => {
-            const found = laneLabels[String(participantKey || '')];
-            return Number(found?.row || 0);
-        };
+    }
 
-        const hasPredecessors = predecessorSegments.length > 0;
-        const focusOffset = hasPredecessors ? 1 : 0;
-        const maxStageColumn = Math.max(0, ...Array.from(stageColumns.values(), (value) => Number(value || 0)));
-        const contextSuccessorColumn = focusOffset + maxStageColumn + 1;
-        const terminalColumn = contextSuccessorColumn + (successorSegments.length ? 0 : 1);
+    function _detailSelectionInSegment(segment) {
+        if (!segment) return false;
+        if (selection.sectionKey === 'stages') {
+            return segment.stageKeys.includes(String(selection.nodeKey || ''));
+        }
+        if (selection.sectionKey === 'transitions') {
+            const sourceKey = String(selection.nodeKey || '').split('::')[0] || '';
+            return segment.stageKeys.includes(sourceKey);
+        }
+        if (selection.sectionKey === 'participants') {
+            return segment.roleKeys.includes(String(selection.nodeKey || ''));
+        }
+        return selection.sectionKey === 'artifacts';
+    }
 
-        const nodes = [
-            ...predecessorSegments.map((item) => ({
-                id: item.id,
-                kind: 'segment',
-                laneKey: String(item.primaryParticipantKey || ''),
-                row: laneRowForParticipant(item.primaryParticipantKey),
-                column: 0,
-                label: item.label,
-                sublabel: item.stepSummary,
-                badges: [{ tone: 'context', label: 'Context' }],
-                isContext: true,
+    function _detailWorkflowData(projection, progress, resolvedView) {
+        const segment = projection.segmentsById.get(String(resolvedView.segmentId || '')) || projection.segments[0] || null;
+        if (segment && editorMode.kind === 'idle' && !_detailSelectionInSegment(segment) && segment.stageKeys.length) {
+            selection = { sectionKey: 'stages', nodeKey: String(segment.stageKeys[0] || '') };
+        }
+        return {
+            segment,
+            firstRun: _firstRunState(progress),
+            toolbarActions: _detailToolbarActions(progress, resolvedView, projection, segment),
+            viewState: {
+                kind: 'detail',
+                title: String(segment?.label || 'Workflow builder'),
+                subtitle: segment ? `${segment.stepSummary} · ${segment.roleSummary}` : 'Build roles, steps, and routes here.',
+            },
+            roleChips: (segment?.roleKeys || []).map((roleKey) => ({
+                key: String(roleKey || ''),
+                label: _participantDisplayName(roleKey, draft.document),
+                selected: selection.sectionKey === 'participants' && selection.nodeKey === String(roleKey || ''),
             })),
-            ...segment.stages.map((item) => ({
-                id: String(item.stage_key || ''),
-                kind: 'stage',
-                laneKey: String(item.participant_key || ''),
-                row: laneRowForParticipant(item.participant_key),
-                column: focusOffset + Number(stageColumns.get(String(item.stage_key || '')) || 0),
-                label: String(item.display_name || item.stage_key || 'Untitled step'),
-                sublabel: _stageNodeSublabel(item),
-                badges: _stageNodeBadges(item, 'focus'),
-            })),
-            ...successorSegments.map((item) => ({
-                id: item.id,
-                kind: 'segment',
-                laneKey: String(item.primaryParticipantKey || ''),
-                row: laneRowForParticipant(item.primaryParticipantKey),
-                column: contextSuccessorColumn,
-                label: item.label,
-                sublabel: item.stepSummary,
-                badges: [{ tone: 'context', label: 'Next phase' }],
-                isContext: true,
-            })),
-            ...terminalTargets.map((targetKey, index) => {
-                const terminal = PROTOCOL_TERMINAL_TARGETS.find((item) => item.key === targetKey);
+            incomingSections: (segment?.incomingSegments || [])
+                .map((segmentId) => projection.segmentsById.get(segmentId))
+                .filter(Boolean)
+                .map((item) => String(item.label || '')),
+            outgoingSections: Array.from(new Set((segment?.outgoingEdges || [])
+                .filter((edge) => edge.targetKind === 'segment')
+                .map((edge) => String(projection.segmentsById.get(edge.targetKey)?.label || ''))
+                .filter(Boolean))),
+            finishOutcomes: Array.from(new Set((segment?.outgoingEdges || [])
+                .filter((edge) => edge.targetKind === 'terminal')
+                .map((edge) => String(_transitionTargetLabel(edge.targetKey, draft.document) || ''))
+                .filter(Boolean))),
+            stepCards: (segment?.stages || []).map((stage, index) => {
+                const stageKey = String(stage.stage_key || '');
+                const routes = _detailRouteEntries(stage, projection, segment?.id || '');
+                const expanded = (selection.sectionKey === 'stages' && selection.nodeKey === stageKey)
+                    || (selection.sectionKey === 'transitions' && String(selection.nodeKey || '').startsWith(`${stageKey}::`))
+                    || (editorMode.kind === 'create-route' && editorMode.sourceStageKey === stageKey);
                 return {
-                    id: targetKey,
-                    kind: 'terminal',
-                    laneKey: '',
-                    row: lanes.length + index,
-                    column: terminalColumn,
-                    label: String(terminal?.label || targetKey),
-                    sublabel: 'Ends the workflow',
-                    isTerminal: true,
+                    stage,
+                    order: index + 1,
+                    routes,
+                    expanded,
+                    summary: routes.length
+                        ? routes.map((route) => `${route.decisionLabel} → ${route.targetLabel}`).join(' · ')
+                        : 'No routes yet',
                 };
             }),
-        ];
-
-        const edges = [
-            ...predecessorSegments.flatMap((item) => item.outgoingEdges
-                .filter((edge) => edge.targetKind === 'segment' && edge.targetKey === segment.id)
-                .flatMap((edge) => {
-                    const matchingTargets = segment.stageKeys.filter((stageKey) => {
-                        const incoming = topology.incomingStage.get(stageKey) || [];
-                        return incoming.some((incomingEdge) => projection.stageToSegment.get(String(incomingEdge.from || '')) === item.id);
-                    });
-                    return matchingTargets.map((stageKey, index) => ({
-                        id: `focus::${item.id}::${stageKey}::${index}`,
-                        from: item.id,
-                        to: stageKey,
-                        label: edge.label,
-                        showLabel: true,
-                    }));
-                })),
-            ..._transitionEntries(doc)
-                .filter((edge) => stageKeys.includes(String(edge.from_stage_key || '')))
-                .map((edge) => {
-                    const targetSegmentId = projection.stageToSegment.get(String(edge.target_key || ''));
-                    return {
-                        id: edge.id,
-                        from: edge.from_stage_key,
-                        to: stageKeys.includes(String(edge.target_key || ''))
-                            ? edge.target_key
-                            : targetSegmentId && targetSegmentId !== segment.id
-                                ? targetSegmentId
-                                : edge.target_key,
-                        label: _protocolDecisionLabel(edge.decision),
-                        showLabel: true,
-                    };
-                }),
-        ];
-
-        return {
-            lanes,
-            nodes,
-            edges,
-            toolbarActions: _baseToolbarActions(progress, resolvedView, projection),
-            accessorySections: _artifactAccessorySections(),
-            firstRun: _firstRunState(progress),
-            laneLabels,
-            outcomes: terminalTargets.length ? {
-                startRow: lanes.length,
-                count: terminalTargets.length,
-                label: Kit.dict.label('protocol.workflow.outcomes'),
-                hint: Kit.dict.label('protocol.workflow.outcomes_hint'),
-            } : null,
-            viewState: {
-                kind: 'focus',
-                title: segment.label,
-                subtitle: `${segment.stepSummary} · ${segment.roleSummary}. Select a step to edit it; use Back to phases for the larger map.`,
-                canReturn: projection.segments.length > 1,
-            },
         };
     }
 
@@ -2331,12 +2619,14 @@ function renderProtocolWorkspace(container) {
         const progress = _workflowProgress(draft.document);
         return {
             projection,
+            progress,
+            resolvedView,
             ...(
                 resolvedView.kind === 'process'
                     ? _processWorkflowData(projection, progress, resolvedView)
-                    : resolvedView.kind === 'full'
-                        ? _fullGraphWorkflowData(projection, progress, resolvedView)
-                        : _focusWorkflowData(projection, progress, resolvedView)
+                    : resolvedView.kind === 'map'
+                        ? _mapWorkflowData(projection, progress, resolvedView)
+                        : _detailWorkflowData(projection, progress, resolvedView)
             ),
         };
     }
@@ -2356,8 +2646,7 @@ function renderProtocolWorkspace(container) {
         return states;
     }
 
-    function _canvasEl() {
-        const workflow = _workflowData();
+    function _surfaceCanvasEl(workflow) {
         return Kit.workflowCanvas({
             lanes: workflow.lanes,
             nodes: workflow.nodes,
@@ -2365,7 +2654,7 @@ function renderProtocolWorkspace(container) {
             toolbarActions: workflow.toolbarActions,
             accessorySections: workflow.accessorySections,
             firstRun: workflow.firstRun,
-            mode: _currentWorkflowMode(),
+            mode: 'graph',
             editorMode,
             laneLabels: workflow.laneLabels,
             outcomes: workflow.outcomes,
@@ -2391,7 +2680,7 @@ function renderProtocolWorkspace(container) {
                     return;
                 }
                 if (kind === 'segment') {
-                    _setFocusSegment(workflow.projection, id);
+                    _setDetailSegment(workflow.projection, id);
                     return;
                 }
                 if (kind === 'participant') {
@@ -2423,6 +2712,217 @@ function renderProtocolWorkspace(container) {
                 }
             },
         });
+    }
+
+    function _detailSurfaceEl(workflow) {
+        const wrap = document.createElement('section');
+        wrap.className = 'kit-protocol-detail';
+
+        if (workflow.firstRun?.active) {
+            const firstRun = document.createElement('div');
+            firstRun.className = 'kit-workflow-first-run';
+            const title = document.createElement('h3');
+            title.className = 'kit-workflow-first-run-title';
+            title.textContent = String(workflow.firstRun.title || '');
+            firstRun.appendChild(title);
+            const body = document.createElement('p');
+            body.className = 'kit-workflow-first-run-body';
+            body.textContent = String(workflow.firstRun.body || '');
+            firstRun.appendChild(body);
+            const actions = document.createElement('div');
+            actions.className = 'kit-workflow-first-run-actions';
+            (workflow.firstRun.actions || []).forEach((action) => {
+                if (!action || typeof action.onClick !== 'function') return;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = ['btn', action.tone || 'btn-primary'].filter(Boolean).join(' ');
+                btn.textContent = String(action.label || '');
+                btn.addEventListener('click', action.onClick);
+                actions.appendChild(btn);
+            });
+            firstRun.appendChild(actions);
+            wrap.appendChild(firstRun);
+            return wrap;
+        }
+
+        const header = document.createElement('div');
+        header.className = 'kit-protocol-detail-header';
+        const titleRow = document.createElement('div');
+        titleRow.className = 'kit-protocol-detail-header-top';
+        const copy = document.createElement('div');
+        copy.className = 'kit-protocol-detail-copy';
+        const title = document.createElement('h3');
+        title.className = 'kit-protocol-detail-title';
+        title.textContent = String(workflow.viewState?.title || 'Workflow builder');
+        copy.appendChild(title);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'kit-protocol-detail-subtitle';
+        subtitle.textContent = String(workflow.viewState?.subtitle || '');
+        copy.appendChild(subtitle);
+        titleRow.appendChild(copy);
+        const actions = document.createElement('div');
+        actions.className = 'kit-protocol-detail-actions';
+        (workflow.toolbarActions || []).forEach((action) => {
+            if (!action || typeof action.onClick !== 'function') return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = ['btn', action.tone || 'btn-small'].filter(Boolean).join(' ');
+            btn.textContent = String(action.label || '');
+            btn.disabled = Boolean(action.disabled);
+            btn.addEventListener('click', action.onClick);
+            actions.appendChild(btn);
+        });
+        titleRow.appendChild(actions);
+        header.appendChild(titleRow);
+
+        const meta = document.createElement('div');
+        meta.className = 'kit-protocol-detail-meta';
+        (workflow.roleChips || []).forEach((role) => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = `kit-protocol-detail-chip${role.selected ? ' is-selected' : ''}`;
+            chip.textContent = String(role.label || '');
+            chip.addEventListener('click', () => {
+                selection = { sectionKey: 'participants', nodeKey: role.key };
+                render();
+            });
+            meta.appendChild(chip);
+        });
+        (workflow.incomingSections || []).forEach((label) => {
+            const chip = document.createElement('span');
+            chip.className = 'kit-protocol-detail-chip is-muted';
+            chip.textContent = `From ${label}`;
+            meta.appendChild(chip);
+        });
+        (workflow.outgoingSections || []).forEach((label) => {
+            const chip = document.createElement('span');
+            chip.className = 'kit-protocol-detail-chip is-muted';
+            chip.textContent = `Next ${label}`;
+            meta.appendChild(chip);
+        });
+        (workflow.finishOutcomes || []).forEach((label) => {
+            const chip = document.createElement('span');
+            chip.className = 'kit-protocol-detail-chip is-success';
+            chip.textContent = label;
+            meta.appendChild(chip);
+        });
+        if (meta.childElementCount) {
+            header.appendChild(meta);
+        }
+        wrap.appendChild(header);
+
+        const list = document.createElement('div');
+        list.className = 'kit-protocol-step-list';
+        (workflow.stepCards || []).forEach((item) => {
+            const stage = item.stage;
+            const card = document.createElement('section');
+            card.className = `kit-protocol-step-card${item.expanded ? ' is-selected' : ''}`;
+
+            const main = document.createElement('button');
+            main.type = 'button';
+            main.className = 'kit-protocol-step-card-main';
+            main.dataset.testid = `workflow-step-${String(stage.stage_key || '')}`;
+            main.addEventListener('click', () => {
+                selection = { sectionKey: 'stages', nodeKey: String(stage.stage_key || '') };
+                render();
+            });
+
+            const eyebrow = document.createElement('div');
+            eyebrow.className = 'kit-protocol-step-card-eyebrow';
+            const order = document.createElement('span');
+            order.className = 'kit-protocol-step-order';
+            order.textContent = String(item.order).padStart(2, '0');
+            eyebrow.appendChild(order);
+            _stageNodeBadges(stage, 'detail').forEach((badge) => {
+                const chip = document.createElement('span');
+                chip.className = `kit-workflow-node-badge${badge?.tone ? ` is-${badge.tone}` : ''}`;
+                chip.textContent = String(badge?.label || '');
+                eyebrow.appendChild(chip);
+            });
+            const owner = document.createElement('button');
+            owner.type = 'button';
+            owner.className = 'kit-protocol-step-owner';
+            owner.textContent = _participantDisplayName(stage.participant_key, draft.document);
+            owner.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                selection = { sectionKey: 'participants', nodeKey: String(stage.participant_key || '') };
+                render();
+            });
+            eyebrow.appendChild(owner);
+            main.appendChild(eyebrow);
+
+            const label = document.createElement('div');
+            label.className = 'kit-protocol-step-title';
+            label.textContent = String(stage.display_name || stage.stage_key || 'Untitled step');
+            main.appendChild(label);
+
+            const summary = document.createElement('div');
+            summary.className = 'kit-protocol-step-summary';
+            summary.textContent = String(item.summary || '');
+            main.appendChild(summary);
+
+            const stageMeta = document.createElement('div');
+            stageMeta.className = 'kit-protocol-step-meta';
+            stageMeta.textContent = _stageNodeSublabel(stage) || 'No artifacts or instructions yet.';
+            main.appendChild(stageMeta);
+            card.appendChild(main);
+
+            if (item.expanded) {
+                const body = document.createElement('div');
+                body.className = 'kit-protocol-step-body';
+                if (String(stage.instructions || '').trim()) {
+                    const note = document.createElement('p');
+                    note.className = 'kit-protocol-step-note';
+                    note.textContent = String(stage.instructions || '');
+                    body.appendChild(note);
+                }
+                const routes = document.createElement('div');
+                routes.className = 'kit-protocol-step-routes';
+                if (item.routes.length) {
+                    item.routes.forEach((route) => {
+                        const routeBtn = document.createElement('button');
+                        routeBtn.type = 'button';
+                        routeBtn.className = `kit-protocol-step-route${selection.sectionKey === 'transitions' && selection.nodeKey === route.id ? ' is-selected' : ''}`;
+                        routeBtn.dataset.testid = `workflow-edge-${String(route.id || '')}`;
+                        routeBtn.addEventListener('click', () => {
+                            selection = { sectionKey: 'transitions', nodeKey: route.id };
+                            render();
+                        });
+                        const decision = document.createElement('span');
+                        decision.className = 'kit-stage-routing-badge';
+                        decision.textContent = String(route.decisionLabel || route.decision || '');
+                        routeBtn.appendChild(decision);
+                        const routeBody = document.createElement('span');
+                        routeBody.className = 'kit-protocol-step-route-body';
+                        routeBody.textContent = `${route.targetLabel} · ${route.scopeLabel}`;
+                        routeBtn.appendChild(routeBody);
+                        routes.appendChild(routeBtn);
+                    });
+                } else {
+                    const empty = document.createElement('div');
+                    empty.className = 'kit-stage-routing-empty';
+                    empty.textContent = 'No routes yet. Add the next step or finish outcome from here.';
+                    routes.appendChild(empty);
+                }
+                body.appendChild(routes);
+                if (saveState.state !== 'conflict' && editorMode.kind !== 'rehearse') {
+                    const row = document.createElement('div');
+                    row.className = 'kit-protocol-step-actions';
+                    const addRoute = document.createElement('button');
+                    addRoute.type = 'button';
+                    addRoute.className = 'btn btn-small';
+                    addRoute.textContent = 'Add route';
+                    addRoute.addEventListener('click', () => _startRouteInsert(stage.stage_key));
+                    row.appendChild(addRoute);
+                    body.appendChild(row);
+                }
+                card.appendChild(body);
+            }
+            list.appendChild(card);
+        });
+        wrap.appendChild(list);
+        return wrap;
     }
 
     function _stageEditorSection(title, panel, { wide = false, collapsible = false, open = true } = {}) {
@@ -2474,7 +2974,7 @@ function renderProtocolWorkspace(container) {
 
         const note = document.createElement('p');
         note.className = 'kit-stage-editor-hero-note';
-        note.textContent = 'Use the graph for placement. Use this editor for content, ownership, artifacts, and routing.';
+        note.textContent = 'Edit this step here: ownership, instructions, artifacts, and routes. Open Visual map only when you need the full topology.';
         hero.appendChild(note);
 
         return hero;
@@ -2496,7 +2996,7 @@ function renderProtocolWorkspace(container) {
             const add = document.createElement('button');
             add.type = 'button';
             add.className = 'btn btn-small';
-            add.textContent = Kit.dict.label('protocol.stage.connect');
+            add.textContent = 'Add route';
             add.addEventListener('click', connectAction);
             head.appendChild(add);
         }
@@ -2659,8 +3159,9 @@ function renderProtocolWorkspace(container) {
         return shell;
     }
 
-    function _detailsEl() {
+    function _detailsEl(workflow = null) {
         const doc = draft.document;
+        const projection = workflow?.projection || _buildWorkflowProjection(doc);
         const participantCount = Array.isArray(doc.participants) ? doc.participants.length : 0;
         const stageCount = Array.isArray(doc.stages) ? doc.stages.length : 0;
         const readOnly = editorMode.kind === 'rehearse';
@@ -2688,53 +3189,14 @@ function renderProtocolWorkspace(container) {
         }));
 
         if (editorMode.kind === 'insert-role') {
-            const wrap = document.createElement('div');
-            wrap.className = 'kit-authoring-canvas-column';
-            wrap.appendChild(Kit.detailsPanel({
+            return _roleEditorShell({
                 target: pendingRole,
-                surfaceKey: 'protocol.participant',
+                participantKey: '__draft__',
                 onCommit: _commitPendingRoleField,
-                schema: [
-                    { key: 'display_name', kind: 'text', required: true },
-                    { key: 'participant_key', kind: 'text' },
-                    {
-                        key: 'selector_kind',
-                        kind: 'select',
-                        options: (authoringManifest?.selector_kind_options || ['skill', 'role', 'agent']).map((value) => ({
-                            value,
-                            label: String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1),
-                        })),
-                        labelKey: 'protocol.participant.selector_kind.label',
-                        helpKey: 'protocol.participant.selector_kind.help',
-                    },
-                    { key: 'selector_value', kind: 'text', labelKey: 'protocol.participant.selector_value.label', helpKey: 'protocol.participant.selector_value.help', placeholderKey: 'protocol.participant.selector_value.placeholder' },
-                    { key: 'instructions', kind: 'textarea', rows: 4 },
-                ],
-                actions: [
-                    { label: 'Create role', tone: 'btn-primary', onClick: _confirmRoleInsert },
-                    { label: 'Cancel', onClick: _cancelRoleInsert },
-                ],
-            }));
-            wrap.appendChild(Kit.selectorResolutionPreview({
-                selector: selectorPreview.participantKey === '__draft__'
-                    ? selectorPreview.query
-                    : _selectorString(_selectorFromFields(pendingRole.selector_kind, pendingRole.selector_value)),
-                candidates: selectorPreview.participantKey === '__draft__' ? selectorPreview.candidates : [],
-                busy: selectorPreview.participantKey === '__draft__' ? selectorPreview.busy : false,
-                message: selectorPreview.participantKey === '__draft__'
-                    ? selectorPreview.message
-                    : 'Preview who would match this role before you add it.',
-                suggestions: _participantSelectorSuggestions(),
+                createAction: _confirmRoleInsert,
+                cancelAction: _cancelRoleInsert,
                 onSuggestionSelect: (value) => { _applyRoleDraftSuggestion(value); },
-                onResolve: (value) => {
-                    const parsed = _selectorFieldsFromString(value);
-                    pendingRole.selector_kind = parsed.kind;
-                    pendingRole.selector_value = parsed.value;
-                    render();
-                    void _resolveSelectorPreview('__draft__', value);
-                },
-            }));
-            return wrap;
+            });
         }
 
         if (editorMode.kind === 'insert-stage') {
@@ -2746,6 +3208,22 @@ function renderProtocolWorkspace(container) {
                 onCommit: _commitPendingStageField,
                 createAction: _confirmStageInsert,
                 cancelAction: _cancelStageInsert,
+            });
+        }
+
+        if (editorMode.kind === 'create-route') {
+            const sourceStage = (doc.stages || []).find((item) => String(item.stage_key || '') === String(pendingRoute.source_stage_key || ''));
+            return _routeEditorPanel({
+                target: {
+                    source_stage: String(sourceStage?.display_name || sourceStage?.stage_key || ''),
+                    decision: String(pendingRoute.decision || ''),
+                    target_key: String(pendingRoute.target_key || ''),
+                },
+                sourceStage,
+                projection,
+                onCommit: _commitPendingRouteField,
+                createAction: _confirmRouteInsert,
+                cancelAction: _cancelRouteInsert,
             });
         }
 
@@ -2795,49 +3273,17 @@ function renderProtocolWorkspace(container) {
         if (selection.sectionKey === 'participants') {
             const target = (doc.participants || []).find((item) => String(item.participant_key) === selection.nodeKey);
             if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            const selectorTarget = {
-                ...target,
-                selector_kind: String(target.selector?.kind || ''),
-                selector_value: String(target.selector?.value || ''),
-            };
-            const wrap = document.createElement('div');
-            wrap.className = 'kit-authoring-canvas-column';
-            wrap.appendChild(Kit.detailsPanel({
-                target: selectorTarget,
-                surfaceKey: 'protocol.participant',
+            return _roleEditorShell({
+                target: {
+                    ...target,
+                    selector_kind: String(target.selector?.kind || ''),
+                    selector_value: String(target.selector?.value || ''),
+                },
+                participantKey: String(selection.nodeKey || ''),
+                readOnly,
                 onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('participant', selection.nodeKey, key, value),
-                schema: applyReadOnly([
-                    { key: 'display_name', kind: 'text', required: true },
-                    { key: 'participant_key', kind: 'text' },
-                    {
-                        key: 'selector_kind',
-                        kind: 'select',
-                        options: (authoringManifest?.selector_kind_options || ['skill', 'role', 'agent']).map((value) => ({
-                            value,
-                            label: String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1),
-                        })),
-                        labelKey: 'protocol.participant.selector_kind.label',
-                        helpKey: 'protocol.participant.selector_kind.help',
-                    },
-                    { key: 'selector_value', kind: 'text', labelKey: 'protocol.participant.selector_value.label', helpKey: 'protocol.participant.selector_value.help', placeholderKey: 'protocol.participant.selector_value.placeholder' },
-                    { key: 'instructions', kind: 'textarea', rows: 4 },
-                ]),
-            }));
-            const currentQuery = selection.nodeKey === selectorPreview.participantKey
-                ? selectorPreview.query
-                : _selectorString(target.selector || null);
-            wrap.appendChild(Kit.selectorResolutionPreview({
-                selector: currentQuery,
-                candidates: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.candidates : [],
-                busy: selection.nodeKey === selectorPreview.participantKey ? selectorPreview.busy : false,
-                message: selection.nodeKey === selectorPreview.participantKey
-                    ? selectorPreview.message
-                    : Kit.dict.label('protocol.participant.selector_hint'),
-                suggestions: _participantSelectorSuggestions(target),
                 onSuggestionSelect: readOnly ? null : (value) => { void _applyParticipantSuggestion(selection.nodeKey, value); },
-                onResolve: (value) => { void _resolveSelectorPreview(selection.nodeKey, value); },
-            }));
-            return wrap;
+            });
         }
         if (selection.sectionKey === 'stages') {
             const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
@@ -2851,47 +3297,28 @@ function renderProtocolWorkspace(container) {
                 onCommit: readOnly
                     ? null
                     : (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
-                connectAction: readOnly ? null : () => _startConnectMode(selection.nodeKey),
+                connectAction: readOnly ? null : () => _startRouteInsert(selection.nodeKey),
             });
         }
         if (selection.sectionKey === 'transitions') {
             const target = _transitionEntries(doc).find((item) => String(item.id || '') === selection.nodeKey);
             if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol', emptyHint: Kit.dict.label('protocol.details.transition.empty') });
             const sourceStage = (doc.stages || []).find((stage) => String(stage.stage_key || '') === String(target.from_stage_key || ''));
-            const targetOptions = [
-                ...((doc.stages || []).map((stage) => ({
-                    value: String(stage.stage_key || ''),
-                    label: String(stage.display_name || stage.stage_key || ''),
-                }))),
-                ...PROTOCOL_TERMINAL_TARGETS.map((item) => ({
-                    value: item.key,
-                    label: item.label,
-                })),
-            ];
-            return Kit.detailsPanel({
+            return _routeEditorPanel({
                 target: {
-                    source_stage: String(target.from_stage_key || ''),
+                    source_stage: String(sourceStage?.display_name || sourceStage?.stage_key || target.from_stage_key || ''),
                     decision: String(target.decision || ''),
                     target_key: String(target.target_key || ''),
                 },
-                surfaceKey: 'protocol.transition',
+                sourceStage,
+                projection,
+                readOnly,
                 onCommit: readOnly ? null : (_t, key, value) => _commitTransitionField(selection.nodeKey, key, value),
-                schema: applyReadOnly([
-                    { key: 'source_stage', kind: 'text', label: 'From stage', help: 'This transition leaves the selected stage.', readOnly: true },
-                    { key: 'decision', kind: 'select', options: _decisionOptionsForStage(sourceStage, target.decision), labelKey: 'protocol.transition.decision.label', helpKey: 'protocol.transition.decision.help' },
-                    { key: 'target_key', kind: 'select', options: targetOptions, labelKey: 'protocol.transition.target.label', helpKey: 'protocol.transition.target.help' },
-                ]),
-                actions: readOnly ? [] : [
-                    {
-                        label: Kit.dict.label('protocol.transition.delete'),
-                        tone: 'btn-danger',
-                        onClick: () => UI.showConfirm(
-                            'Remove transition',
-                            'Remove this transition from the workflow?',
-                            async () => { _deleteTransition(selection.nodeKey); },
-                        ),
-                    },
-                ],
+                deleteAction: readOnly ? null : () => UI.showConfirm(
+                    'Remove transition',
+                    'Remove this transition from the workflow?',
+                    async () => { _deleteTransition(selection.nodeKey); },
+                ),
             });
         }
         if (selection.sectionKey === 'artifacts') {
@@ -3002,26 +3429,34 @@ function renderProtocolWorkspace(container) {
 
     function render() {
         if (!currentProtocolId) {
+            header.hidden = false;
             UI.reconcileChildren(contentEl, [_catalogEl()]);
             _lifecycleHeaderRef = null;
             return;
         }
 
         if (protocolDetailLoading) {
+            header.hidden = true;
             UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocol detail…', true)]);
             _lifecycleHeaderRef = null;
             return;
         }
 
+        header.hidden = true;
         const headerEl = _lifecycleHeaderEl();
+        const workflow = _workflowData();
 
         const workspace = document.createElement('div');
-        workspace.className = 'kit-authoring-workspace';
-        workspace.appendChild(_canvasEl());
+        workspace.className = `kit-authoring-workspace kit-authoring-workspace-${String(workflow.viewState?.kind || 'detail')}`;
+        workspace.appendChild(
+            workflow.viewState?.kind === 'detail'
+                ? _detailSurfaceEl(workflow)
+                : _surfaceCanvasEl(workflow),
+        );
 
         const detailsColumn = document.createElement('div');
         detailsColumn.className = 'kit-authoring-details-column';
-        const details = _detailsEl();
+        const details = _detailsEl(workflow);
         if (details) {
             detailsColumn.appendChild(details);
         }

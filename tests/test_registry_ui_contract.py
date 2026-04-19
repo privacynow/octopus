@@ -173,14 +173,18 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_stageTransitionId(" in workspace
     assert "_transitionEntries(" in workspace
     assert "_applyParticipantSuggestion(" in workspace
-    assert "suggestions: _participantSelectorSuggestions(target)" in workspace
-    assert "_currentWorkflowMode()" in workspace
-    assert "let workflowView = { kind: 'focus'" in workspace
-    assert "let workflowViewport = { process: 'fit', focus: 1, full: 'fit' }" in workspace
+    assert "_selectorCatalogEntries(" in workspace
+    assert "_selectorEditor(" in workspace
+    assert "let workflowView = { kind: 'detail'" in workspace
+    assert "let workflowViewport = { map: 'fit' }" in workspace
     assert "_workflowViewportValue(" in workspace
     assert "_buildWorkflowProjection(" in workspace
     assert "_normalizeWorkflowView(" in workspace
-    assert "_setFocusSegment(" in workspace
+    assert "_setDetailSegment(" in workspace
+    assert "_detailSurfaceEl(" in workspace
+    assert "_surfaceCanvasEl(" in workspace
+    assert "_roleEditorShell(" in workspace
+    assert "_routeEditorPanel(" in workspace
     assert "_stageEditorHero(" in workspace
     assert "_stageRoutingPanel(" in workspace
     assert "window.addEventListener('resize', onResize);" in workspace

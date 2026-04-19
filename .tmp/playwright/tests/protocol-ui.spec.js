@@ -22,7 +22,6 @@ test.describe('protocol authoring live', () => {
 
     const lifecycle = page.locator('.kit-lifecycle-header');
     await expect(lifecycle.getByLabel('Name')).toHaveValue('');
-    await expect(lifecycle.getByLabel('URL slug')).toHaveValue('');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start the workflow');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first role');
 
@@ -38,7 +37,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Connect step' }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add route' }).first()).toBeVisible();
 
     const reviewerKey = await createRole(page, { name: 'Reviewer', key: 'reviewer' });
     const reviewKey = await createStep(page, {
@@ -49,19 +48,20 @@ test.describe('protocol authoring live', () => {
     });
 
     await connectStep(page, planKey, reviewKey);
-    await page.getByTestId(`workflow-node-${planKey}`).click();
+    await page.getByTestId(`workflow-step-${planKey}`).click();
     await expect(page.getByTestId('stage-route-plan::completed')).toBeVisible();
 
     await connectStep(page, reviewKey, '__complete__');
-    await page.getByTestId(`workflow-node-${reviewKey}`).click();
+    await page.getByTestId(`workflow-step-${reviewKey}`).click();
     await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Cancel transition' })).toHaveCount(0);
-    await page.getByTestId('workflow-node-review').click();
+    await page.getByTestId('workflow-step-review').click();
     await expect(details.getByLabel('Name')).toHaveValue('Review');
 
     await lifecycle.getByLabel('Name').fill(`Live Authoring ${Date.now()}`);
     await lifecycle.getByLabel('Name').blur();
     await waitForSaved(page);
+    await lifecycle.getByRole('button', { name: 'Protocol' }).click();
     await expect(lifecycle.getByLabel('URL slug')).not.toHaveValue('');
 
     await page.getByRole('button', { name: 'Validate' }).click();
@@ -94,16 +94,15 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByTestId('workflow-node-segment:planning')).toBeVisible({ timeout: 15000 });
 
     await page.getByTestId('workflow-node-segment:planning').click();
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
+    await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');
     await expect(page.getByRole('button', { name: 'Back to phases' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'All steps' })).toBeVisible();
-    await expect(page.getByTestId('workflow-node-planning')).toBeVisible();
-    await expect(page.getByTestId('workflow-node-plan_review')).toBeVisible();
-    await expect(page.getByTestId('workflow-node-segment:architecture')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Visual map' })).toBeVisible();
+    await expect(page.getByTestId('workflow-step-planning')).toBeVisible();
+    await expect(page.getByTestId('workflow-step-plan_review')).toBeVisible();
     await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
 
-    await page.getByRole('button', { name: 'All steps' }).click();
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('All steps');
+    await page.getByRole('button', { name: 'Visual map' }).click();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Visual map');
     await expect(page.getByRole('button', { name: 'Fit' })).toBeVisible();
     await expect(page.getByRole('button', { name: '100%' })).toBeVisible();
     const labelOverlaps = await page.evaluate(() => {
@@ -150,14 +149,14 @@ test.describe('protocol authoring live', () => {
     expect(processOverflow.scrollWidth).toBeLessThanOrEqual(processOverflow.clientWidth + 2);
 
     await page.getByTestId('workflow-node-segment:planning').click();
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
-    await expect(page.locator('.kit-workflow-compact')).toBeVisible();
-    await page.getByTestId('workflow-node-planning').click();
+    await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');
+    await expect(page.locator('.kit-protocol-step-list')).toBeVisible();
+    await page.getByTestId('workflow-step-planning').click();
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Back to phases' })).toBeVisible();
     const compactOverlap = await page.evaluate(() => {
-      const cards = [...document.querySelectorAll('.kit-workflow-compact-card')].map((element) => ({
+      const cards = [...document.querySelectorAll('.kit-protocol-step-card')].map((element) => ({
         top: element.getBoundingClientRect().top,
         bottom: element.getBoundingClientRect().bottom,
       }));

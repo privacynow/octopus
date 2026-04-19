@@ -357,9 +357,12 @@ window.Kit = (() => {
         permissions = {},
         onTitleCommit = null,
         onSlugCommit = null,
+        compact = false,
+        primaryActions = ['validate', 'publish', 'rehearse'],
+        secondaryActions = ['archive', 'discard'],
     } = {}) {
         const header = document.createElement('header');
-        header.className = 'kit-lifecycle-header';
+        header.className = `kit-lifecycle-header${compact ? ' is-compact' : ''}`;
         const lifecycleState = String(record.lifecycle_state || 'draft');
         const availableActions = [
             permissions.canValidate !== false ? 'validate' : '',
@@ -397,21 +400,11 @@ window.Kit = (() => {
             slugInput.addEventListener('change', () => onSlugCommit(slugInput.value));
             slugInput.addEventListener('blur', () => onSlugCommit(slugInput.value));
         }
-        titleWrap.appendChild(slugInput);
-
-        topRow.appendChild(titleWrap);
-
-        const chip = draftStateChip(saveState);
-        topRow.appendChild(chip);
-        header.appendChild(topRow);
-
-        const actionRow = document.createElement('div');
-        actionRow.className = 'kit-lifecycle-actions';
         const chipBadge = document.createElement('span');
         chipBadge.dataset.key = 'lifecycle-state';
         chipBadge.className = `badge kit-lifecycle-chip kit-lifecycle-chip-${lifecycleState}`;
         chipBadge.textContent = dict.label(`${surfaceKey}.lifecycle.${lifecycleState}`);
-        actionRow.appendChild(chipBadge);
+        const chip = draftStateChip(saveState);
 
         const buttonSpec = [
             { key: 'validate', tone: '', permissionKey: 'canValidate' },
@@ -420,6 +413,7 @@ window.Kit = (() => {
             { key: 'archive', tone: 'btn-secondary', permissionKey: 'canArchive' },
             { key: 'discard', tone: 'btn-danger', permissionKey: 'canDiscard' },
         ];
+        const buttons = [];
         buttonSpec.forEach(({ key, tone, permissionKey }) => {
             const handler = actions[key];
             if (!handler) return;
@@ -431,10 +425,69 @@ window.Kit = (() => {
             btn.dataset.kitAction = key;
             btn.textContent = dict.label(`${surfaceKey}.action.${key}`);
             btn.addEventListener('click', () => handler(record));
-            actionRow.appendChild(btn);
+            buttons.push({ key, btn });
         });
 
-        header.appendChild(actionRow);
+        if (compact) {
+            const meta = document.createElement('div');
+            meta.className = 'kit-lifecycle-meta';
+            const slugText = document.createElement('span');
+            slugText.className = 'kit-lifecycle-slug-chip';
+            slugText.textContent = String(record.slug || '').trim() ? `protocol/${String(record.slug || '').trim()}` : 'Protocol settings';
+            meta.appendChild(chipBadge);
+            meta.appendChild(slugText);
+            titleWrap.appendChild(meta);
+
+            topRow.appendChild(titleWrap);
+
+            const primary = document.createElement('div');
+            primary.className = 'kit-lifecycle-primary';
+            primary.appendChild(chip);
+            buttons
+                .filter(({ key }) => primaryActions.includes(key))
+                .forEach(({ btn }) => primary.appendChild(btn));
+
+            const overflow = document.createElement('details');
+            overflow.className = 'kit-lifecycle-overflow';
+            const overflowSummary = document.createElement('summary');
+            overflowSummary.className = 'btn btn-small';
+            overflowSummary.textContent = 'Protocol';
+            overflow.appendChild(overflowSummary);
+            const overflowBody = document.createElement('div');
+            overflowBody.className = 'kit-lifecycle-overflow-body';
+            if (onSlugCommit) {
+                const slugRow = document.createElement('div');
+                slugRow.className = 'kit-lifecycle-overflow-row';
+                const slugLabel = document.createElement('label');
+                slugLabel.className = 'kit-details-label';
+                slugLabel.textContent = dict.label(`${surfaceKey}.slug.label`);
+                slugRow.appendChild(slugLabel);
+                slugRow.appendChild(slugInput);
+                overflowBody.appendChild(slugRow);
+            }
+            const secondary = buttons.filter(({ key }) => secondaryActions.includes(key));
+            if (secondary.length) {
+                const secondaryRow = document.createElement('div');
+                secondaryRow.className = 'kit-lifecycle-actions';
+                secondary.forEach(({ btn }) => secondaryRow.appendChild(btn));
+                overflowBody.appendChild(secondaryRow);
+            }
+            overflow.appendChild(overflowBody);
+            primary.appendChild(overflow);
+            topRow.appendChild(primary);
+            header.appendChild(topRow);
+        } else {
+            titleWrap.appendChild(slugInput);
+            topRow.appendChild(titleWrap);
+            topRow.appendChild(chip);
+            header.appendChild(topRow);
+
+            const actionRow = document.createElement('div');
+            actionRow.className = 'kit-lifecycle-actions';
+            actionRow.appendChild(chipBadge);
+            buttons.forEach(({ btn }) => actionRow.appendChild(btn));
+            header.appendChild(actionRow);
+        }
 
         header.updateSaveState = (state) => applyChipState(chip, state);
         header.syncRecord = (next) => {
@@ -448,6 +501,12 @@ window.Kit = (() => {
             const nextState = String(next.lifecycle_state || 'draft');
             chipBadge.className = `badge kit-lifecycle-chip kit-lifecycle-chip-${nextState}`;
             chipBadge.textContent = dict.label(`${surfaceKey}.lifecycle.${nextState}`);
+            if (compact) {
+                const slugChip = header.querySelector('.kit-lifecycle-slug-chip');
+                if (slugChip) {
+                    slugChip.textContent = String(next.slug || '').trim() ? `protocol/${String(next.slug || '').trim()}` : 'Protocol settings';
+                }
+            }
         };
 
         return header;

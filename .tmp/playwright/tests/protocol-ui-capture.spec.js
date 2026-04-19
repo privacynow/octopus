@@ -38,14 +38,14 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await connectStep(page, planKey, reviewKey);
   await connectStep(page, reviewKey, '__complete__');
-  await page.getByTestId(`workflow-node-${planKey}`).click();
+  await page.getByTestId(`workflow-step-${planKey}`).click();
   await expect(page.getByTestId('stage-route-plan::completed')).toBeVisible();
-  await page.getByTestId(`workflow-node-${reviewKey}`).click();
+  await page.getByTestId(`workflow-step-${reviewKey}`).click();
   await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
 
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-graph-page.png', fullPage: true });
-  await page.locator('.kit-workflow-shell').screenshot({
-    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-graph-focus.png',
+  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-page.png', fullPage: true });
+  await page.locator('.kit-protocol-detail').screenshot({
+    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-focus.png',
   });
 
   await discardDraft(page);
@@ -61,14 +61,14 @@ test('capture protocol authoring states', async ({ page }) => {
   });
 
   await page.getByTestId('workflow-node-segment:planning').click();
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
+  await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-page.png', fullPage: true });
-  await page.locator('.kit-workflow-shell').screenshot({
-    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-graph.png',
+  await page.locator('.kit-protocol-detail').screenshot({
+    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-detail.png',
   });
 
-  await page.getByRole('button', { name: 'All steps' }).click();
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('All steps');
+  await page.getByRole('button', { name: 'Visual map' }).click();
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Visual map');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-page.png', fullPage: true });
   await page.locator('.kit-workflow-shell').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-graph.png',
@@ -79,7 +79,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow phases');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png', fullPage: true });
   await page.getByTestId('workflow-node-segment:planning').click();
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Planning');
+  await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png', fullPage: true });
 
   await discardDraft(page);

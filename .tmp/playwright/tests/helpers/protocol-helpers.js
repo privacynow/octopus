@@ -85,7 +85,7 @@ async function openBlankDraft(page) {
   await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'New protocol' }).click();
   await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
-  await expect(page.locator('.kit-workflow-canvas')).toBeVisible();
+  await expect(page.locator('.kit-protocol-detail, .kit-workflow-canvas')).toBeVisible();
 }
 
 async function createRole(page, { name, key = '', selectorValue = '' }) {
@@ -146,12 +146,14 @@ async function createStep(page, { name, key = '', ownerRole = '', stageKind = ''
 }
 
 async function connectStep(page, sourceStageKey, targetNodeId) {
-  await page.getByTestId(`workflow-node-${sourceStageKey}`).click();
-  const connectButton = page.getByRole('button', { name: 'Connect step' }).first();
-  await expect(connectButton).toBeVisible();
-  await connectButton.click();
-  await expect(page.getByRole('button', { name: 'Cancel transition' })).toBeVisible();
-  await page.getByTestId(`workflow-node-${targetNodeId}`).click();
+  await page.getByTestId(`workflow-step-${sourceStageKey}`).click();
+  const addRoute = page.getByRole('button', { name: 'Add route' }).first();
+  await expect(addRoute).toBeVisible();
+  await addRoute.click();
+  const routePanel = page.locator('.kit-details-panel').first();
+  await expect(routePanel).toBeVisible();
+  await routePanel.locator('select').last().selectOption(targetNodeId);
+  await page.getByRole('button', { name: 'Create route' }).click();
 }
 
 async function discardDraft(page) {

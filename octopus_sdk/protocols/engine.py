@@ -85,14 +85,14 @@ class ProtocolRunEngine:
         self,
         *,
         run: ProtocolRunRecord,
-        participant,
+        stage,
     ) -> TargetSelector:
         if run.is_rehearsal:
             return TargetSelector(kind="role", value="rehearsal")
-        if participant.selector is not None:
-            return participant.selector
+        if stage.selector is not None:
+            return stage.selector
         raise ValueError(
-            f"Participant {str(participant.participant_key or '').strip() or '<unknown>'} is missing an assignment rule."
+            f"Stage {str(stage.stage_key or '').strip() or '<unknown>'} is missing an assignment rule."
         )
 
     def build_dispatch_request(
@@ -142,7 +142,7 @@ class ProtocolRunEngine:
                 stage=stage,
             ),
             constraints=run.constraints_json,
-            requested_skills=normalized_requested_skills(selector=participant.selector),
+            requested_skills=normalized_requested_skills(selector=stage.selector),
             session_key_override=protocol_participant_session_key(run.protocol_run_id, participant.participant_key),
             project_id_override=run.workspace_ref,
             file_policy_override="edit" if stage.write_capable else "",
@@ -239,7 +239,7 @@ class ProtocolRunEngine:
             participant_state="error",
             participant_resolution_outcome="error",
             participant_resolution_reason=detail,
-            participant_selector_snapshot=RegistryJsonRecord.model_validate(resolution.selector.model_dump(mode="json")),
+            selector_snapshot=RegistryJsonRecord.model_validate(resolution.selector.model_dump(mode="json")),
             transition_metadata=RegistryJsonRecord.model_validate(
                 {"selector": resolution.selector.model_dump(mode="json")}
             ),
@@ -277,7 +277,7 @@ class ProtocolRunEngine:
             participant_resolution_reason="",
             participant_resolved_agent_id=str(resolved_agent_id or "").strip(),
             participant_resolved_authority_ref=str(resolved_authority_ref or "").strip(),
-            participant_selector_snapshot=RegistryJsonRecord.model_validate(selector.model_dump(mode="json")),
+            selector_snapshot=RegistryJsonRecord.model_validate(selector.model_dump(mode="json")),
             transition_metadata=RegistryJsonRecord.model_validate(
                 {
                     "target_agent_id": str(resolved_agent_id or "").strip(),

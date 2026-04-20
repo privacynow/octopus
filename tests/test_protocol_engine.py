@@ -111,13 +111,13 @@ def test_protocol_run_engine_builds_dispatch_request_from_shared_contract() -> N
     assert request.requested_skills == ["planning"]
 
 
-def test_protocol_run_engine_uses_participant_selector_for_dispatch() -> None:
+def test_protocol_run_engine_uses_stage_selector_for_dispatch() -> None:
     document = _document()
-    participant = document.participant("worker")
+    stage = document.stage("planning")
 
     selector = _engine().dispatch_target_selector(
         run=_run().model_copy(update={"entry_agent_id": "agent-1"}),
-        participant=participant,
+        stage=stage,
     )
 
     assert selector.kind == "skill"
@@ -130,14 +130,18 @@ def test_protocol_run_engine_requires_explicit_assignment_rule() -> None:
         **protocol_document(),
         "participants": [
             {"participant_key": "worker", "display_name": "Worker"},
-            {"participant_key": "reviewer", "display_name": "Reviewer", "selector": {"kind": "skill", "value": "review"}},
+            {"participant_key": "reviewer", "display_name": "Reviewer"},
+        ],
+        "stages": [
+            {**stage, "selector": None} if stage["stage_key"] == "planning" else stage
+            for stage in protocol_document()["stages"]
         ],
     })
 
-    with pytest.raises(ValueError, match="missing an assignment rule"):
+    with pytest.raises(ValueError, match="Stage planning is missing an assignment rule"):
         _engine().dispatch_target_selector(
             run=_run().model_copy(update={"entry_agent_id": "agent-1"}),
-            participant=document.participant("worker"),
+            stage=document.stage("planning"),
         )
 
 
@@ -173,7 +177,7 @@ def test_protocol_run_engine_evaluates_dispatch_with_shared_request_contract() -
         resolution=ProtocolParticipantResolutionRecord(
             selector=_engine().dispatch_target_selector(
                 run=run,
-                participant=document.participant("worker"),
+                stage=document.stage("planning"),
             ),
             resolved_agent_id="agent-2",
             resolved_authority_ref="registry:local",
@@ -207,7 +211,7 @@ def test_protocol_run_engine_blocks_dispatch_when_resolution_fails() -> None:
     )
     selector = _engine().dispatch_target_selector(
         run=run,
-        participant=document.participant("worker"),
+        stage=document.stage("planning"),
     )
 
     decision = _engine().evaluate_dispatch_resolution(

@@ -139,7 +139,6 @@ def protocol_retention_until(now: str | None = None, *, days: int = PROTOCOL_DEF
 class ProtocolParticipantDefinitionRecord(RegistryRecordModel):
     participant_key: str = Field(..., min_length=1)
     display_name: str = ""
-    selector: TargetSelector | None = None
     instructions: str = ""
 
     @field_validator("participant_key", mode="before")
@@ -179,6 +178,7 @@ class ProtocolStageDefinitionRecord(RegistryRecordModel):
     stage_key: str = Field(..., min_length=1)
     display_name: str = ""
     participant_key: str = Field(..., min_length=1)
+    selector: TargetSelector | None = None
     stage_kind: ProtocolStageKind = "work"
     instructions: str = ""
     inputs: list[str] = Field(default_factory=list)
@@ -736,7 +736,7 @@ class ProtocolEngineDecisionRecord(RegistryRecordModel):
     participant_resolution_reason: str = ""
     participant_resolved_agent_id: str = ""
     participant_resolved_authority_ref: str = ""
-    participant_selector_snapshot: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    selector_snapshot: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     transition_metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     routed_task_request: RoutedTaskRequest | None = None
 

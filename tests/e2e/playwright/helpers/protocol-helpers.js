@@ -96,58 +96,46 @@ async function openTemplateDraft(page, templateName) {
   await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
 }
 
-async function createParticipant(page, { name, key = '', selectorKind = 'skill', selectorValue = '' }) {
-  const participantKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  if (!selectorValue) {
-    throw new Error(`selectorValue is required when creating participant ${participantKey}`);
-  }
-  const protocolId = protocolIdFromUrl(page.url());
-  const api = page.context().request;
-  const draftPending = await page.locator('.kit-draft-chip[data-state="editing"], .kit-draft-chip[data-state="saving"]').count();
-  if (draftPending) {
-    await waitForSaved(page);
-  }
-  const detail = await apiGetProtocol(api, protocolId);
-  const definition = JSON.parse(JSON.stringify(detail.draft_definition_json || {}));
-  definition.participants = Array.isArray(definition.participants) ? definition.participants : [];
-  definition.participants.push({
-    participant_key: participantKey,
-    display_name: name,
-    selector: {
-      kind: selectorKind,
-      value: selectorValue,
-    },
-    instructions: '',
-  });
-  const save = await apiSaveProtocolDraft(api, protocolId, {
-    slug: detail.protocol.slug,
-    display_name: detail.protocol.display_name,
-    description: detail.protocol.description,
-    definition_json: definition,
-  }, detail.protocol.draft_revision);
-  expect(save.status).toBe(200);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.kit-lifecycle-header')).toBeVisible();
-  await expect(page.locator('.kit-workflow-canvas')).toBeVisible();
-  return participantKey;
-}
-
-async function createStep(page, { name, key = '', ownerParticipant = '', stageKind = '' }) {
+async function createStep(page, {
+  name,
+  key = '',
+  ownerRole = '',
+  roleName = '',
+  roleKey = '',
+  selectorKind = 'skill',
+  selectorValue = '',
+  stageKind = '',
+} = {}) {
   await page.getByRole('button', { name: /\+ Add step/i }).first().click();
   const stageEditor = page.locator('.kit-stage-editor-grid');
   await expect(stageEditor).toBeVisible();
   await stageEditor.getByLabel('Name').fill(name);
-  if (key) {
-    await page.locator('details.kit-stage-editor-section.is-collapsible').first().evaluate((element) => {
-      element.open = true;
-    });
-    await stageEditor.getByLabel('Key').fill(key);
-  }
-  if (ownerParticipant) {
-    await stageEditor.getByLabel('Owning participant').selectOption(ownerParticipant);
+  const ownerRoleSelect = stageEditor.getByLabel('Owner role');
+  if (ownerRole) {
+    await ownerRoleSelect.selectOption(ownerRole);
+  } else {
+    await ownerRoleSelect.selectOption('__new__');
+    await stageEditor.getByLabel('Role name').fill(roleName || `${name} role`);
+    if (roleKey) {
+      await stageEditor.getByLabel('Role key').fill(roleKey);
+    }
   }
   if (stageKind) {
     await stageEditor.getByLabel('Stage type').selectOption(stageKind);
+  }
+  if (!selectorValue) {
+    throw new Error(`selectorValue is required when creating step ${key || name}`);
+  }
+  const assignmentSection = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
+  await assignmentSection.getByLabel('Strategy', { exact: true }).selectOption(selectorKind);
+  const valueLabel = selectorKind === 'agent' ? 'Choose agent' : selectorKind === 'skill' ? 'Choose skill' : 'Choose runtime role tag';
+  const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true });
+  const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
+  if (valueTag === 'select') {
+    await valueControl.selectOption(selectorValue);
+  } else {
+    await valueControl.fill(selectorValue);
+    await valueControl.blur();
   }
   await page.waitForTimeout(150);
   await page.evaluate(() => {
@@ -207,7 +195,6 @@ module.exports = {
   apiSaveProtocolDraft,
   attachErrorCapture,
   connectStep,
-  createParticipant,
   createStep,
   discardDraft,
   login,

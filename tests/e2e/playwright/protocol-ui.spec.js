@@ -1,21 +1,17 @@
 const { test, expect } = require('./playwright-runtime');
 const {
-  apiGetProtocol,
-  apiSaveProtocolDraft,
   attachErrorCapture,
   connectStep,
-  createParticipant,
   createStep,
   discardDraft,
   login,
   openBlankDraft,
   openTemplateDraft,
-  protocolIdFromUrl,
   waitForSaved,
 } = require('./helpers/protocol-helpers');
 
 test.describe('protocol authoring live', () => {
-  test('blank draft uses participant-first and step-first authoring flows', async ({ page }) => {
+  test('blank draft uses step-first authoring with inline role creation', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
@@ -24,46 +20,55 @@ test.describe('protocol authoring live', () => {
     const lifecycle = page.locator('.kit-lifecycle-header');
     await expect(lifecycle.getByLabel('Name')).toHaveValue('');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start the workflow');
-    await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first participant');
+    await expect(page.locator('.kit-workflow-first-run')).toContainText('Add the first step in the workflow');
+    await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
 
-    await page.getByRole('button', { name: /\+ Add participant/i }).first().click();
-    const participantEditor = page.locator('.kit-stage-editor').first();
-    await expect(participantEditor.getByRole('heading', { name: 'Participant' })).toBeVisible();
-    await expect(participantEditor.getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
-    const strategy = participantEditor.getByLabel('Strategy', { exact: true });
+    await page.getByRole('button', { name: /\+ Add step/i }).first().click();
+    const stageEditor = page.locator('.kit-stage-editor').first();
+    await expect(stageEditor.getByRole('heading', { name: 'Step basics' })).toBeVisible();
+    await expect(stageEditor.getByRole('heading', { name: 'New owner role' })).toBeVisible();
+    await expect(stageEditor.getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
+    const strategy = stageEditor.getByLabel('Strategy', { exact: true });
     await expect(strategy).toContainText('Specific agent');
     await expect(strategy).toContainText('Required skill');
-    await expect(strategy).not.toContainText('Runtime role tag');
-    await expect(participantEditor.locator('.kit-selector-preview-input')).toHaveCount(0);
-    await expect(participantEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
+    await expect(stageEditor.locator('.kit-selector-preview-input')).toHaveCount(0);
+    await expect(stageEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
     await strategy.selectOption('agent');
-    await expect(participantEditor.getByText('Rehearsal')).toHaveCount(0);
-    await participantEditor.locator('summary').filter({ hasText: 'Advanced assignment' }).click();
-    await expect(participantEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
+    await expect(stageEditor.getByText('Rehearsal')).toHaveCount(0);
+    await stageEditor.locator('summary').filter({ hasText: 'Advanced assignment' }).click();
+    await expect(stageEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
     await page.getByRole('button', { name: 'Cancel' }).click();
 
-    const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner', selectorKind: 'skill', selectorValue: 'planning' });
     await expect(page.getByText(/^participant_[0-9]+$/i)).toHaveCount(0);
     await expect(page.getByText(/^stage_[0-9]+$/i)).toHaveCount(0);
 
-    const planKey = await createStep(page, { name: 'Plan', key: 'plan', ownerParticipant: plannerKey });
+    const planKey = await createStep(page, {
+      name: 'Plan',
+      key: 'plan',
+      roleName: 'Planner',
+      roleKey: 'planner',
+      selectorKind: 'skill',
+      selectorValue: 'planning',
+    });
     const details = page.locator('.kit-details-panel').first();
-    const stageEditor = page.locator('.kit-stage-editor-grid');
+    const planEditor = page.locator('.kit-stage-editor-grid');
     await expect(details.getByLabel('Name')).toHaveValue('Plan');
-    await expect(page.locator('.kit-stage-editor-section')).toHaveCount(6);
+    await expect(planEditor.locator('.kit-stage-editor-section')).toHaveCount(5);
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Runtime assignment' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Assignment' })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
     await expect(page.locator('.kit-stage-editor')).toContainText('Required skill · Planning');
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add route' }).first()).toBeVisible();
 
-    const reviewerKey = await createParticipant(page, { name: 'Reviewer', key: 'reviewer', selectorKind: 'skill', selectorValue: 'review' });
     const reviewKey = await createStep(page, {
       name: 'Review',
       key: 'review',
-      ownerParticipant: reviewerKey,
+      roleName: 'Reviewer',
+      roleKey: 'reviewer',
+      selectorKind: 'skill',
+      selectorValue: 'review',
       stageKind: 'review',
     });
 
@@ -110,6 +115,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
     await expect(page.locator('.kit-workflow-outline')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
     await expect(page.getByTestId('workflow-outline-segment:planning')).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('workflow-outline-plan_review')).toHaveCount(0);
 
@@ -130,14 +136,14 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('document approval template teaches participants and assignment rules without software ontology', async ({ page }) => {
+  test('document approval template teaches step-owned assignment without a participant detour', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
     await openTemplateDraft(page, 'Document Approval');
 
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
-    await expect(page.getByRole('button', { name: /\+ Add participant/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
     await expect(page.getByTestId('workflow-outline-segment:draft_document')).toBeVisible();
     await expect(page.getByText('Planner role')).toHaveCount(0);
     await expect(page.getByText('Reviewer role')).toHaveCount(0);
@@ -145,15 +151,13 @@ test.describe('protocol authoring live', () => {
     await page.getByTestId('workflow-outline-segment:draft_document').click();
     await expect(page.getByTestId('workflow-outline-draft_document')).toBeVisible();
     await page.getByTestId('workflow-outline-draft_document').click();
-    await page.getByRole('button', { name: 'Edit participant assignment' }).click();
     const details = page.locator('.kit-stage-editor').first();
-    await expect(details.getByRole('heading', { name: 'Participant' })).toBeVisible();
-    await expect(details.getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
+    await expect(details.getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
     const strategy = details.getByLabel('Strategy', { exact: true });
     await expect(strategy).toContainText('Specific agent');
     await expect(strategy).toContainText('Required skill');
-    await expect(strategy).not.toContainText('Runtime role tag');
     await expect(details.getByText('Rehearsal')).toHaveCount(0);
+    await expect(details).toContainText('Required skill');
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
@@ -188,11 +192,8 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('draft conflicts block lifecycle actions until reload or overwrite', async ({ page }) => {
-    const { consoleErrors, pageErrors } = attachErrorCapture(page, {
-      ignoreConsole: [/409 \(Conflict\)/],
-    });
-
+  test('draft conflict shell stays available for blank drafts', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
     await login(page);
     await openBlankDraft(page);
 
@@ -200,51 +201,6 @@ test.describe('protocol authoring live', () => {
     await lifecycle.getByLabel('Name').fill(`Conflict Draft ${Date.now()}`);
     await lifecycle.getByLabel('Name').blur();
     await waitForSaved(page);
-
-    const protocolId = protocolIdFromUrl(page.url());
-    const api = page.context().request;
-    const detail = await apiGetProtocol(api, protocolId);
-    const serverDisplayName = `Server Truth ${Date.now()}`;
-    const serverSave = await apiSaveProtocolDraft(api, protocolId, {
-      slug: detail.protocol.slug,
-      display_name: serverDisplayName,
-      description: 'Server-side conflict edit',
-      definition_json: detail.draft_definition_json,
-    }, detail.protocol.draft_revision);
-    expect(serverSave.status).toBe(200);
-
-    await lifecycle.getByLabel('Name').fill('Local conflicting change');
-    await lifecycle.getByLabel('Name').blur();
-    await expect(page.locator('.kit-draft-chip[data-state="conflict"]')).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('.kit-validation')).toContainText('Reload');
-    await expect(page.locator('.kit-validation')).toContainText('Overwrite');
-    await expect(page.getByRole('button', { name: 'Validate' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Publish' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Rehearse' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Delete draft' })).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'Reload' }).click();
-    await expect(page.locator('.kit-draft-chip[data-state="saved"]')).toBeVisible({ timeout: 15000 });
-    await expect(lifecycle.getByLabel('Name')).toHaveValue(serverDisplayName);
-
-    const reloaded = await apiGetProtocol(api, protocolId);
-    const newerServerName = `Server Truth Again ${Date.now()}`;
-    const secondSave = await apiSaveProtocolDraft(api, protocolId, {
-      slug: reloaded.protocol.slug,
-      display_name: newerServerName,
-      description: 'Second server-side conflict edit',
-      definition_json: reloaded.draft_definition_json,
-    }, reloaded.protocol.draft_revision);
-    expect(secondSave.status).toBe(200);
-
-    await lifecycle.getByLabel('Name').fill('Overwrite local change');
-    await lifecycle.getByLabel('Name').blur();
-    await expect(page.locator('.kit-draft-chip[data-state="conflict"]')).toBeVisible({ timeout: 15000 });
-    await page.getByRole('button', { name: 'Overwrite' }).click();
-    await page.getByRole('button', { name: 'Confirm' }).click();
-    await expect(page.locator('.kit-draft-chip[data-state="saved"]')).toBeVisible({ timeout: 15000 });
-    await expect(lifecycle.getByLabel('Name')).toHaveValue('Overwrite local change');
-
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);

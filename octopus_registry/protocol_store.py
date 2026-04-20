@@ -76,6 +76,24 @@ from .store_shared.conversations import create_conversation as shared_create_con
 log = logging.getLogger(__name__)
 
 
+def _participant_assignment_projection(
+    document: ProtocolDefinitionDocumentRecord,
+    participant_key: str,
+) -> tuple[TargetSelector | None, list[str]]:
+    selectors = []
+    for stage in document.stages:
+        if str(stage.participant_key or "").strip() == str(participant_key or "").strip():
+            if stage.selector is not None:
+                selectors.append(stage.selector.model_dump(mode="json"))
+    if not selectors:
+        return None, []
+    first = selectors[0]
+    if any(item != first for item in selectors[1:]):
+        return None, []
+    selector = TargetSelector.model_validate(first)
+    return selector, normalized_requested_skills(selector=selector)
+
+
 class ProtocolPostgresAdapter:
     """Protocol-specific Postgres adapter used by the registry store."""
 
@@ -1056,7 +1074,7 @@ class ProtocolPostgresAdapter:
         lease_expires_at = str(engine.lease_expires_at or "")
         with cur(conn) as db_cur:
             if str(engine.participant_key or "").strip():
-                participant_selector_snapshot = engine.participant_selector_snapshot.as_dict()
+                selector_snapshot = engine.selector_snapshot.as_dict()
                 db_cur.execute(
                     f"""
                     UPDATE {SCHEMA}.protocol_run_participants
@@ -1080,8 +1098,8 @@ class ProtocolPostgresAdapter:
                         str(engine.participant_resolution_outcome or ""),
                         str(engine.participant_resolution_reason or ""),
                         str(engine.participant_resolution_reason or ""),
-                        jsonb(participant_selector_snapshot),
-                        jsonb(participant_selector_snapshot),
+                        jsonb(selector_snapshot),
+                        jsonb(selector_snapshot),
                         now,
                         run_row["protocol_run_id"],
                         str(engine.participant_key or ""),
@@ -2323,6 +2341,7 @@ class ProtocolPostgresAdapter:
                 if run_row is None:
                     raise RuntimeError("Failed to create protocol run")
                 for participant in document.participants:
+                    participant_selector, required_skills = _participant_assignment_projection(document, participant.participant_key)
                     db_cur.execute(
                         f"""
                         INSERT INTO {SCHEMA}.protocol_run_participants (
@@ -2338,10 +2357,10 @@ class ProtocolPostgresAdapter:
                             run_id,
                             participant.participant_key,
                             participant.display_name or participant.participant_key,
-                            jsonb(normalized_requested_skills(selector=participant.selector)),
-                            jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),
+                            jsonb(required_skills),
+                            jsonb(participant_selector.model_dump(mode="json") if participant_selector is not None else {}),
                             protocol_participant_session_key(run_id, participant.participant_key),
-                            jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),
+                            jsonb({}),
                             now,
                             now,
                         ),

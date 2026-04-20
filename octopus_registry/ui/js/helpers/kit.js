@@ -63,28 +63,28 @@ window.Kit = (() => {
         'protocol.stage.decision.revise': 'Send back',
         'protocol.stage.decision.fail': 'Reject',
 
-        // Details — participants
-        'protocol.participants.section': 'Participants',
-        'protocol.participants.firstrun': 'Add the first participant in the workflow.',
-        'protocol.participants.add': '+ Add participant',
+        // Details — roles
+        'protocol.participants.section': 'Roles',
+        'protocol.participants.firstrun': 'Add a reusable role for this workflow.',
+        'protocol.participants.add': '+ Add role',
         'protocol.participant.display_name.label': 'Name',
-        'protocol.participant.display_name.help': 'Name the reusable participant that owns one or more steps.',
+        'protocol.participant.display_name.help': 'Name the reusable role that can own one or more steps.',
         'protocol.participant.display_name.placeholder': 'e.g. Approver',
         'protocol.participant.participant_key.label': 'Key',
-        'protocol.participant.participant_key.help': 'Internal reference for this participant. It is usually generated from the name.',
+        'protocol.participant.participant_key.help': 'Internal reference for this role. It is usually generated from the name.',
         'protocol.participant.participant_key.placeholder': 'approver',
         'protocol.participant.instructions.label': 'Instructions',
-        'protocol.participant.instructions.help': 'Guidance shared across every step this participant owns.',
-        'protocol.participant.instructions.placeholder': 'Instructions shared with this participant…',
-        'protocol.participant.selector_kind.label': 'Assignment rule',
-        'protocol.participant.selector_kind.help': 'How this protocol should find someone for this participant at runtime.',
-        'protocol.participant.selector_kind.placeholder': 'Choose how to assign this participant…',
+        'protocol.participant.instructions.help': 'Guidance shared across every step this role owns.',
+        'protocol.participant.instructions.placeholder': 'Instructions shared with this role…',
+        'protocol.participant.selector_kind.label': 'Assignment',
+        'protocol.participant.selector_kind.help': 'How this step should resolve someone at runtime.',
+        'protocol.participant.selector_kind.placeholder': 'Choose how this step should resolve…',
         'protocol.participant.selector_strategy.label': 'Strategy',
         'protocol.participant.selector_value.label': 'Rule value',
         'protocol.participant.selector_value.help': 'For example: a skill slug, a runtime role tag, or an agent slug.',
         'protocol.participant.selector_value.placeholder': 'e.g. legal-review, approver, m1',
         'protocol.participant.selector_preview.label': 'Who matches right now',
-        'protocol.participant.selector_preview.help': 'Preview uses the shared registry selector resolution path. It is informational while you author the protocol.',
+        'protocol.participant.selector_preview.help': 'Preview uses the shared registry selector resolution path. Choose a matching agent to pin this step when needed.',
         'protocol.participant.selector_none': 'No rule yet',
         'protocol.participant.selector_current': 'Currently matches',
         'protocol.participant.selector_hint': 'Build a rule first, then preview who currently matches it.',
@@ -102,8 +102,8 @@ window.Kit = (() => {
         'protocol.stage.stage_key.label': 'Key',
         'protocol.stage.stage_key.placeholder': 'planning',
         'protocol.stage.stage_key.help': 'Internal reference for this step. It is usually generated from the name.',
-        'protocol.stage.participant_key.label': 'Owning participant',
-        'protocol.stage.participant_key.help': 'Which participant owns this step.',
+        'protocol.stage.participant_key.label': 'Owner role',
+        'protocol.stage.participant_key.help': 'Which reusable role owns this step.',
         'protocol.stage.stage_kind.label': 'Stage type',
         'protocol.stage.stage_kind.help': 'Work produces output; review evaluates output; acceptance signs off.',
         'protocol.stage.instructions.label': 'Instructions',
@@ -161,25 +161,25 @@ window.Kit = (() => {
         'protocol.policy.max_review_rounds.help': 'How many review loops the protocol allows before it must finish or fail.',
 
         // Details — overview
-        'protocol.details.overview.empty': 'Select a participant, step, or artifact in the workspace — or edit the name and slug above.',
+        'protocol.details.overview.empty': 'Select a role, step, or artifact in the workspace — or edit the name and slug above.',
         'protocol.details.transition.empty': 'Select a transition to edit what happens next.',
 
         // Empty / first-run / onboarding
         'protocol.canvas.empty.title': 'Start the workflow',
-        'protocol.canvas.empty.body': 'Add the first participant in the workflow, then define the first step it owns.',
+        'protocol.canvas.empty.body': 'Add the first step in the workflow and create its owner role inline if needed.',
         'protocol.catalog.empty.title': 'No protocols yet',
         'protocol.catalog.empty.body': 'Create one from a template in the Gallery, or start from a blank draft.',
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',
         'protocol.catalog.gallery': 'Browse template gallery',
-        'protocol.firstrun.participant': 'Add the first participant.',
-        'protocol.firstrun.stage': 'Add the first step for that participant.',
+        'protocol.firstrun.participant': 'Add the first role.',
+        'protocol.firstrun.stage': 'Add the first step for that role.',
         'protocol.firstrun.transition': 'Connect the step to the next step or an outcome.',
         'protocol.workflow.outcomes': 'Outcomes',
         'protocol.workflow.artifacts': 'Artifacts',
         'protocol.workflow.drag_hint': 'Select a step to edit it, or drag it to reorganize the workflow.',
-        'protocol.workflow.lane_hint': 'Participants in this workflow',
+        'protocol.workflow.lane_hint': 'Roles in this workflow',
         'protocol.workflow.outcomes_hint': 'How the workflow can finish',
 
         // Draft state chip
@@ -1148,7 +1148,7 @@ window.Kit = (() => {
 
             const body = document.createElement('p');
             body.className = 'kit-workflow-first-run-body';
-            body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Start by adding the first participant.'));
+            body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Add the first step in the workflow and create its owner role inline if needed.'));
             card.appendChild(body);
 
             const actions = document.createElement('div');
@@ -2345,8 +2345,12 @@ window.Kit = (() => {
             resultsLabel.textContent = String(resultTitle || dictValue('agents.selector.result_title', 'Candidates'));
             list.appendChild(resultsLabel);
             rows.forEach((candidate) => {
-                const row = document.createElement('div');
+                const row = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'div');
                 row.className = 'kit-selector-preview-row';
+                if (row.tagName === 'BUTTON') {
+                    row.type = 'button';
+                    row.addEventListener('click', () => onSuggestionSelect(candidate));
+                }
                 row.appendChild(_presenceChip(candidate.connectivity_state || 'connected'));
                 const label = document.createElement('span');
                 label.className = 'kit-selector-preview-row-title';

@@ -4531,6 +4531,15 @@ select {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
 }
+.kit-selector-preview-row[type="button"] {
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+}
+.kit-selector-preview-row[type="button"]:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
 .kit-selector-preview-row-title { font-weight: 600; }
 .kit-selector-preview-row-subtitle {
     font-size: 0.85rem;

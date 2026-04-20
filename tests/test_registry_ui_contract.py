@@ -160,8 +160,6 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_reloadServerDraftConflict" in workspace
     assert "_overwriteServerDraftConflict" in workspace
     assert "let editorMode = { kind: 'idle'" in workspace
-    assert "_startParticipantInsert(" in workspace
-    assert "_confirmParticipantInsert(" in workspace
     assert "_startStageInsert(" in workspace
     assert "_confirmStageInsert(" in workspace
     assert "_rewriteKeyReferences(" in workspace
@@ -188,10 +186,15 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_stageEditorHero(" in workspace
     assert "_stageRoutingPanel(" in workspace
     assert "window.addEventListener('resize', onResize);" in workspace
-    assert "Assignment rule" in workspace
+    assert "_startParticipantInsert(" not in workspace
+    assert "_confirmParticipantInsert(" not in workspace
+    assert "'Create new role…'" in workspace
+    assert "Assignment" in workspace
     assert "Runtime role tag" in workspace
     assert "Workflow canvas" in workspace
     assert "Workflow outline" in workspace
+    assert "Edit participant assignment" not in workspace
+    assert "+ Add participant" not in workspace
     assert "Visual map" not in workspace
     assert "Workflow phases" not in workspace
     assert "Planner role" not in workspace

@@ -47,8 +47,8 @@ def protocol_document() -> dict[str, object]:
             "description": "Minimal protocol for test coverage.",
         },
         "participants": [
-            {"participant_key": "worker", "display_name": "Worker", "selector": {"kind": "skill", "value": "planning"}},
-            {"participant_key": "reviewer", "display_name": "Reviewer", "selector": {"kind": "skill", "value": "review"}},
+            {"participant_key": "worker", "display_name": "Worker"},
+            {"participant_key": "reviewer", "display_name": "Reviewer"},
         ],
         "artifacts": [
             {
@@ -61,6 +61,7 @@ def protocol_document() -> dict[str, object]:
             {
                 "stage_key": "planning",
                 "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "planning"},
                 "stage_kind": "work",
                 "write_capable": True,
                 "inputs": [],
@@ -71,6 +72,7 @@ def protocol_document() -> dict[str, object]:
             {
                 "stage_key": "review",
                 "participant_key": "reviewer",
+                "selector": {"kind": "skill", "value": "review"},
                 "stage_kind": "review",
                 "inputs": ["plan"],
                 "outputs": [],

@@ -44,6 +44,7 @@ def _simple_rehearsable_document() -> dict[str, object]:
             {
                 "stage_key": "planning",
                 "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "planning"},
                 "stage_kind": "work",
                 "write_capable": False,
                 "inputs": [],
@@ -54,6 +55,7 @@ def _simple_rehearsable_document() -> dict[str, object]:
             {
                 "stage_key": "review",
                 "participant_key": "reviewer",
+                "selector": {"kind": "skill", "value": "review"},
                 "stage_kind": "review",
                 "inputs": [],
                 "outputs": [],

@@ -102,6 +102,21 @@ def _participant_selector_from_source(raw: dict[str, object]) -> dict[str, objec
     return None
 
 
+def _stage_selector_from_source(
+    raw_stage: dict[str, object],
+    *,
+    participant_selectors: dict[str, dict[str, object] | None] | None = None,
+) -> dict[str, object] | None:
+    selector = _coerce_selector(raw_stage.get("selector"))
+    if selector is not None:
+        return selector
+    participant_key = str(raw_stage.get("participant_key", "") or "").strip()
+    if not participant_key:
+        return None
+    inherited = dict((participant_selectors or {}).get(participant_key) or {})
+    return inherited or None
+
+
 def _source_selector_parts(raw: dict[str, object]) -> tuple[bool, str, str]:
     selector = _coerce_mapping(raw.get("selector"))
     if not selector:
@@ -120,7 +135,6 @@ def _normalized_participant_records(items: Sequence[object]) -> list[dict[str, o
         participants.append({
             "participant_key": str(raw.get("participant_key", "") or "").strip(),
             "display_name": str(raw.get("display_name", "") or "").strip(),
-            "selector": _participant_selector_from_source(raw),
             "instructions": str(raw.get("instructions", "") or ""),
         })
     return participants
@@ -133,7 +147,12 @@ def draft_protocol_document_data(value: object) -> dict[str, object]:
     metadata["display_name"] = str(metadata.get("display_name", "") or "").strip()
     metadata["description"] = str(metadata.get("description", "") or "").strip()
 
-    participants = _normalized_participant_records(_coerce_sequence(migrated.get("participants")))
+    participant_sources = [_coerce_mapping(item) for item in _coerce_sequence(migrated.get("participants"))]
+    participants = _normalized_participant_records(participant_sources)
+    participant_selectors = {
+        str(item.get("participant_key", "") or "").strip(): _participant_selector_from_source(item)
+        for item in participant_sources
+    }
 
     artifacts: list[dict[str, object]] = []
     for item in _coerce_sequence(migrated.get("artifacts")):
@@ -158,6 +177,7 @@ def draft_protocol_document_data(value: object) -> dict[str, object]:
             "stage_key": str(raw.get("stage_key", "") or "").strip(),
             "display_name": str(raw.get("display_name", "") or "").strip(),
             "participant_key": str(raw.get("participant_key", "") or "").strip(),
+            "selector": _stage_selector_from_source(raw, participant_selectors=participant_selectors),
             "stage_kind": str(raw.get("stage_kind", "") or "work").strip() or "work",
             "instructions": str(raw.get("instructions", "") or ""),
             "inputs": _coerce_string_list(raw.get("inputs")),
@@ -216,6 +236,7 @@ def _draft_validation_issues(
     source_participants = [_coerce_mapping(item) for item in _coerce_sequence((source_document or document).get("participants"))]
     artifacts = [_coerce_mapping(item) for item in _coerce_sequence(document.get("artifacts"))]
     stages = [_coerce_mapping(item) for item in _coerce_sequence(document.get("stages"))]
+    source_stages = [_coerce_mapping(item) for item in _coerce_sequence((source_document or document).get("stages"))]
 
     if not str(metadata.get("slug", "") or "").strip():
         issues.append(_validation_issue(
@@ -275,43 +296,21 @@ def _draft_validation_issues(
     participant_set = {item for item in participant_keys if item}
     artifact_set = {item for item in artifact_keys if item}
     stage_set = {item for item in stage_keys if item}
+    participant_selector_sources = {
+        str(item.get("participant_key", "") or "").strip(): _participant_selector_from_source(item)
+        for item in source_participants
+    }
+    participant_raw_sources = {
+        str(item.get("participant_key", "") or "").strip(): item
+        for item in source_participants
+    }
 
     for index, participant in enumerate(participants):
         participant_key = str(participant.get("participant_key", "") or "").strip()
         participant_label = participant_key or f"participant {index + 1}"
-        source_participant = source_participants[index] if index < len(source_participants) else participant
-        has_raw_selector, selector_kind, selector_value = _source_selector_parts(source_participant)
+        source_participant = participant_raw_sources.get(participant_key) or (source_participants[index] if index < len(source_participants) else participant)
         required_skills = _coerce_slug_list(source_participant.get("required_skills"))
-        effective_selector = _coerce_selector(participant.get("selector"))
-
-        if has_raw_selector and not selector_kind:
-            issues.append(_validation_issue(
-                "participant.selector_kind_required",
-                f"Add an assignment strategy for {participant_label}.",
-                section="participants",
-                entity_kind="participant",
-                entity_key=participant_key,
-                path=f"participants.{index}.selector.kind",
-            ))
-        elif selector_kind and selector_kind not in PROTOCOL_SELECTOR_KIND_OPTIONS:
-            issues.append(_validation_issue(
-                "participant.selector_kind_invalid",
-                f"{participant_label} uses unsupported assignment strategy {selector_kind!r}.",
-                section="participants",
-                entity_kind="participant",
-                entity_key=participant_key,
-                path=f"participants.{index}.selector.kind",
-            ))
-
-        if has_raw_selector and not selector_value:
-            issues.append(_validation_issue(
-                "participant.selector_value_required",
-                f"Add an assignment value for {participant_label}.",
-                section="participants",
-                entity_kind="participant",
-                entity_key=participant_key,
-                path=f"participants.{index}.selector.value",
-            ))
+        has_raw_selector, _, _ = _source_selector_parts(source_participant)
 
         if not has_raw_selector and len(required_skills) > 1:
             issues.append(_validation_issue(
@@ -322,16 +321,6 @@ def _draft_validation_issues(
                 entity_key=participant_key,
                 path=f"participants.{index}.required_skills",
                 blocking=False,
-            ))
-
-        if effective_selector is None and not has_raw_selector:
-            issues.append(_validation_issue(
-                "participant.selector_required",
-                f"Add an assignment rule for {participant_label} before review or publish.",
-                section="participants",
-                entity_kind="participant",
-                entity_key=participant_key,
-                path=f"participants.{index}.selector",
             ))
 
     for index, artifact in enumerate(artifacts):
@@ -350,6 +339,9 @@ def _draft_validation_issues(
         stage_key = str(stage.get("stage_key", "") or "").strip()
         participant_key = str(stage.get("participant_key", "") or "").strip()
         stage_label = stage_key or f"stage {index + 1}"
+        source_stage = source_stages[index] if index < len(source_stages) else stage
+        has_raw_selector, selector_kind, selector_value = _source_selector_parts(source_stage)
+        effective_selector = _stage_selector_from_source(source_stage, participant_selectors=participant_selector_sources)
         if not participant_key:
             issues.append(_validation_issue(
                 "stage.participant_required",
@@ -367,6 +359,42 @@ def _draft_validation_issues(
                 entity_kind="stage",
                 entity_key=stage_key,
                 path=f"stages.{index}.participant_key",
+            ))
+        if has_raw_selector and not selector_kind:
+            issues.append(_validation_issue(
+                "stage.selector_kind_required",
+                f"Add an assignment strategy for {stage_label}.",
+                section="stages",
+                entity_kind="stage",
+                entity_key=stage_key,
+                path=f"stages.{index}.selector.kind",
+            ))
+        elif selector_kind and selector_kind not in PROTOCOL_SELECTOR_KIND_OPTIONS:
+            issues.append(_validation_issue(
+                "stage.selector_kind_invalid",
+                f"{stage_label} uses unsupported assignment strategy {selector_kind!r}.",
+                section="stages",
+                entity_kind="stage",
+                entity_key=stage_key,
+                path=f"stages.{index}.selector.kind",
+            ))
+        if has_raw_selector and not selector_value:
+            issues.append(_validation_issue(
+                "stage.selector_value_required",
+                f"Add an assignment value for {stage_label}.",
+                section="stages",
+                entity_kind="stage",
+                entity_key=stage_key,
+                path=f"stages.{index}.selector.value",
+            ))
+        if effective_selector is None and not has_raw_selector:
+            issues.append(_validation_issue(
+                "stage.selector_required",
+                f"Add an assignment rule for {stage_label} before review or publish.",
+                section="stages",
+                entity_kind="stage",
+                entity_key=stage_key,
+                path=f"stages.{index}.selector",
             ))
         for artifact_key in [*(_coerce_sequence(stage.get("inputs"))), *(_coerce_sequence(stage.get("outputs")))]:
             normalized_key = str(artifact_key or "").strip()
@@ -434,8 +462,8 @@ def _next_required_actions(issues: Sequence[ProtocolValidationIssueRecord]) -> l
             actions.append("participants.add_first")
         elif issue.code == "stages.required" and "stages.add_first" not in actions:
             actions.append("stages.add_first")
-        elif issue.code.startswith("participant.selector_") and "participants.assign_selector" not in actions:
-            actions.append("participants.assign_selector")
+        elif issue.code.startswith("stage.selector_") and "stages.assign_selector" not in actions:
+            actions.append("stages.assign_selector")
         elif issue.code in {"stage.participant_required", "stage.participant_missing"} and "stages.assign_participant" not in actions:
             actions.append("stages.assign_participant")
     return actions

@@ -171,6 +171,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_isAuthoringAssignableAgent(" in workspace
     assert "_authoringAssignableAgents(" in workspace
     assert "_selectorCatalogEntries(" in workspace
+    assert "_documentSelectorValues(" in workspace
+    assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
     assert "_selectorEditor(" in workspace
     assert "showForm: false" in workspace
     assert "showSuggestions: false" in workspace

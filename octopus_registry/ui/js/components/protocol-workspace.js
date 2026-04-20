@@ -1444,6 +1444,35 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    function _commitPendingStageSelector(selectorKind, selectorValue) {
+        pendingStage.selector_kind = String(selectorKind || '');
+        pendingStage.selector_value = String(selectorValue || '');
+        render();
+        _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
+    }
+
+    function _commitStageSelector(nodeKey, selectorKind, selectorValue) {
+        const doc = _cloneDoc(draft.document);
+        const items = [...(doc.stages || [])];
+        const idx = items.findIndex((item) => String(item.stage_key || '') === String(nodeKey || ''));
+        if (idx < 0) return;
+        const next = Object.assign({}, items[idx], {
+            selector: _selectorFromFields(selectorKind, selectorValue),
+        });
+        items[idx] = next;
+        doc.stages = items;
+        const nextNodeKey = String(nodeKey || '');
+        if (String(selectorPreview.ownerKey || '') === nextNodeKey) {
+            selectorPreview.ownerKey = nextNodeKey;
+            selectorPreview.query = _selectorString(next.selector || null);
+            selectorPreview.message = '';
+        }
+        _commitDocument(doc, {
+            nextSelection: { sectionKey: 'stages', nodeKey: nextNodeKey },
+        });
+        _syncSelectorPreview(nextNodeKey, String(next.selector?.kind || ''), String(next.selector?.value || ''));
+    }
+
     function _startStageInsert({ sourceStageKey = '', decision = '' } = {}) {
         pendingStage = _blankStageDraft(_defaultStageParticipantKey());
         _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
@@ -1787,7 +1816,18 @@ function renderProtocolWorkspace(container) {
         const catalog = _selectorCatalogEntries(normalized);
         const current = String(currentValue || '').trim();
         if (catalog.some((item) => item.value === current)) return current;
+        if (catalog.length) return String(catalog[0].value || '');
         return current;
+    }
+
+    function _documentSelectorValues(kind) {
+        const normalized = String(kind || '').trim().toLowerCase();
+        if (!normalized) return [];
+        return Array.from(new Set((draft.document?.stages || [])
+            .map((stage) => stage?.selector)
+            .filter((selector) => String(selector?.kind || '').trim().toLowerCase() === normalized)
+            .map((selector) => String(selector?.value || '').trim())
+            .filter(Boolean)));
     }
 
     function _selectorCatalogEntries(kind) {
@@ -1816,6 +1856,9 @@ function renderProtocolWorkspace(container) {
                 ].filter(Boolean).join(' · ');
                 push(slug, String(agent?.display_name || _titleCaseWords(slug) || slug), meta);
             });
+            _documentSelectorValues('agent').forEach((value) => {
+                push(value, value, 'Used in workflow');
+            });
         } else if (normalized === 'skill') {
             (availableRoutingSkills || []).forEach((item) => {
                 const skillName = String(item?.skill_name || item || '').trim();
@@ -1827,9 +1870,15 @@ function renderProtocolWorkspace(container) {
                     advertisedBy > 0 ? `${advertisedBy} agent${advertisedBy === 1 ? '' : 's'}` : '',
                 );
             });
+            _documentSelectorValues('skill').forEach((value) => {
+                push(value, _titleCaseWords(value), 'Used in workflow');
+            });
         } else if (normalized === 'role') {
             _availableAuthoringAgents().forEach((agent) => {
                 push(agent?.role, _titleCaseWords(agent?.role || ''));
+            });
+            _documentSelectorValues('role').forEach((value) => {
+                push(value, _titleCaseWords(value), 'Used in workflow');
             });
         }
         return entries.sort((left, right) => String(left.label || '').localeCompare(String(right.label || '')));
@@ -1978,11 +2027,20 @@ function renderProtocolWorkspace(container) {
         previewKey = '',
         readOnly = false,
         onChange = null,
+        onSelectorChange = null,
     } = {}) {
         const wrap = document.createElement('section');
         wrap.className = 'kit-selector-editor';
         const emit = (key, value) => {
             if (typeof onChange === 'function') onChange(null, key, value);
+        };
+        const emitSelector = (kind, value) => {
+            if (typeof onSelectorChange === 'function') {
+                onSelectorChange(String(kind || ''), String(value || ''));
+                return;
+            }
+            emit('selector_kind', kind);
+            emit('selector_value', value);
         };
 
         const heading = document.createElement('div');
@@ -2020,11 +2078,10 @@ function renderProtocolWorkspace(container) {
         });
         strategyControl.disabled = Boolean(readOnly);
         strategyControl.setAttribute('aria-label', strategyLabel.textContent);
-        if (typeof onChange === 'function' && !readOnly) {
+        if ((typeof onChange === 'function' || typeof onSelectorChange === 'function') && !readOnly) {
             strategyControl.addEventListener('change', () => {
                 const nextKind = String(strategyControl.value || '');
-                emit('selector_kind', nextKind);
-                emit('selector_value', _nextSelectorValueForKind(nextKind, nextKind === normalizedKind ? selectorValue : ''));
+                emitSelector(nextKind, _nextSelectorValueForKind(nextKind, nextKind === normalizedKind ? selectorValue : ''));
             });
         }
         strategyRow.appendChild(strategyControl);
@@ -2090,13 +2147,12 @@ function renderProtocolWorkspace(container) {
             });
             advancedKindControl.disabled = Boolean(readOnly);
             advancedKindControl.setAttribute('aria-label', advancedKindLabel.textContent);
-            if (typeof onChange === 'function' && !readOnly) {
+            if ((typeof onChange === 'function' || typeof onSelectorChange === 'function') && !readOnly) {
                 advancedKindControl.addEventListener('change', () => {
                     const nextKind = String(advancedKindControl.value || '').trim();
                     const fallbackKind = primaryKind || _selectorPrimaryKinds()[0] || '';
                     const targetKind = nextKind || fallbackKind;
-                    emit('selector_kind', targetKind);
-                    emit('selector_value', _nextSelectorValueForKind(targetKind, targetKind === normalizedKind ? selectorValue : ''));
+                    emitSelector(targetKind, _nextSelectorValueForKind(targetKind, targetKind === normalizedKind ? selectorValue : ''));
                 });
             }
             advancedKindRow.appendChild(advancedKindControl);
@@ -3114,6 +3170,11 @@ function renderProtocolWorkspace(container) {
             previewKey: String(target?.stage_key || '__draft__'),
             readOnly,
             onChange: onCommit,
+            onSelectorChange: createAction
+                ? _commitPendingStageSelector
+                : (typeof onCommit === 'function' && target?.stage_key
+                    ? (kind, value) => _commitStageSelector(String(target.stage_key || ''), kind, value)
+                    : null),
         }), { wide: true }));
 
         if (!createAction) {

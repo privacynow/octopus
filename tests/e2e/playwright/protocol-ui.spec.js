@@ -140,6 +140,11 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: '100%', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
+    const assignment = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
+    await assignment.getByLabel('Strategy', { exact: true }).selectOption('skill');
+    await expect.poll(async () => assignment.getByLabel('Choose skill', { exact: true }).locator('option').evaluateAll((options) =>
+      options.map((option) => String(option.value || '')).filter(Boolean),
+    )).toContain('product-definition');
     const toolbarInsert = page.locator('.kit-workflow-toolbar-actions').getByRole('button', { name: 'Insert after Planning', exact: true });
     await expect(toolbarInsert).toBeVisible();
     await toolbarInsert.click();

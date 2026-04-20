@@ -2706,11 +2706,7 @@ function renderProtocolWorkspace(container) {
             nodeSpacing: compact ? 20 : 30,
             layerSpacing: compact ? 36 : 68,
             graph: { nodes, edges: edges.filter((edge) => edge.from && edge.to) },
-            focusIds: selection.sectionKey === 'stages' && selection.nodeKey
-                ? [String(selection.nodeKey || '')]
-                : selection.sectionKey === 'transitions' && selection.nodeKey
-                    ? [String(String(selection.nodeKey || '').split('::')[0] || '')]
-                    : (activeSegment?.stageKeys || []).map((item) => String(item || '')),
+            focusIds: nodes.map((node) => String(node.id || '')),
         };
     }
 

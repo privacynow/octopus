@@ -4115,6 +4115,21 @@ select {
     }
 }
 
+@media (max-width: 640px) {
+    .kit-lifecycle-header.is-compact .kit-lifecycle-header-top {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .kit-lifecycle-title-input {
+        font-size: 1.08rem;
+    }
+
+    .kit-lifecycle-primary {
+        width: 100%;
+    }
+}
+
 @media (min-width: 980px) {
     .kit-authoring-workspace {
         grid-template-columns: minmax(0, 1.75fr) minmax(300px, 0.9fr);

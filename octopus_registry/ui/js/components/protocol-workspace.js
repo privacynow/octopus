@@ -2094,11 +2094,16 @@ function renderProtocolWorkspace(container) {
         if (!normalized) return [];
         const seen = new Set();
         const rows = [];
-        const push = (agent) => {
-            const slug = String(agent?.slug || '').trim().toLowerCase();
-            if (!slug || seen.has(slug)) return;
-            seen.add(slug);
-            rows.push(agent);
+        const push = ({ slug = '', displayName = '', role = '', connectivityState = '' } = {}) => {
+            const normalizedSlug = String(slug || '').trim().toLowerCase();
+            if (!normalizedSlug || seen.has(normalizedSlug)) return;
+            seen.add(normalizedSlug);
+            rows.push({
+                slug: normalizedSlug,
+                display_name: String(displayName || '').trim() || _titleCaseWords(normalizedSlug) || normalizedSlug,
+                role: String(role || '').trim(),
+                connectivity_state: String(connectivityState || '').trim(),
+            });
         };
         const availableBySlug = new Map(_availableAuthoringAgents().map((agent) => [
             String(agent?.slug || '').trim().toLowerCase(),
@@ -2108,12 +2113,24 @@ function renderProtocolWorkspace(container) {
             String(item?.skill_name || item || '').trim().toLowerCase() === normalized,
         );
         (Array.isArray(advertised?.advertised_by_agents) ? advertised.advertised_by_agents : []).forEach((slug) => {
-            push(availableBySlug.get(String(slug || '').trim().toLowerCase()));
+            const normalizedSlug = String(slug || '').trim().toLowerCase();
+            const agent = availableBySlug.get(normalizedSlug);
+            push({
+                slug: normalizedSlug,
+                displayName: String(agent?.display_name || '').trim() || _titleCaseWords(normalizedSlug) || normalizedSlug,
+                role: String(agent?.role || '').trim(),
+                connectivityState: String(agent?.connectivity_state || '').trim(),
+            });
         });
         _availableAuthoringAgents().forEach((agent) => {
             const skills = _selectorAgentSkills(agent).map((item) => item.toLowerCase());
             if (skills.includes(normalized)) {
-                push(agent);
+                push({
+                    slug: String(agent?.slug || '').trim(),
+                    displayName: String(agent?.display_name || '').trim(),
+                    role: String(agent?.role || '').trim(),
+                    connectivityState: String(agent?.connectivity_state || '').trim(),
+                });
             }
         });
         return rows.sort((left, right) =>
@@ -2159,7 +2176,7 @@ function renderProtocolWorkspace(container) {
                 }
                 const label = document.createElement('span');
                 label.className = 'kit-selector-preview-row-title';
-                label.textContent = String(candidate?.display_name || candidate?.slug || candidate?.agent_id || '');
+                label.textContent = String(candidate?.display_name || candidate?.slug || '');
                 row.appendChild(label);
                 const sub = document.createElement('span');
                 sub.className = 'kit-selector-preview-row-subtitle';
@@ -2181,7 +2198,6 @@ function renderProtocolWorkspace(container) {
 
     function _selectorAgentSkillsSection(selectorValue = '') {
         const agent = _selectorAgentRecord(selectorValue);
-        if (!agent) return null;
         const section = document.createElement('section');
         section.className = 'kit-selector-editor-context';
         const title = document.createElement('strong');
@@ -2190,11 +2206,14 @@ function renderProtocolWorkspace(container) {
         section.appendChild(title);
         const note = document.createElement('p');
         note.className = 'kit-selector-editor-note';
-        note.textContent = 'This step is pinned to one agent. These are the routing skills that agent currently advertises.';
+        const agentLabel = String(agent?.display_name || agent?.slug || selectorValue || '').trim();
+        note.textContent = agentLabel
+            ? `This step is pinned to ${agentLabel}. These are the routing skills this agent currently advertises.`
+            : 'This step is pinned to one agent. These are the routing skills this agent currently advertises.';
         section.appendChild(note);
         const skills = _selectorAgentSkills(agent);
         if (!skills.length) {
-            section.appendChild(UI.renderEmptyState('This agent is connected, but it is not advertising any routing skills right now.', true));
+            section.appendChild(UI.renderEmptyState('No advertised routing skills are currently available for this agent.', true));
             return section;
         }
         const chips = document.createElement('div');

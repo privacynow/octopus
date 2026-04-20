@@ -3704,6 +3704,14 @@ function renderProtocolWorkspace(container) {
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
         UI.reconcileChildren(contentEl, [headerEl, workspace]);
+        const activeDetailsColumn = contentEl.querySelector('.kit-authoring-details-column');
+        if (
+            detailsColumn.childElementCount
+            && activeDetailsColumn instanceof Element
+            && activeDetailsColumn !== detailsColumn
+        ) {
+            activeDetailsColumn.replaceWith(detailsColumn);
+        }
         const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
         if (activeCanvasRoot && typeof activeCanvasRoot.__workflowCanvasSync === 'function') {
             activeCanvasRoot.__workflowCanvasSync({

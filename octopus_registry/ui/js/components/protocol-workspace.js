@@ -355,6 +355,26 @@ function renderProtocolWorkspace(container) {
         return _transitionEntries(doc).find((item) => String(item.id || '') === String(selection.nodeKey || '')) || null;
     }
 
+    function _defaultStageInsertAnchor(stage) {
+        const transitions = Object.entries(stage?.transitions || {})
+            .map(([decision, target]) => ({
+                decision: String(decision || '').trim().toLowerCase(),
+                target: String(target || '').trim(),
+            }))
+            .filter((item) => item.decision && item.target);
+        const nonTerminal = transitions.filter((item) => !PROTOCOL_TERMINAL_TARGETS.some((terminal) => terminal.key === item.target));
+        const anchor = nonTerminal.length === 1
+            ? nonTerminal[0]
+            : transitions.length === 1
+                ? transitions[0]
+                : null;
+        if (!anchor) return null;
+        return {
+            sourceStageKey: String(stage?.stage_key || ''),
+            decision: String(anchor.decision || ''),
+        };
+    }
+
     function _defaultStageParticipantKey(doc = draft.document) {
         if (selection.sectionKey === 'participants' && selection.nodeKey) {
             return String(selection.nodeKey || '');
@@ -2455,6 +2475,13 @@ function renderProtocolWorkspace(container) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
         const selectedStage = _selectionStage(draft.document);
         const selectedTransition = _selectionTransition(draft.document);
+        const selectedStageAnchor = selectedStage ? _defaultStageInsertAnchor(selectedStage) : null;
+        const insertAnchor = selectedTransition
+            ? {
+                sourceStageKey: selectedTransition.from_stage_key,
+                decision: selectedTransition.decision,
+            }
+            : selectedStageAnchor;
         return [
             ...(selection.sectionKey !== 'overview' ? [{
                 label: 'Show full workflow',
@@ -2471,14 +2498,9 @@ function renderProtocolWorkspace(container) {
                 disabled: !canMutate,
             },
             {
-                label: selectedTransition ? 'Insert step here' : Kit.dict.label('protocol.stages.add'),
+                label: insertAnchor ? 'Insert step here' : Kit.dict.label('protocol.stages.add'),
                 tone: 'btn-small',
-                onClick: () => _startStageInsert(selectedTransition
-                    ? {
-                        sourceStageKey: selectedTransition.from_stage_key,
-                        decision: selectedTransition.decision,
-                    }
-                    : {}),
+                onClick: () => _startStageInsert(insertAnchor || {}),
                 disabled: !canMutate || !progress.participantCount,
             },
             ...(selectedStage && canMutate && editorMode.kind === 'idle' ? [{

@@ -3144,7 +3144,7 @@ function renderProtocolWorkspace(container) {
             surfaceKey: 'protocol.stage',
             onCommit,
             schema: applyReadOnly([
-                { key: 'display_name', kind: 'text', required: true },
+                { key: 'display_name', kind: 'text', required: true, commitOnInput: Boolean(createAction) },
                 { key: 'participant_key', kind: 'select', options: participantOptions },
                 { key: 'stage_kind', kind: 'select', options: kindOptions },
             ]),
@@ -3157,9 +3157,9 @@ function renderProtocolWorkspace(container) {
                 surfaceKey: 'protocol.participant',
                 onCommit,
                 schema: applyReadOnly([
-                    { key: 'role_display_name', kind: 'text', required: true, label: 'Role name', help: 'Name the reusable role this step belongs to.' },
-                    { key: 'role_participant_key', kind: 'text', label: 'Role key', help: 'Internal reference for this role. It is generated from the role name.' },
-                    { key: 'role_instructions', kind: 'textarea', rows: 3, label: 'Shared instructions', help: 'Optional guidance shared by every step that uses this role.' },
+                    { key: 'role_display_name', kind: 'text', required: true, label: 'Role name', help: 'Name the reusable role this step belongs to.', commitOnInput: true },
+                    { key: 'role_participant_key', kind: 'text', label: 'Role key', help: 'Internal reference for this role. It is generated from the role name.', commitOnInput: true },
+                    { key: 'role_instructions', kind: 'textarea', rows: 3, label: 'Shared instructions', help: 'Optional guidance shared by every step that uses this role.', commitOnInput: true },
                 ]),
             });
             grid.appendChild(_stageEditorSection('New owner role', rolePanel, { wide: true }));

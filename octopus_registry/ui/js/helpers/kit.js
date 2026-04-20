@@ -720,6 +720,9 @@ window.Kit = (() => {
                     const value = kind === 'checkbox' ? control.checked : control.value;
                     onCommit(target, field.key, value);
                 };
+                if (field.commitOnInput && (kind === 'text' || kind === 'textarea')) {
+                    control.addEventListener('input', commit);
+                }
                 control.addEventListener('change', commit);
                 if (kind === 'text' || kind === 'textarea') {
                     control.addEventListener('blur', commit);

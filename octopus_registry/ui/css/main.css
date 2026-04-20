@@ -3815,7 +3815,7 @@ select {
 .kit-workflow-shell-scene {
     display: grid;
     gap: var(--space-3);
-    grid-template-columns: minmax(208px, 252px) minmax(0, 1fr);
+    grid-template-columns: minmax(176px, 216px) minmax(0, 1fr);
     align-items: start;
 }
 
@@ -3947,7 +3947,7 @@ select {
 }
 
 .kit-workflow-viewport-cy {
-    min-height: 30rem;
+    min-height: 34rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background:
@@ -3961,7 +3961,7 @@ select {
 .kit-workflow-cy-host {
     width: 100%;
     min-width: 100%;
-    min-height: 30rem;
+    min-height: 34rem;
     height: 100%;
 }
 
@@ -4063,11 +4063,11 @@ select {
 
     .kit-workflow-cy-host {
         min-width: 100%;
-        min-height: 16rem;
+        min-height: 12.5rem;
     }
 
     .kit-workflow-viewport-cy {
-        min-height: 16rem;
+        min-height: 12.5rem;
     }
 
     .kit-stage-editor-hero {

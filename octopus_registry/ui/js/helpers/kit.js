@@ -1519,11 +1519,11 @@ window.Kit = (() => {
                         style: {
                             'background-color': '#fffaf5',
                             'border-color': '#d9b28d',
-                            'min-width': 196,
-                            'min-height': 76,
+                            'min-width': 144,
+                            'min-height': 48,
                             'font-size': 12,
-                            'text-max-width': 184,
-                            'padding': 16,
+                            'text-max-width': 132,
+                            'padding': 10,
                         },
                     },
                     {
@@ -1553,10 +1553,10 @@ window.Kit = (() => {
                         style: {
                             'background-color': '#f3f7fb',
                             'border-color': '#c5d4e4',
-                            'min-width': 148,
-                            'min-height': 58,
+                            'min-width': 132,
+                            'min-height': 44,
                             'font-size': 10,
-                            'text-max-width': 138,
+                            'text-max-width': 120,
                         },
                     },
                     {

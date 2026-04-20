@@ -2167,29 +2167,24 @@ function renderProtocolWorkspace(container) {
         if (!matches.length) {
             results.appendChild(UI.renderEmptyState('No connected agents currently advertise this skill.', true));
         } else {
+            const availability = document.createElement('p');
+            availability.className = 'kit-selector-editor-note';
+            availability.textContent = `Available now: ${matches.map((candidate) =>
+                String(candidate?.display_name || candidate?.slug || '')).filter(Boolean).join(', ')}`;
+            results.appendChild(availability);
+            const chips = document.createElement('div');
+            chips.className = 'chip-row';
             matches.forEach((candidate) => {
-                const row = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'div');
-                row.className = 'kit-selector-preview-row';
-                if (row instanceof HTMLButtonElement) {
-                    row.type = 'button';
-                    row.addEventListener('click', () => onSuggestionSelect(candidate));
+                const chip = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'span');
+                chip.className = typeof onSuggestionSelect === 'function' ? 'quickstart-chip' : 'quickstart-chip static';
+                chip.textContent = String(candidate?.display_name || candidate?.slug || '');
+                if (chip instanceof HTMLButtonElement) {
+                    chip.type = 'button';
+                    chip.addEventListener('click', () => onSuggestionSelect(candidate));
                 }
-                const label = document.createElement('span');
-                label.className = 'kit-selector-preview-row-title';
-                label.textContent = String(candidate?.display_name || candidate?.slug || '');
-                row.appendChild(label);
-                const sub = document.createElement('span');
-                sub.className = 'kit-selector-preview-row-subtitle';
-                sub.textContent = [
-                    String(candidate?.role || '').trim(),
-                    candidate?.slug ? `@${String(candidate.slug || '').trim()}` : '',
-                    String(candidate?.connectivity_state || '').trim().toLowerCase() === 'connected'
-                        ? ''
-                        : String(candidate?.connectivity_state || '').trim(),
-                ].filter(Boolean).join(' · ');
-                row.appendChild(sub);
-                results.appendChild(row);
+                chips.appendChild(chip);
             });
+            results.appendChild(chips);
         }
         body.appendChild(results);
         section.appendChild(body);

@@ -51,18 +51,24 @@ test.describe('protocol authoring live', () => {
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
     const draftAssignmentSection = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
     await draftAssignmentSection.getByLabel('Strategy', { exact: true }).selectOption('skill');
-    const availableSkillValues = await draftAssignmentSection.getByLabel('Choose skill', { exact: true }).locator('option').evaluateAll((options) =>
+    const availableSkillControl = draftAssignmentSection.getByLabel('Choose skill', { exact: true });
+    await expect(availableSkillControl).toBeVisible();
+    const availableSkillValues = await availableSkillControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
-    expect(availableSkillValues.length).toBeGreaterThan(0);
+    if (!availableSkillValues.length) {
+      await expect(draftAssignmentSection).toContainText('No available routing skills were loaded from the registry.');
+    }
     await page.getByRole('button', { name: 'Cancel' }).click();
+
+    const defaultAssignmentKind = availableSkillValues.length ? 'skill' : 'agent';
 
     const planKey = await createStep(page, {
       name: 'Plan',
       key: 'plan',
       roleName: 'Planner',
       roleKey: 'planner',
-      selectorKind: 'skill',
+      selectorKind: defaultAssignmentKind,
       selectorValue: '__first__',
     });
     const details = page.locator('.kit-details-panel').first();
@@ -71,7 +77,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
-    await expect(page.locator('.kit-stage-editor')).toContainText('Required skill ·');
+    await expect(page.locator('.kit-stage-editor')).toContainText(defaultAssignmentKind === 'skill' ? 'Required skill ·' : 'Specific agent ·');
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add branch or finish' }).first()).toBeVisible();
@@ -81,7 +87,7 @@ test.describe('protocol authoring live', () => {
       key: 'review',
       roleName: 'Reviewer',
       roleKey: 'reviewer',
-      selectorKind: 'skill',
+      selectorKind: defaultAssignmentKind,
       selectorValue: '__first__',
       stageKind: 'review',
     });

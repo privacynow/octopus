@@ -176,6 +176,7 @@ function renderProtocolWorkspace(container) {
     let renderInFlight = false;
     let renderQueued = false;
     let editorMode = { kind: 'idle', sourceStageKey: '', decision: '' };
+    let editorSessionNonce = 0;
     let pendingStage = {
         display_name: '',
         stage_key: '',
@@ -1515,6 +1516,7 @@ function renderProtocolWorkspace(container) {
             kind: 'insert-stage',
             sourceStageKey: String(sourceStageKey || ''),
             decision: String(decision || '').trim().toLowerCase(),
+            sessionKey: String(++editorSessionNonce),
         };
         render();
     }
@@ -1640,7 +1642,12 @@ function renderProtocolWorkspace(container) {
         if (!stage) return;
         pendingRoute = _blankRouteDraft(stage.stage_key, stage.stage_kind);
         selection = { sectionKey: 'stages', nodeKey: String(stage.stage_key || '') };
-        editorMode = { kind: 'create-route', sourceStageKey: String(stage.stage_key || ''), decision: String(pendingRoute.decision || '') };
+        editorMode = {
+            kind: 'create-route',
+            sourceStageKey: String(stage.stage_key || ''),
+            decision: String(pendingRoute.decision || ''),
+            sessionKey: String(++editorSessionNonce),
+        };
         render();
     }
 
@@ -2087,7 +2094,7 @@ function renderProtocolWorkspace(container) {
         valueLabel.textContent = label || `Choose ${_selectorValueLabel(normalized)}`;
         row.appendChild(valueLabel);
         const catalog = _selectorCatalogEntries(normalized);
-        if (catalog.length) {
+        if (catalog.length || normalized === 'agent' || normalized === 'skill') {
             const select = document.createElement('select');
             select.className = 'kit-details-control';
             const placeholder = document.createElement('option');
@@ -2114,6 +2121,12 @@ function renderProtocolWorkspace(container) {
             }
             select.setAttribute('aria-label', valueLabel.textContent);
             row.appendChild(select);
+            if (!catalog.length) {
+                const hint = document.createElement('p');
+                hint.className = 'kit-selector-editor-note';
+                hint.textContent = _selectorCatalogEmptyHint(normalized);
+                block.appendChild(hint);
+            }
         } else {
             const input = document.createElement('input');
             input.type = 'text';
@@ -3561,10 +3574,10 @@ function renderProtocolWorkspace(container) {
 
     function _detailsKey() {
         if (editorMode.kind === 'insert-stage') {
-            return `protocol-details:new-stage:${String(editorMode.sourceStageKey || '')}:${String(editorMode.decision || '')}`;
+            return `protocol-details:new-stage:${String(editorMode.sourceStageKey || '')}:${String(editorMode.decision || '')}:${String(editorMode.sessionKey || '')}`;
         }
         if (editorMode.kind === 'create-route') {
-            return `protocol-details:new-route:${String(pendingRoute.source_stage_key || '')}:${String(pendingRoute.decision || '')}`;
+            return `protocol-details:new-route:${String(pendingRoute.source_stage_key || '')}:${String(pendingRoute.decision || '')}:${String(editorMode.sessionKey || '')}`;
         }
         return `protocol-details:${String(selection.sectionKey || 'overview')}:${String(selection.nodeKey || '')}`;
     }

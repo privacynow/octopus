@@ -110,9 +110,7 @@ async function createStep(page, {
   if (openEditor) {
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
   }
-  const detailsPanel = page.locator('.kit-details-panel').filter({ has: page.locator('.kit-stage-editor-grid') }).first();
-  await expect(detailsPanel).toBeVisible();
-  const stageEditor = detailsPanel.locator('.kit-stage-editor-grid').first();
+  const stageEditor = page.locator('.kit-stage-editor-grid').first();
   await expect(stageEditor).toBeVisible();
   const stepBasicsSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: stageEditor.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
   await stepBasicsSection.getByLabel('Name').fill(name);

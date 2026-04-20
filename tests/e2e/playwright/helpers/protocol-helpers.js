@@ -84,8 +84,8 @@ async function waitForSaved(page) {
 async function openBlankDraft(page) {
   await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'New protocol' }).click();
-  await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
-  await expect(page.locator('.kit-protocol-detail, .kit-workflow-canvas')).toBeVisible();
+  await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
+  await expect(page.locator('.kit-workflow-canvas')).toBeVisible();
 }
 
 async function openTemplateDraft(page, templateName) {
@@ -128,7 +128,7 @@ async function createParticipant(page, { name, key = '', selectorKind = 'skill',
   expect(save.status).toBe(200);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('.kit-lifecycle-header')).toBeVisible();
-  await expect(page.locator('.kit-protocol-detail, .kit-workflow-canvas')).toBeVisible();
+  await expect(page.locator('.kit-workflow-canvas')).toBeVisible();
   return participantKey;
 }
 
@@ -159,33 +159,38 @@ async function createStep(page, { name, key = '', ownerParticipant = '', stageKi
     button.click();
   });
   const stageKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const node = page.getByTestId(`workflow-step-${stageKey}`);
+  const node = page.getByTestId(`workflow-outline-${stageKey}`);
   await expect(node).toBeVisible();
   return stageKey;
 }
 
 async function connectStep(page, sourceStageKey, targetNodeId) {
-  const sourceStep = page.getByTestId(`workflow-step-${sourceStageKey}`);
-  if (!await sourceStep.isVisible().catch(() => false)) {
-    const segmentTab = page.getByTestId(`workflow-segment-tab-${sourceStageKey}`);
-    if (await segmentTab.isVisible().catch(() => false)) {
-      await segmentTab.click();
-    } else if (await page.getByRole('button', { name: 'Back to overview' }).count()) {
-      await page.getByRole('button', { name: 'Back to overview' }).click();
-      const segmentNode = page.getByTestId(`workflow-node-segment:${sourceStageKey}`);
-      if (await segmentNode.isVisible().catch(() => false)) {
-        await segmentNode.click();
-      }
+  let stageNode = page.getByTestId(`workflow-outline-${sourceStageKey}`);
+  if (!(await stageNode.count())) {
+    const segmentNode = page.getByTestId(`workflow-outline-segment:${sourceStageKey}`);
+    if (await segmentNode.count()) {
+      await segmentNode.click();
+      stageNode = page.getByTestId(`workflow-outline-${sourceStageKey}`);
     }
   }
-  await page.getByTestId(`workflow-step-${sourceStageKey}`).click();
-  const addRoute = page.getByRole('button', { name: 'Add route' }).first();
-  await expect(addRoute).toBeVisible();
-  await addRoute.click();
-  const routePanel = page.locator('.kit-details-panel').first();
+  if (!(await stageNode.count())) {
+    throw new Error(`workflow outline step missing for ${sourceStageKey}`);
+  }
+  await stageNode.click();
+  await expect(page).toHaveURL(new RegExp(`stage_key=${sourceStageKey}`));
+  const routingAdd = page.locator('.kit-stage-routing').getByRole('button', { name: 'Add route' }).first();
+  const toolbarAdd = page.locator('.kit-workflow-toolbar').getByRole('button', { name: 'Add route' }).first();
+  if (await routingAdd.count()) {
+    await routingAdd.click();
+  } else {
+    await toolbarAdd.click();
+  }
+  const createRoute = page.getByRole('button', { name: 'Create route' });
+  await expect(createRoute).toBeVisible();
+  const routePanel = page.locator('.kit-details-panel').filter({ has: createRoute }).first();
   await expect(routePanel).toBeVisible();
-  await routePanel.locator('select').last().selectOption(targetNodeId);
-  await page.getByRole('button', { name: 'Create route' }).click();
+  await routePanel.getByLabel('Next step').selectOption(targetNodeId);
+  await createRoute.click();
 }
 
 async function discardDraft(page) {

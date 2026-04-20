@@ -357,6 +357,7 @@ window.Kit = (() => {
         record = {},
         saveState = { state: 'idle', lastSavedAt: '', error: '' },
         actions = {},
+        utilityActions = [],
         permissions = {},
         onTitleCommit = null,
         onSlugCommit = null,
@@ -469,6 +470,24 @@ window.Kit = (() => {
                 slugRow.appendChild(slugLabel);
                 slugRow.appendChild(slugInput);
                 overflowBody.appendChild(slugRow);
+            }
+            const utilityItems = Array.isArray(utilityActions) ? utilityActions.filter(Boolean) : [];
+            if (utilityItems.length) {
+                const utilityRow = document.createElement('div');
+                utilityRow.className = 'kit-lifecycle-actions';
+                utilityItems.forEach((item) => {
+                    if (!item || typeof item.onClick !== 'function') return;
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = ['btn', item.tone || 'btn-secondary'].filter(Boolean).join(' ');
+                    btn.textContent = String(item.label || 'Open');
+                    btn.addEventListener('click', () => {
+                        overflow.open = false;
+                        item.onClick(record);
+                    });
+                    utilityRow.appendChild(btn);
+                });
+                overflowBody.appendChild(utilityRow);
             }
             const secondary = buttons.filter(({ key }) => secondaryActions.includes(key));
             if (secondary.length) {
@@ -1085,13 +1104,12 @@ window.Kit = (() => {
     }
 
     function workflowCanvas({
+        scene = null,
         lanes = [],
         nodes = [],
         edges = [],
         selection = null,
         onSelect = null,
-        onBeginConnect = null,
-        onCancelConnect = null,
         onMutate = null,
         firstRun = null,
         mode = 'graph',
@@ -1106,25 +1124,18 @@ window.Kit = (() => {
         onViewportChange = null,
     } = {}) {
         const root = document.createElement('section');
-        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode} kit-workflow-view-${String(viewState?.kind || 'detail')}`;
+        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
         root.dataset.key = [
             'workflow-canvas',
             mode,
-            String(viewState?.kind || ''),
             String(viewState?.title || ''),
-            lanes.map((lane) => String(lane.key || '')).join(','),
-            nodes.map((node) => String(node.id || '')).join(','),
-            edges.map((edge) => String(edge.id || '')).join(','),
+            String(scene?.key || ''),
             String(firstRun?.body || ''),
             String(editorMode?.kind || ''),
             String(editorMode?.sourceStageKey || ''),
             String(editorMode?.decision || ''),
         ].join('|');
         root.tabIndex = 0;
-        const currentView = String(viewState?.kind || 'detail');
-        const isOverview = currentView === 'overview';
-        const isTopology = currentView === 'topology';
-        const topologyScope = String(viewState?.scope || 'full');
 
         if (firstRun && firstRun.active) {
             const card = document.createElement('div');
@@ -1156,18 +1167,13 @@ window.Kit = (() => {
         }
 
         const actions = Array.isArray(toolbarActions) ? toolbarActions.filter(Boolean) : [];
-        const currentMode = String(editorMode?.kind || 'idle');
-        const toolbarHint = currentMode === 'connect'
-            ? dictValue('protocol.transition.connecting', 'Connecting this step. Click the next step or finish outcome.')
-            : currentMode === 'rehearse'
-                ? 'Viewing live rehearsal state on the published workflow.'
-                : '';
+        const toolbarHint = String(viewState?.hint || '');
         if (viewState?.title || viewState?.subtitle) {
             const viewBar = document.createElement('div');
             viewBar.className = 'kit-workflow-viewbar';
             const title = document.createElement('strong');
             title.className = 'kit-workflow-viewbar-title';
-            title.textContent = String(viewState?.title || (isOverview ? 'Workflow overview' : 'Workflow'));
+            title.textContent = String(viewState?.title || 'Workflow');
             viewBar.appendChild(title);
             if (viewState?.subtitle) {
                 const subtitle = document.createElement('span');
@@ -1177,7 +1183,7 @@ window.Kit = (() => {
             }
             root.appendChild(viewBar);
         }
-        if (!firstRun?.active || currentMode === 'connect' || currentMode === 'rehearse') {
+        if (!firstRun?.active || String(editorMode?.kind || '') === 'rehearse') {
             const toolbar = document.createElement('div');
             toolbar.className = 'kit-workflow-toolbar';
             if (toolbarHint) {
@@ -1185,14 +1191,6 @@ window.Kit = (() => {
                 hint.className = 'kit-workflow-toolbar-hint';
                 hint.textContent = toolbarHint;
                 toolbar.appendChild(hint);
-            }
-            if (currentMode === 'connect' && typeof onCancelConnect === 'function') {
-                const cancelBtn = document.createElement('button');
-                cancelBtn.type = 'button';
-                cancelBtn.className = 'btn btn-small';
-                cancelBtn.textContent = dictValue('protocol.transition.cancel_connect', 'Cancel transition');
-                cancelBtn.addEventListener('click', onCancelConnect);
-                toolbar.appendChild(cancelBtn);
             }
             if (actions.length) {
                 const actionBar = document.createElement('div');
@@ -1212,28 +1210,23 @@ window.Kit = (() => {
             root.appendChild(toolbar);
         }
 
-        function _orderedNodes() {
-            return [...nodes].sort((a, b) => {
-                const aOrder = Number(a.order);
-                const bOrder = Number(b.order);
-                if (Number.isFinite(aOrder) || Number.isFinite(bOrder)) {
-                    if (!Number.isFinite(aOrder)) return 1;
-                    if (!Number.isFinite(bOrder)) return -1;
-                    if (aOrder !== bOrder) return aOrder - bOrder;
-                }
-                const aCol = Number(a.column || 0);
-                const bCol = Number(b.column || 0);
-                if (aCol !== bCol) return aCol - bCol;
-                const aRow = Number(a.row || 0);
-                const bRow = Number(b.row || 0);
-                if (aRow !== bRow) return aRow - bRow;
-                return String(a.id || '').localeCompare(String(b.id || ''));
-            });
-        }
+        const graphScene = scene || {
+            graph: {
+                nodes: Array.isArray(nodes) ? nodes : [],
+                edges: Array.isArray(edges) ? edges : [],
+            },
+            outline: [],
+            keyboardOrder: [],
+        };
 
         function _moveSelection(delta) {
             if (typeof onSelect !== 'function') return;
-            const ordered = _orderedNodes();
+            const ordered = Array.isArray(graphScene.keyboardOrder) && graphScene.keyboardOrder.length
+                ? graphScene.keyboardOrder
+                : (Array.isArray(graphScene.graph?.nodes) ? graphScene.graph.nodes.map((item) => ({
+                    kind: item.kind,
+                    id: item.id,
+                })) : []);
             if (!ordered.length) return;
             const currentId = String(selection?.id || '');
             const idx = Math.max(0, ordered.findIndex((item) => String(item.id || '') === currentId));
@@ -1241,18 +1234,63 @@ window.Kit = (() => {
             if (next) onSelect({ kind: next.kind, id: next.id });
         }
 
+        let cy = null;
+        let disposed = false;
+        let currentZoom = viewportState?.zoom === 'fit'
+            ? 'fit'
+            : Math.max(0.35, Math.min(2.25, Number(viewportState?.zoom || 1) || 1));
+
         root.addEventListener('keydown', (event) => {
             if ((event.metaKey || event.ctrlKey) && String(event.key || '').toLowerCase() === 'z' && typeof onMutate === 'function') {
                 event.preventDefault();
                 onMutate({ type: event.shiftKey ? 'redo' : 'undo' });
                 return;
             }
-            if (event.key === 'Escape' && currentMode === 'connect' && typeof onCancelConnect === 'function') {
+            if (event.target && !root.contains(event.target)) return;
+            if ((event.ctrlKey || event.metaKey || event.shiftKey) && cy) {
+                const delta = event.shiftKey ? 140 : 64;
+                if (event.key === 'ArrowRight') {
+                    event.preventDefault();
+                    cy.panBy({ x: -delta, y: 0 });
+                    return;
+                }
+                if (event.key === 'ArrowLeft') {
+                    event.preventDefault();
+                    cy.panBy({ x: delta, y: 0 });
+                    return;
+                }
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    cy.panBy({ x: 0, y: -delta });
+                    return;
+                }
+                if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    cy.panBy({ x: 0, y: delta });
+                    return;
+                }
+            }
+            if (event.key === '+' || event.key === '=') {
                 event.preventDefault();
-                onCancelConnect();
+                if (cy) cy.zoom({ level: Math.min(2.25, cy.zoom() + 0.14), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
                 return;
             }
-            if (event.target && !root.contains(event.target)) return;
+            if (event.key === '-') {
+                event.preventDefault();
+                if (cy) cy.zoom({ level: Math.max(0.35, cy.zoom() - 0.14), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+                return;
+            }
+            if (String(event.key || '').toLowerCase() === '0') {
+                event.preventDefault();
+                currentZoom = 'fit';
+                if (cy) _fitCamera(cy, true);
+                return;
+            }
+            if (event.key === 'Escape' && typeof onSelect === 'function') {
+                event.preventDefault();
+                onSelect({ kind: 'overview', id: '' });
+                return;
+            }
             if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
                 event.preventDefault();
                 _moveSelection(1);
@@ -1262,582 +1300,396 @@ window.Kit = (() => {
             }
         });
 
-        if (!nodes.length && !lanes.length) {
-            // True blank-first-run state: no fake graph, no decorative lanes.
-        } else if (isOverview) {
-            const ordered = _orderedNodes();
-            const overview = document.createElement('div');
-            overview.className = 'kit-workflow-overview';
-            ordered.forEach((node, index) => {
-                const row = document.createElement('div');
-                row.className = 'kit-workflow-overview-row';
-
-                const rail = document.createElement('div');
-                rail.className = 'kit-workflow-overview-rail';
-
-                const order = document.createElement('span');
-                order.className = 'kit-workflow-overview-order';
-                order.textContent = String(index + 1).padStart(2, '0');
-                rail.appendChild(order);
-
-                if (index < ordered.length - 1) {
-                    const connector = document.createElement('span');
-                    connector.className = 'kit-workflow-overview-connector';
-                    rail.appendChild(connector);
-                }
-                row.appendChild(rail);
-
-                const card = document.createElement('button');
-                card.type = 'button';
-                card.className = `kit-workflow-overview-card${selection?.kind === 'segment' && selection?.id === node.id ? ' is-selected' : ''}`;
-                card.dataset.testid = `workflow-node-${String(node.id || '')}`;
-                card.dataset.nodeId = String(node.id || '');
-                if (typeof onSelect === 'function') {
-                    card.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
-                }
-
-                const top = document.createElement('div');
-                top.className = 'kit-workflow-overview-card-top';
-
-                const badges = (Array.isArray(node.badges) ? node.badges : []).slice(0, 2);
-                if (badges.length) {
-                    const badgeRow = document.createElement('div');
-                    badgeRow.className = 'kit-workflow-overview-badges';
-                    badges.forEach((badge) => {
-                        const chip = document.createElement('span');
-                        chip.className = `kit-workflow-node-badge${badge?.tone ? ` is-${badge.tone}` : ''}`;
-                        chip.textContent = String(badge?.label || '');
-                        badgeRow.appendChild(chip);
-                    });
-                    top.appendChild(badgeRow);
-                }
-                card.appendChild(top);
-
-                const label = document.createElement('div');
-                label.className = 'kit-workflow-overview-label';
-                label.textContent = String(node.label || node.id || '');
-                card.appendChild(label);
-
-                if (node.sublabel) {
-                    const sub = document.createElement('div');
-                    sub.className = 'kit-workflow-overview-sublabel';
-                    sub.textContent = String(node.sublabel || '');
-                    card.appendChild(sub);
-                }
-
-                if (node.preview) {
-                    const preview = document.createElement('div');
-                    preview.className = 'kit-workflow-overview-preview';
-                    preview.textContent = String(node.preview || '');
-                    card.appendChild(preview);
-                }
-
-                const stageNames = Array.isArray(node.stageNames) ? node.stageNames.filter(Boolean) : [];
-                if (stageNames.length) {
-                    const sequence = document.createElement('div');
-                    sequence.className = 'kit-workflow-overview-stages';
-                    stageNames.slice(0, 5).forEach((name) => {
-                        const pill = document.createElement('span');
-                        pill.className = 'kit-workflow-overview-stage';
-                        pill.textContent = String(name || '');
-                        sequence.appendChild(pill);
-                    });
-                    if (stageNames.length > 5) {
-                        const extra = document.createElement('span');
-                        extra.className = 'kit-workflow-overview-stage is-muted';
-                        extra.textContent = `+ ${stageNames.length - 5} more`;
-                        sequence.appendChild(extra);
-                    }
-                    card.appendChild(sequence);
-                }
-
-                const routes = Array.isArray(node.routes) ? node.routes.filter(Boolean) : [];
-                if (routes.length) {
-                    const routeList = document.createElement('div');
-                    routeList.className = 'kit-workflow-overview-routes';
-                    routes.forEach((route) => {
-                        const routeRow = document.createElement('div');
-                        routeRow.className = 'kit-workflow-overview-route';
-
-                        const decision = document.createElement('span');
-                        decision.className = 'kit-workflow-node-badge is-context';
-                        decision.textContent = String(route.label || 'Next');
-                        routeRow.appendChild(decision);
-
-                        const routeBody = document.createElement('span');
-                        routeBody.className = 'kit-workflow-overview-route-body';
-                        routeBody.textContent = `${String(route.targetLabel || '')} · ${String(route.metaLabel || '')}`;
-                        routeRow.appendChild(routeBody);
-
-                        routeList.appendChild(routeRow);
-                    });
-                    card.appendChild(routeList);
-                }
-
-                if (node.footnote) {
-                    const foot = document.createElement('div');
-                    foot.className = 'kit-workflow-overview-footnote';
-                    foot.textContent = String(node.footnote || '');
-                    card.appendChild(foot);
-                }
-
-                row.appendChild(card);
-                overview.appendChild(row);
-            });
-            root.appendChild(overview);
-        } else {
-            const shell = document.createElement('div');
-            shell.className = 'kit-workflow-shell';
-            const denseMode = (isTopology && topologyScope === 'full') || nodes.length >= 8;
-
-            const controls = document.createElement('div');
-            controls.className = 'kit-workflow-controls';
-            const viewport = document.createElement('div');
-            viewport.className = 'kit-workflow-viewport';
-
-            const rowHeight = isTopology ? (topologyScope === 'full' ? 88 : 96) : denseMode ? 82 : 92;
-            const rowGap = isTopology ? (topologyScope === 'full' ? 18 : 14) : denseMode ? 10 : 14;
-            const columnWidth = isTopology ? (topologyScope === 'full' ? 214 : 224) : denseMode ? 194 : 214;
-            const columnGap = isTopology ? (topologyScope === 'full' ? 28 : 24) : denseMode ? 18 : 24;
-            const leftPad = lanes.length ? (isTopology ? 84 : denseMode ? 94 : 108) : (isTopology ? 34 : 18);
-            const rightPad = isTopology ? 34 : denseMode ? 18 : 24;
-            const bottomPad = 24;
-            const laneIndex = new Map(lanes.map((lane, index) => [String(lane.key || ''), index]));
-            const nodeRow = (node) => {
-                if (Number.isFinite(Number(node.row))) return Number(node.row);
-                const laneRow = laneIndex.get(String(node.laneKey || ''));
-                return Number.isFinite(Number(laneRow)) ? Number(laneRow) : 0;
-            };
-            const nodeBox = (node) => {
-                if (node.isTerminal) {
-                    return { width: isTopology ? (topologyScope === 'full' ? 154 : 168) : denseMode ? 140 : 148, height: isTopology ? (topologyScope === 'full' ? 60 : 66) : denseMode ? 58 : 64 };
-                }
-                if (node.isContext) {
-                    return { width: isTopology ? (topologyScope === 'full' ? 170 : 182) : denseMode ? 158 : 166, height: isTopology ? (topologyScope === 'full' ? 64 : 72) : denseMode ? 64 : 70 };
-                }
-                if (node.kind === 'segment') {
-                    return { width: isTopology ? (topologyScope === 'full' ? 178 : 190) : denseMode ? 168 : 178, height: isTopology ? (topologyScope === 'full' ? 68 : 76) : denseMode ? 68 : 74 };
-                }
-                return { width: isTopology ? (topologyScope === 'full' ? 198 : 220) : denseMode ? 184 : 198, height: isTopology ? (topologyScope === 'full' ? 88 : 102) : denseMode ? 84 : 92 };
-            };
-            const nodeById = new Map(nodes.map((node) => [String(node.id || ''), node]));
-            const backEdges = edges.filter((edge) => {
-                const fromNode = nodeById.get(String(edge.from || ''));
-                const toNode = nodeById.get(String(edge.to || ''));
-                return toNode && fromNode && Number(toNode.column || 0) <= Number(fromNode.column || 0);
-            });
-            const routeHeadroom = backEdges.length
-                ? (isTopology && topologyScope !== 'full' ? 8 + (backEdges.length * 8) : 14 + (backEdges.length * 18))
-                : (isTopology && topologyScope !== 'full' ? 8 : 14);
-            const topPad = (isTopology && topologyScope !== 'full' ? 14 : 18) + routeHeadroom;
-            const maxColumn = Math.max(0, ...nodes.map((node) => Number(node.column || 0)));
-            const maxRow = Math.max(0, ...nodes.map((node) => nodeRow(node)));
-            const graphWidth = leftPad + rightPad + ((maxColumn + 1) * columnWidth) + (Math.max(0, maxColumn) * columnGap);
-            const graphHeight = topPad + bottomPad + ((maxRow + 1) * rowHeight) + (Math.max(0, maxRow) * rowGap);
-
-            const layout = new Map();
-            nodes.forEach((node) => {
-                const row = Math.max(0, nodeRow(node));
-                const size = nodeBox(node);
-                const x = leftPad + (Number(node.column || 0) * (columnWidth + columnGap)) + Math.max(0, Math.floor((columnWidth - size.width) / 2));
-                const y = topPad + (row * (rowHeight + rowGap)) + Math.max(0, Math.floor((rowHeight - size.height) / 2));
-                layout.set(String(node.id || ''), {
-                    x,
-                    y,
-                    width: size.width,
-                    height: size.height,
-                    row,
-                    column: Number(node.column || 0),
+        function _fitCamera(instance, force = false) {
+            if (!instance) return;
+            const targetIds = Array.isArray(graphScene.focusIds) ? graphScene.focusIds.filter(Boolean) : [];
+            const fitElements = targetIds.length
+                ? instance.elements().filter((item) => targetIds.includes(String(item.id() || '')))
+                : instance.elements();
+            if (!fitElements.length) return;
+            const animate = !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+            if (currentZoom === 'fit' || force) {
+                instance.animate({
+                    fit: {
+                        eles: fitElements,
+                        padding: Number(graphScene.fitPadding || 72),
+                    },
+                    duration: animate ? 220 : 0,
                 });
-            });
-
-            const graphFrame = document.createElement('div');
-            graphFrame.className = 'kit-workflow-frame';
-
-            const graph = document.createElement('div');
-            graph.className = 'kit-workflow-graph';
-            graph.style.width = `${graphWidth}px`;
-            graph.style.height = `${graphHeight}px`;
-            graph.style.setProperty('--workflow-columns', String(Math.max(1, maxColumn + 1)));
-            graph.style.setProperty('--workflow-rows', String(Math.max(1, maxRow + 1)));
-            graph.style.setProperty('--workflow-lane-gutter', `${leftPad}px`);
-
-            const guidesLayer = document.createElement('div');
-            guidesLayer.className = 'kit-workflow-guide-layer';
-            lanes.forEach((lane) => {
-                const guide = document.createElement('div');
-                guide.className = 'kit-workflow-lane-guide';
-                const laneMeta = laneLabels[String(lane.key || '')] || {};
-                const row = Math.max(0, Number(laneMeta.row || laneIndex.get(String(lane.key || '')) || 0));
-                guide.style.top = `${topPad + (row * (rowHeight + rowGap))}px`;
-                guide.style.height = `${rowHeight}px`;
-                const label = document.createElement('button');
-                label.type = 'button';
-                label.className = `kit-workflow-lane-guide-label${selection?.kind === 'participant' && selection?.id === lane.key ? ' is-selected' : ''}`;
-                label.dataset.testid = `workflow-lane-${String(lane.key || '')}`;
-                label.textContent = String(laneMeta.label || lane.label || lane.key || '');
-                if (typeof onSelect === 'function') {
-                    label.addEventListener('click', () => onSelect({ kind: 'participant', id: lane.key }));
-                }
-                guide.appendChild(label);
-                if (laneMeta.sublabel && !denseMode && !isTopology) {
-                    const sub = document.createElement('div');
-                    sub.className = 'kit-workflow-lane-guide-sublabel';
-                    sub.textContent = String(laneMeta.sublabel || '');
-                    guide.appendChild(sub);
-                }
-                const rule = document.createElement('div');
-                rule.className = 'kit-workflow-lane-guide-rule';
-                guide.appendChild(rule);
-                guidesLayer.appendChild(guide);
-            });
-            if (outcomes && Number(outcomes.count || 0) > 0) {
-                const guide = document.createElement('div');
-                guide.className = 'kit-workflow-lane-guide is-outcomes';
-                guide.style.top = `${topPad + (Number(outcomes.startRow || 0) * (rowHeight + rowGap))}px`;
-                guide.style.height = `${(Number(outcomes.count || 0) * rowHeight) + (Math.max(0, Number(outcomes.count || 0) - 1) * rowGap)}px`;
-                const label = document.createElement('div');
-                label.className = 'kit-workflow-lane-guide-label is-static';
-                label.textContent = String(outcomes.label || 'Outcomes');
-                guide.appendChild(label);
-                const rule = document.createElement('div');
-                rule.className = 'kit-workflow-lane-guide-rule';
-                guide.appendChild(rule);
-                guidesLayer.appendChild(guide);
             }
-            graph.appendChild(guidesLayer);
-
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('class', 'kit-workflow-edges');
-            svg.setAttribute('aria-hidden', 'true');
-            svg.setAttribute('viewBox', `0 0 ${graphWidth} ${graphHeight}`);
-            const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-            const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-            marker.setAttribute('id', 'kit-workflow-arrow');
-            marker.setAttribute('markerWidth', '8');
-            marker.setAttribute('markerHeight', '8');
-            marker.setAttribute('refX', '7');
-            marker.setAttribute('refY', '4');
-            marker.setAttribute('orient', 'auto');
-            const markerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            markerPath.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
-            markerPath.setAttribute('fill', 'currentColor');
-            marker.appendChild(markerPath);
-            defs.appendChild(marker);
-            svg.appendChild(defs);
-            graph.appendChild(svg);
-
-            const labelsLayer = document.createElement('div');
-            labelsLayer.className = 'kit-workflow-edge-labels';
-            graph.appendChild(labelsLayer);
-
-            const nodesLayer = document.createElement('div');
-            nodesLayer.className = 'kit-workflow-nodes-layer';
-            graph.appendChild(nodesLayer);
-
-            let draggedNodeId = '';
-            nodes.forEach((node) => {
-                const nodeLayout = layout.get(String(node.id || ''));
-                if (!nodeLayout) return;
-                const isConnectSource = String(editorMode?.sourceStageKey || '') === String(node.id || '');
-                const isConnectTarget = currentMode === 'connect'
-                    && String(editorMode?.sourceStageKey || '') !== String(node.id || '')
-                    && (node.kind === 'stage' || node.kind === 'terminal');
-
-                const wrap = document.createElement('div');
-                wrap.className = [
-                    'kit-workflow-node-wrap',
-                    selection?.kind === node.kind && selection?.id === node.id ? 'is-selected' : '',
-                    node.isTerminal ? 'is-terminal' : '',
-                    node.isContext ? 'is-context' : '',
-                    isConnectSource ? 'is-connect-source' : '',
-                    isConnectTarget ? 'is-connect-target' : '',
-                ].filter(Boolean).join(' ');
-                wrap.dataset.nodeId = String(node.id || '');
-                wrap.style.left = `${nodeLayout.x}px`;
-                wrap.style.top = `${nodeLayout.y}px`;
-                wrap.style.width = `${nodeLayout.width}px`;
-                wrap.style.height = `${nodeLayout.height}px`;
-
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = `kit-workflow-node kit-workflow-node-${node.kind || 'stage'}`;
-                btn.dataset.nodeId = String(node.id || '');
-                btn.dataset.testid = `workflow-node-${String(node.id || '')}`;
-                btn.title = String(node.label || node.id || '');
-                btn.draggable = Boolean(node.kind === 'stage' && typeof onMutate === 'function');
-                if (node.kind === 'stage' && typeof onMutate === 'function') {
-                    btn.addEventListener('dragstart', () => {
-                        draggedNodeId = String(node.id || '');
-                        wrap.classList.add('is-dragging');
-                    });
-                    btn.addEventListener('dragend', () => {
-                        draggedNodeId = '';
-                        wrap.classList.remove('is-dragging');
-                    });
-                    btn.addEventListener('dragover', (event) => event.preventDefault());
-                    btn.addEventListener('drop', (event) => {
-                        event.preventDefault();
-                        if (draggedNodeId && draggedNodeId !== String(node.id || '')) {
-                            onMutate({ type: 'reorder', nodeId: draggedNodeId, targetId: String(node.id || '') });
-                        }
-                    });
-                }
-                if (typeof onSelect === 'function') {
-                    btn.addEventListener('click', () => onSelect({ kind: node.kind, id: node.id }));
-                }
-
-                const metaRow = document.createElement('div');
-                metaRow.className = 'kit-workflow-node-meta';
-                const visibleBadges = (Array.isArray(node.badges) ? node.badges : []).slice(0, denseMode ? 1 : 2);
-                if (visibleBadges.length) {
-                    const badgeRow = document.createElement('div');
-                    badgeRow.className = 'kit-workflow-node-badges';
-                    visibleBadges.forEach((badge) => {
-                        if (!badge) return;
-                        const chip = document.createElement('span');
-                        chip.className = `kit-workflow-node-badge${badge.tone ? ` is-${badge.tone}` : ''}`;
-                        chip.textContent = String(badge.label || '');
-                        badgeRow.appendChild(chip);
-                    });
-                    metaRow.appendChild(badgeRow);
-                }
-
-                const state = nodeStates && Object.prototype.hasOwnProperty.call(nodeStates, String(node.id || ''))
-                    ? String(nodeStates[String(node.id || '')] || '')
-                    : '';
-                if (state) {
-                    const badge = document.createElement('span');
-                    badge.className = `kit-workflow-node-state kit-workflow-node-state-${state}`;
-                    badge.textContent = state;
-                    metaRow.appendChild(badge);
-                }
-                if (metaRow.childElementCount) {
-                    btn.appendChild(metaRow);
-                }
-
-                const label = document.createElement('div');
-                label.className = 'kit-workflow-node-label';
-                label.textContent = String(node.label || node.id || '');
-                btn.appendChild(label);
-
-                if (node.sublabel) {
-                    const sub = document.createElement('div');
-                    sub.className = 'kit-workflow-node-sublabel';
-                    sub.textContent = String(node.sublabel);
-                    btn.appendChild(sub);
-                }
-
-                wrap.appendChild(btn);
-                nodesLayer.appendChild(wrap);
-            });
-
-            const backEdgeOrder = new Map();
-            edges.forEach((edge) => {
-                const fromLayout = layout.get(String(edge.from || ''));
-                const toLayout = layout.get(String(edge.to || ''));
-                if (fromLayout && toLayout && toLayout.column <= fromLayout.column) {
-                    backEdgeOrder.set(String(edge.id || ''), backEdgeOrder.size);
-                }
-            });
-            const nodeBoxes = Array.from(layout.values()).map((item) => ({
-                left: item.x - 10,
-                right: item.x + item.width + 10,
-                top: item.y - 10,
-                bottom: item.y + item.height + 10,
-            }));
-            const labelBoxes = [];
-            function estimateLabelBox(text, x, y) {
-                    const width = Math.min(isTopology ? 128 : 176, Math.max(48, (String(text || '').length * 7) + 28));
-                const height = 24;
-                return {
-                    width,
-                    height,
-                    left: Number(x || 0) - (width / 2),
-                    right: Number(x || 0) + (width / 2),
-                    top: Number(y || 0) - (height / 2),
-                    bottom: Number(y || 0) + (height / 2),
-                };
-            }
-            function overlapsBox(left, right, top, bottom, target) {
-                return left < target.right
-                    && right > target.left
-                    && top < target.bottom
-                    && bottom > target.top;
-            }
-            function placeLabel(text, candidates) {
-                for (const candidate of candidates) {
-                    const box = estimateLabelBox(text, candidate.x, candidate.y);
-                    const nodeCollision = nodeBoxes.some((target) => overlapsBox(box.left, box.right, box.top, box.bottom, target));
-                    const labelCollision = labelBoxes.some((target) => overlapsBox(box.left, box.right, box.top, box.bottom, target));
-                    if (!nodeCollision && !labelCollision) {
-                        labelBoxes.push(box);
-                        return candidate;
-                    }
-                }
-                return null;
-            }
-
-            edges.forEach((edge) => {
-                const fromLayout = layout.get(String(edge.from || ''));
-                const toLayout = layout.get(String(edge.to || ''));
-                if (!fromLayout || !toLayout) return;
-
-                const fromX = fromLayout.x + fromLayout.width;
-                const fromY = fromLayout.y + (fromLayout.height / 2);
-                const toX = toLayout.x;
-                const toY = toLayout.y + (toLayout.height / 2);
-                const selected = selection?.kind === 'transition' && selection?.id === edge.id;
-                const isBackEdge = toLayout.column <= fromLayout.column;
-
-                let pathData = '';
-                let labelCandidates = [];
-
-                if (isBackEdge) {
-                    const bandIndex = Number(backEdgeOrder.get(String(edge.id || '')) || 0);
-                    const trackY = 16 + (bandIndex * 22);
-                    const exitX = fromX + 18;
-                    const entryX = Math.max(leftPad - 10, toX - 18);
-                    pathData = [
-                        `M ${fromX} ${fromY}`,
-                        `L ${exitX} ${fromY}`,
-                        `L ${exitX} ${trackY}`,
-                        `L ${entryX} ${trackY}`,
-                        `L ${entryX} ${toY}`,
-                        `L ${toX} ${toY}`,
-                    ].join(' ');
-                    const centerX = entryX + ((exitX - entryX) / 2);
-                    labelCandidates = [
-                        { x: centerX, y: trackY - 12 },
-                        { x: centerX, y: trackY + 14 },
-                        { x: entryX + 28, y: trackY - 12 },
-                    ];
-                } else {
-                const bendX = fromX + Math.max(22, Math.floor((toX - fromX) / 2));
-                pathData = [
-                    `M ${fromX} ${fromY}`,
-                    `L ${bendX} ${fromY}`,
-                    `L ${bendX} ${toY}`,
-                    `L ${toX} ${toY}`,
-                    ].join(' ');
-                    if (Math.abs(fromY - toY) < 8) {
-                        const midX = fromX + ((toX - fromX) / 2);
-                        labelCandidates = [
-                            { x: midX, y: fromY - 18 },
-                            { x: midX, y: fromY + 20 },
-                            { x: bendX - 26, y: fromY - 18 },
-                        ];
-                    } else {
-                        const midY = fromY + ((toY - fromY) / 2);
-                        labelCandidates = [
-                            { x: bendX + 24, y: midY },
-                            { x: bendX - 24, y: midY },
-                            { x: bendX, y: midY - 18 },
-                            { x: bendX, y: midY + 18 },
-                        ];
-                    }
-                }
-
-                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                path.setAttribute('class', `kit-workflow-edge-path${edge?.tone ? ` is-${edge.tone}` : ''}${selected ? ' is-selected' : ''}`);
-                path.setAttribute('d', pathData);
-                path.setAttribute('marker-end', 'url(#kit-workflow-arrow)');
-                if (typeof onSelect === 'function') {
-                    path.style.pointerEvents = 'visibleStroke';
-                    path.style.cursor = 'pointer';
-                    path.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
-                }
-                svg.appendChild(path);
-
-                if (edge.showLabel === false || !String(edge.label || '').trim()) {
-                    return;
-                }
-                let reserved = placeLabel(String(edge.label || ''), labelCandidates);
-                if (!reserved) {
-                    if (isTopology || !labelCandidates.length) {
-                        return;
-                    }
-                    reserved = labelCandidates[0];
-                }
-                const label = document.createElement('button');
-                label.type = 'button';
-                label.className = `kit-workflow-edge-label${selected ? ' is-selected' : ''}`;
-                label.dataset.testid = `workflow-edge-${String(edge.id || '')}`;
-                label.textContent = String(edge.label || '');
-                label.style.left = `${reserved.x}px`;
-                label.style.top = `${reserved.y}px`;
-                if (typeof onSelect === 'function') {
-                    label.addEventListener('click', () => onSelect({ kind: 'transition', id: edge.id }));
-                }
-                labelsLayer.appendChild(label);
-            });
-
-            const defaultZoom = Object.prototype.hasOwnProperty.call(viewportState || {}, 'zoom')
-                ? viewportState.zoom
-                : (isTopology ? 'fit' : 1);
-            const minZoom = isTopology ? (topologyScope === 'full' ? 0.4 : 0.55) : 0.55;
-            const maxZoom = isTopology ? (topologyScope === 'full' ? 1.2 : 1.3) : 1.5;
-            function resolvedZoomValue() {
-                return Math.max(minZoom, Math.min(maxZoom, Number(graph.dataset.zoomResolved || 1) || 1));
-            }
-            function computeFitZoom() {
-                const viewportWidth = Math.max(320, Number(viewport.clientWidth || 0) - 12);
-                const viewportHeight = Math.max(260, Number(viewport.clientHeight || 0) - 12);
-                const fitCap = isTopology && topologyScope !== 'full' ? maxZoom : 1;
-                return Math.max(
-                    minZoom,
-                    Math.min(fitCap, viewportWidth / Math.max(graphWidth, 1), viewportHeight / Math.max(graphHeight, 1)),
-                );
-            }
-            function applyZoom(nextZoom, notify = true) {
-                const zoomValue = nextZoom === 'fit'
-                    ? computeFitZoom()
-                    : Math.max(minZoom, Math.min(maxZoom, Number(nextZoom || 1) || 1));
-                graph.dataset.zoomResolved = String(zoomValue);
-                graph.style.transform = `scale(${zoomValue})`;
-                graphFrame.style.width = `${graphWidth * zoomValue}px`;
-                graphFrame.style.height = `${graphHeight * zoomValue}px`;
-                controls.dataset.zoom = nextZoom === 'fit' ? 'fit' : String(zoomValue);
-                if (notify && typeof onViewportChange === 'function') {
-                    onViewportChange(nextZoom === 'fit' ? 'fit' : zoomValue);
-                }
-            }
-
-            const fitBtn = document.createElement('button');
-            fitBtn.type = 'button';
-            fitBtn.className = 'btn btn-small';
-            fitBtn.textContent = 'Fit';
-            fitBtn.addEventListener('click', () => applyZoom('fit'));
-            controls.appendChild(fitBtn);
-
-            const zoomOut = document.createElement('button');
-            zoomOut.type = 'button';
-            zoomOut.className = 'btn btn-small';
-            zoomOut.textContent = '−';
-            zoomOut.addEventListener('click', () => applyZoom(resolvedZoomValue() - 0.12));
-            controls.appendChild(zoomOut);
-
-            const zoomReset = document.createElement('button');
-            zoomReset.type = 'button';
-            zoomReset.className = 'btn btn-small';
-            zoomReset.textContent = '100%';
-            zoomReset.addEventListener('click', () => applyZoom(1));
-            controls.appendChild(zoomReset);
-
-            const zoomIn = document.createElement('button');
-            zoomIn.type = 'button';
-            zoomIn.className = 'btn btn-small';
-            zoomIn.textContent = '+';
-            zoomIn.addEventListener('click', () => applyZoom(resolvedZoomValue() + 0.12));
-            controls.appendChild(zoomIn);
-
-            graphFrame.appendChild(graph);
-            viewport.appendChild(graphFrame);
-            shell.appendChild(controls);
-            shell.appendChild(viewport);
-            root.appendChild(shell);
-            requestAnimationFrame(() => applyZoom(defaultZoom, false));
         }
+
+        const shell = document.createElement('div');
+        shell.className = 'kit-workflow-shell kit-workflow-shell-scene';
+
+        const outline = document.createElement('aside');
+        outline.className = 'kit-workflow-outline';
+        const outlineTitle = document.createElement('div');
+        outlineTitle.className = 'kit-workflow-outline-title';
+        outlineTitle.textContent = String(graphScene.outlineTitle || 'Workflow outline');
+        outline.appendChild(outlineTitle);
+        const outlineList = document.createElement('div');
+        outlineList.className = 'kit-workflow-outline-list';
+        (Array.isArray(graphScene.outline) ? graphScene.outline : []).forEach((section) => {
+            const group = document.createElement('div');
+            group.className = 'kit-workflow-outline-group';
+            const head = document.createElement('button');
+            head.type = 'button';
+            head.className = `kit-workflow-outline-item${selection?.kind === section.kind && selection?.id === section.id ? ' is-selected' : ''}`;
+            head.dataset.testid = `workflow-outline-${String(section.id || '')}`;
+            head.textContent = String(section.label || '');
+            if (typeof onSelect === 'function') {
+                head.addEventListener('click', () => onSelect({ kind: section.kind, id: section.id }));
+            }
+            group.appendChild(head);
+            if (section.meta) {
+                const meta = document.createElement('div');
+                meta.className = 'kit-workflow-outline-meta';
+                meta.textContent = String(section.meta || '');
+                group.appendChild(meta);
+            }
+            const items = Array.isArray(section.items) ? section.items : [];
+            if (items.length && section.expanded) {
+                const list = document.createElement('div');
+                list.className = 'kit-workflow-outline-children';
+                items.forEach((item) => {
+                    const child = document.createElement('button');
+                    child.type = 'button';
+                    child.className = `kit-workflow-outline-child${selection?.kind === item.kind && selection?.id === item.id ? ' is-selected' : ''}`;
+                    child.dataset.testid = `workflow-outline-${String(item.id || '')}`;
+                    child.textContent = String(item.label || '');
+                    if (typeof onSelect === 'function') {
+                        child.addEventListener('click', () => onSelect({ kind: item.kind, id: item.id }));
+                    }
+                    list.appendChild(child);
+                    if (item.meta) {
+                        const meta = document.createElement('div');
+                        meta.className = 'kit-workflow-outline-child-meta';
+                        meta.textContent = String(item.meta || '');
+                        list.appendChild(meta);
+                    }
+                });
+                group.appendChild(list);
+            }
+            outlineList.appendChild(group);
+        });
+        if (!outlineList.childElementCount) {
+            outlineList.appendChild(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first participant or step to start shaping the workflow.')));
+        }
+        outline.appendChild(outlineList);
+
+        const canvasColumn = document.createElement('div');
+        canvasColumn.className = 'kit-workflow-canvas-column';
+        const controls = document.createElement('div');
+        controls.className = 'kit-workflow-controls';
+
+        const fitBtn = document.createElement('button');
+        fitBtn.type = 'button';
+        fitBtn.className = 'btn btn-small';
+        fitBtn.textContent = 'Fit';
+        fitBtn.addEventListener('click', () => {
+            currentZoom = 'fit';
+            if (cy) _fitCamera(cy, true);
+        });
+        controls.appendChild(fitBtn);
+
+        const zoomOut = document.createElement('button');
+        zoomOut.type = 'button';
+        zoomOut.className = 'btn btn-small';
+        zoomOut.textContent = '−';
+        zoomOut.addEventListener('click', () => {
+            if (!cy) return;
+            currentZoom = Math.max(0.35, cy.zoom() - 0.14);
+            cy.zoom({ level: currentZoom, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+        });
+        controls.appendChild(zoomOut);
+
+        const zoomReset = document.createElement('button');
+        zoomReset.type = 'button';
+        zoomReset.className = 'btn btn-small';
+        zoomReset.textContent = '100%';
+        zoomReset.addEventListener('click', () => {
+            if (!cy) return;
+            currentZoom = 1;
+            cy.zoom({ level: 1, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+        });
+        controls.appendChild(zoomReset);
+
+        const zoomIn = document.createElement('button');
+        zoomIn.type = 'button';
+        zoomIn.className = 'btn btn-small';
+        zoomIn.textContent = '+';
+        zoomIn.addEventListener('click', () => {
+            if (!cy) return;
+            currentZoom = Math.min(2.25, cy.zoom() + 0.14);
+            cy.zoom({ level: currentZoom, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+        });
+        controls.appendChild(zoomIn);
+
+        const viewport = document.createElement('div');
+        viewport.className = 'kit-workflow-viewport kit-workflow-viewport-cy';
+        const graphHost = document.createElement('div');
+        graphHost.className = 'kit-workflow-cy-host';
+        viewport.appendChild(graphHost);
+
+        canvasColumn.appendChild(controls);
+        canvasColumn.appendChild(viewport);
+        shell.appendChild(outline);
+        shell.appendChild(canvasColumn);
+        root.appendChild(shell);
+
+        function _nodeLabel(node) {
+            return [node.label, node.meta, node.secondary].map((item) => String(item || '').trim()).filter(Boolean).join('\n');
+        }
+
+        function _cyElements() {
+            return [
+                ...(Array.isArray(graphScene.graph?.nodes) ? graphScene.graph.nodes : []).map((node) => ({
+                    data: {
+                        id: String(node.id || ''),
+                        label: _nodeLabel(node),
+                        kind: String(node.kind || 'section'),
+                        state: String(node.state || ''),
+                    },
+                    classes: [
+                        `kind-${String(node.kind || 'section')}`,
+                        node.selected ? 'is-selected' : '',
+                        node.context ? 'is-context' : '',
+                        node.emphasis === 'muted' ? 'is-muted' : '',
+                    ].filter(Boolean).join(' '),
+                })),
+                ...(Array.isArray(graphScene.graph?.edges) ? graphScene.graph.edges : []).map((edge) => ({
+                    data: {
+                        id: String(edge.id || ''),
+                        source: String(edge.from || ''),
+                        target: String(edge.to || ''),
+                        label: String(edge.label || ''),
+                    },
+                    classes: [
+                        edge.primary ? 'is-primary' : '',
+                        edge.muted ? 'is-muted' : '',
+                    ].filter(Boolean).join(' '),
+                })),
+            ];
+        }
+
+        async function _layoutAndMount() {
+            if (disposed || !root.isConnected) return;
+            if (typeof window.cytoscape !== 'function' || typeof window.ELK !== 'function') {
+                graphHost.replaceChildren(UI.createErrorCard('Workflow canvas dependencies are missing.'));
+                return;
+            }
+            const elements = _cyElements();
+            if (!elements.length) {
+                graphHost.replaceChildren(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first participant or step to start shaping the workflow.')));
+                return;
+            }
+
+            cy = window.cytoscape({
+                container: graphHost,
+                elements,
+                style: [
+                    {
+                        selector: 'node',
+                        style: {
+                            'shape': 'round-rectangle',
+                            'background-color': '#f8fafc',
+                            'border-width': 1.5,
+                            'border-color': '#d6dbe4',
+                            'label': 'data(label)',
+                            'font-family': 'ui-sans-serif, system-ui, sans-serif',
+                            'font-size': 11,
+                            'font-weight': 700,
+                            'text-wrap': 'wrap',
+                            'text-max-width': 172,
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            'padding': 14,
+                            'line-height': 1.25,
+                            'color': '#122033',
+                            'width': 'label',
+                            'height': 'label',
+                            'min-width': 132,
+                            'min-height': 54,
+                            'overlay-opacity': 0,
+                        },
+                    },
+                    {
+                        selector: 'node.kind-segment',
+                        style: {
+                            'background-color': '#fffaf5',
+                            'border-color': '#d9b28d',
+                            'min-width': 196,
+                            'min-height': 76,
+                            'font-size': 12,
+                            'text-max-width': 184,
+                            'padding': 16,
+                        },
+                    },
+                    {
+                        selector: 'node.kind-stage',
+                        style: {
+                            'background-color': '#ffffff',
+                            'border-color': '#cdd8e8',
+                            'min-width': 156,
+                            'min-height': 62,
+                            'text-max-width': 148,
+                        },
+                    },
+                    {
+                        selector: 'node.kind-outcome',
+                        style: {
+                            'shape': 'round-rectangle',
+                            'background-color': '#eef8f1',
+                            'border-color': '#96c5a4',
+                            'min-width': 128,
+                            'min-height': 46,
+                            'font-size': 10,
+                            'text-max-width': 120,
+                        },
+                    },
+                    {
+                        selector: 'node.is-context',
+                        style: {
+                            'background-color': '#f3f7fb',
+                            'border-color': '#c5d4e4',
+                            'min-width': 148,
+                            'min-height': 58,
+                            'font-size': 10,
+                            'text-max-width': 138,
+                        },
+                    },
+                    {
+                        selector: 'node.is-muted',
+                        style: {
+                            'opacity': 0.74,
+                        },
+                    },
+                    {
+                        selector: 'node.is-selected',
+                        style: {
+                            'border-width': 2.5,
+                            'border-color': '#8f4f2a',
+                            'background-color': '#fff7f0',
+                        },
+                    },
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': 2.2,
+                            'curve-style': 'bezier',
+                            'line-color': '#8ea0b8',
+                            'target-arrow-color': '#8ea0b8',
+                            'target-arrow-shape': 'triangle',
+                            'arrow-scale': 0.9,
+                            'label': 'data(label)',
+                            'font-size': 10,
+                            'font-weight': 700,
+                            'text-background-color': '#ffffff',
+                            'text-background-opacity': 0.9,
+                            'text-background-padding': 3,
+                            'text-rotation': 'autorotate',
+                            'text-margin-y': -10,
+                            'color': '#334155',
+                            'overlay-opacity': 0,
+                        },
+                    },
+                    {
+                        selector: 'edge.is-muted',
+                        style: {
+                            'line-color': '#c4cedb',
+                            'target-arrow-color': '#c4cedb',
+                            'opacity': 0.76,
+                        },
+                    },
+                    {
+                        selector: 'edge.is-primary',
+                        style: {
+                            'line-color': '#8f4f2a',
+                            'target-arrow-color': '#8f4f2a',
+                        },
+                    },
+                ],
+                wheelSensitivity: 0.18,
+                userPanningEnabled: true,
+                userZoomingEnabled: true,
+                boxSelectionEnabled: false,
+                autoungrabify: true,
+                selectionType: 'single',
+            });
+
+            const elk = new window.ELK();
+            const elkGraph = {
+                id: 'root',
+                layoutOptions: {
+                    'elk.algorithm': 'layered',
+                    'elk.direction': String(graphScene.direction || 'RIGHT'),
+                    'elk.spacing.nodeNode': String(graphScene.nodeSpacing || 34),
+                    'elk.layered.spacing.nodeNodeBetweenLayers': String(graphScene.layerSpacing || 78),
+                    'elk.edgeRouting': 'POLYLINE',
+                },
+                children: (Array.isArray(graphScene.graph?.nodes) ? graphScene.graph.nodes : []).map((node) => ({
+                    id: String(node.id || ''),
+                    width: Number(node.width || (node.kind === 'segment' ? 260 : node.kind === 'stage' ? 220 : node.kind === 'outcome' ? 160 : 180)),
+                    height: Number(node.height || (node.kind === 'segment' ? 126 : node.kind === 'stage' ? 98 : node.kind === 'outcome' ? 60 : 72)),
+                })),
+                edges: (Array.isArray(graphScene.graph?.edges) ? graphScene.graph.edges : []).map((edge) => ({
+                    id: String(edge.id || ''),
+                    sources: [String(edge.from || '')],
+                    targets: [String(edge.to || '')],
+                })),
+            };
+
+            const laidOut = await elk.layout(elkGraph);
+            if (disposed || !cy) return;
+            const positions = new Map((laidOut.children || []).map((node) => [
+                String(node.id || ''),
+                { x: Number(node.x || 0), y: Number(node.y || 0) },
+            ]));
+            cy.nodes().positions((node) => positions.get(String(node.id() || '')) || { x: 0, y: 0 });
+
+            cy.on('tap', 'node', (event) => {
+                if (typeof onSelect === 'function') {
+                    onSelect({
+                        kind: String(event.target.data('kind') || 'segment'),
+                        id: String(event.target.id() || ''),
+                    });
+                }
+            });
+            cy.on('tap', 'edge', (event) => {
+                if (typeof onSelect === 'function') {
+                    onSelect({ kind: 'transition', id: String(event.target.id() || '') });
+                }
+            });
+            cy.on('zoom pan', () => {
+                if (typeof onViewportChange === 'function') {
+                    onViewportChange(Number(cy.zoom() || 1));
+                }
+            });
+
+            if (currentZoom !== 'fit') {
+                cy.zoom(Number(currentZoom || 1));
+                cy.center();
+            } else {
+                _fitCamera(cy, true);
+            }
+        }
+
+        root.__workflowCanvasCleanup = () => {
+            disposed = true;
+            if (cy) {
+                try {
+                    cy.destroy();
+                } catch (_err) {
+                    // best effort
+                }
+            }
+        };
+
+        requestAnimationFrame(() => {
+            if (disposed) return;
+            void _layoutAndMount();
+        });
 
         const extras = Array.isArray(accessorySections) ? accessorySections.filter(Boolean) : [];
         if (extras.length) {

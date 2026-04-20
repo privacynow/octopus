@@ -37,6 +37,15 @@ function _initSidebar() {
             closeDrawer();
         }
     });
+
+    function syncDrawerForViewport() {
+        if (window.innerWidth <= 900) {
+            closeDrawer();
+        }
+    }
+
+    syncDrawerForViewport();
+    window.addEventListener('resize', syncDrawerForViewport);
 }
 
 function _startTimestampRefresh() {

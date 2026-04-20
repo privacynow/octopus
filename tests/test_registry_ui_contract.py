@@ -164,9 +164,6 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_confirmParticipantInsert(" in workspace
     assert "_startStageInsert(" in workspace
     assert "_confirmStageInsert(" in workspace
-    assert "_startConnectMode(" in workspace
-    assert "_cancelTransitionConnect(" in workspace
-    assert "_commitConnectField(" in workspace
     assert "_rewriteKeyReferences(" in workspace
     assert "inputs: (stage.inputs || []).map" in workspace
     assert "outputs: (stage.outputs || []).map" in workspace
@@ -178,18 +175,14 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorEditor(" in workspace
     assert "showForm: false" in workspace
     assert "showSuggestions: false" in workspace
-    assert "let workflowView = { kind: 'detail', segmentId: '', scope: 'focus' }" in workspace
-    assert "let workflowViewport = { topology: 'fit' }" in workspace
-    assert "_workflowViewportValue(" in workspace
-    assert "TOPOLOGY_MOBILE_MEDIA_QUERY" in workspace
-    assert "_isSmallScreenTopologyViewport()" in workspace
-    assert "_topologyScopeActions(" in workspace
-    assert "_topologyScopedGraph(" in workspace
+    assert "let canvasViewport = { zoom: 'fit' }" in workspace
+    assert "_selectionFromQuery(" in workspace
+    assert "_selectionQueryState(" in workspace
     assert "_buildWorkflowProjection(" in workspace
-    assert "_normalizeWorkflowView(" in workspace
-    assert "_setDetailSegment(" in workspace
-    assert "_detailSurfaceEl(" in workspace
+    assert "_workflowStoryScene(" in workspace
+    assert "_focusedWorkflowScene(" in workspace
     assert "_surfaceCanvasEl(" in workspace
+    assert "_segmentInspectorEl(" in workspace
     assert "_participantEditorShell(" in workspace
     assert "_routeEditorPanel(" in workspace
     assert "_stageEditorHero(" in workspace
@@ -197,12 +190,17 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "window.addEventListener('resize', onResize);" in workspace
     assert "Assignment rule" in workspace
     assert "Runtime role tag" in workspace
-    assert "Workflow overview" in workspace
-    assert "Topology" in workspace
+    assert "Workflow canvas" in workspace
+    assert "Workflow outline" in workspace
     assert "Visual map" not in workspace
     assert "Workflow phases" not in workspace
     assert "Planner role" not in workspace
     assert "Reviewer role" not in workspace
+    assert "_startConnectMode(" not in workspace
+    assert "_cancelTransitionConnect(" not in workspace
+    assert "_commitConnectField(" not in workspace
+    assert "'Topology'" not in workspace
+    assert "'Workflow overview'" not in workspace
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
@@ -310,16 +308,14 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".kit-lifecycle-header" in css
     assert ".kit-authoring-workspace" in css
     assert ".kit-workflow-canvas" in css
-    assert ".kit-workflow-graph" in css
-    assert ".kit-workflow-overview" in css
-    assert ".kit-workflow-overview-card" in css
-    assert ".kit-workflow-overview-label" in css
+    assert ".kit-workflow-shell-scene" in css
+    assert ".kit-workflow-outline" in css
+    assert ".kit-workflow-cy-host" in css
+    assert ".kit-workflow-outline-item" in css
+    assert ".kit-workflow-outline-child" in css
     assert ".kit-workflow-controls" in css
-    assert ".kit-workflow-lane-guide-label" in css
-    assert ".kit-workflow-lane-guide-sublabel" in css
-    assert ".kit-workflow-node" in css
-    assert ".kit-workflow-node-wrap {" in css
-    assert "position: absolute;" in css
+    assert ".kit-workflow-viewport-cy" in css
+    assert ".kit-protocol-segment-panel" in css
     assert ".kit-details-panel" in css
     assert ".kit-validation" in css
     assert ".kit-authored-catalog" in css

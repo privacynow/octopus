@@ -176,6 +176,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
     assert "_selectorEditor(" in workspace
     assert "Available now:" in workspace
+    assert "Pin to matching agent" in workspace
     assert "quickstart-chip static" in workspace
     assert "let canvasViewport = { zoom: 'fit' }" in workspace
     assert "_selectionFromQuery(" in workspace
@@ -195,6 +196,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "'Create new role…'" in workspace
     assert "Assignment" in workspace
     assert "Runtime role tag" in workspace
+    assert "Runtime role tag or custom selector" in workspace
     assert "Workflow canvas" in workspace
     assert "Workflow outline" in workspace
     assert "Edit participant assignment" not in workspace

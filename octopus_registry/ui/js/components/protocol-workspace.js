@@ -2171,16 +2171,44 @@ function renderProtocolWorkspace(container) {
         if (!matches.length) {
             results.appendChild(UI.renderEmptyState('No connected agents currently advertise this skill.', true));
         } else {
+            if (typeof onSuggestionSelect === 'function') {
+                const pickerRow = document.createElement('div');
+                pickerRow.className = 'kit-details-row';
+                const pickerLabel = document.createElement('label');
+                pickerLabel.className = 'kit-details-label';
+                pickerLabel.textContent = 'Pin to matching agent';
+                pickerRow.appendChild(pickerLabel);
+                const picker = document.createElement('select');
+                picker.className = 'kit-details-control';
+                picker.setAttribute('aria-label', pickerLabel.textContent);
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = '(leave this step dynamic)';
+                picker.appendChild(placeholder);
+                matches.forEach((candidate) => {
+                    const option = document.createElement('option');
+                    option.value = String(candidate?.slug || '');
+                    const parts = [
+                        String(candidate?.display_name || candidate?.slug || '').trim(),
+                        String(candidate?.role || '').trim(),
+                    ].filter(Boolean);
+                    option.textContent = parts.join(' · ');
+                    picker.appendChild(option);
+                });
+                picker.addEventListener('change', () => {
+                    const selected = matches.find((candidate) => String(candidate?.slug || '') === String(picker.value || ''));
+                    if (selected) onSuggestionSelect(selected);
+                });
+                pickerRow.appendChild(picker);
+                results.appendChild(pickerRow);
+            }
+
             const chips = document.createElement('div');
             chips.className = 'chip-row';
             matches.forEach((candidate) => {
-                const chip = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'span');
-                chip.className = typeof onSuggestionSelect === 'function' ? 'quickstart-chip' : 'quickstart-chip static';
+                const chip = document.createElement('span');
+                chip.className = 'quickstart-chip static';
                 chip.textContent = String(candidate?.display_name || candidate?.slug || '');
-                if (chip instanceof HTMLButtonElement) {
-                    chip.type = 'button';
-                    chip.addEventListener('click', () => onSuggestionSelect(candidate));
-                }
                 chips.appendChild(chip);
             });
             results.appendChild(chips);
@@ -2230,6 +2258,7 @@ function renderProtocolWorkspace(container) {
         selectorValue = '',
         readOnly = false,
         onChange = null,
+        onSelectorChange = null,
         label = '',
     } = {}) {
         const normalized = String(selectorKind || '').trim().toLowerCase();
@@ -2264,8 +2293,12 @@ function renderProtocolWorkspace(container) {
                 select.appendChild(custom);
             }
             select.disabled = Boolean(readOnly);
-            if (typeof onChange === 'function' && !readOnly) {
-                select.addEventListener('change', () => onChange(null, 'selector_value', select.value));
+            if (!readOnly) {
+                if (typeof onSelectorChange === 'function') {
+                    select.addEventListener('change', () => onSelectorChange(normalized, select.value));
+                } else if (typeof onChange === 'function') {
+                    select.addEventListener('change', () => onChange(null, 'selector_value', select.value));
+                }
             }
             select.setAttribute('aria-label', valueLabel.textContent);
             row.appendChild(select);
@@ -2282,10 +2315,16 @@ function renderProtocolWorkspace(container) {
             input.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', 'e.g. legal-review, approver, m1');
             input.value = String(selectorValue || '');
             input.readOnly = Boolean(readOnly);
-            if (typeof onChange === 'function' && !readOnly) {
-                const commit = () => onChange(null, 'selector_value', input.value);
-                input.addEventListener('change', commit);
-                input.addEventListener('blur', commit);
+            if (!readOnly) {
+                if (typeof onSelectorChange === 'function') {
+                    const commit = () => onSelectorChange(normalized, input.value);
+                    input.addEventListener('change', commit);
+                    input.addEventListener('blur', commit);
+                } else if (typeof onChange === 'function') {
+                    const commit = () => onChange(null, 'selector_value', input.value);
+                    input.addEventListener('change', commit);
+                    input.addEventListener('blur', commit);
+                }
             }
             input.setAttribute('aria-label', valueLabel.textContent);
             row.appendChild(input);
@@ -2395,14 +2434,17 @@ function renderProtocolWorkspace(container) {
 
         if (showAllPrimaryValues) {
             primaryKinds.forEach((kind) => {
-                const { element } = _buildSelectorValueField({
-                    selectorKind: kind,
-                    selectorValue: String(normalizedKind || '') === String(kind || '') ? selectorValue : '',
-                    readOnly,
-                    onChange,
-                    label: `Choose ${_selectorValueLabel(kind)}`,
-                });
-                element.dataset.selectorKind = String(kind || '');
+            const { element } = _buildSelectorValueField({
+                selectorKind: kind,
+                selectorValue: String(normalizedKind || '') === String(kind || '') ? selectorValue : '',
+                readOnly,
+                onChange,
+                onSelectorChange: typeof onSelectorChange === 'function'
+                    ? (nextKind, nextValue) => onSelectorChange(String(nextKind || kind || ''), nextValue)
+                    : null,
+                label: `Choose ${_selectorValueLabel(kind)}`,
+            });
+            element.dataset.selectorKind = String(kind || '');
                 wrap.appendChild(element);
             });
         } else if (primaryKind) {
@@ -2411,6 +2453,7 @@ function renderProtocolWorkspace(container) {
                 selectorValue,
                 readOnly,
                 onChange,
+                onSelectorChange,
                 label: `Choose ${_selectorValueLabel(primaryKind)}`,
             });
             wrap.appendChild(element);
@@ -2453,14 +2496,14 @@ function renderProtocolWorkspace(container) {
         advancedSummary.className = 'kit-stage-editor-summary';
         const advancedTitle = document.createElement('h4');
         advancedTitle.className = 'kit-stage-editor-title';
-        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Custom runtime rule');
+        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Runtime role tag or custom selector');
         advancedSummary.appendChild(advancedTitle);
         advanced.appendChild(advancedSummary);
         const advancedBody = document.createElement('div');
         advancedBody.className = 'kit-selector-editor-override-body';
         const advancedNote = document.createElement('p');
         advancedNote.className = 'kit-selector-editor-note';
-        advancedNote.textContent = 'Use this only when you need a runtime role tag or a custom selector value that the default agent and skill pickers cannot express.';
+        advancedNote.textContent = 'Use this only for a runtime role tag or another custom selector value that the agent and skill pickers cannot express.';
         advancedBody.appendChild(advancedNote);
 
         if (advancedKinds.length) {
@@ -2504,6 +2547,7 @@ function renderProtocolWorkspace(container) {
                 selectorValue,
                 readOnly,
                 onChange,
+                onSelectorChange,
                 label: `Choose ${_selectorValueLabel(advancedKind)}`,
             });
             advancedBody.appendChild(element);
@@ -2511,7 +2555,9 @@ function renderProtocolWorkspace(container) {
                 advancedBody.appendChild(_buildSelectorManualOverrideField({
                     selectorValue,
                     readOnly,
-                    onChange,
+                    onChange: typeof onSelectorChange === 'function'
+                        ? (_target, _key, nextValue) => onSelectorChange(advancedKind, nextValue)
+                        : onChange,
                     label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
                 }));
             }
@@ -2519,7 +2565,9 @@ function renderProtocolWorkspace(container) {
             advancedBody.appendChild(_buildSelectorManualOverrideField({
                 selectorValue,
                 readOnly,
-                onChange,
+                onChange: typeof onSelectorChange === 'function'
+                    ? (_target, _key, nextValue) => onSelectorChange(primaryKind, nextValue)
+                    : onChange,
                 label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
             }));
         }

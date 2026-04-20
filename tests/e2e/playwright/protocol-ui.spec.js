@@ -38,7 +38,7 @@ test.describe('protocol authoring live', () => {
     await expect(stageEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
     await strategy.selectOption('agent');
     await expect(stageEditor.getByText('Rehearsal')).toHaveCount(0);
-    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Custom runtime rule' });
+    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Runtime role tag or custom selector' });
     if (await advancedAssignment.count()) {
       await advancedAssignment.click();
       await expect(stageEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
@@ -159,9 +159,14 @@ test.describe('protocol authoring live', () => {
     )).toContain('product-definition');
     await assignment.getByLabel('Choose skill', { exact: true }).selectOption('architecture');
     await expect(assignment.getByText('Agents with this skill')).toBeVisible();
-    await assignment.getByLabel('Strategy', { exact: true }).selectOption('agent');
-    await assignment.getByLabel('Choose agent', { exact: true }).selectOption('lift-and-shift-m1-bot');
+    await expect(assignment.getByLabel('Pin to matching agent', { exact: true })).toBeVisible();
+    await assignment.getByLabel('Pin to matching agent', { exact: true }).selectOption('lift-and-shift-m1-bot');
     await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
+    await expect(assignment).toContainText('Available here:');
+    await assignment.getByLabel('Strategy', { exact: true }).selectOption('agent');
+    await assignment.getByLabel('Choose agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
+    await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
+    await expect(assignment).toContainText('Available here:');
     expect(await assignment.locator('.quickstart-chip.static').count()).toBeGreaterThan(0);
     const toolbarInsert = page.locator('.kit-workflow-toolbar-actions').getByRole('button', { name: 'Insert after Planning', exact: true });
     await expect(toolbarInsert).toBeVisible();

@@ -88,7 +88,7 @@ window.Kit = (() => {
         'protocol.participant.selector_none': 'No rule yet',
         'protocol.participant.selector_current': 'Currently matches',
         'protocol.participant.selector_hint': 'Build a rule first, then preview who currently matches it.',
-        'protocol.participant.selector_advanced.label': 'Custom runtime rule',
+        'protocol.participant.selector_advanced.label': 'Runtime role tag or custom selector',
         'protocol.participant.selector_advanced.strategy': 'Advanced strategy',
         'protocol.participant.selector_override.label': 'Custom value',
 
@@ -1766,6 +1766,11 @@ window.Kit = (() => {
             disposed = true;
             _destroyCy();
         };
+
+        requestAnimationFrame(() => {
+            if (disposed || !root.isConnected) return;
+            void _layoutAndMount();
+        });
 
         const extras = Array.isArray(accessorySections) ? accessorySections.filter(Boolean) : [];
         if (extras.length) {

@@ -1341,9 +1341,11 @@ window.Kit = (() => {
         (Array.isArray(graphScene.outline) ? graphScene.outline : []).forEach((section) => {
             const group = document.createElement('div');
             group.className = 'kit-workflow-outline-group';
+            group.dataset.key = `workflow-outline-group:${String(section.id || '')}`;
             const head = document.createElement('button');
             head.type = 'button';
             head.className = `kit-workflow-outline-item${selection?.kind === section.kind && selection?.id === section.id ? ' is-selected' : ''}`;
+            head.dataset.key = `workflow-outline-item:${String(section.id || '')}`;
             head.dataset.testid = `workflow-outline-${String(section.id || '')}`;
             head.textContent = String(section.label || '');
             if (typeof onSelect === 'function') {
@@ -1353,6 +1355,7 @@ window.Kit = (() => {
             if (section.meta) {
                 const meta = document.createElement('div');
                 meta.className = 'kit-workflow-outline-meta';
+                meta.dataset.key = `workflow-outline-item-meta:${String(section.id || '')}`;
                 meta.textContent = String(section.meta || '');
                 group.appendChild(meta);
             }
@@ -1360,10 +1363,12 @@ window.Kit = (() => {
             if (items.length && section.expanded) {
                 const list = document.createElement('div');
                 list.className = 'kit-workflow-outline-children';
+                list.dataset.key = `workflow-outline-children:${String(section.id || '')}`;
                 items.forEach((item) => {
                     const child = document.createElement('button');
                     child.type = 'button';
                     child.className = `kit-workflow-outline-child${selection?.kind === item.kind && selection?.id === item.id ? ' is-selected' : ''}`;
+                    child.dataset.key = `workflow-outline-child:${String(item.id || '')}`;
                     child.dataset.testid = `workflow-outline-${String(item.id || '')}`;
                     child.textContent = String(item.label || '');
                     if (typeof onSelect === 'function') {
@@ -1373,6 +1378,7 @@ window.Kit = (() => {
                     if (item.meta) {
                         const meta = document.createElement('div');
                         meta.className = 'kit-workflow-outline-child-meta';
+                        meta.dataset.key = `workflow-outline-child-meta:${String(item.id || '')}`;
                         meta.textContent = String(item.meta || '');
                         list.appendChild(meta);
                     }

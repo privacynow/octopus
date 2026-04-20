@@ -3938,7 +3938,7 @@ function renderProtocolWorkspace(container) {
             }));
         }
         if (detailsColumn.childElementCount) {
-            workspace.appendChild(detailsColumn);
+            workspace.dataset.hasInspector = 'true';
         }
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;

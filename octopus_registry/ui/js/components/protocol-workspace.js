@@ -2175,6 +2175,77 @@ function renderProtocolWorkspace(container) {
         return Kit.dict.label('protocol.participant.selector_hint');
     }
 
+    function _selectorAgentRecord(selectorValue = '') {
+        const normalized = String(selectorValue || '').trim().toLowerCase();
+        if (!normalized) return null;
+        return _availableAuthoringAgents().find((agent) => {
+            const slug = String(agent?.slug || '').trim().toLowerCase();
+            const agentId = String(agent?.agent_id || '').trim().toLowerCase();
+            return normalized === slug || normalized === agentId;
+        }) || null;
+    }
+
+    function _selectorAgentSkills(agent) {
+        const values = Array.isArray(agent?.routing_skills) ? agent.routing_skills : [];
+        return Array.from(new Set(values
+            .map((item) => String(item || '').trim())
+            .filter((item) => _isAuthoringRoutingSkill({ skill_name: item }))));
+    }
+
+    function _selectorSkillMatchSection({ query = '', previewState = null, readOnly = false, onSuggestionSelect = null } = {}) {
+        if (!query) return null;
+        const section = document.createElement('section');
+        section.className = 'kit-selector-editor-preview';
+        section.appendChild(Kit.selectorResolutionPreview({
+            selector: String(previewState?.query || query || ''),
+            candidates: Array.isArray(previewState?.candidates) ? previewState.candidates : [],
+            busy: Boolean(previewState?.busy),
+            message: String(previewState?.message || ''),
+            onSuggestionSelect: typeof onSuggestionSelect === 'function' ? onSuggestionSelect : null,
+            showForm: false,
+            showSuggestions: false,
+            title: 'Agents with this skill',
+            help: readOnly
+                ? 'These connected agents currently advertise the selected skill.'
+                : 'These connected agents currently advertise the selected skill. Leave the step on skill assignment to keep it dynamic, or choose one to pin the step to a specific agent.',
+            emptyHint: Kit.dict.label('agents.selector.no_matches'),
+            resultTitle: typeof onSuggestionSelect === 'function'
+                ? 'Available agents — choose one to pin this step'
+                : 'Available agents',
+        }));
+        return section;
+    }
+
+    function _selectorAgentSkillsSection(selectorValue = '') {
+        const agent = _selectorAgentRecord(selectorValue);
+        if (!agent) return null;
+        const section = document.createElement('section');
+        section.className = 'kit-selector-editor-context';
+        const title = document.createElement('strong');
+        title.className = 'kit-selector-editor-context-title';
+        title.textContent = 'Skills advertised by this agent';
+        section.appendChild(title);
+        const note = document.createElement('p');
+        note.className = 'kit-selector-editor-note';
+        note.textContent = 'This step is pinned to one agent. These are the routing skills that agent currently advertises.';
+        section.appendChild(note);
+        const skills = _selectorAgentSkills(agent);
+        if (!skills.length) {
+            section.appendChild(UI.renderEmptyState('This agent is connected, but it is not advertising any routing skills right now.', true));
+            return section;
+        }
+        const chips = document.createElement('div');
+        chips.className = 'chip-row';
+        skills.forEach((skillName) => {
+            const chip = document.createElement('span');
+            chip.className = 'quickstart-chip static';
+            chip.textContent = _titleCaseWords(skillName);
+            chips.appendChild(chip);
+        });
+        section.appendChild(chips);
+        return section;
+    }
+
     function _buildSelectorValueField({
         selectorKind = '',
         selectorValue = '',
@@ -2304,7 +2375,7 @@ function renderProtocolWorkspace(container) {
         heading.className = 'kit-selector-editor-head';
         const copy = document.createElement('p');
         copy.className = 'kit-stage-routing-copy';
-        copy.textContent = 'Choose how this step resolves at run time. Start with the available agent or skill list, then use Advanced assignment only when the default path is not enough.';
+        copy.textContent = 'Choose how this step resolves at run time. Start with the available agent or skill list, then use the custom runtime rule only when the default path is not enough.';
         heading.appendChild(copy);
         wrap.appendChild(heading);
 
@@ -2369,9 +2440,32 @@ function renderProtocolWorkspace(container) {
             const note = document.createElement('p');
             note.className = 'kit-selector-editor-note';
             note.textContent = normalizedKind
-                ? 'This step currently uses an advanced assignment. Edit it below.'
+                ? 'This step currently uses a custom runtime rule. Edit it below.'
                 : 'Choose a strategy above to start assigning this step.';
             wrap.appendChild(note);
+        }
+
+        const query = _selectorString(_selectorFromFields(selectorKind, selectorValue));
+        const previewState = _selectorPreviewState(previewKey || '__draft__', query);
+        const handleCandidateSelect = !readOnly && normalizedKind === 'skill'
+            ? (candidate) => {
+                const targetValue = String(candidate?.slug || candidate?.agent_id || '').trim();
+                if (!targetValue) return;
+                emitSelector('agent', targetValue);
+            }
+            : null;
+        if (normalizedKind === 'skill' && query) {
+            const matchesSection = _selectorSkillMatchSection({
+                query,
+                previewState,
+                readOnly,
+                onSuggestionSelect: handleCandidateSelect,
+            });
+            if (matchesSection) wrap.appendChild(matchesSection);
+        }
+        if (normalizedKind === 'agent' && selectorValue) {
+            const skillsSection = _selectorAgentSkillsSection(selectorValue);
+            if (skillsSection) wrap.appendChild(skillsSection);
         }
 
         const advanced = document.createElement('details');
@@ -2384,14 +2478,14 @@ function renderProtocolWorkspace(container) {
         advancedSummary.className = 'kit-stage-editor-summary';
         const advancedTitle = document.createElement('h4');
         advancedTitle.className = 'kit-stage-editor-title';
-        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Advanced assignment');
+        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Custom runtime rule');
         advancedSummary.appendChild(advancedTitle);
         advanced.appendChild(advancedSummary);
         const advancedBody = document.createElement('div');
         advancedBody.className = 'kit-selector-editor-override-body';
         const advancedNote = document.createElement('p');
         advancedNote.className = 'kit-selector-editor-note';
-        advancedNote.textContent = 'Use this only when you need a runtime role tag or a custom value that is not in the default picker.';
+        advancedNote.textContent = 'Use this only when you need a runtime role tag or a custom selector value that the default agent and skill pickers cannot express.';
         advancedBody.appendChild(advancedNote);
 
         if (advancedKinds.length) {
@@ -2456,48 +2550,6 @@ function renderProtocolWorkspace(container) {
         }
         advanced.appendChild(advancedBody);
         wrap.appendChild(advanced);
-
-        const query = _selectorString(_selectorFromFields(selectorKind, selectorValue));
-        if (query) {
-            const previewState = _selectorPreviewState(previewKey || '__draft__', query);
-            const previewWrap = document.createElement('details');
-            previewWrap.className = 'kit-selector-editor-preview';
-            previewWrap.open = Boolean(!readOnly && normalizedKind === 'skill');
-            const previewSummary = document.createElement('summary');
-            previewSummary.className = 'kit-stage-editor-summary';
-            const previewTitle = document.createElement('h4');
-            previewTitle.className = 'kit-stage-editor-title';
-            previewTitle.textContent = Kit.dict.label('protocol.participant.selector_preview.label', 'Who matches right now');
-            previewSummary.appendChild(previewTitle);
-            const previewStatus = document.createElement('p');
-            previewStatus.className = 'kit-selector-editor-note';
-            previewStatus.textContent = _selectorPreviewSummary(previewState);
-            previewSummary.appendChild(previewStatus);
-            previewWrap.appendChild(previewSummary);
-            const handleCandidateSelect = !readOnly && normalizedKind === 'skill'
-                ? (candidate) => {
-                    const targetValue = String(candidate?.slug || candidate?.agent_id || '').trim();
-                    if (!targetValue) return;
-                    emit('selector_kind', 'agent');
-                    emit('selector_value', targetValue);
-                }
-                : null;
-            previewWrap.appendChild(Kit.selectorResolutionPreview({
-                selector: previewState.query,
-                candidates: previewState.candidates,
-                busy: previewState.busy,
-                message: previewState.message,
-                onSuggestionSelect: handleCandidateSelect,
-                showForm: false,
-                showSuggestions: false,
-                title: Kit.dict.label('protocol.participant.selector_preview.label', 'Who matches right now'),
-                help: Kit.dict.help('protocol.participant.selector_preview.help')
-                    || 'Matches update after you choose an agent or skill value.',
-                emptyHint: Kit.dict.label('protocol.participant.selector_hint'),
-                resultTitle: handleCandidateSelect ? 'Matching agents — choose one to pin this step' : 'Matching agents',
-            }));
-            wrap.appendChild(previewWrap);
-        }
 
         return wrap;
     }

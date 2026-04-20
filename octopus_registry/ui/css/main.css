@@ -3390,8 +3390,7 @@ select {
     overflow: hidden;
 }
 
-.kit-selector-editor-override[open] .kit-stage-editor-summary,
-.kit-selector-editor-preview[open] .kit-stage-editor-summary {
+.kit-selector-editor-override[open] .kit-stage-editor-summary {
     border-bottom: 1px solid var(--border);
 }
 
@@ -3413,6 +3412,20 @@ select {
     border-radius: 0;
     background: transparent;
     padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+.kit-selector-editor-context {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+}
+
+.kit-selector-editor-context-title {
+    font-size: var(--text-sm);
+    line-height: 1.35;
 }
 
 .kit-stage-editor {

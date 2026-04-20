@@ -88,7 +88,7 @@ window.Kit = (() => {
         'protocol.participant.selector_none': 'No rule yet',
         'protocol.participant.selector_current': 'Currently matches',
         'protocol.participant.selector_hint': 'Build a rule first, then preview who currently matches it.',
-        'protocol.participant.selector_advanced.label': 'Advanced assignment',
+        'protocol.participant.selector_advanced.label': 'Custom runtime rule',
         'protocol.participant.selector_advanced.strategy': 'Advanced strategy',
         'protocol.participant.selector_override.label': 'Custom value',
 

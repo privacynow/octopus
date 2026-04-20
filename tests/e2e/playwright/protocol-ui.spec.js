@@ -38,7 +38,7 @@ test.describe('protocol authoring live', () => {
     await expect(stageEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
     await strategy.selectOption('agent');
     await expect(stageEditor.getByText('Rehearsal')).toHaveCount(0);
-    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Advanced assignment' });
+    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Custom runtime rule' });
     if (await advancedAssignment.count()) {
       await advancedAssignment.click();
       await expect(stageEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
@@ -133,8 +133,10 @@ test.describe('protocol authoring live', () => {
     await login(page);
     await openTemplateDraft(page, 'Software Engineering');
     const protocolId = protocolIdFromUrl(page.url());
+    await page.reload({ waitUntil: 'networkidle' });
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
     await expect(page.locator('.kit-workflow-outline')).toBeVisible();
+    await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
     await expect(page.getByTestId('workflow-outline-segment:planning')).toBeVisible({ timeout: 15000 });
@@ -155,6 +157,12 @@ test.describe('protocol authoring live', () => {
     await expect.poll(async () => assignment.getByLabel('Choose skill', { exact: true }).locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
+    await assignment.getByLabel('Choose skill', { exact: true }).selectOption('architecture');
+    await expect(assignment.getByText('Agents with this skill')).toBeVisible();
+    await assignment.getByLabel('Strategy', { exact: true }).selectOption('agent');
+    await assignment.getByLabel('Choose agent', { exact: true }).selectOption('lift-and-shift-m1-bot');
+    await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
+    expect(await assignment.locator('.quickstart-chip.static').count()).toBeGreaterThan(0);
     const toolbarInsert = page.locator('.kit-workflow-toolbar-actions').getByRole('button', { name: 'Insert after Planning', exact: true });
     await expect(toolbarInsert).toBeVisible();
     await toolbarInsert.click();

@@ -1472,7 +1472,7 @@ function renderProtocolWorkspace(container) {
             pendingStage[key] = Number.parseInt(String(value || '0'), 10) || 0;
         }
         if (['participant_key', 'selector_kind', 'selector_value', 'stage_kind'].includes(String(key || ''))) {
-            render();
+            queueMicrotask(() => render());
         }
         if (key === 'selector_kind' || key === 'selector_value') {
             _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
@@ -1482,7 +1482,7 @@ function renderProtocolWorkspace(container) {
     function _commitPendingStageSelector(selectorKind, selectorValue) {
         pendingStage.selector_kind = String(selectorKind || '');
         pendingStage.selector_value = String(selectorValue || '');
-        render();
+        queueMicrotask(() => render());
         _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
     }
 

@@ -3533,22 +3533,13 @@ function renderProtocolWorkspace(container) {
         }
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
-        const nextCanvasRoot = workspace.querySelector('.kit-workflow-canvas');
-        let canvasPlaceholder = null;
-        if (previousCanvasRoot && previousCanvasRoot.parentNode instanceof Element) {
-            canvasPlaceholder = document.createElement('div');
-            canvasPlaceholder.hidden = true;
-            previousCanvasRoot.replaceWith(canvasPlaceholder);
-        }
-        if (previousCanvasRoot && nextCanvasRoot) {
-            UI.reconcileElement(previousCanvasRoot, nextCanvasRoot);
-            nextCanvasRoot.replaceWith(previousCanvasRoot);
-        }
         contentEl.replaceChildren(headerEl, workspace);
-        if (canvasPlaceholder && canvasPlaceholder.isConnected) {
-            canvasPlaceholder.remove();
+        let activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
+        if (previousCanvasRoot && activeCanvasRoot && previousCanvasRoot !== activeCanvasRoot) {
+            UI.reconcileElement(previousCanvasRoot, activeCanvasRoot);
+            activeCanvasRoot.replaceWith(previousCanvasRoot);
+            activeCanvasRoot = previousCanvasRoot;
         }
-        const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
         if (activeCanvasRoot && typeof activeCanvasRoot.__workflowCanvasSync === 'function') {
             activeCanvasRoot.__workflowCanvasSync({
                 scene: workflow.scene,

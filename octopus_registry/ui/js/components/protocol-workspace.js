@@ -3830,7 +3830,7 @@ function renderProtocolWorkspace(container) {
         const detailsColumn = document.createElement('div');
         detailsColumn.className = 'kit-authoring-details-column';
         detailsColumn.dataset.key = 'protocol-authoring-details-column';
-        const details = _detailsEl(workflow);
+        const details = editorMode.kind === 'rehearse' ? null : _detailsEl(workflow);
         if (details) {
             const detailsKey = _detailsKey();
             details.dataset.key = detailsKey;
@@ -3838,7 +3838,7 @@ function renderProtocolWorkspace(container) {
             detailsColumn.appendChild(details);
             workspace.dataset.hasInspector = 'true';
         }
-        const validation = _validationEl();
+        const validation = editorMode.kind === 'rehearse' ? null : _validationEl();
         if (validation) detailsColumn.appendChild(validation);
         if (editorMode.kind === 'rehearse' || rehearsal.runId) {
             detailsColumn.appendChild(Kit.rehearsalPanel({

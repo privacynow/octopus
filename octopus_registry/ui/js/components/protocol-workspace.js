@@ -173,6 +173,8 @@ function renderProtocolWorkspace(container) {
         busy: false,
         message: '',
     };
+    let renderInFlight = false;
+    let renderQueued = false;
     let editorMode = { kind: 'idle', sourceStageKey: '', decision: '' };
     let pendingStage = {
         display_name: '',
@@ -1757,6 +1759,11 @@ function renderProtocolWorkspace(container) {
         return (availableAgents || []).filter((agent) => _isAuthoringAssignableAgent(agent));
     }
 
+    function _isAuthoringRoutingSkill(item) {
+        const skillName = String(item?.skill_name || item || '').trim().toLowerCase();
+        return Boolean(skillName) && skillName !== '*' && skillName !== 'rehearsal';
+    }
+
     function _selectorKindLabel(kind) {
         const normalized = String(kind || '').trim().toLowerCase();
         if (normalized === 'agent') return 'Specific agent';
@@ -1860,7 +1867,7 @@ function renderProtocolWorkspace(container) {
                 push(value, value, 'Used in workflow');
             });
         } else if (normalized === 'skill') {
-            (availableRoutingSkills || []).forEach((item) => {
+            (availableRoutingSkills || []).filter((item) => _isAuthoringRoutingSkill(item)).forEach((item) => {
                 const skillName = String(item?.skill_name || item || '').trim();
                 if (!skillName || item?.enabled === false) return;
                 const advertisedBy = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents.length : 0;
@@ -3476,6 +3483,12 @@ function renderProtocolWorkspace(container) {
     }
 
     function render() {
+        if (renderInFlight) {
+            renderQueued = true;
+            return;
+        }
+        renderInFlight = true;
+        try {
         if (!currentProtocolId) {
             header.hidden = false;
             _writeState();
@@ -3565,6 +3578,13 @@ function renderProtocolWorkspace(container) {
         }
         contentEl.__workflowCanvasRoot = activeCanvasRoot || null;
         _lifecycleHeaderRef = contentEl.querySelector('.kit-lifecycle-header');
+        } finally {
+            renderInFlight = false;
+            if (renderQueued) {
+                renderQueued = false;
+                queueMicrotask(() => render());
+            }
+        }
     }
 
     async function loadProtocols({ quiet = false } = {}) {
@@ -3592,7 +3612,8 @@ function renderProtocolWorkspace(container) {
             connectedAgents = availableAgents.filter((agent) =>
                 String(agent?.connectivity_state || '').trim().toLowerCase() === 'connected',
             );
-            availableRoutingSkills = Array.isArray(skillData?.routing_skills) ? skillData.routing_skills : (Array.isArray(skillData) ? skillData : []);
+            availableRoutingSkills = (Array.isArray(skillData?.routing_skills) ? skillData.routing_skills : (Array.isArray(skillData) ? skillData : []))
+                .filter((item) => _isAuthoringRoutingSkill(item));
         } catch (err) {
             availableAgents = [];
             connectedAgents = [];

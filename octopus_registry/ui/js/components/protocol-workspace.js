@@ -3682,7 +3682,9 @@ function renderProtocolWorkspace(container) {
         detailsColumn.dataset.key = 'protocol-authoring-details-column';
         const details = _detailsEl(workflow);
         if (details) {
-            details.dataset.key = _detailsKey();
+            const detailsKey = _detailsKey();
+            details.dataset.key = detailsKey;
+            detailsColumn.dataset.key = `protocol-authoring-details-column:${detailsKey}`;
             detailsColumn.appendChild(details);
             workspace.dataset.hasInspector = 'true';
         }

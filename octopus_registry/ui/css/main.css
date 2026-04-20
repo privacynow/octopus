@@ -2689,6 +2689,7 @@ select {
     gap: var(--space-1-5);
     flex: 1 1 420px;
     min-width: 0;
+    width: 100%;
 }
 
 .kit-lifecycle-title-input {
@@ -4123,6 +4124,8 @@ select {
 
     .kit-lifecycle-title-input {
         font-size: 1.08rem;
+        width: 100%;
+        min-width: 0;
     }
 
     .kit-lifecycle-primary {

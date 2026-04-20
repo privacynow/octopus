@@ -929,16 +929,8 @@ window.UI = (() => {
         return typeof document !== 'undefined' && Boolean(document.hidden);
     }
 
-    function reconcileChildren(container, nextNodes) {
-        const target = container.cloneNode(false);
-        Array.from(nextNodes || []).forEach((node) => {
-            target.appendChild(node);
-        });
-        if (typeof morphdom !== 'function') {
-            container.replaceChildren(...Array.from(target.childNodes));
-            return;
-        }
-        morphdom(container, target, {
+    function _morphOptions() {
+        return {
             childrenOnly: true,
             getNodeKey(node) {
                 if (!(node instanceof Element)) return undefined;
@@ -957,7 +949,28 @@ window.UI = (() => {
                 }
                 return true;
             },
+        };
+    }
+
+    function reconcileElement(container, nextNode) {
+        if (!(container instanceof Element) || !(nextNode instanceof Element)) return;
+        if (typeof morphdom !== 'function') {
+            container.replaceWith(nextNode);
+            return;
+        }
+        morphdom(container, nextNode, _morphOptions());
+    }
+
+    function reconcileChildren(container, nextNodes) {
+        const target = container.cloneNode(false);
+        Array.from(nextNodes || []).forEach((node) => {
+            target.appendChild(node);
         });
+        if (typeof morphdom !== 'function') {
+            container.replaceChildren(...Array.from(target.childNodes));
+            return;
+        }
+        morphdom(container, target, _morphOptions());
     }
 
     function bindSegmentedControlKeyboard(group, onActivate) {
@@ -1067,6 +1080,7 @@ window.UI = (() => {
         buildConversationTypeBadge,
         isBackgrounded,
         reconcileChildren,
+        reconcileElement,
         bindSegmentedControlKeyboard,
         createErrorCard,
         renderError,

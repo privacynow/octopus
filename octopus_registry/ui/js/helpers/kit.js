@@ -1125,16 +1125,7 @@ window.Kit = (() => {
     } = {}) {
         const root = document.createElement('section');
         root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
-        root.dataset.key = [
-            'workflow-canvas',
-            mode,
-            String(viewState?.title || ''),
-            String(scene?.key || ''),
-            String(firstRun?.body || ''),
-            String(editorMode?.kind || ''),
-            String(editorMode?.sourceStageKey || ''),
-            String(editorMode?.decision || ''),
-        ].join('|');
+        root.dataset.key = `workflow-canvas:${mode}`;
         root.tabIndex = 0;
 
         if (firstRun && firstRun.active) {
@@ -1210,7 +1201,7 @@ window.Kit = (() => {
             root.appendChild(toolbar);
         }
 
-        const graphScene = scene || {
+        let graphScene = scene || {
             graph: {
                 nodes: Array.isArray(nodes) ? nodes : [],
                 edges: Array.isArray(edges) ? edges : [],
@@ -1218,6 +1209,7 @@ window.Kit = (() => {
             outline: [],
             keyboardOrder: [],
         };
+        let currentSelection = selection || { kind: 'overview', id: '' };
 
         function _moveSelection(delta) {
             if (typeof onSelect !== 'function') return;
@@ -1228,7 +1220,7 @@ window.Kit = (() => {
                     id: item.id,
                 })) : []);
             if (!ordered.length) return;
-            const currentId = String(selection?.id || '');
+            const currentId = String(currentSelection?.id || '');
             const idx = Math.max(0, ordered.findIndex((item) => String(item.id || '') === currentId));
             const next = ordered[Math.max(0, Math.min(ordered.length - 1, idx + delta))];
             if (next) onSelect({ kind: next.kind, id: next.id });
@@ -1237,6 +1229,7 @@ window.Kit = (() => {
         let cy = null;
         let disposed = false;
         let syncingFit = false;
+        let mountedSceneKey = '';
         let currentZoom = viewportState?.zoom === 'fit'
             ? 'fit'
             : Math.max(0.35, Math.min(2.25, Number(viewportState?.zoom || 1) || 1));
@@ -1455,6 +1448,11 @@ window.Kit = (() => {
             return [node.label, node.meta, node.secondary].map((item) => String(item || '').trim()).filter(Boolean).join('\n');
         }
 
+        function _selectionMatches(kind, id) {
+            return String(currentSelection?.kind || '') === String(kind || '')
+                && String(currentSelection?.id || '') === String(id || '');
+        }
+
         function _cyElements() {
             return [
                 ...(Array.isArray(graphScene.graph?.nodes) ? graphScene.graph.nodes : []).map((node) => ({
@@ -1466,7 +1464,7 @@ window.Kit = (() => {
                     },
                     classes: [
                         `kind-${String(node.kind || 'section')}`,
-                        node.selected ? 'is-selected' : '',
+                        node.selected || _selectionMatches(String(node.kind || 'section'), String(node.id || '')) ? 'is-selected' : '',
                         node.context ? 'is-context' : '',
                         node.emphasis === 'muted' ? 'is-muted' : '',
                     ].filter(Boolean).join(' '),
@@ -1479,6 +1477,7 @@ window.Kit = (() => {
                         label: String(edge.label || ''),
                     },
                     classes: [
+                        _selectionMatches('transition', String(edge.id || '')) ? 'is-selected' : '',
                         edge.primary ? 'is-primary' : '',
                         edge.muted ? 'is-muted' : '',
                     ].filter(Boolean).join(' '),
@@ -1486,20 +1485,53 @@ window.Kit = (() => {
             ];
         }
 
+        function _destroyCy() {
+            if (cy) {
+                try {
+                    cy.destroy();
+                } catch (_err) {
+                    // best effort
+                }
+                cy = null;
+            }
+        }
+
+        function _syncCySelection() {
+            if (!cy) return;
+            cy.batch(() => {
+                cy.nodes().forEach((node) => {
+                    const selected = _selectionMatches(String(node.data('kind') || 'section'), String(node.id() || ''));
+                    node.toggleClass('is-selected', selected);
+                });
+                cy.edges().forEach((edge) => {
+                    edge.toggleClass('is-selected', _selectionMatches('transition', String(edge.id() || '')));
+                });
+            });
+        }
+
         async function _layoutAndMount() {
             if (disposed || !root.isConnected) return;
+            const graphHostEl = root.querySelector('.kit-workflow-cy-host');
+            if (!(graphHostEl instanceof Element)) return;
+            const nextSceneKey = String(graphScene.key || '');
+            if (cy && mountedSceneKey === nextSceneKey) {
+                _syncCySelection();
+                return;
+            }
+            mountedSceneKey = nextSceneKey;
+            _destroyCy();
             if (typeof window.cytoscape !== 'function' || typeof window.ELK !== 'function') {
-                graphHost.replaceChildren(UI.createErrorCard('Workflow canvas dependencies are missing.'));
+                graphHostEl.replaceChildren(UI.createErrorCard('Workflow canvas dependencies are missing.'));
                 return;
             }
             const elements = _cyElements();
             if (!elements.length) {
-                graphHost.replaceChildren(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first step to start shaping the workflow.')));
+                graphHostEl.replaceChildren(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first step to start shaping the workflow.')));
                 return;
             }
 
             cy = window.cytoscape({
-                container: graphHost,
+                container: graphHostEl,
                 elements,
                 style: [
                     {
@@ -1622,6 +1654,14 @@ window.Kit = (() => {
                             'target-arrow-color': '#8f4f2a',
                         },
                     },
+                    {
+                        selector: 'edge.is-selected',
+                        style: {
+                            'line-color': '#8f4f2a',
+                            'target-arrow-color': '#8f4f2a',
+                            'width': 3,
+                        },
+                    },
                 ],
                 wheelSensitivity: 0.18,
                 userPanningEnabled: true,
@@ -1663,6 +1703,7 @@ window.Kit = (() => {
                 },
             ]));
             cy.nodes().positions((node) => positions.get(String(node.id() || '')) || { x: 0, y: 0 });
+            _syncCySelection();
 
             cy.on('tap', 'node', (event) => {
                 if (typeof onSelect === 'function') {
@@ -1695,21 +1736,27 @@ window.Kit = (() => {
             }
         }
 
-        root.__workflowCanvasCleanup = () => {
-            disposed = true;
-            if (cy) {
-                try {
-                    cy.destroy();
-                } catch (_err) {
-                    // best effort
-                }
-            }
+        root.__workflowCanvasSync = ({
+            scene: nextScene = graphScene,
+            selection: nextSelection = currentSelection,
+            viewportState: nextViewportState = {},
+        } = {}) => {
+            graphScene = nextScene || graphScene;
+            currentSelection = nextSelection || currentSelection;
+            currentZoom = nextViewportState?.zoom === 'fit'
+                ? 'fit'
+                : Math.max(0.35, Math.min(2.25, Number(nextViewportState?.zoom || currentZoom || 1) || 1));
+            if (!root.isConnected || disposed) return;
+            requestAnimationFrame(() => {
+                if (disposed) return;
+                void _layoutAndMount();
+            });
         };
 
-        requestAnimationFrame(() => {
-            if (disposed) return;
-            void _layoutAndMount();
-        });
+        root.__workflowCanvasCleanup = () => {
+            disposed = true;
+            _destroyCy();
+        };
 
         const extras = Array.isArray(accessorySections) ? accessorySections.filter(Boolean) : [];
         if (extras.length) {

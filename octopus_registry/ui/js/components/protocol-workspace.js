@@ -3533,12 +3533,37 @@ function renderProtocolWorkspace(container) {
         }
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
-        UI.reconcileChildren(contentEl, [headerEl, workspace]);
-        const nextCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
-        if (previousCanvasRoot && previousCanvasRoot !== nextCanvasRoot && typeof previousCanvasRoot.__workflowCanvasCleanup === 'function') {
+        const nextCanvasRoot = workspace.querySelector('.kit-workflow-canvas');
+        if (previousCanvasRoot && nextCanvasRoot) {
+            UI.reconcileElement(previousCanvasRoot, nextCanvasRoot);
+            nextCanvasRoot.replaceWith(previousCanvasRoot);
+        }
+        contentEl.replaceChildren(headerEl, workspace);
+        const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
+        if (activeCanvasRoot && typeof activeCanvasRoot.__workflowCanvasSync === 'function') {
+            activeCanvasRoot.__workflowCanvasSync({
+                scene: workflow.scene,
+                selection: {
+                    kind: selection.sectionKey === 'segments'
+                        ? 'segment'
+                        : selection.sectionKey === 'transitions'
+                            ? 'transition'
+                            : selection.sectionKey === 'participants'
+                                ? 'participant'
+                                : selection.sectionKey === 'artifacts'
+                                    ? 'artifact'
+                                    : selection.sectionKey === 'stages'
+                                        ? 'stage'
+                                        : 'overview',
+                    id: selection.nodeKey,
+                },
+                viewportState: { zoom: _canvasZoomValue() },
+            });
+        }
+        if (previousCanvasRoot && previousCanvasRoot !== activeCanvasRoot && typeof previousCanvasRoot.__workflowCanvasCleanup === 'function') {
             previousCanvasRoot.__workflowCanvasCleanup();
         }
-        contentEl.__workflowCanvasRoot = nextCanvasRoot || null;
+        contentEl.__workflowCanvasRoot = activeCanvasRoot || null;
         _lifecycleHeaderRef = contentEl.querySelector('.kit-lifecycle-header');
     }
 

@@ -4122,6 +4122,10 @@ select {
         align-items: stretch;
     }
 
+    .kit-lifecycle-title {
+        flex: 1 1 auto;
+    }
+
     .kit-lifecycle-title-input {
         font-size: 1.08rem;
         width: 100%;

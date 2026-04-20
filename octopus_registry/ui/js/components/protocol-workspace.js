@@ -2554,8 +2554,8 @@ function renderProtocolWorkspace(container) {
             label: String(segment.label || 'Untitled section'),
             meta: '',
             secondary: '',
-            width: compact ? 156 : 188,
-            height: compact ? 52 : 58,
+            width: compact ? 148 : 164,
+            height: compact ? 50 : 54,
         }));
         const edges = projection.segments.flatMap((segment) =>
             (segment.outgoingEdges || [])
@@ -2573,9 +2573,9 @@ function renderProtocolWorkspace(container) {
             hint: editorMode.kind === 'rehearse' ? 'Rehearsal is active. Workflow state is annotated on the same canvas while authoring is paused.' : '',
             outlineTitle: 'Workflow outline',
             direction: compact ? 'DOWN' : 'RIGHT',
-            fitPadding: compact ? 24 : 64,
-            nodeSpacing: compact ? 22 : 34,
-            layerSpacing: compact ? 42 : 78,
+            fitPadding: compact ? 18 : 40,
+            nodeSpacing: compact ? 18 : 24,
+            layerSpacing: compact ? 32 : 54,
             graph: { nodes, edges },
             focusIds: nodes.map((node) => node.id),
         };

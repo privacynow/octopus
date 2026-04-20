@@ -2458,7 +2458,31 @@ function renderProtocolWorkspace(container) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
         const selectedStage = _selectionStage(draft.document);
         const selectedTransition = _selectionTransition(draft.document);
-        const selectedStageAnchor = selectedStage ? _defaultStageInsertAnchor(selectedStage, projection) : null;
+        const activeSegmentId = _selectionSegmentId(projection);
+        const activeSegment = projection.segmentsById.get(String(activeSegmentId || '')) || null;
+        let selectedStageAnchor = null;
+        let insertLabel = 'Insert step here';
+        if (selectedStage) {
+            let anchorStage = selectedStage;
+            if (
+                activeSegment
+                && Array.isArray(activeSegment.stageKeys)
+                && activeSegment.stageKeys.includes(String(selectedStage.stage_key || ''))
+                && String(activeSegment.endStageKey || '') !== String(selectedStage.stage_key || '')
+            ) {
+                anchorStage = (draft.document.stages || []).find((item) =>
+                    String(item.stage_key || '') === String(activeSegment.endStageKey || ''),
+                ) || selectedStage;
+                insertLabel = `Insert after ${String(activeSegment.label || 'section')}`;
+            }
+            selectedStageAnchor = _defaultStageInsertAnchor(anchorStage, projection);
+        } else if (selection.sectionKey === 'segments' && activeSegment?.endStageKey) {
+            const anchorStage = (draft.document.stages || []).find((item) =>
+                String(item.stage_key || '') === String(activeSegment.endStageKey || ''),
+            ) || null;
+            selectedStageAnchor = anchorStage ? _defaultStageInsertAnchor(anchorStage, projection) : null;
+            insertLabel = `Insert after ${String(activeSegment.label || 'section')}`;
+        }
         const insertAnchor = selectedTransition
             ? {
                 sourceStageKey: selectedTransition.from_stage_key,
@@ -2475,7 +2499,7 @@ function renderProtocolWorkspace(container) {
                 },
             }] : []),
             {
-                label: insertAnchor ? 'Insert step here' : Kit.dict.label('protocol.stages.add'),
+                label: insertAnchor ? insertLabel : Kit.dict.label('protocol.stages.add'),
                 tone: 'btn-small',
                 onClick: () => _startStageInsert(insertAnchor || {}),
                 disabled: !canMutate,

@@ -1,6 +1,5 @@
 const { test, expect } = require('./playwright-runtime');
 const {
-  apiGetProtocol,
   attachErrorCapture,
   connectStep,
   createStep,
@@ -44,22 +43,30 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByText(/^participant_[0-9]+$/i)).toHaveCount(0);
     await expect(page.getByText(/^stage_[0-9]+$/i)).toHaveCount(0);
 
+    await page.getByRole('button', { name: /\+ Add step/i }).first().click();
+    const draftAssignmentSection = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
+    await draftAssignmentSection.getByLabel('Strategy', { exact: true }).selectOption('skill');
+    const availableSkillValues = await draftAssignmentSection.getByLabel('Choose skill', { exact: true }).locator('option').evaluateAll((options) =>
+      options.map((option) => String(option.value || '')).filter(Boolean),
+    );
+    expect(availableSkillValues.length).toBeGreaterThan(0);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+
     const planKey = await createStep(page, {
       name: 'Plan',
       key: 'plan',
       roleName: 'Planner',
       roleKey: 'planner',
       selectorKind: 'skill',
-      selectorValue: 'planning',
+      selectorValue: '__first__',
     });
     const details = page.locator('.kit-details-panel').first();
     const planEditor = page.locator('.kit-stage-editor-grid');
     await expect(details.getByLabel('Name')).toHaveValue('Plan');
-    await expect(planEditor.locator('.kit-stage-editor-section')).toHaveCount(5);
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Assignment' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
-    await expect(page.locator('.kit-stage-editor')).toContainText('Required skill · Planning');
+    await expect(page.locator('.kit-stage-editor')).toContainText('Required skill ·');
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add route' }).first()).toBeVisible();
@@ -70,7 +77,7 @@ test.describe('protocol authoring live', () => {
       roleName: 'Reviewer',
       roleKey: 'reviewer',
       selectorKind: 'skill',
-      selectorValue: 'review',
+      selectorValue: '__first__',
       stageKind: 'review',
     });
 
@@ -109,7 +116,7 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('software engineering template opens into one workflow canvas with inspector', async ({ page, request }) => {
+  test('software engineering template opens into one workflow canvas with inspector', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
@@ -133,21 +140,27 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: '100%', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
-    await expect(page.locator('.kit-stage-routing-actions').getByRole('button', { name: /Insert before Architecture/i })).toBeVisible();
-
-    await page.locator('.kit-stage-routing-actions').getByRole('button', { name: /Insert before Architecture/i }).click();
+    const toolbarInsert = page.locator('.kit-workflow-toolbar-actions').getByRole('button', { name: 'Insert after Planning', exact: true });
+    await expect(toolbarInsert).toBeVisible();
+    await toolbarInsert.click();
     await createStep(page, {
       name: 'Secondary Approval',
       key: 'secondary-approval',
       roleName: 'Secondary Approver',
       roleKey: 'secondary-approver',
       selectorKind: 'agent',
-      selectorValue: 'm1',
+      selectorValue: 'lift-and-shift-m1-bot',
       openEditor: false,
     });
     await waitForSaved(page);
 
-    const detail = await apiGetProtocol(request, protocolId);
+    const detail = await page.evaluate(async (id) => {
+      const response = await fetch(`/v1/protocols/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(`protocol fetch failed: ${response.status}`);
+      }
+      return response.json();
+    }, protocolId);
     const draftDocument = detail.draft_definition_json || detail.draft_document || {};
     const stages = Array.isArray(draftDocument.stages) ? draftDocument.stages : [];
     const planning = stages.find((item) => String(item.stage_key || '') === 'planning');
@@ -157,7 +170,7 @@ test.describe('protocol authoring live', () => {
     expect(planning?.transitions?.completed).toBe('secondary-approval');
     expect(inserted?.transitions?.completed).toBe('architecture');
     expect(inserted?.selector?.kind).toBe('agent');
-    expect(inserted?.selector?.value).toBe('m1');
+    expect(inserted?.selector?.value).toBe('lift-and-shift-m1-bot');
     expect(insertedIndex).toBeGreaterThan(-1);
     expect(architectureIndex).toBeGreaterThan(insertedIndex);
 

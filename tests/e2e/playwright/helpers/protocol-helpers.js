@@ -137,7 +137,16 @@ async function createStep(page, {
   const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true });
   const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
   if (valueTag === 'select') {
-    await valueControl.selectOption(selectorValue);
+    let targetValue = selectorValue;
+    if (selectorValue === '__first__') {
+      targetValue = await valueControl.locator('option').evaluateAll((options) =>
+        options.map((option) => String(option.value || '')).find((value) => value),
+      );
+      if (!targetValue) {
+        throw new Error(`No selectable ${selectorKind} option is available for ${key || name}`);
+      }
+    }
+    await valueControl.selectOption(targetValue);
   } else {
     await valueControl.fill(selectorValue);
     await valueControl.blur();

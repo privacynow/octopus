@@ -2572,7 +2572,7 @@ function renderProtocolWorkspace(container) {
             subtitle: 'Read the workflow here. Select a section or step to inspect local routes and edit in the inspector.',
             hint: editorMode.kind === 'rehearse' ? 'Rehearsal is active. Workflow state is annotated on the same canvas while authoring is paused.' : '',
             outlineTitle: 'Workflow outline',
-            direction: compact ? 'DOWN' : 'RIGHT',
+            direction: 'DOWN',
             fitPadding: compact ? 18 : 40,
             nodeSpacing: compact ? 18 : 24,
             layerSpacing: compact ? 32 : 54,

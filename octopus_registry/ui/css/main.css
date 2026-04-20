@@ -3367,6 +3367,15 @@ select {
     gap: var(--space-2);
 }
 
+.kit-selector-editor[data-show-all-primary="true"] [data-selector-kind] {
+    display: none;
+}
+
+.kit-selector-editor[data-show-all-primary="true"]:has(select[aria-label="Strategy"] option[value="agent"]:checked) [data-selector-kind="agent"],
+.kit-selector-editor[data-show-all-primary="true"]:has(select[aria-label="Strategy"] option[value="skill"]:checked) [data-selector-kind="skill"] {
+    display: grid;
+}
+
 .kit-selector-editor-note {
     margin: 0;
     color: var(--text-muted);
@@ -3554,6 +3563,14 @@ select {
 
 .kit-stage-editor-section.is-wide {
     grid-column: 1 / -1;
+}
+
+.kit-stage-editor-grid[data-create-mode="true"] .kit-stage-editor-new-role {
+    display: none;
+}
+
+.kit-stage-editor-grid[data-create-mode="true"]:has(#kit-details-participant_key option[value="__new__"]:checked) .kit-stage-editor-new-role {
+    display: grid;
 }
 
 .kit-stage-editor-title {

@@ -1487,6 +1487,41 @@ function renderProtocolWorkspace(container) {
         _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
     }
 
+    function _syncPendingStageFromMountedEditor() {
+        const editor = contentEl.querySelector('.kit-stage-editor-grid');
+        if (!(editor instanceof Element)) return;
+        const readValue = (selector) => {
+            const control = editor.querySelector(selector);
+            return control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
+                ? String(control.value || '')
+                : '';
+        };
+        pendingStage.display_name = readValue('#kit-details-display_name');
+        pendingStage.participant_key = readValue('#kit-details-participant_key');
+        pendingStage.stage_kind = readValue('#kit-details-stage_kind') || 'work';
+        pendingStage.role_display_name = readValue('#kit-details-role_display_name');
+        pendingStage.role_participant_key = _slugSuggestion(readValue('#kit-details-role_participant_key'));
+        pendingStage.role_instructions = readValue('#kit-details-role_instructions');
+        pendingStage.instructions = readValue('#kit-details-instructions');
+        pendingStage.max_rounds = Number.parseInt(readValue('#kit-details-max_rounds') || '0', 10) || 0;
+        pendingStage.timeout_seconds = Number.parseInt(readValue('#kit-details-timeout_seconds') || '0', 10) || 0;
+        const advancedKind = readValue('select[aria-label="Advanced strategy"]');
+        const primaryKind = readValue('select[aria-label="Strategy"]');
+        const selectorKind = String(advancedKind || primaryKind || '').trim().toLowerCase();
+        let selectorValue = '';
+        if (selectorKind === 'agent') {
+            selectorValue = readValue('[aria-label="Choose agent"]');
+        } else if (selectorKind === 'skill') {
+            selectorValue = readValue('[aria-label="Choose skill"]');
+        } else if (selectorKind === 'role') {
+            selectorValue = readValue('[aria-label="Choose runtime role tag"]') || readValue('[aria-label="Custom value"]');
+        } else {
+            selectorValue = readValue('[aria-label="Custom value"]');
+        }
+        pendingStage.selector_kind = selectorKind;
+        pendingStage.selector_value = selectorValue;
+    }
+
     function _bindPendingStageEditorControls(root) {
         if (!(root instanceof Element) || root.dataset.pendingStageBindings === 'true') return;
         root.dataset.pendingStageBindings = 'true';
@@ -1584,6 +1619,7 @@ function renderProtocolWorkspace(container) {
     }
 
     function _confirmStageInsert() {
+        _syncPendingStageFromMountedEditor();
         const displayName = String(pendingStage.display_name || '').trim();
         if (!displayName) {
             UI.notify('Give this step a name before adding it to the workflow.', 'warning');
@@ -2247,9 +2283,11 @@ function renderProtocolWorkspace(container) {
         readOnly = false,
         onChange = null,
         onSelectorChange = null,
+        showAllPrimaryValues = false,
     } = {}) {
         const wrap = document.createElement('section');
         wrap.className = 'kit-selector-editor';
+        if (showAllPrimaryValues) wrap.dataset.showAllPrimary = 'true';
         const emit = (key, value) => {
             if (typeof onChange === 'function') onChange(null, key, value);
         };
@@ -2306,7 +2344,19 @@ function renderProtocolWorkspace(container) {
         strategyRow.appendChild(strategyControl);
         wrap.appendChild(strategyRow);
 
-        if (primaryKind) {
+        if (showAllPrimaryValues) {
+            primaryKinds.forEach((kind) => {
+                const { element } = _buildSelectorValueField({
+                    selectorKind: kind,
+                    selectorValue: String(normalizedKind || '') === String(kind || '') ? selectorValue : '',
+                    readOnly,
+                    onChange,
+                    label: `Choose ${_selectorValueLabel(kind)}`,
+                });
+                element.dataset.selectorKind = String(kind || '');
+                wrap.appendChild(element);
+            });
+        } else if (primaryKind) {
             const { element } = _buildSelectorValueField({
                 selectorKind: primaryKind,
                 selectorValue,
@@ -3340,6 +3390,9 @@ function renderProtocolWorkspace(container) {
 
         const grid = document.createElement('div');
         grid.className = 'kit-stage-editor-grid';
+        if (createAction) {
+            grid.dataset.createMode = 'true';
+        }
 
         const summaryActions = [];
         if (createAction) {
@@ -3360,7 +3413,7 @@ function renderProtocolWorkspace(container) {
             actions: summaryActions,
         });
         grid.appendChild(_stageEditorSection('Step basics', summaryPanel));
-        if (String(target?.participant_key || '') === '__new__') {
+        if (createAction || String(target?.participant_key || '') === '__new__') {
             const rolePanel = Kit.detailsPanel({
                 target,
                 surfaceKey: 'protocol.participant',
@@ -3371,7 +3424,9 @@ function renderProtocolWorkspace(container) {
                     { key: 'role_instructions', kind: 'textarea', rows: 3, label: 'Shared instructions', help: 'Optional guidance shared by every step that uses this role.', commitOnInput: true },
                 ]),
             });
-            grid.appendChild(_stageEditorSection('New owner role', rolePanel, { wide: true }));
+            const roleSection = _stageEditorSection('New owner role', rolePanel, { wide: true });
+            roleSection.classList.add('kit-stage-editor-new-role');
+            grid.appendChild(roleSection);
         }
         grid.appendChild(_stageEditorSection('Assignment', _selectorEditor({
             selectorKind: String(target?.selector_kind || ''),
@@ -3384,6 +3439,7 @@ function renderProtocolWorkspace(container) {
                 : (typeof onCommit === 'function' && target?.stage_key
                     ? (kind, value) => _commitStageSelector(String(target.stage_key || ''), kind, value)
                     : null),
+            showAllPrimaryValues: Boolean(createAction),
         }), { wide: true }));
 
         if (!createAction) {

@@ -69,7 +69,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-stage-editor')).toContainText('Required skill ·');
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Add route' }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add branch or finish' }).first()).toBeVisible();
 
     const reviewKey = await createStep(page, {
       name: 'Review',
@@ -172,7 +172,8 @@ test.describe('protocol authoring live', () => {
     const inserted = stages.find((item) => String(item.stage_key || '') === 'secondary-approval');
     const insertedIndex = stages.findIndex((item) => String(item.stage_key || '') === 'secondary-approval');
     const architectureIndex = stages.findIndex((item) => String(item.stage_key || '') === 'architecture');
-    expect(planning?.transitions?.completed).toBe('secondary-approval');
+    expect(planning?.transitions?.completed).toBe('plan_review');
+    expect(stages.find((item) => String(item.stage_key || '') === 'plan_review')?.transitions?.accept).toBe('secondary-approval');
     expect(inserted?.transitions?.completed).toBe('architecture');
     expect(inserted?.selector?.kind).toBe('agent');
     expect(inserted?.selector?.value).toBe('lift-and-shift-m1-bot');

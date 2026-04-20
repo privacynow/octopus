@@ -1442,6 +1442,7 @@ window.Kit = (() => {
         viewport.className = 'kit-workflow-viewport kit-workflow-viewport-cy';
         const graphHost = document.createElement('div');
         graphHost.className = 'kit-workflow-cy-host';
+        graphHost.dataset.signature = `workflow-graph:${String(graphScene.key || '')}`;
         viewport.appendChild(graphHost);
 
         canvasColumn.appendChild(controls);

@@ -180,19 +180,15 @@ async function connectStep(page, sourceStageKey, targetNodeId) {
   }
   await stageNode.click();
   await expect(page).toHaveURL(new RegExp(`stage_key=${sourceStageKey}`));
-  const routingAdd = page.locator('.kit-stage-routing').getByRole('button', { name: 'Add route' }).first();
-  const toolbarAdd = page.locator('.kit-workflow-toolbar').getByRole('button', { name: 'Add route' }).first();
-  if (await routingAdd.count()) {
-    await routingAdd.click();
-  } else {
-    await toolbarAdd.click();
-  }
-  const createRoute = page.getByRole('button', { name: 'Create route' });
-  await expect(createRoute).toBeVisible();
-  const routePanel = page.locator('.kit-details-panel').filter({ has: createRoute }).first();
+  const branchAdd = page.locator('.kit-stage-routing').getByRole('button', { name: 'Add branch or finish' }).first();
+  await expect(branchAdd).toBeVisible();
+  await branchAdd.click();
+  const saveBranch = page.getByRole('button', { name: 'Save branch' });
+  await expect(saveBranch).toBeVisible();
+  const routePanel = page.locator('.kit-details-panel').filter({ has: saveBranch }).first();
   await expect(routePanel).toBeVisible();
-  await routePanel.getByLabel('Next step').selectOption(targetNodeId);
-  await createRoute.click();
+  await routePanel.getByLabel('Go to').selectOption(targetNodeId);
+  await saveBranch.click();
 }
 
 async function discardDraft(page) {

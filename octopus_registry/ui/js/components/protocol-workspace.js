@@ -2309,12 +2309,12 @@ function renderProtocolWorkspace(container) {
             surfaceKey: 'protocol.transition',
             onCommit,
             schema: [
-                { key: 'source_stage', kind: 'text', label: 'From step', help: 'This route leaves the selected step.', readOnly: true },
-                { key: 'decision', kind: 'select', options: _decisionOptionsForStage(sourceStage, target?.decision), disabled: readOnly, labelKey: 'protocol.transition.decision.label', helpKey: 'protocol.transition.decision.help' },
-                { key: 'target_key', kind: 'select', options: _routeTargetOptions(sourceStage?.stage_key || target?.source_stage_key || '', projection), disabled: readOnly, labelKey: 'protocol.transition.target.label', helpKey: 'protocol.transition.target.help' },
+                { key: 'source_stage', kind: 'text', label: 'From step', help: 'This branch leaves the selected step.', readOnly: true },
+                { key: 'decision', kind: 'select', options: _decisionOptionsForStage(sourceStage, target?.decision), disabled: readOnly, label: 'When', help: 'Name the outcome or decision that triggers this branch.' },
+                { key: 'target_key', kind: 'select', options: _routeTargetOptions(sourceStage?.stage_key || target?.source_stage_key || '', projection), disabled: readOnly, label: 'Go to', help: 'Choose the next step or a finish outcome for this branch.' },
             ],
             actions: [
-                ...(createAction ? [{ label: 'Create route', tone: 'btn-primary', onClick: createAction }] : []),
+                ...(createAction ? [{ label: 'Save branch', tone: 'btn-primary', onClick: createAction }] : []),
                 ...(insertAction ? [{ label: 'Insert step here', onClick: insertAction }] : []),
                 ...(deleteAction ? [{ label: Kit.dict.label('protocol.transition.delete'), tone: 'btn-danger', onClick: deleteAction }] : []),
                 ...(cancelAction ? [{ label: 'Cancel', onClick: cancelAction }] : []),
@@ -2560,11 +2560,6 @@ function renderProtocolWorkspace(container) {
                 onClick: () => _startStageInsert(insertAnchor || {}),
                 disabled: !canMutate,
             },
-            ...(selectedStage && canMutate && editorMode.kind === 'idle' ? [{
-                label: 'Add route',
-                tone: 'btn-small',
-                onClick: () => _startRouteInsert(selectedStage.stage_key),
-            }] : []),
             ...(rehearsal.runId ? [{
                 label: editorMode.kind === 'rehearse' ? 'Back to authoring' : 'View rehearsal',
                 tone: 'btn-small',
@@ -2779,8 +2774,6 @@ function renderProtocolWorkspace(container) {
                 ...scene,
                 key: [
                     String(activeSegmentId || ''),
-                    String(selection.sectionKey || ''),
-                    String(selection.nodeKey || ''),
                     ...((scene.graph?.nodes || []).map((item) => String(item.id || ''))),
                     ...((scene.graph?.edges || []).map((item) => String(item.id || ''))),
                 ].join('|'),
@@ -3009,14 +3002,14 @@ function renderProtocolWorkspace(container) {
 
         const intro = document.createElement('p');
         intro.className = 'kit-stage-routing-copy';
-        intro.textContent = 'Choose where this step goes next.';
+        intro.textContent = 'Use branches only when this step can go to different next steps or finish outcomes.';
         head.appendChild(intro);
 
         if (!readOnly && typeof connectAction === 'function') {
             const add = document.createElement('button');
             add.type = 'button';
             add.className = 'btn btn-small';
-            add.textContent = 'Add route';
+            add.textContent = 'Add branch or finish';
             add.addEventListener('click', connectAction);
             head.appendChild(add);
         }
@@ -3035,7 +3028,7 @@ function renderProtocolWorkspace(container) {
             empty.className = 'kit-stage-routing-empty';
             empty.textContent = readOnly
                 ? 'No routes are defined for this step yet.'
-                : 'No routes yet. Add the next step or finish path from here.';
+                : 'No branches yet. Add a finish outcome or another next step from here when this step can split.';
             panel.appendChild(empty);
             return panel;
         }
@@ -3506,17 +3499,20 @@ function renderProtocolWorkspace(container) {
 
         const workspace = document.createElement('div');
         workspace.className = 'kit-authoring-workspace';
+        workspace.dataset.key = 'protocol-authoring-workspace';
         workspace.dataset.selection = String(selection.sectionKey || 'overview');
         workspace.dataset.editorMode = String(editorMode.kind || 'idle');
 
         const canvasColumn = document.createElement('div');
         canvasColumn.className = 'kit-authoring-canvas-column';
+        canvasColumn.dataset.key = 'protocol-authoring-canvas-column';
         const canvasRoot = _surfaceCanvasEl(workflow);
         canvasColumn.appendChild(canvasRoot);
         workspace.appendChild(canvasColumn);
 
         const detailsColumn = document.createElement('div');
         detailsColumn.className = 'kit-authoring-details-column';
+        detailsColumn.dataset.key = 'protocol-authoring-details-column';
         const details = _detailsEl(workflow);
         if (details) {
             detailsColumn.appendChild(details);
@@ -3536,12 +3532,14 @@ function renderProtocolWorkspace(container) {
             workspace.appendChild(detailsColumn);
         }
 
-        if (contentEl.__workflowCanvasRoot?.__workflowCanvasCleanup) {
-            contentEl.__workflowCanvasRoot.__workflowCanvasCleanup();
+        const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
+        UI.reconcileChildren(contentEl, [headerEl, workspace]);
+        const nextCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
+        if (previousCanvasRoot && previousCanvasRoot !== nextCanvasRoot && typeof previousCanvasRoot.__workflowCanvasCleanup === 'function') {
+            previousCanvasRoot.__workflowCanvasCleanup();
         }
-        contentEl.replaceChildren(headerEl, workspace);
-        contentEl.__workflowCanvasRoot = canvasRoot;
-        _lifecycleHeaderRef = headerEl;
+        contentEl.__workflowCanvasRoot = nextCanvasRoot || null;
+        _lifecycleHeaderRef = contentEl.querySelector('.kit-lifecycle-header');
     }
 
     async function loadProtocols({ quiet = false } = {}) {

@@ -2,7 +2,7 @@
 
 ## Live Audit State — 2026-04-20
 
-This section supersedes guesswork. It is based on a live Octopus audit against the deployed registry at commit `3d17469`, not stale local captures.
+This section is the current source of truth. It reflects the live Octopus deployment at commit `f7cdcdd`, not stale local screenshots or earlier broken deployments.
 
 ### Audit coverage completed
 
@@ -24,169 +24,129 @@ This section supersedes guesswork. It is based on a live Octopus audit against t
   - published skill-assigned protocol run
   - run detail on `/ui/runs`
   - run list filters on desktop / tablet / mobile
+- Current live suite status:
+  - `tests/e2e/playwright/protocol-ui.spec.js` passes live against Octopus
+  - `.tmp/playwright/live-exhaustive-audit.spec.js` passes live against Octopus
+  - `.tmp/playwright/live-runs-filter-matrix.spec.js` passes live against Octopus
 
 ### Audit artifact count
 
 Fresh live captures under `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit`:
 
-- 510 screenshots total
-- 113 full-page captures
-- 90 canvas captures
-- 81 details-panel captures
-- 90 outline captures
-- 105 header/list/detail supplementary captures
+- 671 screenshots total on the current build
+
+Representative current-state captures:
+
+- rehearsal inspector visible: `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-desktop-16-rehearsal-page.png`
+- desktop focused editor: `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-desktop-stage-00-plan_review-page.png`
+- mobile focused editor: `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-mobile-plan_review-page.png`
 
 ### Verified working flows
 
-These are no longer speculative:
+These are now verified on the current live build:
 
-- Skill assignment dropdowns populate from live registry data.
-- Agent assignment dropdowns populate from live registry data.
-- Blank-draft publish, rehearse, and archive completed in the live UI.
-- Agent-assigned execution created a live protocol run and surfaced in `/ui/runs`.
-- Skill-assigned execution created a live protocol run and surfaced in `/ui/runs`.
-- Transition detail editing and transition deletion are exposed in the live UI.
+- blank draft step-first authoring works end-to-end
+- inline `Create new role…` works in blank drafts and template insert flows
+- skill assignment dropdowns render in the insert editor and populate from live/workflow-backed data
+- agent assignment dropdowns render in the insert editor and populate from live registry data
+- insert-after between existing stages persists correctly
+- stage deletion is available and rewires the surrounding route correctly in the tested case
+- branch / finish authoring works from the step editor
+- blank-draft validate / publish / rehearse / archive works in the live UI
+- rehearsal now surfaces as the active right-column inspector
+- agent-assigned execution created a live protocol run and surfaced in `/ui/runs`
+- skill-assigned execution created a live protocol run and surfaced in `/ui/runs`
+- runs filter matrix passes on desktop / tablet / mobile
 
-### Verified defects still blocking acceptable UX
+### Previously verified defects now closed
 
-#### 1. Step deletion is missing
+These items were real defects and are no longer open on the current build:
 
-This is a hard product gap.
+1. Missing stage deletion
+2. Broken first-step / single-step outline semantics
+3. Broken insert-step role creation
+4. Broken skill / agent dropdown discovery in the insert editor
+5. Rehearsal mode missing a visible inspector surface
 
-- Authors can insert stages.
-- Authors can remove transitions.
-- Authors cannot remove a stage from the workflow anywhere in the authoring surface.
+### Verified defects still open
 
-Evidence:
+The remaining issues are now predominantly UX and density problems rather than hard authoring blockers.
 
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-desktop-12-review-route-detail-page.png`
+#### 1. Mobile authoring is still too dense
 
-Fix required:
+The mobile surface is functional, but still too long and too crowded.
 
-- Add one explicit destructive action for stage deletion in the step editor.
-- Define and implement the rewrite semantics for predecessor/successor transitions:
-  - delete isolated stage
-  - delete stage with one incoming + one outgoing route
-  - delete stage with multiple incoming/outgoing routes
-- Add live regression coverage for add -> delete -> verify graph + outline + transitions.
+Observed in the current live audit:
 
-#### 2. Blank / single-step outline semantics are inconsistent
-
-The first-step and single-step flows do not expose a stable stage-selection model.
-
-Observed behavior:
-
-- A newly created one-step workflow may surface only a segment-like outline item rather than a stable stage row keyed by the actual `stage_key`.
-- In blank flows, the outline can show `Plan` as the section header and `Work` as the child row instead of repeating the actual step name.
-- The execution audit had to bypass direct stage-outline assumptions because the outline shape was not stable enough to trust.
-
-This is not just a testing inconvenience. It means the author is not getting one consistent mental model for:
-
-- section
-- step
-- stage kind
-
-Evidence:
-
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-desktop-12-review-route-detail-page.png`
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/test-results/live-exhaustive-audit-live-6ff08-execution-and-runs-surfaces/test-failed-1.png`
-
-Fix required:
-
-- Make outline ownership explicit:
-  - segment row label
-  - step row label
-  - stage kind as secondary metadata only
-- Keep the step row keyed to the actual `stage_key` in all states, including single-step workflows.
-- Stop substituting generic stage-kind labels like `Work` where the user expects the actual step name.
-
-#### 3. Inspector / canvas remount churn still exists during insert and panel transitions
-
-The authoring surface is more stable than before, but still not stable enough.
-
-During the live capture audit there were detached-node retries while capturing ordinary insert/panel transitions:
-
-- `detached_retries = 4`
-
-That means the inspector/canvas shell is still remounting often enough to race DOM attachment during normal interaction.
-
-Evidence:
-
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-desktop-insert-panel-page.png`
-
-Fix required:
-
-- Keep the details column mounted during insert-state transitions.
-- Stop remounting the graph host or details host when only panel mode changes.
-- Split scene updates from panel updates and selection updates.
-- Add instrumentation and assertions for:
-  - no canvas destroy/create on insert-panel open
-  - no details-column detach on route/insert selection
-
-#### 4. Mobile authoring is still too dense and vertically stacked
-
-The mobile surface is functional but still not acceptable.
-
-Observed in the live audit:
-
-- outline
-- canvas
+- section outline
+- focused graph
 - full step editor
-- assignment
+- assignment preview
+- routing
 - instructions
 - artifacts
 - advanced
 
-all stack into one long scroll. The result is technically usable but cognitively heavy and visually cramped.
+still stack into a heavy one-column surface.
 
 Evidence:
 
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-mobile-add-step-page.png`
 - `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-mobile-plan_review-page.png`
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-mobile-add-step-page.png`
 
 Fix required:
 
-- Make mobile authoring task-first instead of dumping the full desktop composition into one column.
-- Prefer:
-  - structure selection first
-  - focused step editor second
-  - collapsible or sheet-based advanced sections
-- Reduce simultaneous visible concerns on compact screens.
+- reduce simultaneous visible concerns on compact screens
+- make advanced content more aggressively collapsed on mobile
+- keep structure selection and immediate editing higher in the visual hierarchy than lower-value detail
 
-#### 5. Mobile runs surface is also too dense
+#### 2. Mobile runs is still too dense
 
-The runs route works, but on mobile it stacks:
-
-- issue filter controls
-- run list
-- run detail
-- participant filter
-- stage executions
-- participants
-- artifacts
-- transitions
-
-into one extremely long screen.
+The runs route is working, but it still presents a support-heavy surface as one long stacked page on mobile.
 
 Evidence:
 
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/runs-mobile-blocked-page.png`
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/runs-list-mobile-page.png`
 
 Fix required:
 
-- Separate list vs detail more clearly on mobile.
-- Collapse or defer heavy detail sections until explicitly opened.
-- Do not render the full support/admin triage surface as one uninterrupted phone-length page.
+- separate list vs detail more clearly on mobile
+- collapse lower-priority execution sections by default
+- stop rendering the full triage stack as one uninterrupted phone-length page
 
-### Priority order from the live audit
+#### 3. Desktop focused-step editing is still text-heavy
 
-1. Add real stage deletion.
-2. Fix outline semantics for first-step / single-step / generic `Work` labeling.
-3. Eliminate remaining insert/details remount churn.
-4. Redesign compact mobile composition for authoring.
-5. Redesign compact mobile composition for runs.
+Desktop is functionally solid, but the focused step/editor composition is still denser than it should be.
 
-This plan replaces the earlier canvas/mobile-only cleanup scope. The current blocking problem is not primarily visual polish. It is that protocol authoring still splits one user job across two concepts:
+Observed in the current live audit:
+
+- inspector summary text
+- assignment copy
+- preview copy
+- route copy
+- artifacts copy
+
+still compete for space in one right column.
+
+Evidence:
+
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-desktop-stage-00-plan_review-page.png`
+
+Fix required:
+
+- compress explanatory copy in the right column
+- tighten assignment preview wording
+- reduce repeated descriptive text where the control label already explains the section
+
+### Current priority order
+
+1. Reduce mobile authoring density
+2. Reduce mobile runs density
+3. Tighten desktop focused-step density
+
+This plan replaces the earlier “hard blocker” state. The major authoring failures are cleared on the current live build. The remaining work is to make the shipped UX calmer and more legible without reintroducing duplicate paths.
+
+The structural assignment simplification below remains the architectural direction that made the current authoring fix possible:
 
 - the **step** is where authors think about work
 - the **participant** is where assignment actually lives

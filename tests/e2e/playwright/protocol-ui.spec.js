@@ -5,9 +5,11 @@ const {
   createStep,
   discardDraft,
   login,
+  outlineStepNode,
   openBlankDraft,
   openTemplateDraft,
   protocolIdFromUrl,
+  selectStep,
   waitForSaved,
 } = require('./helpers/protocol-helpers');
 
@@ -82,13 +84,13 @@ test.describe('protocol authoring live', () => {
     });
 
     await connectStep(page, planKey, reviewKey);
-    await page.getByTestId(`workflow-outline-${planKey}`).click();
+    await selectStep(page, planKey);
     await expect(page.getByTestId('stage-route-plan::completed')).toBeVisible();
 
     await connectStep(page, reviewKey, '__complete__');
-    await page.getByTestId(`workflow-outline-${reviewKey}`).click();
+    await selectStep(page, reviewKey);
     await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
-    await page.getByTestId('workflow-outline-review').click();
+    await selectStep(page, 'review');
     await expect(details.getByLabel('Name')).toHaveValue('Review');
 
     await lifecycle.getByLabel('Name').fill(`Live Authoring ${Date.now()}`);
@@ -130,11 +132,10 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByTestId('workflow-outline-plan_review')).toHaveCount(0);
 
     await page.getByTestId('workflow-outline-segment:planning').click();
-    await expect(page.locator('.kit-protocol-segment-panel')).toContainText('Planning');
-    await expect(page.locator('.kit-protocol-segment-step')).toHaveCount(2);
+    await expect(page.locator('.kit-stage-editor').first()).toContainText('Planning');
     await expect(page.getByTestId('workflow-outline-plan_review')).toBeVisible();
 
-    await page.getByTestId('workflow-outline-planning').click();
+    await selectStep(page, 'planning');
     await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
     await expect(page.locator('.kit-stage-editor')).toContainText('Required skill · Product Definition');
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
@@ -180,6 +181,28 @@ test.describe('protocol authoring live', () => {
     expect(insertedIndex).toBeGreaterThan(-1);
     expect(architectureIndex).toBeGreaterThan(insertedIndex);
 
+    await selectStep(page, 'secondary-approval');
+    const advancedSection = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Advanced', exact: true }) }).first();
+    await advancedSection.locator('summary').click();
+    await advancedSection.getByRole('button', { name: 'Delete step', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm' }).click();
+    await waitForSaved(page);
+
+    const afterDelete = await page.evaluate(async (id) => {
+      const response = await fetch(`/v1/protocols/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(`protocol fetch failed: ${response.status}`);
+      }
+      return response.json();
+    }, protocolId);
+    const afterDeleteStages = Array.isArray(afterDelete.draft_definition_json?.stages)
+      ? afterDelete.draft_definition_json.stages
+      : Array.isArray(afterDelete.draft_document?.stages)
+        ? afterDelete.draft_document.stages
+        : [];
+    expect(afterDeleteStages.some((item) => String(item.stage_key || '') === 'secondary-approval')).toBe(false);
+    expect(afterDeleteStages.find((item) => String(item.stage_key || '') === 'plan_review')?.transitions?.accept).toBe('architecture');
+
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
@@ -198,8 +221,8 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByText('Reviewer role')).toHaveCount(0);
 
     await page.getByTestId('workflow-outline-segment:draft_document').click();
-    await expect(page.getByTestId('workflow-outline-draft_document')).toBeVisible();
-    await page.getByTestId('workflow-outline-draft_document').click();
+    await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
+    await selectStep(page, 'draft_document');
     const details = page.locator('.kit-stage-editor').first();
     await expect(details.getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
     const strategy = details.getByLabel('Strategy', { exact: true });
@@ -229,8 +252,8 @@ test.describe('protocol authoring live', () => {
     expect(canvasOverflow.scrollWidth).toBeLessThanOrEqual(canvasOverflow.clientWidth + 2);
 
     await page.getByTestId('workflow-outline-segment:planning').click();
-    await expect(page.locator('.kit-protocol-segment-panel')).toContainText('Planning');
-    await page.getByTestId('workflow-outline-planning').click();
+    await expect(page.locator('.kit-stage-editor').first()).toContainText('Planning');
+    await selectStep(page, 'planning');
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);

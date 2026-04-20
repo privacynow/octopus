@@ -4079,6 +4079,14 @@ select {
         grid-template-columns: 1fr;
     }
 
+    .kit-authoring-workspace[data-has-inspector="true"]:not([data-selection="overview"]) .kit-authoring-details-column {
+        order: 1;
+    }
+
+    .kit-authoring-workspace[data-has-inspector="true"]:not([data-selection="overview"]) .kit-authoring-canvas-column {
+        order: 2;
+    }
+
     .kit-workflow-shell-scene {
         grid-template-columns: 1fr;
     }
@@ -4098,6 +4106,11 @@ select {
 
     .kit-workflow-viewport-cy {
         min-height: 16rem;
+    }
+
+    .kit-authoring-workspace[data-has-inspector="true"]:not([data-selection="overview"]) .kit-workflow-cy-host,
+    .kit-authoring-workspace[data-has-inspector="true"]:not([data-selection="overview"]) .kit-workflow-viewport-cy {
+        min-height: 12rem;
     }
 
     .kit-stage-editor-hero {
@@ -4124,6 +4137,36 @@ select {
     .kit-workflow-controls {
         gap: var(--space-1-5);
     }
+
+    .kit-workflow-outline {
+        padding: var(--space-2);
+    }
+
+    .kit-workflow-outline-item {
+        padding: 0.54rem 0.68rem;
+    }
+
+    .kit-workflow-outline-child {
+        padding: 0.34rem 0.68rem;
+    }
+
+    .kit-workflow-outline-meta,
+    .kit-workflow-outline-child-meta {
+        padding: 0 0.68rem;
+    }
+
+    .dashboard-board[data-route="protocol-runs"][data-has-selection="true"] > .dashboard-column:first-child {
+        order: 2;
+    }
+
+    .dashboard-board[data-route="protocol-runs"][data-has-selection="true"] > .dashboard-column:last-child {
+        order: 1;
+    }
+
+    .dashboard-board[data-route="protocol-runs"] .editor-panel {
+        gap: var(--space-2-5);
+        padding: var(--space-3);
+    }
 }
 
 @media (max-width: 640px) {
@@ -4144,6 +4187,36 @@ select {
 
     .kit-lifecycle-primary {
         width: 100%;
+    }
+
+    .kit-workflow-canvas {
+        padding: var(--space-2);
+    }
+
+    .kit-workflow-outline-title,
+    .kit-stage-editor-title {
+        letter-spacing: 0.04em;
+    }
+
+    .kit-stage-editor-hero-meta {
+        gap: var(--space-1);
+    }
+
+    .kit-stage-editor-hero-chip {
+        min-height: 22px;
+        padding-inline: 0.5rem;
+    }
+
+    .kit-runs-list-row {
+        padding: var(--space-2);
+    }
+
+    .kit-runs-list-row-title {
+        white-space: normal;
+    }
+
+    .kit-runs-list-row-subtitle {
+        line-height: 1.45;
     }
 }
 

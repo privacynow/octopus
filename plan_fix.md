@@ -1,5 +1,191 @@
 **Protocol Assignment Simplification Plan**
 
+## Live Audit State — 2026-04-20
+
+This section supersedes guesswork. It is based on a live Octopus audit against the deployed registry at commit `3d17469`, not stale local captures.
+
+### Audit coverage completed
+
+- Live Octopus only: `http://127.0.0.1:8787`
+- Protocol authoring coverage:
+  - blank draft authoring
+  - Software Engineering template
+  - Document Approval template
+  - desktop, tablet, and mobile viewports
+  - add step
+  - create new role inline
+  - select skill
+  - select agent
+  - add branch / finish
+  - insert after / insert before route target
+  - validate / publish / rehearse / archive
+- Execution coverage:
+  - published agent-assigned protocol run
+  - published skill-assigned protocol run
+  - run detail on `/ui/runs`
+  - run list filters on desktop / tablet / mobile
+
+### Audit artifact count
+
+Fresh live captures under `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit`:
+
+- 510 screenshots total
+- 113 full-page captures
+- 90 canvas captures
+- 81 details-panel captures
+- 90 outline captures
+- 105 header/list/detail supplementary captures
+
+### Verified working flows
+
+These are no longer speculative:
+
+- Skill assignment dropdowns populate from live registry data.
+- Agent assignment dropdowns populate from live registry data.
+- Blank-draft publish, rehearse, and archive completed in the live UI.
+- Agent-assigned execution created a live protocol run and surfaced in `/ui/runs`.
+- Skill-assigned execution created a live protocol run and surfaced in `/ui/runs`.
+- Transition detail editing and transition deletion are exposed in the live UI.
+
+### Verified defects still blocking acceptable UX
+
+#### 1. Step deletion is missing
+
+This is a hard product gap.
+
+- Authors can insert stages.
+- Authors can remove transitions.
+- Authors cannot remove a stage from the workflow anywhere in the authoring surface.
+
+Evidence:
+
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-desktop-12-review-route-detail-page.png`
+
+Fix required:
+
+- Add one explicit destructive action for stage deletion in the step editor.
+- Define and implement the rewrite semantics for predecessor/successor transitions:
+  - delete isolated stage
+  - delete stage with one incoming + one outgoing route
+  - delete stage with multiple incoming/outgoing routes
+- Add live regression coverage for add -> delete -> verify graph + outline + transitions.
+
+#### 2. Blank / single-step outline semantics are inconsistent
+
+The first-step and single-step flows do not expose a stable stage-selection model.
+
+Observed behavior:
+
+- A newly created one-step workflow may surface only a segment-like outline item rather than a stable stage row keyed by the actual `stage_key`.
+- In blank flows, the outline can show `Plan` as the section header and `Work` as the child row instead of repeating the actual step name.
+- The execution audit had to bypass direct stage-outline assumptions because the outline shape was not stable enough to trust.
+
+This is not just a testing inconvenience. It means the author is not getting one consistent mental model for:
+
+- section
+- step
+- stage kind
+
+Evidence:
+
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-desktop-12-review-route-detail-page.png`
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/test-results/live-exhaustive-audit-live-6ff08-execution-and-runs-surfaces/test-failed-1.png`
+
+Fix required:
+
+- Make outline ownership explicit:
+  - segment row label
+  - step row label
+  - stage kind as secondary metadata only
+- Keep the step row keyed to the actual `stage_key` in all states, including single-step workflows.
+- Stop substituting generic stage-kind labels like `Work` where the user expects the actual step name.
+
+#### 3. Inspector / canvas remount churn still exists during insert and panel transitions
+
+The authoring surface is more stable than before, but still not stable enough.
+
+During the live capture audit there were detached-node retries while capturing ordinary insert/panel transitions:
+
+- `detached_retries = 4`
+
+That means the inspector/canvas shell is still remounting often enough to race DOM attachment during normal interaction.
+
+Evidence:
+
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-desktop-insert-panel-page.png`
+
+Fix required:
+
+- Keep the details column mounted during insert-state transitions.
+- Stop remounting the graph host or details host when only panel mode changes.
+- Split scene updates from panel updates and selection updates.
+- Add instrumentation and assertions for:
+  - no canvas destroy/create on insert-panel open
+  - no details-column detach on route/insert selection
+
+#### 4. Mobile authoring is still too dense and vertically stacked
+
+The mobile surface is functional but still not acceptable.
+
+Observed in the live audit:
+
+- outline
+- canvas
+- full step editor
+- assignment
+- instructions
+- artifacts
+- advanced
+
+all stack into one long scroll. The result is technically usable but cognitively heavy and visually cramped.
+
+Evidence:
+
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-mobile-add-step-page.png`
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-mobile-plan_review-page.png`
+
+Fix required:
+
+- Make mobile authoring task-first instead of dumping the full desktop composition into one column.
+- Prefer:
+  - structure selection first
+  - focused step editor second
+  - collapsible or sheet-based advanced sections
+- Reduce simultaneous visible concerns on compact screens.
+
+#### 5. Mobile runs surface is also too dense
+
+The runs route works, but on mobile it stacks:
+
+- issue filter controls
+- run list
+- run detail
+- participant filter
+- stage executions
+- participants
+- artifacts
+- transitions
+
+into one extremely long screen.
+
+Evidence:
+
+- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/runs-mobile-blocked-page.png`
+
+Fix required:
+
+- Separate list vs detail more clearly on mobile.
+- Collapse or defer heavy detail sections until explicitly opened.
+- Do not render the full support/admin triage surface as one uninterrupted phone-length page.
+
+### Priority order from the live audit
+
+1. Add real stage deletion.
+2. Fix outline semantics for first-step / single-step / generic `Work` labeling.
+3. Eliminate remaining insert/details remount churn.
+4. Redesign compact mobile composition for authoring.
+5. Redesign compact mobile composition for runs.
+
 This plan replaces the earlier canvas/mobile-only cleanup scope. The current blocking problem is not primarily visual polish. It is that protocol authoring still splits one user job across two concepts:
 
 - the **step** is where authors think about work

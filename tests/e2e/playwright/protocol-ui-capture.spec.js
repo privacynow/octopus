@@ -4,8 +4,10 @@ const {
   createStep,
   discardDraft,
   login,
+  outlineStepNode,
   openBlankDraft,
   openTemplateDraft,
+  selectStep,
   waitForSaved,
 } = require('./helpers/protocol-helpers');
 
@@ -53,9 +55,9 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await connectStep(page, planKey, reviewKey);
   await connectStep(page, reviewKey, '__complete__');
-  await page.getByTestId(`workflow-outline-${planKey}`).click();
+  await selectStep(page, planKey);
   await expect(page.getByTestId('stage-route-plan::completed')).toBeVisible();
-  await page.getByTestId(`workflow-outline-${reviewKey}`).click();
+  await selectStep(page, reviewKey);
   await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
 
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-page.png', fullPage: true });
@@ -73,13 +75,13 @@ test('capture protocol authoring states', async ({ page }) => {
   });
 
   await page.getByTestId('workflow-outline-segment:planning').click();
-  await expect(page.locator('.kit-protocol-segment-panel')).toContainText('Planning');
+  await expect(page.locator('.kit-stage-editor')).toContainText('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-page.png', fullPage: true });
   await page.locator('.kit-authoring-details-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-detail.png',
   });
 
-  await page.getByTestId('workflow-outline-planning').click();
+  await selectStep(page, 'planning');
   await expect(page.locator('.kit-stage-editor')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-page.png', fullPage: true });
   await page.locator('.kit-workflow-viewport-cy').screenshot({
@@ -91,7 +93,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png' });
   await page.getByTestId('workflow-outline-segment:planning').click();
-  await expect(page.locator('.kit-protocol-segment-panel')).toContainText('Planning');
+  await expect(page.locator('.kit-stage-editor')).toContainText('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png' });
 
   await discardDraft(page);
@@ -100,8 +102,8 @@ test('capture protocol authoring states', async ({ page }) => {
   await expect(page.getByTestId('workflow-outline-segment:draft_document')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-page.png', fullPage: true });
   await page.getByTestId('workflow-outline-segment:draft_document').click();
-  await expect(page.getByTestId('workflow-outline-draft_document')).toBeVisible();
-  await page.getByTestId('workflow-outline-draft_document').click();
+  await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
+  await selectStep(page, 'draft_document');
   await expect(page.locator('.kit-stage-editor').first().getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-participant-page.png', fullPage: true });
 

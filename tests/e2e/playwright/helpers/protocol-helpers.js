@@ -161,24 +161,27 @@ async function createStep(page, {
     button.click();
   });
   const stageKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const node = page.getByTestId(`workflow-outline-${stageKey}`);
+  const node = await outlineStepNode(page, stageKey);
   await expect(node).toBeVisible();
   return stageKey;
 }
 
+async function outlineStepNode(page, stageKey) {
+  const stageNode = page.getByTestId(`workflow-outline-${stageKey}`);
+  if (await stageNode.count()) {
+    return stageNode.first();
+  }
+  return page.getByTestId(`workflow-outline-segment:${stageKey}`).first();
+}
+
+async function selectStep(page, stageKey) {
+  const node = await outlineStepNode(page, stageKey);
+  await expect(node).toBeVisible();
+  await node.click();
+}
+
 async function connectStep(page, sourceStageKey, targetNodeId) {
-  let stageNode = page.getByTestId(`workflow-outline-${sourceStageKey}`);
-  if (!(await stageNode.count())) {
-    const segmentNode = page.getByTestId(`workflow-outline-segment:${sourceStageKey}`);
-    if (await segmentNode.count()) {
-      await segmentNode.click();
-      stageNode = page.getByTestId(`workflow-outline-${sourceStageKey}`);
-    }
-  }
-  if (!(await stageNode.count())) {
-    throw new Error(`workflow outline step missing for ${sourceStageKey}`);
-  }
-  await stageNode.click();
+  await selectStep(page, sourceStageKey);
   await expect(page).toHaveURL(new RegExp(`stage_key=${sourceStageKey}`));
   const branchAdd = page.locator('.kit-stage-routing').getByRole('button', { name: 'Add branch or finish' }).first();
   await expect(branchAdd).toBeVisible();
@@ -210,6 +213,8 @@ module.exports = {
   login,
   openBlankDraft,
   openTemplateDraft,
+  outlineStepNode,
   protocolIdFromUrl,
+  selectStep,
   waitForSaved,
 };

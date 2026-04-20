@@ -350,6 +350,35 @@ function renderProtocolWorkspace(container) {
         return _transitionEntries(doc).find((item) => String(item.id || '') === String(selection.nodeKey || '')) || null;
     }
 
+    function _segmentPrimaryStageKey(segment) {
+        return String(segment?.primaryStageKey || segment?.stageKeys?.[0] || '');
+    }
+
+    function _segmentHasHiddenPrimaryStage(segment) {
+        return Boolean(segment?.stages?.length > 1 && _segmentPrimaryStageKey(segment));
+    }
+
+    function _segmentStageList(segment) {
+        const primaryStageKey = _segmentPrimaryStageKey(segment);
+        const stages = Array.isArray(segment?.stages) ? segment.stages : [];
+        if (!_segmentHasHiddenPrimaryStage(segment)) {
+            return stages;
+        }
+        return stages.filter((stage) => String(stage?.stage_key || '') !== primaryStageKey);
+    }
+
+    function _normalizeSelectionForProjection(current, projection) {
+        const key = String(current?.sectionKey || 'overview');
+        if (key !== 'segments') return current;
+        const segment = projection?.segmentsById?.get(String(current?.nodeKey || ''));
+        if (!segment) return current;
+        const primaryStageKey = _segmentPrimaryStageKey(segment);
+        if (primaryStageKey) {
+            return { sectionKey: 'stages', nodeKey: primaryStageKey };
+        }
+        return current;
+    }
+
     function _defaultStageInsertAnchor(stage, projection) {
         const sourceStageKey = String(stage?.stage_key || '');
         const transitions = Object.entries(stage?.transitions || {})
@@ -691,6 +720,7 @@ function renderProtocolWorkspace(container) {
                 endStageKey: stageKeys[stageKeys.length - 1],
                 stageKeys,
                 stages: segmentStages,
+                primaryStageKey: String(primaryStage?.stage_key || segmentStages[0]?.stage_key || stageKeys[0] || ''),
                 participantKeys,
                 primaryParticipantKey: String(primaryStage?.participant_key || segmentStages[0]?.participant_key || ''),
                 label: String(primaryStage?.display_name || primaryStage?.stage_key || stageKeys[0] || 'Step'),
@@ -858,9 +888,10 @@ function renderProtocolWorkspace(container) {
         if (key === 'protocol') return { sectionKey: 'protocol', nodeKey: '' };
         if (key === 'segments') {
             const projection = _buildWorkflowProjection(doc);
-            return projection.segmentsById.has(String(current.nodeKey || ''))
+            const next = projection.segmentsById.has(String(current.nodeKey || ''))
                 ? { sectionKey: 'segments', nodeKey: String(current.nodeKey || '') }
                 : { sectionKey: 'overview', nodeKey: '' };
+            return _normalizeSelectionForProjection(next, projection);
         }
         if (key === 'transitions') {
             const hit = _transitionEntries(doc).some((item) => String(item.id || '') === String(current.nodeKey || ''));
@@ -1693,6 +1724,91 @@ function renderProtocolWorkspace(container) {
         _commitDocument(doc, { nextSelection: { sectionKey: 'stages', nodeKey: fromStageKey } });
     }
 
+    function _stageDeletionPlan(stageKey, doc = draft.document) {
+        const normalizedStageKey = String(stageKey || '').trim();
+        if (!normalizedStageKey) return null;
+        const stages = Array.isArray(doc?.stages) ? doc.stages : [];
+        const stageIndex = stages.findIndex((item) => String(item.stage_key || '') === normalizedStageKey);
+        if (stageIndex < 0) return null;
+        const stage = stages[stageIndex];
+        const outgoing = Object.entries(stage.transitions || {})
+            .map(([decision, target]) => ({
+                decision: String(decision || '').trim().toLowerCase(),
+                target: String(target || '').trim(),
+            }))
+            .filter((item) => item.decision && item.target);
+        const successorTargets = Array.from(new Set(outgoing
+            .map((item) => item.target)
+            .filter((item) => item && item !== normalizedStageKey)));
+        const redirectTarget = successorTargets.length === 1 ? successorTargets[0] : '';
+        const incoming = stages.flatMap((source) => Object.entries(source.transitions || {})
+            .filter(([, target]) => String(target || '').trim() === normalizedStageKey)
+            .map(([decision]) => ({
+                sourceStageKey: String(source.stage_key || ''),
+                decision: String(decision || '').trim().toLowerCase(),
+            })))
+            .filter((item) => item.sourceStageKey && item.sourceStageKey !== normalizedStageKey);
+        const siblingFallback = stages[stageIndex + 1]?.stage_key || stages[stageIndex - 1]?.stage_key || '';
+        const nextSelection = redirectTarget && !PROTOCOL_TERMINAL_TARGETS.some((item) => item.key === redirectTarget)
+            ? { sectionKey: 'stages', nodeKey: redirectTarget }
+            : siblingFallback
+                ? { sectionKey: 'stages', nodeKey: String(siblingFallback || '') }
+                : { sectionKey: 'overview', nodeKey: '' };
+        return {
+            stage,
+            stageIndex,
+            outgoing,
+            incoming,
+            redirectTarget,
+            nextSelection,
+        };
+    }
+
+    function _deleteStage(stageKey) {
+        const plan = _stageDeletionPlan(stageKey, draft.document);
+        if (!plan) return;
+        const doc = _cloneDoc(draft.document);
+        doc.stages = (doc.stages || [])
+            .filter((item) => String(item.stage_key || '') !== String(stageKey || ''))
+            .map((item) => {
+                const transitions = {};
+                Object.entries(item.transitions || {}).forEach(([decision, target]) => {
+                    const normalizedTarget = String(target || '').trim();
+                    if (normalizedTarget !== String(stageKey || '').trim()) {
+                        transitions[decision] = target;
+                        return;
+                    }
+                    if (plan.redirectTarget) {
+                        transitions[decision] = plan.redirectTarget;
+                    }
+                });
+                return { ...item, transitions };
+            });
+        _commitDocument(doc, { nextSelection: plan.nextSelection });
+    }
+
+    function _confirmStageDelete(stageKey) {
+        const plan = _stageDeletionPlan(stageKey, draft.document);
+        if (!plan) return;
+        const stageLabel = String(plan.stage?.display_name || plan.stage?.stage_key || 'this step');
+        const consequences = [];
+        if (plan.redirectTarget) {
+            consequences.push(`Incoming routes will be rewired to ${_transitionTargetLabel(plan.redirectTarget, draft.document) || plan.redirectTarget}.`);
+        } else if (plan.incoming.length) {
+            consequences.push('Incoming routes to this step will be removed.');
+        }
+        if (plan.outgoing.length > 1) {
+            consequences.push('This step fans out to multiple branches, so deleting it also removes those outgoing branches.');
+        } else if (!plan.outgoing.length) {
+            consequences.push('This step has no outgoing branch; deleting it simply removes it from the workflow.');
+        }
+        UI.showConfirm(
+            'Delete step',
+            [`Delete ${stageLabel}?`, ...consequences].join(' '),
+            async () => { _deleteStage(stageKey); },
+        );
+    }
+
     async function _resolveSelectorPreview(ownerKey, selectorValue) {
         selectorPreview = {
             ownerKey: String(ownerKey || ''),
@@ -2475,17 +2591,8 @@ function renderProtocolWorkspace(container) {
     }
 
     function _segmentStageDisplayLabel(segment, stage) {
-        const segmentLabel = String(segment?.label || '').trim();
         const stageLabel = String(stage?.display_name || stage?.stage_key || '').trim();
-        if (!segmentLabel || !stageLabel) return stageLabel || 'Untitled step';
-        if (stageLabel.localeCompare(segmentLabel, undefined, { sensitivity: 'base' }) === 0) {
-            return Kit.dict.label(`protocol.stage.kind.${String(stage?.stage_kind || 'work')}`, _titleCaseWords(stage?.stage_kind || 'work'));
-        }
-        const prefix = `${segmentLabel} `;
-        if (stageLabel.toLowerCase().startsWith(prefix.toLowerCase())) {
-            return stageLabel.slice(prefix.length).trim() || stageLabel;
-        }
-        return stageLabel;
+        return stageLabel || 'Untitled step';
     }
 
     function _workflowInsertHint() {
@@ -2582,7 +2689,7 @@ function renderProtocolWorkspace(container) {
             label: String(segment.label || 'Untitled section'),
             meta: '',
             expanded: String(segment.id || '') === String(activeSegmentId || ''),
-            items: (segment.stages || []).map((stage) => ({
+            items: _segmentStageList(segment).map((stage) => ({
                 id: String(stage.stage_key || ''),
                 kind: 'stage',
                 label: _segmentStageDisplayLabel(segment, stage),
@@ -2837,7 +2944,7 @@ function renderProtocolWorkspace(container) {
             },
             onSelect: ({ kind, id }) => {
                 if (kind === 'segment') {
-                    selection = { sectionKey: 'segments', nodeKey: id };
+                    selection = _normalizeSelectionForProjection({ sectionKey: 'segments', nodeKey: id }, workflow.projection);
                 } else if (kind === 'transition') {
                     selection = { sectionKey: 'transitions', nodeKey: id };
                 } else if (kind === 'stage') {
@@ -2924,6 +3031,7 @@ function renderProtocolWorkspace(container) {
     }
 
     function _segmentInspectorEl(segment, projection, nodeStates = {}) {
+        const visibleStages = _segmentStageList(segment);
         const panel = document.createElement('section');
         panel.className = 'kit-protocol-segment-panel';
 
@@ -2935,7 +3043,9 @@ function renderProtocolWorkspace(container) {
         head.appendChild(title);
         const subtitle = document.createElement('p');
         subtitle.className = 'kit-stage-editor-hero-note';
-        subtitle.textContent = 'Select a step below to edit it or inspect its routes.';
+        subtitle.textContent = visibleStages.length
+            ? 'Select a supporting step below to edit it or inspect its routes.'
+            : 'This section currently resolves through its primary step.';
         head.appendChild(subtitle);
         panel.appendChild(head);
 
@@ -2964,7 +3074,7 @@ function renderProtocolWorkspace(container) {
 
         const list = document.createElement('div');
         list.className = 'kit-protocol-segment-steps';
-        (segment?.stages || []).forEach((stage) => {
+        visibleStages.forEach((stage) => {
             const row = document.createElement('button');
             row.type = 'button';
             row.className = `kit-protocol-segment-step${selection.sectionKey === 'stages' && selection.nodeKey === String(stage.stage_key || '') ? ' is-selected' : ''}`;
@@ -2996,7 +3106,9 @@ function renderProtocolWorkspace(container) {
 
             list.appendChild(row);
         });
-        panel.appendChild(list);
+        if (list.childElementCount) {
+            panel.appendChild(list);
+        }
         return panel;
     }
 
@@ -3109,6 +3221,7 @@ function renderProtocolWorkspace(container) {
         connectAction = null,
         createAction = null,
         cancelAction = null,
+        deleteAction = null,
         createHint = '',
     } = {}) {
         const applyReadOnly = (schema) => (!readOnly
@@ -3211,6 +3324,9 @@ function renderProtocolWorkspace(container) {
         }));
 
         const advancedActions = [];
+        if (deleteAction) {
+            advancedActions.push({ label: 'Delete step', tone: 'btn-danger', onClick: deleteAction });
+        }
         if (cancelAction) {
             advancedActions.push({ label: 'Cancel', onClick: cancelAction });
         }
@@ -3318,6 +3434,30 @@ function renderProtocolWorkspace(container) {
         if (selection.sectionKey === 'segments') {
             const segment = projection.segmentsById.get(String(selection.nodeKey || ''));
             if (!segment) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+            if (segment.stages?.length === 1) {
+                const primaryStageKey = _segmentPrimaryStageKey(segment);
+                const target = (doc.stages || []).find((item) => String(item.stage_key) === primaryStageKey);
+                if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
+                if (target.selector && String(selectorPreview.ownerKey || '') !== String(primaryStageKey || '')) {
+                    _syncSelectorPreview(String(primaryStageKey || ''), String(target.selector.kind || ''), String(target.selector.value || ''));
+                }
+                return _stageEditorShell({
+                    target: {
+                        ...target,
+                        selector_kind: String(target.selector?.kind || ''),
+                        selector_value: String(target.selector?.value || ''),
+                    },
+                    readOnly,
+                    participantOptions,
+                    kindOptions,
+                    artifactOptions,
+                    onCommit: readOnly
+                        ? null
+                        : (_t, key, value) => _commitNodeField('stage', primaryStageKey, key, value),
+                    connectAction: readOnly ? null : () => _startRouteInsert(primaryStageKey),
+                    deleteAction: readOnly ? null : () => _confirmStageDelete(primaryStageKey),
+                });
+            }
             return _segmentInspectorEl(segment, projection, workflow?.nodeStates || {});
         }
         if (selection.sectionKey === 'participants') {
@@ -3349,6 +3489,7 @@ function renderProtocolWorkspace(container) {
                     ? null
                     : (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
                 connectAction: readOnly ? null : () => _startRouteInsert(selection.nodeKey),
+                deleteAction: readOnly ? null : () => _confirmStageDelete(selection.nodeKey),
             });
         }
         if (selection.sectionKey === 'transitions') {
@@ -3508,6 +3649,7 @@ function renderProtocolWorkspace(container) {
         header.hidden = true;
         _writeState();
         const headerEl = _lifecycleHeaderEl();
+        headerEl.dataset.key = 'protocol-lifecycle-header';
         const workflow = _workflowData();
 
         const workspace = document.createElement('div');
@@ -3546,13 +3688,8 @@ function renderProtocolWorkspace(container) {
         }
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
-        contentEl.replaceChildren(headerEl, workspace);
-        let activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
-        if (previousCanvasRoot && activeCanvasRoot && previousCanvasRoot !== activeCanvasRoot) {
-            UI.reconcileElement(previousCanvasRoot, activeCanvasRoot);
-            activeCanvasRoot.replaceWith(previousCanvasRoot);
-            activeCanvasRoot = previousCanvasRoot;
-        }
+        UI.reconcileChildren(contentEl, [headerEl, workspace]);
+        const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
         if (activeCanvasRoot && typeof activeCanvasRoot.__workflowCanvasSync === 'function') {
             activeCanvasRoot.__workflowCanvasSync({
                 scene: workflow.scene,
@@ -4185,6 +4322,9 @@ function renderProtocolRuns(container) {
         }, () => {
             const board = document.createElement('div');
             board.className = 'dashboard-board';
+            board.dataset.route = 'protocol-runs';
+            board.dataset.hasSelection = currentRunId ? 'true' : 'false';
+            board.dataset.issueMode = issueKindFilter ? 'true' : 'false';
 
             const listColumn = document.createElement('div');
             listColumn.className = 'dashboard-column';

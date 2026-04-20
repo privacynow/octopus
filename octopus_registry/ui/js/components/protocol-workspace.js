@@ -2141,17 +2141,22 @@ function renderProtocolWorkspace(container) {
         if (!selectorValue) return null;
         const section = document.createElement('section');
         section.className = 'kit-selector-editor-preview';
+        section.dataset.key = `selector-skill-match:${String(selectorValue || '').trim().toLowerCase()}`;
         const body = document.createElement('div');
         body.className = 'kit-selector-preview';
+        body.dataset.key = `${section.dataset.key}:body`;
         const header = document.createElement('div');
         header.className = 'kit-selector-preview-header';
+        header.dataset.key = `${section.dataset.key}:header`;
         const title = document.createElement('strong');
         title.textContent = 'Agents with this skill';
+        title.dataset.key = `${section.dataset.key}:title`;
         header.appendChild(title);
         const matches = _agentsAdvertisingSkill(selectorValue);
         const matchLabels = matches.map((candidate) => String(candidate?.display_name || candidate?.slug || '').trim()).filter(Boolean);
         const help = document.createElement('p');
         help.className = 'quiet-note';
+        help.dataset.key = `${section.dataset.key}:note`;
         help.textContent = readOnly
             ? 'These connected agents currently advertise the selected skill.'
             : 'These connected agents currently advertise the selected skill. Leave the step on skill assignment to keep it dynamic, or choose one below to pin the step to a specific agent.';
@@ -2162,8 +2167,10 @@ function renderProtocolWorkspace(container) {
         body.appendChild(header);
         const results = document.createElement('div');
         results.className = 'kit-selector-preview-results';
+        results.dataset.key = `${section.dataset.key}:results`;
         const resultTitle = document.createElement('div');
         resultTitle.className = 'detail-label';
+        resultTitle.dataset.key = `${section.dataset.key}:results-title`;
         resultTitle.textContent = typeof onSuggestionSelect === 'function'
             ? 'Available agents — choose one to pin this step'
             : 'Available agents';
@@ -2174,16 +2181,22 @@ function renderProtocolWorkspace(container) {
             if (typeof onSuggestionSelect === 'function') {
                 const pickerRow = document.createElement('div');
                 pickerRow.className = 'kit-details-row';
+                pickerRow.dataset.key = `${section.dataset.key}:picker-row`;
                 const pickerLabel = document.createElement('label');
                 pickerLabel.className = 'kit-details-label';
+                pickerLabel.dataset.key = `${section.dataset.key}:picker-label`;
                 pickerLabel.textContent = 'Pin to matching agent';
                 pickerRow.appendChild(pickerLabel);
                 const picker = document.createElement('select');
                 picker.className = 'kit-details-control';
+                picker.dataset.key = `${section.dataset.key}:picker`;
+                picker.id = `selector-skill-match-${String(selectorValue || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
+                pickerLabel.htmlFor = picker.id;
                 picker.setAttribute('aria-label', pickerLabel.textContent);
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
                 placeholder.textContent = '(leave this step dynamic)';
+                placeholder.dataset.key = `${section.dataset.key}:picker-option:none`;
                 picker.appendChild(placeholder);
                 matches.forEach((candidate) => {
                     const option = document.createElement('option');
@@ -2193,6 +2206,7 @@ function renderProtocolWorkspace(container) {
                         String(candidate?.role || '').trim(),
                     ].filter(Boolean);
                     option.textContent = parts.join(' · ');
+                    option.dataset.key = `${section.dataset.key}:picker-option:${String(candidate?.slug || '').trim().toLowerCase()}`;
                     picker.appendChild(option);
                 });
                 picker.addEventListener('change', () => {
@@ -2205,10 +2219,12 @@ function renderProtocolWorkspace(container) {
 
             const chips = document.createElement('div');
             chips.className = 'chip-row';
+            chips.dataset.key = `${section.dataset.key}:chips`;
             matches.forEach((candidate) => {
                 const chip = document.createElement('span');
                 chip.className = 'quickstart-chip static';
                 chip.textContent = String(candidate?.display_name || candidate?.slug || '');
+                chip.dataset.key = `${section.dataset.key}:chip:${String(candidate?.slug || '').trim().toLowerCase()}`;
                 chips.appendChild(chip);
             });
             results.appendChild(chips);
@@ -2222,12 +2238,15 @@ function renderProtocolWorkspace(container) {
         const agent = _selectorAgentRecord(selectorValue);
         const section = document.createElement('section');
         section.className = 'kit-selector-editor-context';
+        section.dataset.key = `selector-agent-skills:${String(selectorValue || '').trim().toLowerCase()}`;
         const title = document.createElement('strong');
         title.className = 'kit-selector-editor-context-title';
+        title.dataset.key = `${section.dataset.key}:title`;
         title.textContent = 'Skills advertised by this agent';
         section.appendChild(title);
         const note = document.createElement('p');
         note.className = 'kit-selector-editor-note';
+        note.dataset.key = `${section.dataset.key}:note`;
         const agentLabel = String(agent?.display_name || agent?.slug || selectorValue || '').trim();
         const skills = _selectorAgentSkills(agent);
         note.textContent = agentLabel
@@ -2243,10 +2262,12 @@ function renderProtocolWorkspace(container) {
         }
         const chips = document.createElement('div');
         chips.className = 'chip-row';
+        chips.dataset.key = `${section.dataset.key}:chips`;
         skills.forEach((skillName) => {
             const chip = document.createElement('span');
             chip.className = 'quickstart-chip static';
             chip.textContent = _titleCaseWords(skillName);
+            chip.dataset.key = `${section.dataset.key}:chip:${String(skillName || '').trim().toLowerCase()}`;
             chips.appendChild(chip);
         });
         section.appendChild(chips);

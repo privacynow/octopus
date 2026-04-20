@@ -1471,7 +1471,9 @@ function renderProtocolWorkspace(container) {
         } else if (key === 'max_rounds' || key === 'timeout_seconds') {
             pendingStage[key] = Number.parseInt(String(value || '0'), 10) || 0;
         }
-        render();
+        if (['participant_key', 'selector_kind', 'selector_value', 'stage_kind'].includes(String(key || ''))) {
+            render();
+        }
         if (key === 'selector_kind' || key === 'selector_value') {
             _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
         }

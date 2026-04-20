@@ -3540,6 +3540,16 @@ function renderProtocolWorkspace(container) {
         return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
     }
 
+    function _detailsKey() {
+        if (editorMode.kind === 'insert-stage') {
+            return `protocol-details:new-stage:${String(editorMode.sourceStageKey || '')}:${String(editorMode.decision || '')}`;
+        }
+        if (editorMode.kind === 'create-route') {
+            return `protocol-details:new-route:${String(pendingRoute.source_stage_key || '')}:${String(pendingRoute.decision || '')}`;
+        }
+        return `protocol-details:${String(selection.sectionKey || 'overview')}:${String(selection.nodeKey || '')}`;
+    }
+
     function _validationEl() {
         const normalized = [];
         if (saveState.state === 'conflict' && draftConflict?.serverDetail?.protocol) {
@@ -3672,6 +3682,7 @@ function renderProtocolWorkspace(container) {
         detailsColumn.dataset.key = 'protocol-authoring-details-column';
         const details = _detailsEl(workflow);
         if (details) {
+            details.dataset.key = _detailsKey();
             detailsColumn.appendChild(details);
             workspace.dataset.hasInspector = 'true';
         }

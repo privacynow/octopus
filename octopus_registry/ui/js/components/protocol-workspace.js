@@ -2148,11 +2148,16 @@ function renderProtocolWorkspace(container) {
         const title = document.createElement('strong');
         title.textContent = 'Agents with this skill';
         header.appendChild(title);
+        const matches = _agentsAdvertisingSkill(selectorValue);
+        const matchLabels = matches.map((candidate) => String(candidate?.display_name || candidate?.slug || '').trim()).filter(Boolean);
         const help = document.createElement('p');
         help.className = 'quiet-note';
         help.textContent = readOnly
             ? 'These connected agents currently advertise the selected skill.'
             : 'These connected agents currently advertise the selected skill. Leave the step on skill assignment to keep it dynamic, or choose one below to pin the step to a specific agent.';
+        help.textContent += matchLabels.length
+            ? ` Available now: ${matchLabels.join(', ')}.`
+            : ' No connected agents currently advertise this skill.';
         header.appendChild(help);
         body.appendChild(header);
         const results = document.createElement('div');
@@ -2163,15 +2168,9 @@ function renderProtocolWorkspace(container) {
             ? 'Available agents — choose one to pin this step'
             : 'Available agents';
         results.appendChild(resultTitle);
-        const matches = _agentsAdvertisingSkill(selectorValue);
         if (!matches.length) {
             results.appendChild(UI.renderEmptyState('No connected agents currently advertise this skill.', true));
         } else {
-            const availability = document.createElement('p');
-            availability.className = 'kit-selector-editor-note';
-            availability.textContent = `Available now: ${matches.map((candidate) =>
-                String(candidate?.display_name || candidate?.slug || '')).filter(Boolean).join(', ')}`;
-            results.appendChild(availability);
             const chips = document.createElement('div');
             chips.className = 'chip-row';
             matches.forEach((candidate) => {
@@ -2202,11 +2201,14 @@ function renderProtocolWorkspace(container) {
         const note = document.createElement('p');
         note.className = 'kit-selector-editor-note';
         const agentLabel = String(agent?.display_name || agent?.slug || selectorValue || '').trim();
+        const skills = _selectorAgentSkills(agent);
         note.textContent = agentLabel
             ? `This step is pinned to ${agentLabel}. These are the routing skills this agent currently advertises.`
             : 'This step is pinned to one agent. These are the routing skills this agent currently advertises.';
+        note.textContent += skills.length
+            ? ` Available here: ${skills.map((skillName) => _titleCaseWords(skillName)).join(', ')}.`
+            : ' No advertised routing skills are currently available for this agent.';
         section.appendChild(note);
-        const skills = _selectorAgentSkills(agent);
         if (!skills.length) {
             section.appendChild(UI.renderEmptyState('No advertised routing skills are currently available for this agent.', true));
             return section;

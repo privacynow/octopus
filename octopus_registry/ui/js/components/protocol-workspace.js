@@ -355,15 +355,30 @@ function renderProtocolWorkspace(container) {
         return _transitionEntries(doc).find((item) => String(item.id || '') === String(selection.nodeKey || '')) || null;
     }
 
-    function _defaultStageInsertAnchor(stage) {
+    function _defaultStageInsertAnchor(stage, projection) {
+        const sourceStageKey = String(stage?.stage_key || '');
         const transitions = Object.entries(stage?.transitions || {})
             .map(([decision, target]) => ({
                 decision: String(decision || '').trim().toLowerCase(),
                 target: String(target || '').trim(),
             }))
             .filter((item) => item.decision && item.target);
+        const stageOrder = new Map((draft.document.stages || []).map((item, index) => [String(item.stage_key || ''), index]));
+        const sourceIndex = Number(stageOrder.get(sourceStageKey) || 0);
+        const sourceSegmentId = String(projection?.stageToSegment?.get(sourceStageKey) || '');
+        const sourceColumn = Number(projection?.segmentsById?.get(sourceSegmentId)?.column || 0);
+        const forward = transitions.filter((item) => {
+            if (PROTOCOL_TERMINAL_TARGETS.some((terminal) => terminal.key === item.target)) return false;
+            const targetSegmentId = String(projection?.stageToSegment?.get(item.target) || '');
+            const targetColumn = Number(projection?.segmentsById?.get(targetSegmentId)?.column || sourceColumn);
+            if (targetColumn > sourceColumn) return true;
+            if (targetColumn < sourceColumn) return false;
+            return Number(stageOrder.get(item.target) || -1) > sourceIndex;
+        });
         const nonTerminal = transitions.filter((item) => !PROTOCOL_TERMINAL_TARGETS.some((terminal) => terminal.key === item.target));
-        const anchor = nonTerminal.length === 1
+        const anchor = forward.length === 1
+            ? forward[0]
+            : nonTerminal.length === 1
             ? nonTerminal[0]
             : transitions.length === 1
                 ? transitions[0]
@@ -2475,7 +2490,7 @@ function renderProtocolWorkspace(container) {
         const canMutate = saveState.state !== 'conflict' && editorMode.kind !== 'rehearse';
         const selectedStage = _selectionStage(draft.document);
         const selectedTransition = _selectionTransition(draft.document);
-        const selectedStageAnchor = selectedStage ? _defaultStageInsertAnchor(selectedStage) : null;
+        const selectedStageAnchor = selectedStage ? _defaultStageInsertAnchor(selectedStage, projection) : null;
         const insertAnchor = selectedTransition
             ? {
                 sourceStageKey: selectedTransition.from_stage_key,

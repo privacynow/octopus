@@ -139,6 +139,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
+    assert "Require one of this agent’s skills" in workspace
+    assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
     assert "API.listRehearsalSessions(" in workspace
@@ -177,7 +179,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorEditor(" in workspace
     assert "Available now:" in workspace
     assert "Pin to matching agent" in workspace
-    assert "quickstart-chip static" in workspace
+    assert "quickstart-chip" in workspace
+    assert "Choose another advertised skill below to keep" in workspace
     assert "let canvasViewport = { zoom: 'fit' }" in workspace
     assert "_selectionFromQuery(" in workspace
     assert "_selectionQueryState(" in workspace

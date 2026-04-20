@@ -110,32 +110,30 @@ async function createStep(page, {
   if (openEditor) {
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
   }
-  const stageEditor = page.locator('.kit-stage-editor-grid').first();
+  const stageEditor = page.locator('.kit-stage-editor-grid').last();
   await expect(stageEditor).toBeVisible();
-  const stepBasicsSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: stageEditor.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
-  await stepBasicsSection.getByLabel('Name').fill(name);
-  const ownerRoleSelect = stepBasicsSection.getByLabel('Owner role');
+  await stageEditor.getByLabel('Name').first().fill(name);
+  const ownerRoleSelect = stageEditor.getByLabel('Owner role').first();
   if (ownerRole) {
     await ownerRoleSelect.selectOption(ownerRole);
   } else {
     await ownerRoleSelect.selectOption('__new__');
-    const newRoleSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: stageEditor.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
-    await expect(newRoleSection.getByLabel('Role name')).toBeVisible();
-    await newRoleSection.getByLabel('Role name').fill(roleName || `${name} role`);
+    const roleNameControl = stageEditor.getByLabel('Role name').first();
+    await expect(roleNameControl).toBeVisible();
+    await roleNameControl.fill(roleName || `${name} role`);
     if (roleKey) {
-      await newRoleSection.getByLabel('Role key').fill(roleKey);
+      await stageEditor.getByLabel('Role key').first().fill(roleKey);
     }
   }
   if (stageKind) {
-    await stepBasicsSection.getByLabel('Stage type').selectOption(stageKind);
+    await stageEditor.getByLabel('Stage type').first().selectOption(stageKind);
   }
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);
   }
-  const assignmentSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: stageEditor.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
-  await assignmentSection.getByLabel('Strategy', { exact: true }).selectOption(selectorKind);
+  await stageEditor.getByLabel('Strategy', { exact: true }).first().selectOption(selectorKind);
   const valueLabel = selectorKind === 'agent' ? 'Choose agent' : selectorKind === 'skill' ? 'Choose skill' : 'Choose runtime role tag';
-  const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true });
+  const valueControl = stageEditor.getByLabel(valueLabel, { exact: true }).first();
   const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
   if (valueTag === 'select') {
     let targetValue = selectorValue;

@@ -27,7 +27,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
 
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
-    const stageEditor = page.locator('.kit-stage-editor').first();
+    const stageEditor = page.locator('.kit-stage-editor').last();
     await expect(stageEditor.getByRole('heading', { name: 'Step basics' })).toBeVisible();
     await expect(stageEditor.getByRole('heading', { name: 'New owner role' })).toBeVisible();
     await expect(stageEditor.getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
@@ -49,15 +49,15 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByText(/^stage_[0-9]+$/i)).toHaveCount(0);
 
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
-    const draftAssignmentSection = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
-    await draftAssignmentSection.getByLabel('Strategy', { exact: true }).selectOption('skill');
-    const availableSkillControl = draftAssignmentSection.getByLabel('Choose skill', { exact: true });
+    const draftStageEditor = page.locator('.kit-stage-editor').last();
+    await draftStageEditor.getByLabel('Strategy', { exact: true }).first().selectOption('skill');
+    const availableSkillControl = draftStageEditor.getByLabel('Choose skill', { exact: true }).first();
     await expect(availableSkillControl).toBeVisible();
     const availableSkillValues = await availableSkillControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
     if (!availableSkillValues.length) {
-      await expect(draftAssignmentSection).toContainText('No available routing skills were loaded from the registry.');
+      await expect(draftStageEditor).toContainText('No available routing skills were loaded from the registry.');
     }
     await page.getByRole('button', { name: 'Cancel' }).click();
 

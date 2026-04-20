@@ -1656,7 +1656,10 @@ window.Kit = (() => {
             if (disposed || !cy) return;
             const positions = new Map((laidOut.children || []).map((node) => [
                 String(node.id || ''),
-                { x: Number(node.x || 0), y: Number(node.y || 0) },
+                {
+                    x: Number(node.x || 0) + (Number(node.width || 0) / 2),
+                    y: Number(node.y || 0) + (Number(node.height || 0) / 2),
+                },
             ]));
             cy.nodes().positions((node) => positions.get(String(node.id() || '')) || { x: 0, y: 0 });
 

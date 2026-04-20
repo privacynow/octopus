@@ -26,8 +26,10 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await page.getByRole('button', { name: /\+ Add step/i }).first().click();
   const participantEditor = page.locator('.kit-stage-editor').first();
-  await participantEditor.getByLabel('Name').fill('Plan');
-  await participantEditor.getByLabel('Role name').fill('Planner');
+  const stepBasics = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
+  const newRole = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
+  await stepBasics.getByLabel('Name').fill('Plan');
+  await newRole.getByLabel('Role name').fill('Planner');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-step-create-page.png', fullPage: true });
   await page.getByRole('button', { name: 'Cancel' }).click();
 

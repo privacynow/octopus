@@ -1,5 +1,6 @@
 const { test, expect } = require('./playwright-runtime');
 const {
+  apiGetProtocol,
   attachErrorCapture,
   connectStep,
   createStep,
@@ -7,6 +8,7 @@ const {
   login,
   openBlankDraft,
   openTemplateDraft,
+  protocolIdFromUrl,
   waitForSaved,
 } = require('./helpers/protocol-helpers');
 
@@ -20,7 +22,7 @@ test.describe('protocol authoring live', () => {
     const lifecycle = page.locator('.kit-lifecycle-header');
     await expect(lifecycle.getByLabel('Name')).toHaveValue('');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start the workflow');
-    await expect(page.locator('.kit-workflow-first-run')).toContainText('Add the first step in the workflow');
+    await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first step.');
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
 
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
@@ -107,11 +109,12 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('software engineering template opens into one workflow canvas with inspector', async ({ page }) => {
+  test('software engineering template opens into one workflow canvas with inspector', async ({ page, request }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
     await openTemplateDraft(page, 'Software Engineering');
+    const protocolId = protocolIdFromUrl(page.url());
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
     await expect(page.locator('.kit-workflow-outline')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
@@ -130,6 +133,33 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: '100%', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
+    await expect(page.locator('.kit-stage-routing-actions').getByRole('button', { name: /Insert before Architecture/i })).toBeVisible();
+
+    await page.locator('.kit-stage-routing-actions').getByRole('button', { name: /Insert before Architecture/i }).click();
+    await createStep(page, {
+      name: 'Secondary Approval',
+      key: 'secondary-approval',
+      roleName: 'Secondary Approver',
+      roleKey: 'secondary-approver',
+      selectorKind: 'agent',
+      selectorValue: 'm1',
+      openEditor: false,
+    });
+    await waitForSaved(page);
+
+    const detail = await apiGetProtocol(request, protocolId);
+    const draftDocument = detail.draft_definition_json || detail.draft_document || {};
+    const stages = Array.isArray(draftDocument.stages) ? draftDocument.stages : [];
+    const planning = stages.find((item) => String(item.stage_key || '') === 'planning');
+    const inserted = stages.find((item) => String(item.stage_key || '') === 'secondary-approval');
+    const insertedIndex = stages.findIndex((item) => String(item.stage_key || '') === 'secondary-approval');
+    const architectureIndex = stages.findIndex((item) => String(item.stage_key || '') === 'architecture');
+    expect(planning?.transitions?.completed).toBe('secondary-approval');
+    expect(inserted?.transitions?.completed).toBe('architecture');
+    expect(inserted?.selector?.kind).toBe('agent');
+    expect(inserted?.selector?.value).toBe('m1');
+    expect(insertedIndex).toBeGreaterThan(-1);
+    expect(architectureIndex).toBeGreaterThan(insertedIndex);
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

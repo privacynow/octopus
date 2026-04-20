@@ -1386,7 +1386,7 @@ window.Kit = (() => {
             outlineList.appendChild(group);
         });
         if (!outlineList.childElementCount) {
-            outlineList.appendChild(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first participant or step to start shaping the workflow.')));
+            outlineList.appendChild(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first step to start shaping the workflow.')));
         }
         outline.appendChild(outlineList);
 
@@ -1493,7 +1493,7 @@ window.Kit = (() => {
             }
             const elements = _cyElements();
             if (!elements.length) {
-                graphHost.replaceChildren(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first participant or step to start shaping the workflow.')));
+                graphHost.replaceChildren(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first step to start shaping the workflow.')));
                 return;
             }
 

@@ -105,23 +105,28 @@ async function createStep(page, {
   selectorKind = 'skill',
   selectorValue = '',
   stageKind = '',
+  openEditor = true,
 } = {}) {
-  await page.getByRole('button', { name: /\+ Add step/i }).first().click();
+  if (openEditor) {
+    await page.getByRole('button', { name: /\+ Add step/i }).first().click();
+  }
   const stageEditor = page.locator('.kit-stage-editor-grid');
   await expect(stageEditor).toBeVisible();
-  await stageEditor.getByLabel('Name').fill(name);
-  const ownerRoleSelect = stageEditor.getByLabel('Owner role');
+  const stepBasicsSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
+  await stepBasicsSection.getByLabel('Name').fill(name);
+  const ownerRoleSelect = stepBasicsSection.getByLabel('Owner role');
   if (ownerRole) {
     await ownerRoleSelect.selectOption(ownerRole);
   } else {
     await ownerRoleSelect.selectOption('__new__');
-    await stageEditor.getByLabel('Role name').fill(roleName || `${name} role`);
+    const newRoleSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
+    await newRoleSection.getByLabel('Role name').fill(roleName || `${name} role`);
     if (roleKey) {
-      await stageEditor.getByLabel('Role key').fill(roleKey);
+      await newRoleSection.getByLabel('Role key').fill(roleKey);
     }
   }
   if (stageKind) {
-    await stageEditor.getByLabel('Stage type').selectOption(stageKind);
+    await stepBasicsSection.getByLabel('Stage type').selectOption(stageKind);
   }
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);

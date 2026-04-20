@@ -3601,6 +3601,11 @@ select {
     gap: var(--space-2);
 }
 
+.kit-stage-routing-entry {
+    display: grid;
+    gap: var(--space-1-5);
+}
+
 .kit-stage-routing-item {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -3671,6 +3676,11 @@ select {
 .kit-stage-routing-meta {
     color: var(--text-muted);
     font-size: var(--text-xs);
+}
+
+.kit-stage-routing-actions {
+    display: flex;
+    justify-content: flex-end;
 }
 
 .kit-catalog-tertiary {
@@ -4083,11 +4093,11 @@ select {
 
     .kit-workflow-cy-host {
         min-width: 100%;
-        min-height: 10.5rem;
+        min-height: 16rem;
     }
 
     .kit-workflow-viewport-cy {
-        min-height: 10.5rem;
+        min-height: 16rem;
     }
 
     .kit-stage-editor-hero {

@@ -163,6 +163,8 @@ function renderProtocolWorkspace(container) {
     let protocolDetailLoading = false;
     let draftRevision = 0;
     let connectedAgents = [];
+    let availableAgents = [];
+    let availableRoutingSkills = [];
     let draftConflict = null;
     let selectorPreview = {
         ownerKey: '',
@@ -370,10 +372,10 @@ function renderProtocolWorkspace(container) {
         const anchor = forward.length === 1
             ? forward[0]
             : nonTerminal.length === 1
-            ? nonTerminal[0]
-            : transitions.length === 1
-                ? transitions[0]
-                : null;
+                ? nonTerminal[0]
+                : transitions.length === 1
+                    ? transitions[0]
+                    : null;
         if (!anchor) return null;
         return {
             sourceStageKey: String(stage?.stage_key || ''),
@@ -791,6 +793,7 @@ function renderProtocolWorkspace(container) {
             segments,
             segmentsById,
             stageToSegment,
+            segmentOrder,
         };
     }
 
@@ -1721,6 +1724,10 @@ function renderProtocolWorkspace(container) {
         return (Array.isArray(candidates) ? candidates : []).filter((candidate) => _isAuthoringAssignableAgent(candidate));
     }
 
+    function _availableAuthoringAgents() {
+        return (availableAgents || []).filter((agent) => _isAuthoringAssignableAgent(agent));
+    }
+
     function _selectorKindLabel(kind) {
         const normalized = String(kind || '').trim().toLowerCase();
         if (normalized === 'agent') return 'Specific agent';
@@ -1780,7 +1787,6 @@ function renderProtocolWorkspace(container) {
         const catalog = _selectorCatalogEntries(normalized);
         const current = String(currentValue || '').trim();
         if (catalog.some((item) => item.value === current)) return current;
-        if (catalog.length) return String(catalog[0].value || '');
         return current;
     }
 
@@ -1799,17 +1805,30 @@ function renderProtocolWorkspace(container) {
             });
         };
         if (normalized === 'agent') {
-            _authoringAssignableAgents().forEach((agent) => {
+            _availableAuthoringAgents().forEach((agent) => {
                 const slug = String(agent?.slug || '').trim();
                 if (!slug) return;
-                push(slug, String(agent?.display_name || _titleCaseWords(slug) || slug), String(agent?.role || ''));
+                const meta = [
+                    String(agent?.role || '').trim(),
+                    String(agent?.connectivity_state || '').trim().toLowerCase() === 'connected'
+                        ? ''
+                        : String(agent?.connectivity_state || '').trim(),
+                ].filter(Boolean).join(' · ');
+                push(slug, String(agent?.display_name || _titleCaseWords(slug) || slug), meta);
             });
         } else if (normalized === 'skill') {
-            _authoringAssignableAgents().forEach((agent) => {
-                (agent?.routing_skills || []).forEach((skill) => push(skill, _titleCaseWords(skill)));
+            (availableRoutingSkills || []).forEach((item) => {
+                const skillName = String(item?.skill_name || item || '').trim();
+                if (!skillName || item?.enabled === false) return;
+                const advertisedBy = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents.length : 0;
+                push(
+                    skillName,
+                    _titleCaseWords(skillName),
+                    advertisedBy > 0 ? `${advertisedBy} agent${advertisedBy === 1 ? '' : 's'}` : '',
+                );
             });
         } else if (normalized === 'role') {
-            _authoringAssignableAgents().forEach((agent) => {
+            _availableAuthoringAgents().forEach((agent) => {
                 push(agent?.role, _titleCaseWords(agent?.role || ''));
             });
         }
@@ -1819,13 +1838,13 @@ function renderProtocolWorkspace(container) {
     function _selectorCatalogEmptyHint(kind) {
         const normalized = String(kind || '').trim().toLowerCase();
         if (normalized === 'agent') {
-            return 'No connected assignable agents are available right now. Enter an agent slug only if you need to pin one anyway.';
+            return 'No available agents were loaded from the registry. Enter an agent slug only if you need to pin one anyway.';
         }
         if (normalized === 'skill') {
-            return 'No connected agents are advertising skills right now. Enter a skill slug only if you already know it.';
+            return 'No available routing skills were loaded from the registry. Enter a skill slug only if you already know it.';
         }
         if (normalized === 'role') {
-            return 'No runtime role tags are visible from connected agents right now. Enter one manually only if you need this advanced path.';
+            return 'No runtime role tags were loaded from the registry. Enter one manually only if you need this advanced path.';
         }
         return 'Enter the exact value you want to match at runtime.';
     }
@@ -1970,7 +1989,7 @@ function renderProtocolWorkspace(container) {
         heading.className = 'kit-selector-editor-head';
         const copy = document.createElement('p');
         copy.className = 'kit-stage-routing-copy';
-        copy.textContent = 'Choose how this step resolves at run time. Start with a specific agent or required skill, then use Advanced assignment only when the default path is not enough.';
+        copy.textContent = 'Choose how this step resolves at run time. Start with the available agent or skill list, then use Advanced assignment only when the default path is not enough.';
         heading.appendChild(copy);
         wrap.appendChild(heading);
 
@@ -1979,12 +1998,6 @@ function renderProtocolWorkspace(container) {
         const advancedKinds = _selectorAdvancedKinds();
         const primaryKind = _isPrimarySelectorKind(normalizedKind) ? normalizedKind : '';
         const primaryCatalog = primaryKind ? _selectorCatalogEntries(primaryKind) : [];
-        const currentValueIsCustom = Boolean(
-            primaryKind
-            && primaryCatalog.length
-            && selectorValue
-            && !primaryCatalog.some((item) => item.value === String(selectorValue || '')),
-        );
 
         const strategyRow = document.createElement('div');
         strategyRow.className = 'kit-details-row';
@@ -2037,7 +2050,10 @@ function renderProtocolWorkspace(container) {
 
         const advanced = document.createElement('details');
         advanced.className = 'kit-selector-editor-override';
-        advanced.open = Boolean((normalizedKind && !_isPrimarySelectorKind(normalizedKind)) || currentValueIsCustom);
+        advanced.open = Boolean(
+            (normalizedKind && !_isPrimarySelectorKind(normalizedKind))
+            || (primaryCatalog.length && selectorValue && !primaryCatalog.some((item) => item.value === String(selectorValue || ''))),
+        );
         const advancedSummary = document.createElement('summary');
         advancedSummary.className = 'kit-stage-editor-summary';
         const advancedTitle = document.createElement('h4');
@@ -2121,6 +2137,7 @@ function renderProtocolWorkspace(container) {
             const previewState = _selectorPreviewState(previewKey || '__draft__', query);
             const previewWrap = document.createElement('details');
             previewWrap.className = 'kit-selector-editor-preview';
+            previewWrap.open = Boolean(!readOnly && normalizedKind === 'skill');
             const previewSummary = document.createElement('summary');
             previewSummary.className = 'kit-stage-editor-summary';
             const previewTitle = document.createElement('h4');
@@ -2149,7 +2166,8 @@ function renderProtocolWorkspace(container) {
                 showForm: false,
                 showSuggestions: false,
                 title: Kit.dict.label('protocol.participant.selector_preview.label', 'Who matches right now'),
-                help: Kit.dict.help('protocol.participant.selector_preview.help'),
+                help: Kit.dict.help('protocol.participant.selector_preview.help')
+                    || 'Matches update after you choose an agent or skill value.',
                 emptyHint: Kit.dict.label('protocol.participant.selector_hint'),
                 resultTitle: handleCandidateSelect ? 'Matching agents — choose one to pin this step' : 'Matching agents',
             }));
@@ -2492,34 +2510,36 @@ function renderProtocolWorkspace(container) {
     }
 
     function _workflowStoryScene(projection, { compact = false } = {}) {
-        const nodes = projection.segments.map((segment) => ({
+        const orderedSegments = (Array.isArray(projection.segmentOrder) && projection.segmentOrder.length
+            ? projection.segmentOrder.map((segmentId) => projection.segmentsById.get(String(segmentId || '')))
+            : projection.segments)
+            .filter(Boolean);
+        const nodes = orderedSegments.map((segment) => ({
             id: String(segment.id || ''),
             kind: 'segment',
             label: String(segment.label || 'Untitled section'),
             meta: '',
             secondary: '',
-            width: compact ? 148 : 164,
-            height: compact ? 50 : 54,
+            width: compact ? 144 : 168,
+            height: compact ? 44 : 48,
         }));
-        const edges = projection.segments.flatMap((segment) =>
-            (segment.outgoingEdges || [])
-                .filter((edge) => edge.targetKind === 'segment')
-                .map((edge) => ({
-                    id: `segment:${String(edge.id || '')}`,
-                    from: String(segment.id || ''),
-                    to: String(edge.targetKey || ''),
-                    label: String(edge.label || ''),
-                    primary: true,
-                })));
+        const edges = orderedSegments.slice(1).map((segment, index) => ({
+            id: `story:${String(orderedSegments[index]?.id || '')}::${String(segment.id || '')}`,
+            from: String(orderedSegments[index]?.id || ''),
+            to: String(segment.id || ''),
+            label: '',
+            primary: true,
+        }));
         return {
             title: 'Workflow canvas',
             subtitle: 'Read the workflow here. Select a section or step to inspect local routes and edit in the inspector.',
             hint: editorMode.kind === 'rehearse' ? 'Rehearsal is active. Workflow state is annotated on the same canvas while authoring is paused.' : '',
             outlineTitle: 'Workflow outline',
             direction: 'DOWN',
-            fitPadding: compact ? 18 : 40,
-            nodeSpacing: compact ? 18 : 24,
-            layerSpacing: compact ? 32 : 54,
+            fitPadding: compact ? 14 : 40,
+            nodeSpacing: compact ? 14 : 24,
+            layerSpacing: compact ? 22 : 54,
+            emptyHint: 'Add the first step to start shaping the workflow.',
             graph: { nodes, edges },
             focusIds: nodes.map((node) => node.id),
         };
@@ -2943,6 +2963,9 @@ function renderProtocolWorkspace(container) {
         const list = document.createElement('div');
         list.className = 'kit-stage-routing-list';
         routes.forEach((route) => {
+            const entry = document.createElement('div');
+            entry.className = 'kit-stage-routing-entry';
+
             const row = document.createElement('button');
             row.type = 'button';
             row.className = `kit-stage-routing-item${selection.sectionKey === 'transitions' && selection.nodeKey === route.id ? ' is-selected' : ''}`;
@@ -2973,7 +2996,24 @@ function renderProtocolWorkspace(container) {
             body.appendChild(meta);
 
             row.appendChild(body);
-            list.appendChild(row);
+            entry.appendChild(row);
+
+            if (!readOnly) {
+                const actions = document.createElement('div');
+                actions.className = 'kit-stage-routing-actions';
+                const insert = document.createElement('button');
+                insert.type = 'button';
+                insert.className = 'btn btn-small';
+                insert.textContent = `Insert before ${String(route.targetLabel || route.target_key || 'this target')}`;
+                insert.addEventListener('click', () => _startStageInsert({
+                    sourceStageKey: String(stage?.stage_key || ''),
+                    decision: String(route.decision || ''),
+                }));
+                actions.appendChild(insert);
+                entry.appendChild(actions);
+            }
+
+            list.appendChild(entry);
         });
         panel.appendChild(list);
         return panel;
@@ -3434,14 +3474,23 @@ function renderProtocolWorkspace(container) {
         authoringManifest = await API.getProtocolAuthoringManifest();
     }
 
-    async function loadConnectedAgents({ quiet = true } = {}) {
+    async function loadAssignmentCatalog({ quiet = true } = {}) {
         try {
-            const data = await API.listAgents({ state: 'connected', limit: 24 });
-            connectedAgents = Array.isArray(data?.agents) ? data.agents : (Array.isArray(data) ? data : []);
+            const [agentData, skillData] = await Promise.all([
+                API.listAgents({ limit: 100 }),
+                API.listRoutingSkills(),
+            ]);
+            availableAgents = Array.isArray(agentData?.agents) ? agentData.agents : (Array.isArray(agentData) ? agentData : []);
+            connectedAgents = availableAgents.filter((agent) =>
+                String(agent?.connectivity_state || '').trim().toLowerCase() === 'connected',
+            );
+            availableRoutingSkills = Array.isArray(skillData?.routing_skills) ? skillData.routing_skills : (Array.isArray(skillData) ? skillData : []);
         } catch (err) {
+            availableAgents = [];
             connectedAgents = [];
+            availableRoutingSkills = [];
             if (!quiet) {
-                UI.reportError('Failed to load connected agents', err);
+                UI.reportError('Failed to load assignment options', err);
             }
         }
     }
@@ -3466,7 +3515,7 @@ function renderProtocolWorkspace(container) {
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
-            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringManifest(), loadConnectedAgents({ quiet: true })]);
+            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringManifest(), loadAssignmentCatalog({ quiet: true })]);
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {
@@ -4109,6 +4158,10 @@ function renderProtocolRuns(container) {
         loadRuns(),
         loadIssues({ rerender: true }),
     ]), 400);
+    UI.subscribeWithRefresh(cleanups, 'agents', async () => {
+        await loadAssignmentCatalog({ quiet: true });
+        render();
+    }, 400);
     UI.subscribeWithRefresh(cleanups, 'protocols', () => Promise.all([
         loadRuns(),
         currentRunId ? loadRunDetail({ soft: true }) : Promise.resolve(),

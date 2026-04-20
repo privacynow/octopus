@@ -136,7 +136,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Kit.validationSurface(" in workspace
     assert "Kit.rehearsalPanel(" in workspace
     assert "Kit.selectorResolutionPreview(" in workspace
-    assert "API.listAgents({ state: 'connected', limit: 24 })" in workspace
+    assert "API.listAgents({ limit: 100 })" in workspace
+    assert "API.listRoutingSkills()" in workspace
 
     # Rehearsal API the workspace drives
     assert "API.listRehearsalSessions(" in workspace
@@ -277,13 +278,13 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "renderIssuesSurface" not in workspace
     assert "renderLauncherStrip" not in workspace
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
-    assert "UI.subscribeWithRefresh(cleanups, 'agents'" not in workspace
     assert "UI.readQueryParam('protocol_view'" not in workspace
     assert "protocol_view:" in workspace  # kept in _writeState to clear legacy URLs
     assert "API.getProtocolTemplate('software-engineering')" not in workspace
     assert "loadDefaultTemplate" not in workspace
 
     # Protocol authoring lifecycle subscription is retained
+    assert "UI.subscribeWithRefresh(cleanups, 'agents'" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'protocols'" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
 

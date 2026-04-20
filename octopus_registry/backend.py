@@ -21,7 +21,7 @@ def get_registry_store() -> AbstractRegistryStore:
         config = load_registry_config()
         if not config.database_url:
             raise RuntimeError("OCTOPUS_DATABASE_URL must be set before the registry can start.")
-        _store = RegistryPostgresStore(config.database_url)
+        _store = RegistryPostgresStore(config.database_url, config=config)
     return _store
 
 

@@ -74,6 +74,13 @@ class WebSocketManager:
             RealtimeEventEnvelope(type="event", data=jsonable_encoder(event_data)).model_dump(),
         )
 
+    async def broadcast_topic_event(self, topic: str, event_data: Any) -> None:
+        """Push a typed event to subscribers of one arbitrary registry topic."""
+        await self._broadcast_topics(
+            {topic},
+            RealtimeEventEnvelope(type="event", data=jsonable_encoder(event_data)).model_dump(),
+        )
+
     async def broadcast_heartbeat(self, agent_id: str, status_data: Any) -> None:
         """Push agent status update to subscribers."""
         topic = f"agent:{agent_id}"

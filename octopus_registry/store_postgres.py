@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import secrets
 import uuid
-from contextlib import contextmanager
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Literal
@@ -16,15 +17,40 @@ from octopus_sdk.content_models import (
     RuntimeSkillTrackRecord,
     SkillRevisionRecord,
 )
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
-
+from octopus_sdk.protocols import (
+    ProtocolAuthoringManifestRecord,
+    ProtocolAccessContextRecord,
+    ProtocolArtifactRecord,
+    ProtocolDefinitionDiffRecord,
+    ProtocolDefinitionDocumentRecord,
+    ProtocolDefinitionRecord,
+    ProtocolDefinitionVersionRecord,
+    ProtocolDraftCreateRecord,
+    ProtocolIssueRecord,
+    ProtocolMaintenanceResultRecord,
+    ProtocolMutationRecord,
+    ProtocolRunCreateRecord,
+    ProtocolRunDetailRecord,
+    ProtocolRunExportRecord,
+    ProtocolRunMutationRecord,
+    ProtocolRunParticipantRecord,
+    ProtocolRunRecord,
+    ProtocolScenarioRecord,
+    ProtocolTemplateSummaryRecord,
+    ProtocolTextDocumentRecord,
+    ProtocolTransitionRecord,
+)
+from octopus_sdk.protocols.engine import DEFAULT_PROTOCOL_RUN_ENGINE, ProtocolRunEngine
+from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
+from .protocol_store import ProtocolPostgresAdapter
 from .routing_skill_service import (
     requested_routed_skills,
 )
+from .config import RegistryConfig, load_registry_config
 from .postgres import get_connection
 from .store_dialect import StoreDialect
 from .store_shared.agents import (
+    agent_exists as shared_agent_exists,
     enroll as shared_enroll,
     get_agent_runtime_health as shared_get_agent_runtime_health,
     get_agent_status as shared_get_agent_status,
@@ -37,6 +63,7 @@ from .store_shared.agents import (
     row_to_agent as shared_row_to_agent,
     runtime_worker_rows as shared_runtime_worker_rows,
     search_agents as shared_search_agents,
+    selector_candidates as shared_selector_candidates,
 )
 from .store_shared.conversations import (
     add_conversation_action as shared_add_conversation_action,
@@ -149,7 +176,8 @@ from octopus_sdk.registry.models import (
 )
 from octopus_sdk.task_protocol import RoutedTaskSnapshot
 
-_SCHEMA = "agent_registry"
+_SCHEMA = SCHEMA
+log = logging.getLogger(__name__)
 _REGISTRY_EPOCH_KEY = "registry_epoch"
 
 
@@ -181,68 +209,26 @@ def _records(model_cls, rows):
     return [_record(model_cls, row) for row in rows]
 
 
-class _PostgresStoreDialect(StoreDialect):
-    def placeholder(self, index: int) -> str:
-        return "%s"
-
-    def qualify(self, table: str) -> str:
-        return f"{_SCHEMA}.{table}"
-
-    def json_text(self, json_expr: str, key: str) -> str:
-        return f"{json_expr}->>'{key}'"
-
-    def usage_token_predicate(self, metadata_expr: str) -> str:
-        return f"{metadata_expr} ? 'prompt_tokens'"
-
-    def execute(self, conn, sql: str, params=()):
-        with _cur(conn) as cur:
-            cur.execute(sql, params)
-            return cur.rowcount
-
-    def fetchone(self, conn, sql: str, params=()):
-        with _cur(conn) as cur:
-            cur.execute(sql, params)
-            row = cur.fetchone()
-        return None if row is None else dict(row)
-
-    def fetchall(self, conn, sql: str, params=()):
-        with _cur(conn) as cur:
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-        return [dict(row) for row in rows]
-
-
-_POSTGRES_STORE_DIALECT = _PostgresStoreDialect()
-
-
-@contextmanager
-def _cur(conn):
-    cur = conn.cursor(row_factory=dict_row)
-    try:
-        yield cur
-    finally:
-        cur.close()
-
-
-@contextmanager
-def _write_tx(conn):
-    try:
-        yield conn
-        conn.commit()
-    except BaseException:
-        conn.rollback()
-        raise
-
-
-def _jsonb(value: object) -> Jsonb:
-    return Jsonb(_json_ready(value))
+_POSTGRES_STORE_DIALECT = POSTGRES_STORE_DIALECT
+_cur = cur
+_write_tx = write_tx
+_jsonb = jsonb
 
 
 class RegistryPostgresStore(AbstractRegistryStore):
     """Postgres-backed implementation of the registry store contract."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, config: RegistryConfig | None = None) -> None:
         self.database_url = database_url
+        self._config = config or load_registry_config()
+        self._protocol_engine: ProtocolRunEngine = DEFAULT_PROTOCOL_RUN_ENGINE
+        self._protocol_store = ProtocolPostgresAdapter(
+            database_url=database_url,
+            config=self._config,
+            protocol_engine=self._protocol_engine,
+            create_routed_task_in_tx=self._create_routed_task_in_tx,
+            resolve_selector_in_tx=self._resolve_selector,
+        )
         self._verify_schema()
 
     def _connect(self):
@@ -725,7 +711,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> TaskRecord:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            return shared_update_routed_task_status(
+            result = shared_update_routed_task_status(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 token_row=self._token_row,
@@ -738,6 +724,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 payload=payload,
                 now=now,
             )
+            status_value = str(getattr(payload, "status", "") or "")
+            if status_value == "running":
+                self._protocol_store.renew_protocol_stage_lease_in_tx(
+                    conn,
+                    routed_task_id=routed_task_id,
+                    now=now,
+                )
+            return result
 
     def update_routed_task_result(
         self,
@@ -747,7 +741,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> TaskRecord:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            return shared_update_routed_task_result(
+            result = shared_update_routed_task_result(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 token_row=self._token_row,
@@ -762,6 +756,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 payload=payload,
                 now=now,
             )
+            self._advance_protocol_run_for_task_in_tx(
+                conn,
+                routed_task_id=routed_task_id,
+                now=now,
+            )
+            return result
 
     def report_management_result(
         self,
@@ -819,6 +819,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         limit: int = 25,
         q: str = "",
         connectivity_state: str = "",
+        include_soft_deleted: bool = False,
     ) -> list[AgentRecord]:
         with self._connect() as conn:
             return shared_list_agents(
@@ -830,7 +831,137 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 limit=limit,
                 q=q,
                 connectivity_state=connectivity_state,
+                include_soft_deleted=include_soft_deleted,
             )
+
+    def update_agent_trust_tier(self, agent_id: str, trust_tier: str) -> AgentRecord:
+        normalized_id = str(agent_id or "").strip()
+        normalized_tier = str(trust_tier or "").strip().lower()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        if normalized_tier not in {"community", "trusted", "verified", "restricted"}:
+            raise ValueError("trust_tier must be community|trusted|verified|restricted")
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET trust_tier = %s, updated_at = %s
+                    WHERE agent_id = %s AND soft_deleted_at = ''
+                    RETURNING *
+                    """,
+                    (normalized_tier, now, normalized_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row)
+
+    def update_agent_capacity(
+        self,
+        agent_id: str,
+        *,
+        current_capacity: int | None = None,
+        max_capacity: int | None = None,
+    ) -> AgentRecord:
+        normalized_id = str(agent_id or "").strip()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        if current_capacity is None and max_capacity is None:
+            raise ValueError("at least one of current_capacity or max_capacity must be provided")
+        if current_capacity is not None and current_capacity < 0:
+            raise ValueError("current_capacity must be >= 0")
+        if max_capacity is not None and max_capacity < 1:
+            raise ValueError("max_capacity must be >= 1")
+        now = utcnow_iso()
+        set_parts: list[str] = []
+        params: list[object] = []
+        if current_capacity is not None:
+            set_parts.append("current_capacity = %s")
+            params.append(int(current_capacity))
+        if max_capacity is not None:
+            set_parts.append("max_capacity = %s")
+            params.append(int(max_capacity))
+        set_parts.append("updated_at = %s")
+        params.append(now)
+        params.append(normalized_id)
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET {', '.join(set_parts)}
+                    WHERE agent_id = %s AND soft_deleted_at = ''
+                    RETURNING *
+                    """,
+                    tuple(params),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row)
+
+    def rotate_agent_token(self, agent_id: str) -> tuple[AgentRecord, str]:
+        normalized_id = str(agent_id or "").strip()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        new_token = secrets.token_urlsafe(32)
+        new_token_hash = hash_agent_token(new_token)
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET agent_token = %s, updated_at = %s
+                    WHERE agent_id = %s AND soft_deleted_at = ''
+                    RETURNING *
+                    """,
+                    (new_token_hash, now, normalized_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row), new_token
+
+    def preview_selector_resolution(
+        self,
+        selector,
+        *,
+        exclude_agent_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, object]]:
+        """Return every candidate row that a selector matches, without ambiguity errors."""
+        exclude = {str(agent_id or "").strip() for agent_id in exclude_agent_ids if str(agent_id or "").strip()}
+        with self._connect() as conn:
+            candidates = shared_selector_candidates(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                selector=selector,
+            )
+        return [row for row in candidates if str(row.get("agent_id") or "").strip() not in exclude]
+
+    def soft_delete_agent(self, agent_id: str) -> AgentRecord:
+        normalized_id = str(agent_id or "").strip()
+        if not normalized_id:
+            raise ValueError("agent_id must not be blank")
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.agents
+                    SET soft_deleted_at = %s, connectivity_state = 'disconnected',
+                        updated_at = %s, last_heartbeat_at = %s
+                    WHERE agent_id = %s
+                    RETURNING *
+                    """,
+                    (now, now, now, normalized_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError(f"agent not found: {normalized_id}")
+            return shared_row_to_agent(row)
 
     def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         with self._connect() as conn:
@@ -844,12 +975,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def agent_exists(self, agent_id: str) -> bool:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT 1 FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                    (agent_id,),
-                )
-                return cur.fetchone() is not None
+            return shared_agent_exists(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                agent_id=agent_id,
+            )
 
     def create_conversation(
         self,
@@ -968,6 +1098,296 @@ class RegistryPostgresStore(AbstractRegistryStore):
         return _records(
             ConversationSearchHitRecord,
             [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows],
+        )
+
+    def _advance_protocol_run_for_task_in_tx(
+        self,
+        conn,
+        *,
+        routed_task_id: str,
+        now: str,
+    ) -> None:
+        self._protocol_store.advance_run_for_task_in_tx(
+            conn,
+            routed_task_id=routed_task_id,
+            now=now,
+        )
+
+    def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
+        return self._protocol_store.run_protocol_maintenance(now=now)
+
+    def list_protocols(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 50,
+        lifecycle_state: str = "",
+        slug: str = "",
+        created_after: str = "",
+        include_drafts: bool | None = None,
+    ) -> list[ProtocolDefinitionRecord]:
+        return self._protocol_store.list_protocols(
+            access=access,
+            lifecycle_state=lifecycle_state,
+            slug=slug,
+            limit=limit,
+            cursor=cursor,
+            created_after=created_after,
+            include_drafts=include_drafts,
+        )
+
+    def get_protocol_template(
+        self,
+        slug: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionDocumentRecord:
+        return self._protocol_store.get_protocol_template(slug, access=access)
+
+    def list_protocol_templates(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTemplateSummaryRecord]:
+        return self._protocol_store.list_protocol_templates(access=access)
+
+    def get_protocol_authoring_manifest(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAuthoringManifestRecord:
+        return self._protocol_store.get_protocol_authoring_manifest(access=access)
+
+    def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        return self._protocol_store.get_protocol(protocol_id, access=access)
+
+    def get_protocol_version(
+        self,
+        protocol_id: str,
+        version_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionVersionRecord:
+        return self._protocol_store.get_protocol_version(protocol_id, version_id, access=access)
+
+    def parse_protocol_document_text(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        definition_text: str,
+        format: str = "json",
+        validation_mode: str = "strict",
+    ) -> ProtocolTextDocumentRecord:
+        return self._protocol_store.parse_protocol_document_text(
+            access=access,
+            definition_text=definition_text,
+            format=format,
+            validation_mode=validation_mode,
+        )
+
+    def export_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        return self._protocol_store.export_protocol_draft(
+            protocol_id,
+            access=access,
+            format=format,
+        )
+
+    def diff_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolDefinitionDiffRecord:
+        return self._protocol_store.diff_protocol_draft(
+            protocol_id,
+            access=access,
+            format=format,
+        )
+
+    def save_protocol_draft(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        protocol_id: str,
+        slug: str,
+        display_name: str,
+        description: str,
+        definition_json: RegistryJsonRecord,
+        expected_revision: int | None = None,
+    ) -> ProtocolMutationRecord:
+        return self._protocol_store.save_protocol_draft(
+            access=access,
+            protocol_id=protocol_id,
+            slug=slug,
+            display_name=display_name,
+            description=description,
+            definition_json=definition_json,
+            expected_revision=expected_revision,
+        )
+
+    def create_protocol_draft(
+        self,
+        payload: ProtocolDraftCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolMutationRecord:
+        return self._protocol_store.create_protocol_draft(payload, access=access)
+
+    def delete_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        return self._protocol_store.delete_protocol(protocol_id, access=access)
+
+    def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        return self._protocol_store.validate_protocol(protocol_id, access=access)
+
+    def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        return self._protocol_store.publish_protocol(protocol_id, access=access)
+
+    def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        return self._protocol_store.archive_protocol(protocol_id, access=access)
+
+    def list_protocol_runs(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        status: str = "",
+        protocol_id: str = "",
+        entry_agent_id: str = "",
+        origin_channel: str = "",
+    ) -> list[ProtocolRunRecord]:
+        return self._protocol_store.list_protocol_runs(
+            access=access,
+            limit=limit,
+            cursor=cursor,
+            status=status,
+            protocol_id=protocol_id,
+            entry_agent_id=entry_agent_id,
+            origin_channel=origin_channel,
+        )
+
+    def list_protocol_issues(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        issue_kind: str = "",
+        protocol_run_id: str = "",
+        protocol_id: str = "",
+    ) -> list[ProtocolIssueRecord]:
+        return self._protocol_store.list_protocol_issues(
+            access=access,
+            limit=limit,
+            cursor=cursor,
+            issue_kind=issue_kind,
+            protocol_run_id=protocol_run_id,
+            protocol_id=protocol_id,
+        )
+
+    def create_protocol_run(
+        self,
+        payload: ProtocolRunCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunMutationRecord:
+        return self._protocol_store.create_protocol_run(
+            payload,
+            access=access,
+            idempotency_key=idempotency_key,
+        )
+
+    def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
+        return self._protocol_store.get_protocol_run(run_id, access=access)
+
+    def get_protocol_run_participants(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolRunParticipantRecord]:
+        return self._protocol_store.get_protocol_run_participants(run_id, access=access)
+
+    def get_protocol_run_artifacts(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolArtifactRecord]:
+        return self._protocol_store.get_protocol_run_artifacts(run_id, access=access)
+
+    def get_protocol_run_timeline(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTransitionRecord]:
+        return self._protocol_store.get_protocol_run_timeline(run_id, access=access)
+
+    def export_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolRunExportRecord:
+        return self._protocol_store.export_protocol_run(run_id, access=access)
+
+    def act_on_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        action: str,
+        reason: str,
+        idempotency_key: str = "",
+        expected_version: int | None = None,
+    ) -> ProtocolRunMutationRecord:
+        return self._protocol_store.act_on_protocol_run(
+            run_id,
+            access=access,
+            action=action,
+            reason=reason,
+            idempotency_key=idempotency_key,
+            expected_version=expected_version,
+        )
+
+    def list_protocol_scenarios(
+        self,
+        *,
+        protocol_id: str = "",
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolScenarioRecord]:
+        return self._protocol_store.list_protocol_scenarios(
+            protocol_id=protocol_id,
+            access=access,
+        )
+
+    def create_protocol_scenario(
+        self,
+        *,
+        payload: Mapping[str, object],
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolScenarioRecord:
+        return self._protocol_store.create_protocol_scenario(payload=payload, access=access)
+
+    def delete_protocol_scenario(
+        self,
+        *,
+        scenario_id: str,
+        access: ProtocolAccessContextRecord,
+    ) -> bool:
+        return self._protocol_store.delete_protocol_scenario(
+            scenario_id=scenario_id,
+            access=access,
         )
 
     def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:

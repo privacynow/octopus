@@ -147,7 +147,7 @@ async def test_approval_off_clears_pending_and_preserves_thread():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", {"thread_id": "thread-123", "started": True}, "on")
+        session = default_session("codex", ProviderStateRecord({"thread_id": "thread-123", "started": True}), "on")
         session["pending_approval"] = pending_approval_dict(prompt="do it", created_at=0)
         save_session(data_dir, telegram_conversation_key(12345), session)
 

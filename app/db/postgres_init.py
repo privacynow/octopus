@@ -25,23 +25,15 @@ def _existing_octopus_schemas(conn: Any) -> set[str]:
 
 
 def run_init(conn: Any) -> list[str]:
-    """Initialize an empty database with the current schema.
+    """Apply the current canonical schema and verify it matches the build.
 
-    Existing databases are only accepted when they already match the current
-    schema exactly. Older or partial schema states are rejected; there is no
-    migration path.
+    `init.sql` is the single source of truth for additive schema bootstrap.
+    Reapplying it to an existing database is allowed so newly added tables,
+    indexes, and other `IF NOT EXISTS` objects can be created in place.
+
+    Older or incompatible objects are still rejected after the apply step when
+    the resulting schema does not satisfy the current doctor checks.
     """
-    existing = _existing_octopus_schemas(conn)
-    if existing:
-        errors = run_doctor(conn)
-        if not errors:
-            return []
-        return [
-            "Database already contains Octopus schema objects that do not match the current build. "
-            "Reset the database volumes and rerun DB init.",
-            *errors,
-        ]
-
     sql = _INIT_SQL_PATH.read_text(encoding="utf-8")
     try:
         with conn.cursor() as cur:
@@ -49,9 +41,25 @@ def run_init(conn: Any) -> list[str]:
         errors = run_doctor(conn)
         if errors:
             conn.rollback()
+            existing = _existing_octopus_schemas(conn)
+            if existing:
+                return [
+                    "Database already contains Octopus schema objects that do not match the current build. "
+                    "Reset the database volumes and rerun DB init.",
+                    *errors,
+                ]
             return errors
         conn.commit()
     except Exception as exc:
         conn.rollback()
+        existing = _existing_octopus_schemas(conn)
+        if existing:
+            errors = run_doctor(conn)
+            if errors:
+                return [
+                    "Database already contains Octopus schema objects that do not match the current build. "
+                    "Reset the database volumes and rerun DB init.",
+                    *errors,
+                ]
         return [f"Applying init.sql: {exc}"]
     return []

@@ -18,6 +18,13 @@ def _stringify_timestamp(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
+def _parse_timestamp(value):
+    text = _stringify_timestamp(value)
+    if not text:
+        return None
+    return datetime.fromisoformat(str(text))
+
+
 def get_usage_summary(
     conn,
     *,
@@ -104,6 +111,71 @@ def get_summary(
         """,
         (window_start,),
     ) or {}
+    protocol_totals = dialect.fetchone(
+        conn,
+        f"""
+        SELECT
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_definitions')}) AS definitions_total,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_definitions')} WHERE lifecycle_state = 'published') AS definitions_published,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')}) AS runs_total,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status IN ('queued', 'running', 'blocked')) AS runs_active,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status = 'blocked') AS runs_blocked,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status = 'failed' AND updated_at >= {dialect.placeholder(1)}) AS runs_failed_24h,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE blocked_code = 'protocol_contract_invalid') AS runs_contract_invalid,
+            (
+                SELECT COUNT(*)
+                FROM {dialect.qualify('protocol_stage_executions')} pse
+                JOIN {dialect.qualify('protocol_runs')} pr
+                  ON pr.protocol_run_id = pse.protocol_run_id
+                WHERE pse.status = 'running'
+                  AND COALESCE(pse.lease_expires_at, '') <> ''
+                  AND pse.lease_expires_at <= {dialect.placeholder(2)}
+                  AND pr.status = 'running'
+            ) AS stuck_leases,
+            (
+                SELECT COUNT(*)
+                FROM {dialect.qualify('protocol_stage_executions')} pse
+                JOIN {dialect.qualify('protocol_runs')} pr
+                  ON pr.protocol_run_id = pse.protocol_run_id
+                WHERE pse.status = 'running'
+                  AND COALESCE(pse.timeout_at, '') <> ''
+                  AND pse.timeout_at <= {dialect.placeholder(2)}
+                  AND pr.status = 'running'
+            ) AS overdue_timeouts
+        """,
+        (window_start, now_iso, now_iso),
+    ) or {}
+    protocol_metric_rows = dialect.fetchall(
+        conn,
+        f"""
+        SELECT protocol_run_id, status, created_at, completed_at, updated_at
+        FROM {dialect.qualify('protocol_runs')}
+        WHERE created_at >= {dialect.placeholder(1)}
+           OR completed_at >= {dialect.placeholder(1)}
+           OR updated_at >= {dialect.placeholder(1)}
+        """,
+        (window_start, window_start, window_start),
+    )
+    protocol_stage_metric_rows = dialect.fetchall(
+        conn,
+        f"""
+        SELECT protocol_run_id,
+               COUNT(*) AS stage_count,
+               SUM(CASE WHEN decision = 'revise' THEN 1 ELSE 0 END) AS revise_count
+        FROM {dialect.qualify('protocol_stage_executions')}
+        GROUP BY protocol_run_id
+        """,
+    )
+    protocol_intervention_row = dialect.fetchone(
+        conn,
+        f"""
+        SELECT COUNT(*) AS operator_actions_24h
+        FROM {dialect.qualify('protocol_compliance_events')}
+        WHERE created_at >= {dialect.placeholder(1)}
+          AND event_kind LIKE {dialect.placeholder(2)}
+        """,
+        (window_start, "operator_%"),
+    ) or {}
 
     connected = 0
     degraded = 0
@@ -123,6 +195,65 @@ def get_summary(
 
     usage_rows = get_usage_summary(conn, dialect=dialect, since_iso=window_start, until_iso=now_iso)
     usage_total = aggregate_usage_totals(usage_rows)
+    stage_metrics_by_run = {
+        str(row.get("protocol_run_id", "") or ""): {
+            "stage_count": int(row.get("stage_count") or 0),
+            "revise_count": int(row.get("revise_count") or 0),
+        }
+        for row in protocol_stage_metric_rows
+    }
+    terminal_runs_24h = [
+        row
+        for row in protocol_metric_rows
+        if str(row.get("status", "") or "") in {"completed", "failed", "cancelled"}
+        and _parse_timestamp(row.get("completed_at"))
+        and _parse_timestamp(row.get("completed_at")) >= datetime.fromisoformat(window_start)
+    ]
+    started_runs_24h = [
+        row for row in protocol_metric_rows
+        if _parse_timestamp(row.get("created_at"))
+        and _parse_timestamp(row.get("created_at")) >= datetime.fromisoformat(window_start)
+    ]
+    completed_runs_24h = [
+        row for row in terminal_runs_24h if str(row.get("status", "") or "") == "completed"
+    ]
+    cancelled_runs_24h = [
+        row for row in terminal_runs_24h if str(row.get("status", "") or "") == "cancelled"
+    ]
+    blocked_runs_24h = [
+        row
+        for row in protocol_metric_rows
+        if str(row.get("status", "") or "") == "blocked"
+        and _parse_timestamp(row.get("updated_at"))
+        and _parse_timestamp(row.get("updated_at")) >= datetime.fromisoformat(window_start)
+    ]
+    mean_completion_seconds_24h = 0.0
+    if completed_runs_24h:
+        mean_completion_seconds_24h = sum(
+            max(
+                (
+                    _parse_timestamp(row.get("completed_at"))
+                    - _parse_timestamp(row.get("created_at"))
+                ).total_seconds(),
+                0.0,
+            )
+            for row in completed_runs_24h
+            if _parse_timestamp(row.get("completed_at")) and _parse_timestamp(row.get("created_at"))
+        ) / max(len(completed_runs_24h), 1)
+    mean_stage_executions_per_terminal_run_24h = 0.0
+    mean_review_revisions_per_terminal_run_24h = 0.0
+    if terminal_runs_24h:
+        mean_stage_executions_per_terminal_run_24h = sum(
+            stage_metrics_by_run.get(str(row.get("protocol_run_id", "") or ""), {}).get("stage_count", 0)
+            for row in terminal_runs_24h
+        ) / len(terminal_runs_24h)
+        mean_review_revisions_per_terminal_run_24h = sum(
+            stage_metrics_by_run.get(str(row.get("protocol_run_id", "") or ""), {}).get("revise_count", 0)
+            for row in terminal_runs_24h
+        ) / len(terminal_runs_24h)
+    started_run_count = len(started_runs_24h)
+    terminal_run_count = len(terminal_runs_24h)
+    operator_actions_24h = int(protocol_intervention_row.get("operator_actions_24h") or 0)
 
     return RegistrySummaryRecord.model_validate({
         "generated_at": now_iso,
@@ -142,6 +273,29 @@ def get_summary(
             "running": int(task_totals.get("running") or 0),
             "pending": int(task_totals.get("pending") or 0),
             "failed_24h": int(task_totals.get("failed_24h") or 0),
+        },
+        "protocols": {
+            "definitions_total": int(protocol_totals.get("definitions_total") or 0),
+            "definitions_published": int(protocol_totals.get("definitions_published") or 0),
+            "runs_total": int(protocol_totals.get("runs_total") or 0),
+            "runs_active": int(protocol_totals.get("runs_active") or 0),
+            "runs_blocked": int(protocol_totals.get("runs_blocked") or 0),
+            "runs_failed_24h": int(protocol_totals.get("runs_failed_24h") or 0),
+            "runs_contract_invalid": int(protocol_totals.get("runs_contract_invalid") or 0),
+            "stuck_leases": int(protocol_totals.get("stuck_leases") or 0),
+            "overdue_timeouts": int(protocol_totals.get("overdue_timeouts") or 0),
+            "runs_started_24h": started_run_count,
+            "runs_completed_24h": len(completed_runs_24h),
+            "runs_cancelled_24h": len(cancelled_runs_24h),
+            "runs_blocked_24h": len(blocked_runs_24h),
+            "operator_interventions_24h": operator_actions_24h,
+            "completion_rate_24h": (len(completed_runs_24h) / started_run_count) if started_run_count else 0.0,
+            "blocked_rate_24h": (len(blocked_runs_24h) / started_run_count) if started_run_count else 0.0,
+            "intervention_rate_24h": (operator_actions_24h / started_run_count) if started_run_count else 0.0,
+            "mean_completion_seconds_24h": mean_completion_seconds_24h,
+            "mean_stage_executions_per_terminal_run_24h": mean_stage_executions_per_terminal_run_24h,
+            "mean_review_revisions_per_terminal_run_24h": mean_review_revisions_per_terminal_run_24h,
+            "terminal_runs_24h": terminal_run_count,
         },
         "usage_24h": usage_total,
     })

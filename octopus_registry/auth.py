@@ -86,6 +86,8 @@ class AuthContext:
     is_operator: bool = False
     agent_id: str | None = None      # set when is_agent=True; used for scoped reads
     agent_token: str | None = None    # raw token, for passing to store methods that need it
+    org_id: str = "local"
+    roles: tuple[str, ...] = ()
 
 
 def require_agent_token(
@@ -204,16 +206,23 @@ def require_authenticated(
         agent_record = store.resolve_agent_for_token(token)
         if agent_record is None:
             raise HTTPException(status_code=401, detail="Unknown agent token")
+        settings = load_settings()
         return AuthContext(
             is_agent=True,
             agent_id=str(agent_record.agent_id),
             agent_token=token,
+            org_id=settings.operator_org_id,
         )
     # Fall back to session cookie
     if ui_session_is_valid(request):
         _validate_csrf_for_session_mutation(request, x_csrf_token)
         current_ui_csrf_token(request)
-        return AuthContext(is_operator=True)
+        settings = load_settings()
+        return AuthContext(
+            is_operator=True,
+            org_id=settings.operator_org_id,
+            roles=settings.operator_roles,
+        )
     raise HTTPException(status_code=401, detail="Authentication required")
 
 
@@ -233,4 +242,9 @@ def require_operator_session(
         raise HTTPException(status_code=401, detail="Operator session required")
     _validate_csrf_for_session_mutation(request, x_csrf_token)
     current_ui_csrf_token(request)
-    return AuthContext(is_operator=True)
+    settings = load_settings()
+    return AuthContext(
+        is_operator=True,
+        org_id=settings.operator_org_id,
+        roles=settings.operator_roles,
+    )

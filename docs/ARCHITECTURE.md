@@ -76,6 +76,7 @@ plane. It runs independently of any bot. When bots connect, it manages them.
 - Conversation storage, event timeline, message/action APIs, and browser-origin
   operator messages
 - Routed task lifecycle (create, status, result, recipient projection)
+- Protocol definition/version storage and protocol run orchestration
 - Skill catalog and provider guidance management (via management protocol)
 - Skill-derived routing projection and global routing policy
 - Operator dashboard and SPA
@@ -115,12 +116,53 @@ flowchart TB
 | Agent API | Agent token | Enroll, register, heartbeat, poll, ack, deregister |
 | Resource API | Agent token, operator session, or both (varies per endpoint) | Agents, conversations, tasks, events. Usage and summary are operator-only. |
 | Management bridge | Operator session or UI bearer token | Agent-scoped skill/guidance operations via management protocol |
+| Protocol API | Operator session or UI write access | Protocol templates, definitions, versions, runs, and run inspection |
 | Realtime API | Operator session | WebSocket — events, heartbeats, progress, invalidations |
 | Operator SPA | Session cookie | Dashboard, conversations, agents, tasks, approvals, skills, routing, guidance, usage |
 
 All management endpoints are agent-scoped: `/v1/agents/{agent_id}/catalog/skills`,
 `/v1/agents/{agent_id}/guidance/{provider}`, etc. No global management endpoints
 that assume a single connected bot.
+
+The generated registry OpenAPI artifact is checked in at
+`docs/registry-openapi.json` and locked by tests against the live FastAPI app,
+so protocol clients do not depend on undocumented route drift.
+
+Protocol definitions and protocol runs are registry-owned control-plane
+objects:
+
+- definitions are versioned in `agent_registry`
+- runs are persisted in `agent_registry`
+- lifecycle decisions are evaluated by `octopus_sdk/protocols/engine.py`
+  (`ProtocolRunEngine`) and persisted through one canonical registry applier
+  in `octopus_registry/protocol_store.py`
+- stage execution is dispatched through the existing routed-task/runtime path
+- work-stage completion is enforced through protocol control lines plus runtime-reported artifact observations
+- operator actions are versioned, idempotent registry mutations over the same
+  run state (`cancel`, `retry`, `accept`, `send-back` in the current release)
+- built-in protocol templates are seeded by the canonical DB init/bootstrap path
+  (`app/db/postgres_init.py` calling `octopus_sdk/protocols/bootstrap.py`), then
+  served from the registry database as the runtime/control-plane source of truth
+- stage timeout enforcement uses a registry maintenance loop and the same
+  canonical applier; it does not depend on receiving a late routed-task result
+- the registry maintenance loop emits post-applier protocol invalidations so the
+  browser and operator tooling observe the same protocol truth the GET/timeline
+  APIs expose
+- protocol draft parsing, JSON/YAML export, and draft-vs-published diff use the
+  shared SDK document helpers in `octopus_sdk/protocols/`; the registry UI and
+  API do not maintain a second protocol text conversion path
+- protocol support/admin visibility is exposed through registry-backed issue
+  queries for blocked runs, invalid contracts, expired timeouts, and stuck
+  leases; the dashboard and protocol workspace consume those control-plane reads
+- protocol operational metrics are projected through the canonical summary path;
+  the dashboard reads them from registry summary data instead of computing a
+  browser-local protocol health model
+- transport clients such as Telegram invoke and observe protocol runs, but they
+  do not own protocol state or state-machine rules
+- `protocol-stage:` routed-task results intentionally short-circuit delegation
+  continuation in `app/channels/registry/delivery_transport.py`; the
+  authoritative completion path is routed-task result update in the registry,
+  followed by protocol engine advancement
 
 For skills, the shared user-facing states are:
 
@@ -276,7 +318,24 @@ progressive editor, but the owning bot remains part of the request identity.
 WebSocket topics:
 - `conversation:{id}` — conversation events and progress
 - `agent:{id}` — agent heartbeat and status
-- Collection topics: `agents`, `conversations`, `tasks`, `approvals`, `summary`, `usage`
+- `protocol-run:{id}` — protocol run detail invalidations
+- Collection topics: `agents`, `conversations`, `tasks`, `approvals`,
+  `summary`, `usage`, `protocols`
+
+Protocol run invalidations are emitted from the canonical registry path on run
+create, operator actions, and protocol-stage routed-task completion. The
+browser reacts to those invalidations; it does not infer protocol advancement
+locally from task rows.
+
+The same `protocol-run:{id}` topic also carries named `event` envelopes for
+post-applier protocol lifecycle updates:
+
+- `protocol_run.updated`
+- `protocol_run.stage_changed`
+- `protocol_run.terminal`
+
+Those payloads are built in `octopus_registry/protocol_runtime.py` from the same
+registry-backed run detail projection used by `GET /v1/protocol-runs/{id}`.
 
 Four envelope types (defined in `octopus_sdk/realtime.py`):
 `RealtimeEventEnvelope`, `RealtimeHeartbeatEnvelope`,
@@ -297,7 +356,9 @@ The registry store is Postgres-only.
 
 - `store_base.py` defines the protocol and shared validation helpers
 - `store_shared/` contains domain-sliced SQL helpers used by the Postgres store
-- `store_postgres.py` owns the live registry persistence implementation
+- `store_postgres.py` owns the live registry persistence implementation and
+  delegates protocol-specific persistence/orchestration to
+  `protocol_store.py`
 
 The registry database lives in the shared deployment Postgres instance under
 the `agent_registry` schema.
@@ -315,6 +376,8 @@ layer. It defines what a bot IS, not how any specific bot works.
 - Runtime orchestration (`BotRuntime` — admission, dispatch, worker loop)
 - Execution engine (`execute_request` — provider invocation, delegation, finalization)
 - Registry participant contracts (enrollment, mirroring, coordination)
+- Protocol models, schema migration, validation, stage prompt rendering,
+  lifecycle evaluation (`octopus_sdk/protocols/engine.py`), and participant session-keying
 - Workflow composition (`WorkflowComposer` with builder pattern)
 - Event taxonomy (12 typed event kinds with validated metadata)
 - Task protocol (lifecycle state machine, transition validation)

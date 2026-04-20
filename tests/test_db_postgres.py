@@ -58,6 +58,77 @@ def test_run_init_is_noop_on_current_db(postgres_truncated):
     assert errors == []
 
 
+def test_run_init_does_not_seed_builtin_protocols_into_authored_definitions(postgres_base_url, request):
+    """DB init leaves builtin protocol examples out of authored protocol rows."""
+    from app.db.postgres import get_connection
+    from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
+
+    worker_id = get_worker_id(request.config)
+    db_name = f"test_bot_registry_builtin_seed_{worker_id}".replace("-", "_")
+    db_url = _replace_db_in_url(postgres_base_url, db_name)
+    create_test_database(postgres_base_url, db_name)
+
+    with get_connection(db_url) as conn:
+        errors = run_init(conn)
+        assert errors == []
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT slug, lifecycle_state
+                FROM agent_registry.protocol_definitions
+                WHERE slug = 'software-engineering'
+                """
+            )
+            row = cur.fetchone()
+
+    assert row is None
+
+
+def test_run_init_restores_missing_additive_schema_objects(postgres_truncated):
+    """run_init() recreates missing additive objects from the canonical init.sql."""
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE agent_registry.protocol_transitions CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_artifacts CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_stage_executions CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_run_participants CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_runs CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_definition_versions CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_definitions CASCADE")
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+        assert run_doctor(conn) == []
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('agent_registry.protocol_definitions')")
+            assert cur.fetchone()[0] == "agent_registry.protocol_definitions"
+
+
+def test_run_init_restores_missing_additive_protocol_columns(postgres_truncated):
+    """run_init() adds newly introduced protocol columns onto existing tables."""
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE agent_registry.protocol_definitions DROP COLUMN owner_org_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_definition_versions DROP COLUMN published_by")
+            cur.execute("ALTER TABLE agent_registry.protocol_runs DROP COLUMN blocked_code")
+            cur.execute("ALTER TABLE agent_registry.protocol_run_participants DROP COLUMN resolution_outcome")
+            cur.execute("ALTER TABLE agent_registry.protocol_stage_executions DROP COLUMN timeout_at")
+            cur.execute("ALTER TABLE agent_registry.protocol_artifacts DROP COLUMN verification_state")
+            cur.execute("ALTER TABLE agent_registry.protocol_transitions DROP COLUMN error_code")
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+        assert run_doctor(conn) == []
+
+
 def test_registry_init_schema_matches_current_store_contract(postgres_truncated):
     """Fresh Postgres init exposes the current registry tables/columns/defaults."""
     from app.db.postgres import get_connection
@@ -83,6 +154,8 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "management_capabilities_json",
             "version",
             "runtime_health_json",
+            "trust_tier",
+            "soft_deleted_at",
             "created_at",
             "updated_at",
             "last_heartbeat_at",
@@ -237,6 +310,164 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "created_at",
             "updated_at",
         },
+        "protocol_definitions": {
+            "protocol_id",
+            "slug",
+            "display_name",
+            "description",
+            "lifecycle_state",
+            "current_version_id",
+            "owner_org_id",
+            "visibility",
+            "created_by",
+            "updated_by",
+            "draft_definition_json",
+            "draft_content_hash",
+            "created_at",
+            "updated_at",
+        },
+        "protocol_definition_versions": {
+            "protocol_definition_version_id",
+            "protocol_id",
+            "version",
+            "definition_json",
+            "content_hash",
+            "validation_status",
+            "published_at",
+            "published_by",
+            "created_at",
+        },
+        "protocol_runs": {
+            "protocol_run_id",
+            "protocol_id",
+            "protocol_definition_version_id",
+            "entry_agent_id",
+            "entry_authority_ref",
+            "is_rehearsal",
+            "root_conversation_id",
+            "origin_channel",
+            "workspace_ref",
+            "repo_ref",
+            "branch_ref",
+            "problem_statement",
+            "constraints_json",
+            "status",
+            "current_stage_execution_id",
+            "current_stage_key",
+            "termination_summary",
+            "blocked_code",
+            "blocked_detail",
+            "run_org_id",
+            "started_by",
+            "version",
+            "retention_until",
+            "last_transition_at",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        },
+        "protocol_scenarios": {
+            "protocol_scenario_id",
+            "protocol_id",
+            "stage_key",
+            "participant_key",
+            "display_name",
+            "response_text",
+            "run_org_id",
+            "created_by",
+            "created_at",
+            "updated_at",
+        },
+        "protocol_run_participants": {
+            "protocol_run_participant_id",
+            "protocol_run_id",
+            "participant_key",
+            "display_name",
+            "required_skills_json",
+            "target_selector_json",
+            "resolved_agent_id",
+            "resolved_authority_ref",
+            "session_key",
+            "state",
+            "resolution_outcome",
+            "resolution_reason",
+            "selector_snapshot_json",
+            "created_at",
+            "updated_at",
+        },
+        "protocol_stage_executions": {
+            "protocol_stage_execution_id",
+            "protocol_run_id",
+            "stage_key",
+            "participant_key",
+            "attempt",
+            "loop_iteration",
+            "status",
+            "decision",
+            "decision_summary",
+            "input_snapshot_json",
+            "routed_task_id",
+            "failure_code",
+            "failure_detail",
+            "timeout_at",
+            "lease_owner",
+            "lease_expires_at",
+            "started_at",
+            "completed_at",
+        },
+        "protocol_artifacts": {
+            "protocol_artifact_id",
+            "protocol_run_id",
+            "artifact_key",
+            "artifact_kind",
+            "location",
+            "workspace_path",
+            "content_hash",
+            "size_bytes",
+            "exists",
+            "modified_at",
+            "observed_at",
+            "verification_state",
+            "produced_by_stage_execution_id",
+            "state",
+            "supersedes_protocol_artifact_id",
+            "created_at",
+        },
+        "protocol_transitions": {
+            "protocol_transition_id",
+            "protocol_run_id",
+            "from_stage_execution_id",
+            "to_stage_execution_id",
+            "transition_kind",
+            "decision",
+            "reason",
+            "error_code",
+            "metadata_json",
+            "actor_type",
+            "actor_ref",
+            "created_at",
+        },
+        "protocol_idempotency": {
+            "protocol_idempotency_id",
+            "scope_kind",
+            "scope_ref",
+            "action_name",
+            "idempotency_key",
+            "request_hash",
+            "response_json",
+            "created_at",
+        },
+        "protocol_compliance_events": {
+            "protocol_compliance_event_id",
+            "protocol_run_id",
+            "protocol_definition_version_id",
+            "event_kind",
+            "actor_ref",
+            "actor_role",
+            "summary",
+            "metadata_json",
+            "created_at",
+        },
         "skills_override": {"skill_name", "enabled", "set_by", "set_at"},
         "meta": {"key", "value"},
     }
@@ -266,6 +497,9 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
     assert defaults[("conversations", "conversation_type")].startswith("'conversation'")
     assert defaults[("conversations", "origin_channel")].startswith("'registry'")
     assert "jsonb" in defaults[("events", "metadata_json")]
+    assert defaults[("protocol_definitions", "visibility")].startswith("'org_private'")
+    assert defaults[("protocol_runs", "status")].startswith("'queued'")
+    assert "jsonb" in defaults[("protocol_transitions", "metadata_json")]
 
 
 def test_run_init_rejects_non_current_existing_schema(postgres_base_url, request):

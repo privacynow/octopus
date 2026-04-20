@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Awaitable, Callable
 from uuid import uuid4
 
@@ -14,6 +16,8 @@ from octopus_sdk.config import BotConfigBase
 from octopus_sdk.deferred_notifications import DeferredNotification, DeferredNotificationPort
 from octopus_sdk.execution import RequestExecutionOutcome
 from octopus_sdk.formatting import summarize_text
+from octopus_sdk.protocols import ProtocolArtifactObservationRecord, ProtocolStageRuntimeContractRecord
+from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.task_routing import TaskRoutingPort
@@ -45,6 +49,8 @@ class FinalizationContext:
     deferred_target_agent_id: str = ""
     deferred_actor_key: str = ""
     deferred_title: str = ""
+    registry_inspection: RegistryInspectionPort | None = None
+    working_dir_resolver: Callable[[int | str], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -96,7 +102,125 @@ async def _publish_routed_result_delivery_failure(
             "Fallback routed-task status update failed for %s",
             context.routed_task_id,
             exc_info=True,
+    )
+
+
+def _safe_workspace_artifact_path(base_dir: str, relative_path: str) -> Path | None:
+    base = Path(base_dir).expanduser().resolve()
+    candidate = Path(relative_path)
+    if candidate.is_absolute():
+        return None
+    resolved = (base / candidate).resolve()
+    if resolved != base and base not in resolved.parents:
+        return None
+    return resolved
+
+
+def _artifact_observation_for_path(
+    *,
+    base_dir: str,
+    artifact_key: str,
+    artifact_kind: str,
+    relative_path: str,
+) -> ProtocolArtifactObservationRecord:
+    safe_path = _safe_workspace_artifact_path(base_dir, relative_path)
+    if safe_path is None:
+        return ProtocolArtifactObservationRecord(
+            artifact_key=artifact_key,
+            artifact_kind=artifact_kind,
+            path=relative_path,
+            exists=False,
+            verification_state="missing",
         )
+    try:
+        stat = safe_path.stat()
+    except FileNotFoundError:
+        return ProtocolArtifactObservationRecord(
+            artifact_key=artifact_key,
+            artifact_kind=artifact_kind,
+            path=relative_path,
+            exists=False,
+            verification_state="missing",
+        )
+    except Exception:
+        log.warning("Failed to stat protocol artifact %s", safe_path, exc_info=True)
+        return ProtocolArtifactObservationRecord(
+            artifact_key=artifact_key,
+            artifact_kind=artifact_kind,
+            path=relative_path,
+            exists=False,
+            verification_state="missing",
+        )
+    if not safe_path.is_file():
+        return ProtocolArtifactObservationRecord(
+            artifact_key=artifact_key,
+            artifact_kind=artifact_kind,
+            path=relative_path,
+            exists=False,
+            verification_state="missing",
+        )
+    digest = hashlib.sha256()
+    with safe_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return ProtocolArtifactObservationRecord(
+        artifact_key=artifact_key,
+        artifact_kind=artifact_kind,
+        path=relative_path,
+        exists=True,
+        size_bytes=int(stat.st_size or 0),
+        content_hash=digest.hexdigest(),
+        modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        verification_state="verified",
+    )
+
+
+async def _protocol_artifact_payloads(context: FinalizationContext) -> list[dict[str, object]]:
+    if (
+        not context.routed_task_id
+        or not context.authority_ref
+        or context.registry_inspection is None
+        or context.working_dir_resolver is None
+    ):
+        return []
+    try:
+        task = await context.registry_inspection.get_task(context.authority_ref, context.routed_task_id)
+    except Exception:
+        log.warning(
+            "Failed to inspect routed task %s for protocol artifact observations",
+            context.routed_task_id,
+            exc_info=True,
+        )
+        return []
+    request_payload = task.request.as_dict() if task.request is not None else {}
+    internal_context = request_payload.get("internal_context", {})
+    if not isinstance(internal_context, dict):
+        return []
+    contract_raw = internal_context.get("protocol_stage_contract")
+    if not isinstance(contract_raw, dict):
+        return []
+    try:
+        contract = ProtocolStageRuntimeContractRecord.model_validate(contract_raw)
+    except Exception:
+        log.warning(
+            "Invalid protocol stage contract on routed task %s",
+            context.routed_task_id,
+            exc_info=True,
+        )
+        return []
+    working_dir = str(context.working_dir_resolver(context.runtime_chat) or "").strip()
+    if not working_dir:
+        return []
+    observations = [
+        _artifact_observation_for_path(
+            base_dir=working_dir,
+            artifact_key=artifact.artifact_key,
+            artifact_kind=artifact.artifact_kind,
+            relative_path=artifact.path,
+        )
+        for artifact in contract.output_artifacts
+    ]
+    return [item.model_dump(mode="json") for item in observations]
 
 
 async def finalize_execution(
@@ -129,6 +253,7 @@ async def finalize_execution(
     if context.routed_task_id and context.task_routing is not None and authority_ref:
         full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
         result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
+        artifact_payloads = await _protocol_artifact_payloads(context)
         try:
             report = await context.task_routing.report_routed_task_result(
                 routed_task_id=context.routed_task_id,
@@ -139,7 +264,7 @@ async def finalize_execution(
                     transition_id=uuid4().hex,
                     summary=summarize_text(full_text or outcome.error_text or result_status),
                     full_text=full_text or outcome.error_text,
-                    artifacts=(),
+                    artifacts=artifact_payloads,
                     follow_up_questions=(),
                     prompt_tokens=outcome.prompt_tokens,
                     completion_tokens=outcome.completion_tokens,

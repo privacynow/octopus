@@ -3,8 +3,8 @@
 Octopus runs Claude or Codex behind bot runtimes and adds a local registry UI
 for operators. In the shipped product you can talk to bots from Telegram or
 from registry-origin browser conversations, and you use the registry to inspect
-conversations, review approvals, manage skills and guidance, and inspect agent
-health.
+conversations, review approvals, manage skills and guidance, define reusable
+protocols, launch protocol runs, and inspect agent health.
 
 The main entrypoint is:
 
@@ -75,6 +75,8 @@ Use the registry to:
 - review approvals
 - manage skills
 - manage provider guidance
+- define and publish protocols
+- inspect protocol runs
 
 If you want the browser workflow in detail, use
 [docs/registry-user-guide.md](docs/registry-user-guide.md).
@@ -94,6 +96,15 @@ Useful Telegram commands:
 - `/project <name>`
 - `/skills ...`
 - `/guidance ...`
+- `/protocol list`
+- `/protocol start <slug> <problem statement>`
+- `/protocol status <run_id>`
+- `/protocol watch <run_id>`
+- `/protocol unwatch <run_id>`
+- `/protocol cancel <run_id> [reason]`
+- `/protocol retry <run_id> [reason]`
+- `/protocol accept <run_id> [reason]`
+- `/protocol send-back <run_id> [reason]`
 
 If you want the Telegram workflow in detail, use
 [docs/telegram-user-guide.md](docs/telegram-user-guide.md).
@@ -135,6 +146,55 @@ skills, use [docs/skills-guide.md](docs/skills-guide.md).
 For the lower-level shared model, use
 [docs/skills-model.md](docs/skills-model.md).
 
+## Protocols
+
+Protocols are reusable multi-stage workflows stored in the registry control
+plane and executed through the shared SDK/runtime path.
+
+The current shipped model is:
+
+- define and edit protocol definitions in the registry UI
+- import, validate, diff, and export protocol drafts as JSON or YAML through the
+  same shared SDK protocol-document contract the registry API uses
+- validate and publish immutable protocol versions
+- archive published protocol definitions when operators retire them
+- start protocol runs from the registry UI or from Telegram
+- observe participants, artifacts, stage transitions, and outcomes in the registry
+- intervene on runs with typed operator actions over the shared registry API:
+  `cancel`, `retry`, `accept`, and `send-back`
+- enforce stage completion through shared SDK contracts, artifact observations,
+  and versioned operator actions instead of UI-only state
+- serve built-in protocol templates from the seeded registry database after
+  bootstrap via the shared SDK bootstrap helper, not from a parallel SDK-only
+  read path
+- sweep expired protocol-stage timeouts through the registry maintenance loop
+  so timeout handling uses the same canonical run-state applier as task results
+  and so maintenance-triggered state changes are pushed back into the UI over the
+  same protocol invalidation topics
+- refresh protocol UI state through registry realtime invalidation topics
+  instead of maintaining a separate browser-side protocol state machine
+- emit named protocol run realtime events (`protocol_run.updated`,
+  `protocol_run.stage_changed`, `protocol_run.terminal`) on the same
+  `protocol-run:{id}` topic after the canonical registry applier commits
+- expose protocol issue summaries for blocked runs, invalid contracts, expired
+  timeouts, and stuck leases through the control plane instead of ad hoc
+  transport-specific inspection
+- surface protocol operational metrics in the registry summary path, including
+  started/completed runs, intervention rate, and mean completion/runtime slices
+
+The first built-in protocol is `software-engineering`, which models planning,
+review, architecture, implementation, review, and acceptance over durable repo
+artifacts.
+
+The protocol implementation is described in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the active delivery backlog
+lives in [protocol_remediation_plan.md](protocol_remediation_plan.md).
+The operator workflow, authoring contract, and checked-in API artifact live in:
+
+- [docs/operator-protocol-guide.md](docs/operator-protocol-guide.md)
+- [docs/author-protocol-guide.md](docs/author-protocol-guide.md)
+- [docs/registry-openapi.json](docs/registry-openapi.json)
+
 `./octopus` generates `BOT_CREDENTIAL_KEY` for managed bot env files. Keep it:
 
 - present in each bot `.env`
@@ -167,5 +227,9 @@ fault state.
   SDK-oriented bot development guide
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   System architecture and runtime boundaries
+- [docs/operator-protocol-guide.md](docs/operator-protocol-guide.md)
+  Protocol run operations, metrics, and runbooks
+- [docs/author-protocol-guide.md](docs/author-protocol-guide.md)
+  Protocol authoring and validation guide
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

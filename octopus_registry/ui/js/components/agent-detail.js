@@ -17,6 +17,11 @@ function renderAgentDetail(container, params) {
     let resetBusy = false;
     let executionOverride = null;
     let resetNotice = '';
+    let adminNotice = '';
+    let selectorQuery = '';
+    let selectorCandidates = [];
+    let selectorBusy = false;
+    let selectorMessage = '';
 
     const header = document.createElement('header');
     header.className = 'workspace-header workspace-header-compact';
@@ -171,17 +176,18 @@ function renderAgentDetail(container, params) {
         const body = document.createElement('div');
         body.className = 'list-shell';
 
-        const grid = UI.renderMetadataGrid([
-            { label: 'Agent ID', value: agent.agent_id || '—' },
-            { label: 'Scope', value: agent.registry_scope || '—' },
-            { label: 'Version', value: agent.version || '—' },
-            { label: 'Transport', value: agent.connectivity_state || 'unknown' },
-            { label: 'Execution', value: execution.state || 'healthy' },
-            { label: 'Last heartbeat', value: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : 'never' },
-            execution.faultedAt ? { label: 'Faulted at', value: UI.relativeTime(execution.faultedAt) } : null,
-            execution.detail ? { label: 'Last failure', value: execution.detail } : null,
-        ].filter(Boolean));
-        body.appendChild(grid);
+        const overrideSnapshot = executionOverride
+            ? { ...agent, execution_state: execution.state }
+            : agent;
+        body.appendChild(Kit.agentSummary({ agent: overrideSnapshot }));
+
+        if (execution.faultedAt || execution.detail) {
+            const faultGrid = UI.renderMetadataGrid([
+                execution.faultedAt ? { label: 'Faulted at', value: UI.relativeTime(execution.faultedAt) } : null,
+                execution.detail ? { label: 'Last failure', value: execution.detail } : null,
+            ].filter(Boolean));
+            body.appendChild(faultGrid);
+        }
 
         if (resetNotice) {
             const note = document.createElement('div');
@@ -191,6 +197,272 @@ function renderAgentDetail(container, params) {
         }
 
         card.appendChild(body);
+
+        return card;
+    }
+
+    const TRUST_TIERS = ['community', 'trusted', 'verified', 'restricted'];
+
+    function _confirmAsync(title, message, { destructive = false, confirmLabel = 'Confirm' } = {}) {
+        return new Promise((resolve) => {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn';
+            cancelBtn.textContent = 'Cancel';
+            const confirmBtn = document.createElement('button');
+            confirmBtn.type = 'button';
+            confirmBtn.className = destructive ? 'btn btn-destructive' : 'btn btn-primary';
+            confirmBtn.textContent = confirmLabel;
+            const view = UI.showDialog(title, message, {
+                actions: [cancelBtn, confirmBtn],
+                role: 'alertdialog',
+                initialFocus: confirmBtn,
+            });
+            cancelBtn.addEventListener('click', () => {
+                view.close();
+                resolve(false);
+            });
+            confirmBtn.addEventListener('click', () => {
+                view.close();
+                resolve(true);
+            });
+        });
+    }
+
+    function _showToken(title, tokenValue) {
+        return new Promise((resolve) => {
+            const body = document.createElement('div');
+            body.className = 'studio-stack';
+            const hint = document.createElement('p');
+            hint.className = 'quiet-note';
+            hint.textContent = title;
+            body.appendChild(hint);
+            const code = document.createElement('pre');
+            code.className = 'token-display';
+            code.textContent = tokenValue;
+            body.appendChild(code);
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'btn btn-sm';
+            copyBtn.textContent = 'Copy to clipboard';
+            copyBtn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(tokenValue);
+                    copyBtn.textContent = 'Copied';
+                } catch (err) {
+                    copyBtn.textContent = 'Copy failed';
+                }
+            });
+            const okBtn = document.createElement('button');
+            okBtn.type = 'button';
+            okBtn.className = 'btn btn-primary';
+            okBtn.textContent = 'I saved it';
+            const view = UI.showDialog('New bearer token', body, {
+                actions: [copyBtn, okBtn],
+                maxWidth: '520px',
+            });
+            okBtn.addEventListener('click', () => {
+                view.close();
+                resolve();
+            });
+        });
+    }
+
+    function buildAdminCard(agent) {
+        const card = document.createElement('section');
+        card.className = 'card workspace-section';
+        card.dataset.key = 'admin';
+
+        const head = document.createElement('div');
+        head.className = 'section-header';
+        head.innerHTML = `<strong>${Kit.dict.label('agents.admin.title', 'Admin actions')}</strong>`;
+        card.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'list-shell';
+
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = Kit.dict.label('agents.admin.gated_help', '');
+        body.appendChild(note);
+
+        if (adminNotice) {
+            const flash = document.createElement('div');
+            flash.className = 'quiet-note';
+            flash.textContent = adminNotice;
+            body.appendChild(flash);
+        }
+
+        const trustRow = document.createElement('div');
+        trustRow.className = 'form-row';
+        const trustLabel = document.createElement('label');
+        trustLabel.textContent = Kit.dict.label('agents.admin.trust_tier.label', 'Trust tier');
+        trustRow.appendChild(trustLabel);
+        const trustSelect = document.createElement('select');
+        TRUST_TIERS.forEach((tier) => {
+            const opt = document.createElement('option');
+            opt.value = tier;
+            opt.textContent = Kit.dict.label(`agents.trust_tier.${tier}`, tier);
+            if (String(agent.trust_tier || 'community') === tier) opt.selected = true;
+            trustSelect.appendChild(opt);
+        });
+        trustSelect.addEventListener('change', async () => {
+            const value = trustSelect.value;
+            trustSelect.disabled = true;
+            try {
+                await API.updateAgentTrustTier(agentId, value);
+                adminNotice = Kit.dict.label('agents.admin.trust_tier.saved', 'Trust tier updated.');
+                void loadDetail({ soft: true });
+            } catch (err) {
+                UI.reportError('Failed to update trust tier', err, { context: 'Agent admin trust tier update failed' });
+                trustSelect.disabled = false;
+            }
+        });
+        trustRow.appendChild(trustSelect);
+        body.appendChild(trustRow);
+
+        const capacityRow = document.createElement('div');
+        capacityRow.className = 'form-row';
+        const capacityLabel = document.createElement('label');
+        capacityLabel.textContent = Kit.dict.label('agents.admin.capacity.label', 'Capacity (current / max)');
+        capacityRow.appendChild(capacityLabel);
+        const currentInput = document.createElement('input');
+        currentInput.type = 'number';
+        currentInput.min = '0';
+        currentInput.value = Number(agent.current_capacity || 0);
+        currentInput.style.maxWidth = '80px';
+        const maxInput = document.createElement('input');
+        maxInput.type = 'number';
+        maxInput.min = '0';
+        maxInput.value = Number(agent.max_capacity || 1);
+        maxInput.style.maxWidth = '80px';
+        const capacitySave = document.createElement('button');
+        capacitySave.type = 'button';
+        capacitySave.className = 'btn btn-sm';
+        capacitySave.textContent = Kit.dict.label('agents.admin.capacity.save', 'Save capacity');
+        capacitySave.addEventListener('click', async () => {
+            const current = Math.max(0, Number(currentInput.value || 0));
+            const max = Math.max(0, Number(maxInput.value || 0));
+            capacitySave.disabled = true;
+            try {
+                await API.updateAgentCapacity(agentId, { current_capacity: current, max_capacity: max });
+                adminNotice = Kit.dict.label('agents.admin.capacity.saved', 'Capacity updated.');
+                void loadDetail({ soft: true });
+            } catch (err) {
+                UI.reportError('Failed to update capacity', err, { context: 'Agent admin capacity update failed' });
+                capacitySave.disabled = false;
+            }
+        });
+        capacityRow.appendChild(currentInput);
+        capacityRow.appendChild(document.createTextNode(' / '));
+        capacityRow.appendChild(maxInput);
+        capacityRow.appendChild(capacitySave);
+        body.appendChild(capacityRow);
+
+        const dangerZone = document.createElement('div');
+        dangerZone.className = 'editor-actions';
+        const rotateBtn = document.createElement('button');
+        rotateBtn.type = 'button';
+        rotateBtn.className = 'btn btn-sm';
+        rotateBtn.textContent = Kit.dict.label('agents.admin.rotate_token', 'Rotate token');
+        rotateBtn.addEventListener('click', async () => {
+            const ok = await _confirmAsync(
+                Kit.dict.label('agents.admin.rotate_token', 'Rotate token'),
+                Kit.dict.label('agents.admin.rotate_token.confirm', 'Rotate this agent’s bearer token? The old token will stop working immediately.'),
+                { confirmLabel: Kit.dict.label('agents.admin.rotate_token', 'Rotate token') },
+            );
+            if (!ok) return;
+            rotateBtn.disabled = true;
+            try {
+                const result = await API.rotateAgentToken(agentId);
+                const newToken = String(result?.bearer_token || '');
+                if (newToken) {
+                    await _showToken(
+                        Kit.dict.label('agents.admin.rotate_token.shown', 'Copy this new bearer token now — the registry will not display it again.'),
+                        newToken,
+                    );
+                }
+                adminNotice = Kit.dict.label('agents.admin.rotate_token.saved', 'Token rotated.');
+                void loadDetail({ soft: true });
+            } catch (err) {
+                UI.reportError('Failed to rotate token', err, { context: 'Agent admin rotate token failed' });
+            } finally {
+                rotateBtn.disabled = false;
+            }
+        });
+        dangerZone.appendChild(rotateBtn);
+
+        const softDeleteBtn = document.createElement('button');
+        softDeleteBtn.type = 'button';
+        softDeleteBtn.className = 'btn btn-sm btn-destructive';
+        softDeleteBtn.textContent = Kit.dict.label('agents.admin.soft_delete', 'Disconnect and soft-delete');
+        softDeleteBtn.addEventListener('click', async () => {
+            const ok = await _confirmAsync(
+                Kit.dict.label('agents.admin.soft_delete', 'Disconnect and soft-delete'),
+                Kit.dict.label('agents.admin.soft_delete.confirm', 'Disconnect this agent and mark it soft-deleted? It will stop receiving routed tasks.'),
+                { confirmLabel: Kit.dict.label('agents.admin.soft_delete', 'Disconnect and soft-delete'), destructive: true },
+            );
+            if (!ok) return;
+            softDeleteBtn.disabled = true;
+            try {
+                await API.softDeleteAgent(agentId);
+                Router.navigate('/ui/agents');
+            } catch (err) {
+                UI.reportError('Failed to soft-delete agent', err, { context: 'Agent admin soft-delete failed' });
+                softDeleteBtn.disabled = false;
+            }
+        });
+        dangerZone.appendChild(softDeleteBtn);
+        body.appendChild(dangerZone);
+
+        card.appendChild(body);
+        return card;
+    }
+
+    function buildSelectorCard(agent) {
+        const card = document.createElement('section');
+        card.className = 'card workspace-section';
+        card.dataset.key = 'selector-preview';
+
+        const head = document.createElement('div');
+        head.className = 'section-header';
+        head.innerHTML = `<strong>${Kit.dict.label('agents.selector.title', 'Selector resolution preview')}</strong>`;
+        card.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'list-shell';
+        card.appendChild(body);
+
+        function renderPreview() {
+            const node = Kit.selectorResolutionPreview({
+                selector: selectorQuery,
+                candidates: selectorCandidates,
+                busy: selectorBusy,
+                message: selectorMessage,
+                currentAgentId: agent.agent_id,
+                onResolve: async (value) => {
+                    selectorQuery = value;
+                    selectorBusy = true;
+                    selectorMessage = '';
+                    renderPreview();
+                    try {
+                        const result = await API.previewSelectorResolution({ selector: value });
+                        selectorCandidates = Array.isArray(result?.candidates) ? result.candidates : [];
+                        if (!selectorCandidates.length) {
+                            selectorMessage = Kit.dict.label('agents.selector.no_matches', 'No connected agents match this selector.');
+                        }
+                    } catch (err) {
+                        selectorCandidates = [];
+                        selectorMessage = `Error: ${err.message}`;
+                    } finally {
+                        selectorBusy = false;
+                        renderPreview();
+                    }
+                },
+            });
+            UI.reconcileChildren(body, [node]);
+        }
+        renderPreview();
 
         return card;
     }
@@ -790,6 +1062,11 @@ function renderAgentDetail(container, params) {
                     version: String(agent.version || ''),
                     routingSkills: (agent.routing_skills || []).map((skillName) => String(skillName || '')),
                     capabilities: (agent.management_capabilities || []).map((capability) => String(capability || '')),
+                    trustTier: String(agent.trust_tier || 'community'),
+                    currentCapacity: Number(agent.current_capacity || 0),
+                    maxCapacity: Number(agent.max_capacity || 1),
+                    softDeletedAt: String(agent.soft_deleted_at || ''),
+                    adminNotice: String(adminNotice || ''),
                 },
                 workers: workers.map((worker) => ({
                     id: String(worker.worker_id || ''),
@@ -805,6 +1082,8 @@ function renderAgentDetail(container, params) {
             const detailRender = UI.memoizedRender(content, signature, () => [
                 buildOverviewCard(agent),
                 buildSkillsCard(agent),
+                buildSelectorCard(agent),
+                buildAdminCard(agent),
                 buildWorkersCard(workers),
                 buildConversationsSection(),
             ], {

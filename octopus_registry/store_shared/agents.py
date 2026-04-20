@@ -48,12 +48,14 @@ def list_agents(
     limit: int = 25,
     q: str = "",
     connectivity_state: str = "",
+    include_soft_deleted: bool = False,
 ) -> list[AgentRecord]:
     fetch_limit = limit + 1
+    soft_delete_filter = "" if include_soft_deleted else " WHERE soft_deleted_at = ''"
     if q or connectivity_state:
         rows = dialect.fetchall(
             conn,
-            f"SELECT * FROM {dialect.qualify('agents')} ORDER BY lower(display_name)",
+            f"SELECT * FROM {dialect.qualify('agents')}{soft_delete_filter} ORDER BY lower(display_name)",
         )
         agents = [row_to_agent(row) for row in rows]
         if for_agent_id is not None:
@@ -74,11 +76,14 @@ def list_agents(
             ]
         return agents[cursor: cursor + fetch_limit]
     if for_agent_id is not None:
+        id_filter_clause = "WHERE agent_id = " + dialect.placeholder(1)
+        if not include_soft_deleted:
+            id_filter_clause += " AND soft_deleted_at = ''"
         rows = dialect.fetchall(
             conn,
             (
                 f"SELECT * FROM {dialect.qualify('agents')} "
-                f"WHERE agent_id = {dialect.placeholder(1)} "
+                f"{id_filter_clause} "
                 f"ORDER BY lower(display_name) "
                 f"LIMIT {dialect.placeholder(2)} OFFSET {dialect.placeholder(3)}"
             ),
@@ -88,13 +93,30 @@ def list_agents(
         rows = dialect.fetchall(
             conn,
             (
-                f"SELECT * FROM {dialect.qualify('agents')} "
+                f"SELECT * FROM {dialect.qualify('agents')}{soft_delete_filter} "
                 f"ORDER BY lower(display_name) "
                 f"LIMIT {dialect.placeholder(1)} OFFSET {dialect.placeholder(2)}"
             ),
             (fetch_limit, cursor),
-        )
+    )
     return [row_to_agent(row) for row in rows]
+
+
+def agent_exists(
+    conn,
+    *,
+    dialect: StoreDialect,
+    agent_id: str,
+) -> bool:
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        return False
+    row = dialect.fetchone(
+        conn,
+        f"SELECT 1 AS ok FROM {dialect.qualify('agents')} WHERE agent_id = {dialect.placeholder(1)}",
+        (normalized_agent_id,),
+    )
+    return row is not None
 
 
 def row_to_agent(row) -> AgentRecord:
@@ -119,6 +141,8 @@ def row_to_agent(row) -> AgentRecord:
         "channel_capabilities": decode_json_field(row.get("channel_capabilities_json"), []),
         "management_capabilities": decode_json_field(row.get("management_capabilities_json"), []),
         "version": row["version"],
+        "trust_tier": str(row.get("trust_tier", "community") or "community"),
+        "soft_deleted_at": str(row.get("soft_deleted_at", "") or ""),
         "last_heartbeat_at": row["last_heartbeat_at"],
         "updated_at": row["updated_at"],
         "runtime_health_summary": runtime_health_summary(row.get("runtime_health_json")),

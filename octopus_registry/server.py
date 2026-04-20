@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import hmac
 import logging
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, WebSocket
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
 from starlette.websockets import WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
@@ -31,17 +32,27 @@ from .auth import (
     validate_settings,
 )
 from .ws import WebSocketManager
+from .rehearsal import RehearsalSessionManager
 from .routing_skill_service import RoutingSkillService
 from octopus_sdk.exact_aliases import direct_selector_aliases
+from octopus_sdk.protocols import ProtocolAccessContextRecord, ProtocolRunCreateRecord
 from octopus_sdk.registry.models import (
+    AgentCapacityUpdate,
     AgentDiscoveryQuery,
+    AgentTokenRotationResult,
+    AgentTrustTierUpdate,
     ConversationCreate,
     CoordinationActionEnvelope,
     HealthSummary,
+    SelectorPreviewCandidate,
+    SelectorPreviewRequest,
+    SelectorPreviewResult,
+    TargetSelector,
     TaskRecord,
     RoutedTaskResult,
     RoutedTaskUpdate,
     format_target_selector,
+    parse_target_selector,
     utcnow_iso,
 )
 from octopus_sdk.registry.management import ManagementResult
@@ -86,6 +97,8 @@ from .ingress import (
 )
 from .authority import StoreBackedRegistryAuthority
 from .backend import get_registry_authority, get_registry_store
+from .protocol_http import build_protocol_router
+from .protocol_runtime import broadcast_protocol_run_event, internal_protocol_access
 from .store_base import (
     AbstractRegistryStore,
     RoutingSkillDisabledError,
@@ -112,6 +125,7 @@ from .http_support import (
     secure_html_response as _secure_html_response,
 )
 from .store_shared.usage import aggregate_usage_rows
+from .ui_http import register_ui_routes
 
 _REGISTRY_UI_SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -146,16 +160,85 @@ def get_authority() -> StoreBackedRegistryAuthority:
 async def _registry_lifespan(app: FastAPI):
     del app
     validate_settings()
-    yield
+    stop_event = asyncio.Event()
+    global _rehearsal_manager
+    _rehearsal_manager = RehearsalSessionManager(store=get_store())
+    try:
+        await _rehearsal_manager.start()
+    except Exception:
+        log.warning("Rehearsal session manager failed to start", exc_info=True)
+
+    async def _protocol_maintenance_loop() -> None:
+        while not stop_event.is_set():
+            try:
+                result = await asyncio.to_thread(get_store().run_protocol_maintenance)
+                swept_count = int(getattr(result, "swept_count", 0) or 0)
+                if swept_count:
+                    topics = {"protocols", "summary"}
+                    for run_id in getattr(result, "affected_run_ids", ()) or ():
+                        normalized = str(run_id or "").strip()
+                        if normalized:
+                            topics.add(f"protocol-run:{normalized}")
+                    await _broadcast_invalidations(
+                        topics=topics,
+                        reason="protocol.run.timeout",
+                    )
+                    for run_id in getattr(result, "affected_run_ids", ()) or ():
+                        normalized = str(run_id or "").strip()
+                        if normalized:
+                            await broadcast_protocol_run_event(
+                                get_store(),
+                                _ws_manager,
+                                run_id=normalized,
+                                event_kind="protocol_run.terminal",
+                                reason="protocol.run.timeout",
+                            )
+            except Exception:
+                log.warning("Protocol maintenance sweep failed", exc_info=True)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                continue
+
+    maintenance_task = asyncio.create_task(_protocol_maintenance_loop(), name="registry-protocol-maintenance")
+    try:
+        yield
+    finally:
+        stop_event.set()
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await _rehearsal_manager.stop()
+        except Exception:
+            log.warning("Rehearsal session manager failed to stop cleanly", exc_info=True)
 
 
 app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
 configure_session_middleware(app)
 _ws_manager = WebSocketManager()
+_rehearsal_manager: RehearsalSessionManager | None = None
 
 
 def get_ws_manager() -> WebSocketManager:
     return _ws_manager
+
+
+def get_rehearsal_manager() -> RehearsalSessionManager:
+    if _rehearsal_manager is None:
+        raise HTTPException(status_code=503, detail="Rehearsal service not initialized.")
+    return _rehearsal_manager
+
+
+def _protocol_access(auth: AuthContext) -> ProtocolAccessContextRecord:
+    actor_ref = f"agent:{auth.agent_id}" if auth.is_agent and auth.agent_id else "operator-session"
+    return ProtocolAccessContextRecord(
+        actor_ref=actor_ref,
+        org_id=str(auth.org_id or "local"),
+        roles=list(auth.roles or ()),
+    )
 
 
 def _raise_ingress_http_error(exc: RegistryIngressError) -> None:
@@ -171,6 +254,17 @@ def _event_invalidation_topics(kind: str) -> tuple[str, ...]:
     if kind in {"approval.requested", "approval.decided"}:
         topics.add("approvals")
     return tuple(sorted(topics))
+
+
+def _protocol_run_id_from_task_record(task: TaskRecord) -> str:
+    routed_task_id = str(task.routed_task_id or "").strip()
+    if not routed_task_id.startswith("protocol-stage:"):
+        return ""
+    request_payload = task.request.as_dict() if task.request is not None else {}
+    context = request_payload.get("context", {})
+    if not isinstance(context, dict):
+        return ""
+    return str(context.get("protocol_run_id", "") or "").strip()
 
 
 async def _broadcast_task_record_events(result: TaskRecord) -> None:
@@ -201,6 +295,26 @@ async def _broadcast_invalidations(
             agent_id=agent_id,
             routed_task_id=routed_task_id,
         )
+
+
+app.include_router(
+    build_protocol_router(
+        get_store=get_store,
+        require_authenticated=require_authenticated,
+        require_operator_session=require_operator_session,
+        protocol_access=_protocol_access,
+        broadcast_invalidations=_broadcast_invalidations,
+        broadcast_topic_event=lambda *, run_id, event_kind, reason: broadcast_protocol_run_event(
+            get_store(),
+            _ws_manager,
+            run_id=run_id,
+            event_kind=event_kind,
+            reason=reason,
+        ),
+        get_rehearsal_manager=get_rehearsal_manager,
+    )
+)
+register_ui_routes(app, security_headers=_REGISTRY_UI_SECURITY_HEADERS)
 
 
 @app.websocket("/v1/ws")
@@ -439,6 +553,7 @@ async def routed_task_result(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         result = authority.report_routed_result_for_agent(
@@ -456,15 +571,41 @@ async def routed_task_result(
         raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
     parent_conversation_id = str(result.parent_conversation_id or "")
     agent_id = str(result.target_agent_id or result.origin_agent_id or "")
+    protocol_run_id = _protocol_run_id_from_task_record(result)
     if (parent_conversation_id or result.recipient_conversation_id) and (result.inserted_events or result.recipient_inserted_events):
         await _broadcast_task_record_events(result)
+    topics = {"tasks", "conversations", "summary"}
+    reason = "routed_task.completed"
+    if protocol_run_id:
+        topics.add("protocols")
+        topics.add(f"protocol-run:{protocol_run_id}")
+        reason = "protocol.run.updated"
     await _broadcast_invalidations(
-        topics=("tasks", "conversations", "summary"),
-        reason="routed_task.completed",
+        topics=topics,
+        reason=reason,
         conversation_id=parent_conversation_id,
         agent_id=agent_id,
         routed_task_id=routed_task_id,
     )
+    if protocol_run_id:
+        event_kind = "protocol_run.updated"
+        try:
+            detail = store.get_protocol_run(protocol_run_id, access=internal_protocol_access())
+        except Exception:
+            detail = None
+        if detail is not None:
+            if str(detail.run.status or "") in {"completed", "failed", "cancelled"}:
+                event_kind = "protocol_run.terminal"
+            elif str(detail.run.current_stage_key or ""):
+                event_kind = "protocol_run.stage_changed"
+        await broadcast_protocol_run_event(
+            store,
+            _ws_manager,
+            run_id=protocol_run_id,
+            event_kind=event_kind,
+            reason=reason,
+            routed_task_id=routed_task_id,
+        )
     return result.model_dump(mode="json")
 
 
@@ -603,6 +744,152 @@ async def api_agent_execution_reset(
         )
         return result
     except RegistryIngressError as exc: _raise_ingress_http_error(exc)
+
+
+@app.patch("/v1/agents/{agent_id}/trust-tier")
+async def api_agent_trust_tier_update(
+    agent_id: str,
+    payload: AgentTrustTierUpdate,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record = store.update_agent_trust_tier(agent_id, payload.trust_tier)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}"),
+        reason="agent.trust_tier.updated",
+        agent_id=agent_id,
+    )
+    return _json_payload(record)
+
+
+@app.patch("/v1/agents/{agent_id}/capacity")
+async def api_agent_capacity_update(
+    agent_id: str,
+    payload: AgentCapacityUpdate,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record = store.update_agent_capacity(
+            agent_id,
+            current_capacity=payload.current_capacity,
+            max_capacity=payload.max_capacity,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}"),
+        reason="agent.capacity.updated",
+        agent_id=agent_id,
+    )
+    return _json_payload(record)
+
+
+@app.post("/v1/agents/{agent_id}/rotate-token")
+async def api_agent_rotate_token(
+    agent_id: str,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record, plaintext_token = store.rotate_agent_token(agent_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}"),
+        reason="agent.token.rotated",
+        agent_id=agent_id,
+    )
+    return _json_payload(
+        AgentTokenRotationResult(
+            agent_id=record.agent_id,
+            agent_token=plaintext_token,
+            slug=record.slug,
+            registry_epoch=utcnow_iso(),
+        )
+    )
+
+
+@app.delete("/v1/agents/{agent_id}")
+async def api_agent_soft_delete(
+    agent_id: str,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        record = store.soft_delete_agent(agent_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", f"agent:{agent_id}", "summary"),
+        reason="agent.soft_deleted",
+        agent_id=agent_id,
+    )
+    return _json_payload(record)
+
+
+@app.post("/v1/selector/preview")
+def api_selector_preview(
+    payload: SelectorPreviewRequest,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: AuthContext = Depends(require_authenticated),
+) -> dict[str, Any]:
+    parsed = parse_target_selector(payload.selector)
+    if parsed is None:
+        parsed = TargetSelector(kind="agent", value=payload.selector)
+    try:
+        candidates = store.preview_selector_resolution(
+            parsed,
+            exclude_agent_ids=tuple(payload.exclude_agent_ids or ()),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    enriched: list[SelectorPreviewCandidate] = []
+    for row in candidates:
+        raw_skills = row.get("skills_json")
+        if isinstance(raw_skills, str):
+            try:
+                import json as _json
+                decoded_skills = _json.loads(raw_skills)
+            except Exception:
+                decoded_skills = []
+        elif isinstance(raw_skills, list):
+            decoded_skills = raw_skills
+        else:
+            decoded_skills = []
+        enriched.append(
+            SelectorPreviewCandidate(
+                agent_id=str(row.get("agent_id") or ""),
+                display_name=str(row.get("display_name") or ""),
+                slug=str(row.get("slug") or ""),
+                role=str(row.get("role") or ""),
+                connectivity_state=str(row.get("effective_state") or row.get("connectivity_state") or ""),
+                trust_tier=str(row.get("trust_tier") or "community"),
+                current_capacity=int(row.get("current_capacity") or 0),
+                max_capacity=int(row.get("max_capacity") or 1),
+                routing_skills=[str(s) for s in decoded_skills if isinstance(s, str)],
+                reason="",
+            )
+        )
+    return _json_payload(
+        SelectorPreviewResult(
+            selector=payload.selector,
+            authority_ref=payload.authority_ref,
+            candidates=enriched,
+            total_considered=len(enriched),
+        )
+    )
 
 
 @app.get("/v1/agents/{agent_id}/conversations")
@@ -1676,116 +1963,3 @@ async def api_provider_guidance_archive(
             note=payload.note,
         )
     except RegistryIngressError as exc: _raise_ingress_http_error(exc)
-
-
-def _render_login_html(title: str, error: str = "") -> str:
-    error_block = f'<p class="error">{error}</p>' if error else ""
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} — Login</title>
-<style>
-  body {{ font-family: system-ui, sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }}
-  .box {{ background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12); padding: 2rem; min-width: 320px; }}
-  h1 {{ font-size: 1.25rem; margin: 0 0 1.5rem; }}
-  label {{ display: block; margin-bottom: .4rem; font-size: .875rem; font-weight: 500; }}
-  input[type=password] {{ width: 100%; box-sizing: border-box; padding: .5rem .75rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; margin-bottom: 1rem; }}
-  button {{ width: 100%; padding: .6rem; background: #1a73e8; color: #fff; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; }}
-  button:hover {{ background: #1558b0; }}
-  .error {{ color: #c62828; font-size: .875rem; margin-bottom: .75rem; }}
-</style>
-</head>
-<body>
-<div class="box">
-  <h1>{title}</h1>
-  {error_block}
-  <form method="post" action="/ui/login">
-    <label for="password">Password</label>
-    <input type="password" id="password" name="password" autofocus required>
-    <button type="submit">Sign in</button>
-  </form>
-</div>
-</body>
-</html>"""
-
-
-import os as _os
-from pathlib import Path as _Path
-from fastapi.staticfiles import StaticFiles as _StaticFiles
-
-_UI_DIR = _Path(__file__).resolve().parent / "ui"
-
-
-@app.get("/ui/login", response_class=HTMLResponse)
-def ui_login_page(request: Request):
-    settings = load_settings()
-    if ui_session_is_valid(request):
-        return RedirectResponse("/ui", status_code=303)
-    return _secure_html_response(
-        _render_login_html(settings.display_name or "Agent Registry"),
-        headers=_REGISTRY_UI_SECURITY_HEADERS,
-    )
-
-
-@app.post("/ui/login")
-async def ui_login(request: Request, password: str = Form(default="")):
-    settings = load_settings()
-    if ui_session_is_valid(request):
-        return RedirectResponse("/ui", status_code=303)
-    enforce_auth_attempt_limit(request, "registry-ui-login")
-    if not ui_password_matches(password, settings=settings):
-        return _secure_html_response(
-            _render_login_html(settings.display_name or "Agent Registry", error="Incorrect password."),
-            headers=_REGISTRY_UI_SECURITY_HEADERS,
-        )
-    clear_auth_attempt_limit(request, "registry-ui-login")
-    mark_ui_session_authenticated(request)
-    return RedirectResponse("/ui", status_code=303)
-
-
-@app.get("/ui/logout")
-def ui_logout(request: Request):
-    clear_ui_session(request)
-    return RedirectResponse("/ui/login", status_code=303)
-
-
-@app.get("/ui", response_class=HTMLResponse)
-def ui_shell(request: Request) -> HTMLResponse:
-    require_ui_session(request)
-    return HTMLResponse(
-        (_UI_DIR / "index.html").read_text(),
-        headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
-    )
-
-
-# ---------------------------------------------------------------------------
-# New SPA static file serving (Phase 7)
-# ---------------------------------------------------------------------------
-
-if _UI_DIR.is_dir():
-    app.mount("/ui/css", _StaticFiles(directory=str(_UI_DIR / "css")), name="ui-css")
-    app.mount("/ui/js", _StaticFiles(directory=str(_UI_DIR / "js")), name="ui-js")
-    if (_UI_DIR / "vendor").is_dir():
-        app.mount("/ui/vendor", _StaticFiles(directory=str(_UI_DIR / "vendor")), name="ui-vendor")
-
-    @app.get("/ui/{path:path}", response_class=HTMLResponse)
-    def ui_spa_subpath(request: Request, path: str) -> HTMLResponse:
-        """Serve SPA index for client-side routes so /ui/conversations etc. work on refresh/bookmark."""
-        if path == "login":
-            raise HTTPException(status_code=404)
-        require_ui_session(request)
-        return HTMLResponse(
-            (_UI_DIR / "index.html").read_text(),
-            headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
-        )
-
-    @app.get("/ui/spa/{path:path}", response_class=HTMLResponse)
-    def ui_spa_catchall(request: Request, path: str = ""):
-        """Legacy: Serve the SPA index.html for all /ui/spa/* routes (client-side routing)."""
-        require_ui_session(request)
-        return HTMLResponse(
-            (_UI_DIR / "index.html").read_text(),
-            headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
-        )

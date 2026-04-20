@@ -1354,6 +1354,201 @@ def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
     return _html_message("\n".join(lines))
 
 
+def protocol_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(
+        text=(
+            "Usage:\n"
+            "/protocol list\n"
+            "/protocol start <slug> <problem statement>\n"
+            "/protocol status <run_id>\n"
+            "/protocol watch <run_id>\n"
+            "/protocol unwatch <run_id>\n"
+            "/protocol cancel <run_id> [reason]\n"
+            "/protocol retry <run_id> [reason]\n"
+            "/protocol accept <run_id> [reason]\n"
+            "/protocol send-back <run_id> [reason]"
+        )
+    )
+
+
+def protocol_list_message(protocols: list[Any]) -> TelegramRenderedMessage:
+    if not protocols:
+        return TelegramRenderedMessage(text="No protocols are published in the registry yet.")
+    lines = ["<b>Protocols</b>"]
+    for raw in protocols[:12]:
+        item = raw.model_dump() if hasattr(raw, "model_dump") else raw
+        label = html.escape(str(item.get("display_name") or item.get("slug") or item.get("protocol_id") or "Protocol"))
+        token = html.escape(str(item.get("slug") or item.get("protocol_id") or ""))
+        lines.append(f"- {label} (<code>{token}</code>)")
+    return _html_message("\n".join(lines))
+
+
+def protocol_run_started_message(
+    *,
+    run_id: str,
+    protocol_label: str,
+    current_stage: str,
+    deep_link: str = "",
+    watching: bool,
+) -> TelegramRenderedMessage:
+    lines = [
+        "<b>Protocol run started</b>",
+        f"Run id: <code>{html.escape(run_id)}</code>",
+        f"Protocol: <code>{html.escape(protocol_label)}</code>",
+        f"Current stage: <code>{html.escape(current_stage or 'queued')}</code>",
+        f"Notifications: <code>{'watching' if watching else 'not watching'}</code>",
+    ]
+    if deep_link:
+        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def protocol_run_status_message(
+    detail,
+    *,
+    deep_link: str = "",
+    watching: bool = False,
+) -> TelegramRenderedMessage:
+    run = detail.run
+    lines = [
+        f"Run id: <code>{html.escape(run.protocol_run_id)}</code>",
+        f"Status: <code>{html.escape(run.status)}</code>",
+        f"Version: <code>{html.escape(str(run.version or 1))}</code>",
+        f"Current stage: <code>{html.escape(run.current_stage_key or 'n/a')}</code>",
+        f"Workspace: <code>{html.escape(run.workspace_ref or 'default')}</code>",
+        f"Notifications: <code>{'watching' if watching else 'not watching'}</code>",
+    ]
+    if run.termination_summary:
+        lines.append(f"Summary: {html.escape(run.termination_summary)}")
+    if run.blocked_detail:
+        lines.append(f"Blocked: {html.escape(run.blocked_detail)}")
+    if detail.participants:
+        participants = ", ".join(
+            f"{html.escape(item.participant_key)}:{html.escape(item.state or item.resolution_outcome or 'queued')}"
+            for item in detail.participants[:6]
+        )
+        lines.append(f"Participants: <code>{participants}</code>")
+    if detail.artifacts:
+        artifacts = ", ".join(
+            f"{html.escape(item.artifact_key)}:{html.escape(item.verification_state or item.state or 'declared')}"
+            for item in detail.artifacts[:6]
+        )
+        lines.append(f"Artifacts: <code>{artifacts}</code>")
+    if detail.stage_executions:
+        latest = detail.stage_executions[0]
+        lines.append(f"Latest stage: <code>{html.escape(latest.stage_key)} ({html.escape(latest.status)})</code>")
+        if latest.decision_summary:
+            lines.append(f"Latest summary: {html.escape(latest.decision_summary)}")
+        elif latest.failure_detail:
+            lines.append(f"Latest failure: {html.escape(latest.failure_detail)}")
+    if deep_link:
+        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def protocol_action_confirmation_message(
+    *,
+    action: str,
+    run_id: str,
+    reason: str,
+    deep_link: str = "",
+) -> TelegramRenderedMessage:
+    reason_text = html.escape(reason or "No reason provided.")
+    lines = [
+        f"<b>Confirm protocol action</b>",
+        f"Action: <code>{html.escape(action)}</code>",
+        f"Run id: <code>{html.escape(run_id)}</code>",
+        f"Reason: {reason_text}",
+        "",
+        "Repeat the command with <code>confirm</code> before the reason to apply it.",
+        f"<code>/protocol {html.escape(action)} {html.escape(run_id)} confirm {reason_text}</code>",
+    ]
+    if deep_link:
+        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def protocol_run_updated_message(
+    *,
+    run_id: str,
+    status: str,
+    current_stage: str,
+    deep_link: str = "",
+) -> TelegramRenderedMessage:
+    lines = [
+        "<b>Protocol run updated</b>",
+        f"Run id: <code>{html.escape(run_id)}</code>",
+        f"Status: <code>{html.escape(status)}</code>",
+        f"Current stage: <code>{html.escape(current_stage or 'n/a')}</code>",
+    ]
+    if deep_link:
+        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def protocol_watch_changed_message(
+    *,
+    run_id: str,
+    watching: bool,
+    deep_link: str = "",
+) -> TelegramRenderedMessage:
+    lines = [
+        f"Protocol notifications <b>{'enabled' if watching else 'disabled'}</b>.",
+        f"Run id: <code>{html.escape(run_id)}</code>",
+    ]
+    if deep_link:
+        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def protocol_run_notification_message(detail, *, deep_link: str = "") -> TelegramRenderedMessage:
+    run = detail.run
+    latest = detail.stage_executions[0] if detail.stage_executions else None
+    lines = [
+        "<b>Protocol run update</b>",
+        f"Run id: <code>{html.escape(run.protocol_run_id)}</code>",
+        f"Status: <code>{html.escape(run.status)}</code>",
+        f"Current stage: <code>{html.escape(run.current_stage_key or 'n/a')}</code>",
+    ]
+    if latest is not None:
+        lines.append(f"Latest stage: <code>{html.escape(latest.stage_key)} ({html.escape(latest.status)})</code>")
+        if latest.decision_summary:
+            lines.append(f"Summary: {html.escape(latest.decision_summary)}")
+        elif latest.failure_detail:
+            lines.append(f"Failure: {html.escape(latest.failure_detail)}")
+    if run.blocked_detail:
+        lines.append(f"Blocked: {html.escape(run.blocked_detail)}")
+    if run.termination_summary:
+        lines.append(f"Outcome: {html.escape(run.termination_summary)}")
+    if deep_link:
+        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 def admin_required_message() -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text=_msg.admin_required())
 

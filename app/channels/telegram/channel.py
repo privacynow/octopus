@@ -8,9 +8,11 @@ from contextlib import asynccontextmanager
 from telegram.error import TelegramError
 
 from app import work_queue
+from app.presentation import telegram as telegram_presenters
 from app.channels.telegram.bootstrap import TelegramBootstrap
 from app.channels.telegram.bootstrap import build_bootstrap
 from app.channels.telegram.egress import TelegramChannelEgress
+from app.runtime import telegram_protocols
 from app.runtime import telegram_worker
 from app.runtime import telegram_session_io
 from app.config import BotConfig
@@ -68,6 +70,8 @@ class TelegramTransport(TransportImplementation):
         self._bootstrapped = False
         self._app_started = False
         self._updater_started = False
+        self._protocol_watch_stop = asyncio.Event()
+        self._protocol_watch_task: asyncio.Task | None = None
 
     @property
     def transport_id(self) -> str:
@@ -202,6 +206,15 @@ class TelegramTransport(TransportImplementation):
 
                 if telegram_runtime.config.process_role != ProcessRole.WORKER.value:
                     await self._start_live_updates()
+                    self._protocol_watch_stop.clear()
+                    self._protocol_watch_task = asyncio.create_task(
+                        telegram_protocols.protocol_watch_loop(
+                            telegram_runtime,
+                            stop_event=self._protocol_watch_stop,
+                            render_notification=telegram_presenters.protocol_run_notification_message,
+                        ),
+                        name="telegram-protocol-watch",
+                    )
 
             await self._wait_for_stop(stop_event)
         except asyncio.CancelledError:
@@ -280,6 +293,11 @@ class TelegramTransport(TransportImplementation):
         application = self._bootstrap.application
         async with self._cleanup_lock:
             try:
+                self._protocol_watch_stop.set()
+                if self._protocol_watch_task is not None:
+                    self._protocol_watch_task.cancel()
+                    await asyncio.gather(self._protocol_watch_task, return_exceptions=True)
+                    self._protocol_watch_task = None
                 if self._updater_started and application.updater is not None:
                     await application.updater.stop()
                 if self._app_started:

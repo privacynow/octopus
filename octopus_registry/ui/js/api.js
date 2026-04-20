@@ -41,7 +41,7 @@ const API = (() => {
         }
     }
 
-    async function request(method, path, { body, params, raw } = {}) {
+    async function request(method, path, { body, params, raw, headers } = {}) {
         const url = new URL(path, window.location.origin);
         if (params) {
             for (const [k, v] of Object.entries(params)) {
@@ -50,7 +50,7 @@ const API = (() => {
         }
         const opts = {
             method,
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...(headers || {}) },
             credentials: 'same-origin',
             signal: AbortSignal.timeout(REQUEST_TIMEOUT),
         };
@@ -71,7 +71,26 @@ const API = (() => {
         }
         if (!resp.ok) {
             const text = await resp.text();
-            throw new Error(`${resp.status}: ${text}`);
+            let message = text;
+            let parsed = null;
+            try {
+                parsed = JSON.parse(text);
+                if (parsed && typeof parsed === 'object') {
+                    const detail = parsed.detail && typeof parsed.detail === 'object' ? parsed.detail : parsed;
+                    message = detail.message || detail.error_code || text;
+                }
+            } catch (err) {
+                void err;
+            }
+            const detail = parsed && typeof parsed === 'object'
+                ? (parsed.detail && typeof parsed.detail === 'object' ? parsed.detail : parsed)
+                : null;
+            const error = new Error(`${resp.status}: ${message}`);
+            error.status = resp.status;
+            error.errorCode = detail && typeof detail.error_code === 'string' ? detail.error_code : '';
+            error.details = detail && typeof detail.details === 'object' ? detail.details : null;
+            error.payload = parsed;
+            throw error;
         }
         if (resp.status === 204) return null;
         if (raw) return resp.text();
@@ -134,6 +153,18 @@ const API = (() => {
             request('GET', `/v1/agents/${encodeURIComponent(id)}/status`),
         resetAgentExecutionFault: (id, body = {}) =>
             request('POST', `/v1/agents/${encodeURIComponent(id)}/execution/reset`, { body }),
+        updateAgentTrustTier: (id, trustTier) =>
+            request('PATCH', `/v1/agents/${encodeURIComponent(id)}/trust-tier`, {
+                body: { trust_tier: String(trustTier || '') },
+            }),
+        updateAgentCapacity: (id, body = {}) =>
+            request('PATCH', `/v1/agents/${encodeURIComponent(id)}/capacity`, { body }),
+        rotateAgentToken: (id) =>
+            request('POST', `/v1/agents/${encodeURIComponent(id)}/rotate-token`, { body: {} }),
+        softDeleteAgent: (id) =>
+            request('DELETE', `/v1/agents/${encodeURIComponent(id)}`),
+        previewSelectorResolution: (body = {}) =>
+            request('POST', '/v1/selector/preview', { body }),
         getAgentConversations: (id, opts = {}) =>
             request('GET', `/v1/agents/${encodeURIComponent(id)}/conversations`, { params: opts }),
         openConversationForAgent: async (agentId, opts = {}) => {
@@ -199,6 +230,80 @@ const API = (() => {
             request('GET', '/v1/tasks', { params: opts }),
         getTask: (id) =>
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
+
+        // Protocols
+        listProtocols: (opts = {}) =>
+            request('GET', '/v1/protocols', { params: opts }),
+        listProtocolTemplates: () =>
+            request('GET', '/v1/protocol-templates'),
+        getProtocolAuthoringManifest: () =>
+            request('GET', '/v1/protocol-authoring/manifest'),
+        getProtocolTemplate: (slug) =>
+            request('GET', `/v1/protocol-templates/${encodeURIComponent(slug)}`),
+        getProtocol: (id) =>
+            request('GET', `/v1/protocols/${encodeURIComponent(id)}`),
+        getProtocolVersion: (protocolId, versionId) =>
+            request('GET', `/v1/protocols/${encodeURIComponent(protocolId)}/versions/${encodeURIComponent(versionId)}`),
+        parseProtocolDocument: (body = {}) =>
+            request('POST', '/v1/protocols/parse', { body }),
+        createProtocolDraft: (body = {}) =>
+            request('POST', '/v1/protocol-drafts', { body }),
+        createProtocol: (body = {}) =>
+            request('POST', '/v1/protocols', { body }),
+        deleteProtocol: (id) =>
+            request('DELETE', `/v1/protocols/${encodeURIComponent(id)}`),
+        saveProtocolDraft: (id, body = {}, opts = {}) =>
+            request('PUT', `/v1/protocols/${encodeURIComponent(id)}/draft`, {
+                body,
+                headers: Number.isFinite(opts.ifMatch) ? { 'If-Match': String(opts.ifMatch) } : undefined,
+            }),
+        validateProtocol: (id) =>
+            request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
+        publishProtocol: (id) =>
+            request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
+        archiveProtocol: (id) =>
+            request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
+        exportProtocolDraft: (id, format = 'json') =>
+            request('GET', `/v1/protocols/${encodeURIComponent(id)}/draft/export`, { params: { format } }),
+        diffProtocolDraft: (id, format = 'json') =>
+            request('GET', `/v1/protocols/${encodeURIComponent(id)}/diff`, { params: { format } }),
+        listProtocolRuns: (opts = {}) =>
+            request('GET', '/v1/protocol-runs', { params: opts }),
+        listProtocolIssues: (opts = {}) =>
+            request('GET', '/v1/protocol-runs/issues', { params: opts }),
+        createProtocolRun: (body = {}, opts = {}) =>
+            request('POST', '/v1/protocol-runs', {
+                body,
+                headers: opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : undefined,
+            }),
+        getProtocolRun: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}`),
+        getProtocolRunParticipants: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
+        getProtocolRunArtifacts: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts`),
+        getProtocolRunTimeline: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/timeline`),
+        exportProtocolRun: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/export`),
+        actOnProtocolRun: (id, action, body = {}, opts = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, {
+                body,
+                headers: {
+                    ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
+                    ...(Number.isFinite(opts.expectedVersion) ? { 'If-Match': String(opts.expectedVersion) } : {}),
+                },
+            }),
+        listRehearsalSessions: (runId) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(runId)}/rehearsal/sessions`),
+        respondRehearsalSession: (runId, body = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(runId)}/rehearsal/respond`, { body }),
+        listProtocolScenarios: (opts = {}) =>
+            request('GET', '/v1/protocol-scenarios', { params: opts }),
+        createProtocolScenario: (body = {}) =>
+            request('POST', '/v1/protocol-scenarios', { body }),
+        deleteProtocolScenario: (scenarioId) =>
+            request('DELETE', `/v1/protocol-scenarios/${encodeURIComponent(scenarioId)}`),
 
         // Routing skills
         listRoutingSkills: () =>

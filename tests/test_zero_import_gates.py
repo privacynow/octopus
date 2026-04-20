@@ -419,6 +419,57 @@ def test_rehomed_telegram_modules_only_depend_on_telegram_state_from_transport_d
         assert not unexpected, f"{path} has unexpected channel imports: {sorted(unexpected)}"
 
 
+def test_protocol_engine_keeps_registry_runtime_import_boundary() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    engine_path = repo_root / "octopus_sdk" / "protocols" / "engine.py"
+    tree = ast.parse(engine_path.read_text(), filename=str(engine_path))
+    forbidden_prefixes = (
+        "octopus_registry",
+        "app",
+        "fastapi",
+        "httpx",
+        "psycopg",
+        "telegram",
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = str(alias.name or "")
+                assert not name.startswith(forbidden_prefixes), f"forbidden import {name} in {engine_path}"
+        elif isinstance(node, ast.ImportFrom):
+            module = str(node.module or "")
+            if not module:
+                continue
+            assert not module.startswith(forbidden_prefixes), f"forbidden import {module} in {engine_path}"
+
+
+def test_protocol_engine_dispatch_path_has_no_resolver_callback_surface() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    engine_path = repo_root / "octopus_sdk" / "protocols" / "engine.py"
+    text = engine_path.read_text()
+    assert "resolve_selector" not in text, "protocol engine should consume registry-supplied resolution input only"
+
+
+def test_runtime_code_does_not_import_protocol_engine() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path
+        for root in (repo_root / "app",)
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    forbidden_tokens = (
+        "from octopus_sdk.protocols.engine import",
+        "import octopus_sdk.protocols.engine",
+        "ProtocolRunEngine(",
+    )
+    for path in python_files:
+        text = path.read_text()
+        for token in forbidden_tokens:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
 def test_telegram_transport_directory_stays_collapsed() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     telegram_root = repo_root / "app" / "channels" / "telegram"

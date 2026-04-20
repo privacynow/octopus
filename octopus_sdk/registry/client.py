@@ -6,18 +6,43 @@ async — the client and store run in different processes.
 
 from __future__ import annotations
 
-from typing import TypeVar
+from collections.abc import Mapping
+from typing import Literal, TypeVar
 
 import httpx
 from pydantic import BaseModel
 
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
+from octopus_sdk.protocols import (
+    ProtocolAuthoringManifestRecord,
+    ProtocolDefinitionDiffRecord,
+    ProtocolDefinitionDocumentRecord,
+    ProtocolDefinitionRecord,
+    ProtocolDefinitionVersionRecord,
+    ProtocolDraftCreateRecord,
+    ProtocolMutationRecord,
+    ProtocolIssueRecord,
+    ProtocolTextDocumentRecord,
+    ProtocolRunExportRecord,
+    ProtocolRunCreateRecord,
+    ProtocolRunDetailRecord,
+    ProtocolRunMutationRecord,
+    ProtocolRunParticipantRecord,
+    ProtocolRunRecord,
+    ProtocolTransitionRecord,
+    ProtocolArtifactRecord,
+    ProtocolInvocationPort,
+    ProtocolObservationPort,
+)
 from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.registry.models import (
     AckResult,
+    AgentCapacityUpdate,
     AgentCard,
     AgentDiscoveryQuery,
     AgentRecord,
+    AgentTokenRotationResult,
+    AgentTrustTierUpdate,
     CoordinationActionEnvelope,
     CoordinationActionResult,
     ConversationCreate,
@@ -31,11 +56,55 @@ from octopus_sdk.registry.models import (
     RuntimeHealthPayload,
     RoutedTaskRequest,
     RoutedTaskResult,
+    SelectorPreviewRequest,
+    SelectorPreviewResult,
     TaskRecord,
     RoutedTaskUpdate,
 )
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+ProtocolRegistryErrorCode = Literal[
+    "PROTOCOL_NOT_FOUND",
+    "PROTOCOL_NOT_VISIBLE",
+    "PROTOCOL_FORBIDDEN",
+    "PROTOCOL_DUPLICATE_SLUG",
+    "PROTOCOL_INVALID_ACTION",
+    "PROTOCOL_INVALID",
+    "PROTOCOL_INVALID_FILTER",
+    "PROTOCOL_INVALID_FORMAT",
+    "PROTOCOL_INVALID_IF_MATCH",
+    "PROTOCOL_RUN_NOT_FOUND",
+    "PROTOCOL_VERSION_NOT_FOUND",
+    "PROTOCOL_EXPORT_FORBIDDEN",
+    "PROTOCOL_INVALID_TRANSITION",
+    "LEASE_HELD",
+    "MAX_REVIEW_ROUNDS_EXCEEDED",
+    "ARTIFACT_VERIFICATION_FAILED",
+    "CONCURRENT_MODIFICATION",
+    "IDEMPOTENCY_REPLAY",
+    "PROTOCOL_REQUEST_FAILED",
+]
+PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
+    "PROTOCOL_NOT_FOUND",
+    "PROTOCOL_NOT_VISIBLE",
+    "PROTOCOL_FORBIDDEN",
+    "PROTOCOL_DUPLICATE_SLUG",
+    "PROTOCOL_INVALID_ACTION",
+    "PROTOCOL_INVALID",
+    "PROTOCOL_INVALID_FILTER",
+    "PROTOCOL_INVALID_FORMAT",
+    "PROTOCOL_INVALID_IF_MATCH",
+    "PROTOCOL_RUN_NOT_FOUND",
+    "PROTOCOL_VERSION_NOT_FOUND",
+    "PROTOCOL_EXPORT_FORBIDDEN",
+    "PROTOCOL_INVALID_TRANSITION",
+    "LEASE_HELD",
+    "MAX_REVIEW_ROUNDS_EXCEEDED",
+    "ARTIFACT_VERIFICATION_FAILED",
+    "CONCURRENT_MODIFICATION",
+    "IDEMPOTENCY_REPLAY",
+    "PROTOCOL_REQUEST_FAILED",
+})
 
 
 class RegistryClientError(RuntimeError):
@@ -47,12 +116,18 @@ class RegistryClientError(RuntimeError):
         *,
         error_code: str = "registry_request_failed",
         operator_detail: str = "",
+        details: object | None = None,
         status_code: int | None = None,
     ) -> None:
         self.error_code = error_code
         self.operator_detail = operator_detail or message
+        self.details = details
         self.status_code = status_code
         super().__init__(message)
+
+    @property
+    def is_protocol_error(self) -> bool:
+        return str(self.error_code or "").upper() in PROTOCOL_REGISTRY_ERROR_CODES
 
 
 def _registry_http_error_code(status_code: int) -> str:
@@ -65,6 +140,15 @@ def _registry_http_error_code(status_code: int) -> str:
     return "registry_request_failed"
 
 
+def _detail_error_payload(value: object) -> tuple[str, str, object | None]:
+    if isinstance(value, dict):
+        error_code = str(value.get("error_code", "") or "").strip()
+        message = str(value.get("message", "") or "").strip()
+        if error_code or message:
+            return error_code or "registry_request_failed", message or "Registry request failed.", value.get("details")
+    return "", "", None
+
+
 def _validated_model(
     value: ModelT | Mapping[str, object],
     schema: type[ModelT],
@@ -74,7 +158,7 @@ def _validated_model(
     return schema.model_validate(dict(value))
 
 
-class RegistryClient:
+class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
     """Async HTTP client wrapping the registry's /v1/ endpoints."""
 
     def __init__(
@@ -108,9 +192,12 @@ class RegistryClient:
         path: str,
         *,
         require_auth: bool = True,
+        extra_headers: Mapping[str, str] | None = None,
         **kwargs: object,
     ) -> object:
         headers = self._headers(require_auth=require_auth)
+        if extra_headers:
+            headers.update({str(key): str(value) for key, value in extra_headers.items() if str(value or "").strip()})
 
         async def _do(client: httpx.AsyncClient) -> object:
             try:
@@ -135,10 +222,21 @@ class RegistryClient:
                     ),
                 ) from exc
             if response.status_code >= 400:
+                payload: object = {}
+                if response.headers.get("content-type", "").startswith("application/json"):
+                    try:
+                        payload = response.json().get("detail", response.json())
+                    except Exception:
+                        payload = {}
+                error_code, message, details = _detail_error_payload(payload)
                 raise RegistryClientError(
-                    f"Registry {method} {path} failed: HTTP {response.status_code}",
-                    error_code=_registry_http_error_code(response.status_code),
-                    operator_detail=f"Registry {method} {path} failed with HTTP {response.status_code}.",
+                    message or f"Registry {method} {path} failed: HTTP {response.status_code}",
+                    error_code=error_code or _registry_http_error_code(response.status_code),
+                    operator_detail=(
+                        message
+                        or f"Registry {method} {path} failed with HTTP {response.status_code}."
+                    ),
+                    details=details,
                     status_code=response.status_code,
                 )
             if response.status_code == 204 or not response.content:
@@ -219,6 +317,247 @@ class RegistryClient:
     async def get_agent_status(self, agent_id: str) -> AgentRecord:
         result = await self._request("GET", f"/v1/agents/{agent_id}/status")
         return AgentRecord.model_validate(result)
+
+    async def list_protocols(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 50,
+        lifecycle_state: str = "",
+        slug: str = "",
+        created_after: str = "",
+    ) -> list[ProtocolDefinitionRecord]:
+        result = await self._request(
+            "GET",
+            "/v1/protocols",
+            params={
+                "cursor": cursor,
+                "limit": limit,
+                "lifecycle_state": lifecycle_state,
+                "slug": slug,
+                "created_after": created_after,
+            },
+        )
+        return [ProtocolDefinitionRecord.model_validate(item) for item in result]
+
+    async def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
+        result = await self._request("GET", f"/v1/protocol-templates/{slug}")
+        return ProtocolDefinitionDocumentRecord.model_validate(result)
+
+    async def get_protocol_authoring_manifest(self) -> ProtocolAuthoringManifestRecord:
+        result = await self._request("GET", "/v1/protocol-authoring/manifest")
+        return ProtocolAuthoringManifestRecord.model_validate(result)
+
+    async def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("GET", f"/v1/protocols/{protocol_id}")
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def get_protocol_version(self, protocol_id: str, version_id: str) -> ProtocolDefinitionVersionRecord:
+        result = await self._request("GET", f"/v1/protocols/{protocol_id}/versions/{version_id}")
+        return ProtocolDefinitionVersionRecord.model_validate(result)
+
+    async def save_protocol(
+        self,
+        *,
+        protocol_id: str = "",
+        slug: str,
+        display_name: str,
+        description: str,
+        definition_json: dict[str, object],
+    ) -> ProtocolMutationRecord:
+        payload = {
+            "protocol_id": protocol_id,
+            "slug": slug,
+            "display_name": display_name,
+            "description": description,
+            "definition_json": definition_json,
+        }
+        if protocol_id:
+            result = await self._request("PUT", f"/v1/protocols/{protocol_id}/draft", json=payload)
+        else:
+            result = await self._request("POST", "/v1/protocols", json=payload)
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def create_protocol_draft(
+        self,
+        payload: ProtocolDraftCreateRecord,
+    ) -> ProtocolMutationRecord:
+        result = await self._request(
+            "POST",
+            "/v1/protocol-drafts",
+            json=payload.model_dump(exclude_unset=True),
+        )
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def delete_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("DELETE", f"/v1/protocols/{protocol_id}")
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def validate_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("POST", f"/v1/protocols/{protocol_id}/validate", json={})
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def publish_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("POST", f"/v1/protocols/{protocol_id}/publish", json={})
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def archive_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("POST", f"/v1/protocols/{protocol_id}/archive", json={})
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def parse_protocol_document_text(
+        self,
+        *,
+        definition_text: str,
+        format: str = "json",
+        validation_mode: str = "strict",
+    ) -> ProtocolTextDocumentRecord:
+        result = await self._request(
+            "POST",
+            "/v1/protocols/parse",
+            json={
+                "definition_text": definition_text,
+                "format": format,
+                "validation_mode": validation_mode,
+            },
+        )
+        return ProtocolTextDocumentRecord.model_validate(result)
+
+    async def export_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        result = await self._request(
+            "GET",
+            f"/v1/protocols/{protocol_id}/draft/export",
+            params={"format": format},
+        )
+        return ProtocolTextDocumentRecord.model_validate(result)
+
+    async def diff_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        format: str = "json",
+    ) -> ProtocolDefinitionDiffRecord:
+        result = await self._request(
+            "GET",
+            f"/v1/protocols/{protocol_id}/diff",
+            params={"format": format},
+        )
+        return ProtocolDefinitionDiffRecord.model_validate(result)
+
+    async def list_runs(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+        protocol_id: str = "",
+        entry_agent_id: str = "",
+        origin_channel: str = "",
+    ) -> list[ProtocolRunRecord]:
+        result = await self._request(
+            "GET",
+            "/v1/protocol-runs",
+            params={
+                "cursor": cursor,
+                "limit": limit,
+                "status": status,
+                "protocol_id": protocol_id,
+                "entry_agent_id": entry_agent_id,
+                "origin_channel": origin_channel,
+            },
+        )
+        rows = result.get("runs", result)
+        return [ProtocolRunRecord.model_validate(item) for item in rows]
+
+    async def invoke_protocol(
+        self,
+        payload: ProtocolRunCreateRecord | dict[str, object],
+        *,
+        idempotency_key: str = "",
+        origin: str = "",
+    ) -> ProtocolRunMutationRecord:
+        del origin
+        body = _validated_model(payload, ProtocolRunCreateRecord).model_dump(mode="json")
+        result = await self._request(
+            "POST",
+            "/v1/protocol-runs",
+            json=body,
+            extra_headers={"Idempotency-Key": idempotency_key} if idempotency_key else None,
+        )
+        return ProtocolRunMutationRecord.model_validate(result)
+
+    async def list_run_issues(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 25,
+        issue_kind: str = "",
+        protocol_run_id: str = "",
+        protocol_id: str = "",
+    ) -> list[ProtocolIssueRecord]:
+        result = await self._request(
+            "GET",
+            "/v1/protocol-runs/issues",
+            params={
+                "cursor": cursor,
+                "limit": limit,
+                "issue_kind": issue_kind,
+                "protocol_run_id": protocol_run_id,
+                "protocol_id": protocol_id,
+            },
+        )
+        rows = result.get("issues", result)
+        return [ProtocolIssueRecord.model_validate(item) for item in rows]
+
+    async def get_run(self, run_id: str) -> ProtocolRunDetailRecord:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}")
+        return ProtocolRunDetailRecord.model_validate(result)
+
+    async def list_run_participants(self, run_id: str) -> list[ProtocolRunParticipantRecord]:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/participants")
+        rows = result.get("participants", result)
+        return [ProtocolRunParticipantRecord.model_validate(item) for item in rows]
+
+    async def list_run_artifacts(self, run_id: str) -> list[ProtocolArtifactRecord]:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/artifacts")
+        rows = result.get("artifacts", result)
+        return [ProtocolArtifactRecord.model_validate(item) for item in rows]
+
+    async def list_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/timeline")
+        rows = result.get("transitions", result)
+        return [ProtocolTransitionRecord.model_validate(item) for item in rows]
+
+    async def export_run(self, run_id: str) -> ProtocolRunExportRecord:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/export")
+        return ProtocolRunExportRecord.model_validate(result)
+
+    async def act_on_protocol_run(
+        self,
+        run_id: str,
+        *,
+        action: str,
+        reason: str = "",
+        idempotency_key: str = "",
+        expected_version: int | None = None,
+    ) -> ProtocolRunMutationRecord:
+        headers: dict[str, str] = {}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        if expected_version is not None:
+            headers["If-Match"] = str(expected_version)
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-runs/{run_id}/actions/{action}",
+            json={"reason": reason},
+            extra_headers=headers or None,
+        )
+        return ProtocolRunMutationRecord.model_validate(result)
 
     async def publish_events(
         self,
@@ -442,3 +781,64 @@ class RegistryClient:
 
     async def fail_delivery(self, delivery_id: str, reason: str = "") -> AckResult:
         return await self.ack([delivery_id], classification="rejected")
+
+    async def update_agent_trust_tier(
+        self,
+        agent_id: str,
+        trust_tier: str,
+    ) -> AgentRecord:
+        payload = AgentTrustTierUpdate(trust_tier=trust_tier)
+        result = await self._request(
+            "PATCH",
+            f"/v1/agents/{agent_id}/trust-tier",
+            json=payload.model_dump(),
+        )
+        return AgentRecord.model_validate(result)
+
+    async def update_agent_capacity(
+        self,
+        agent_id: str,
+        *,
+        current_capacity: int | None = None,
+        max_capacity: int | None = None,
+    ) -> AgentRecord:
+        payload = AgentCapacityUpdate(
+            current_capacity=current_capacity,
+            max_capacity=max_capacity,
+        )
+        result = await self._request(
+            "PATCH",
+            f"/v1/agents/{agent_id}/capacity",
+            json=payload.model_dump(exclude_none=False),
+        )
+        return AgentRecord.model_validate(result)
+
+    async def rotate_agent_token(self, agent_id: str) -> AgentTokenRotationResult:
+        result = await self._request(
+            "POST",
+            f"/v1/agents/{agent_id}/rotate-token",
+        )
+        return AgentTokenRotationResult.model_validate(result)
+
+    async def soft_delete_agent(self, agent_id: str) -> AgentRecord:
+        result = await self._request("DELETE", f"/v1/agents/{agent_id}")
+        return AgentRecord.model_validate(result)
+
+    async def preview_selector_resolution(
+        self,
+        selector: str,
+        *,
+        authority_ref: str = "",
+        exclude_agent_ids: list[str] | None = None,
+    ) -> SelectorPreviewResult:
+        payload = SelectorPreviewRequest(
+            selector=selector,
+            authority_ref=authority_ref,
+            exclude_agent_ids=list(exclude_agent_ids or ()),
+        )
+        result = await self._request(
+            "POST",
+            "/v1/selector/preview",
+            json=payload.model_dump(),
+        )
+        return SelectorPreviewResult.model_validate(result)

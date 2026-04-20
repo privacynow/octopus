@@ -18,6 +18,29 @@ from octopus_sdk.content_models import (
     SkillRevisionRecord,
 )
 from octopus_sdk.registry.management import ManagementRequest, ManagementResult
+from octopus_sdk.protocols import (
+    ProtocolAuthoringManifestRecord,
+    ProtocolAccessContextRecord,
+    ProtocolDefinitionDocumentRecord,
+    ProtocolDefinitionDiffRecord,
+    ProtocolDefinitionRecord,
+    ProtocolDefinitionVersionRecord,
+    ProtocolDraftCreateRecord,
+    ProtocolMutationRecord,
+    ProtocolIssueRecord,
+    ProtocolMaintenanceResultRecord,
+    ProtocolTemplateSummaryRecord,
+    ProtocolTextDocumentRecord,
+    ProtocolRunCreateRecord,
+    ProtocolRunDetailRecord,
+    ProtocolRunExportRecord,
+    ProtocolRunMutationRecord,
+    ProtocolRunParticipantRecord,
+    ProtocolRunRecord,
+    ProtocolScenarioRecord,
+    ProtocolArtifactRecord,
+    ProtocolTransitionRecord,
+)
 
 from .runtime_health import report_from_dict, report_to_dict
 from octopus_sdk.registry.models import (
@@ -524,8 +547,35 @@ class AbstractRegistryStore(Protocol):
         limit: int = 25,
         q: str = "",
         connectivity_state: str = "",
+        include_soft_deleted: bool = False,
     ) -> list[AgentRecord]:
         """Return registered agents in UI-ready form with offset-based pagination."""
+
+    def update_agent_trust_tier(self, agent_id: str, trust_tier: str) -> AgentRecord:
+        """Update an agent's trust tier (community|trusted|verified|restricted)."""
+
+    def update_agent_capacity(
+        self,
+        agent_id: str,
+        *,
+        current_capacity: int | None = None,
+        max_capacity: int | None = None,
+    ) -> AgentRecord:
+        """Admin override for an agent's capacity counters."""
+
+    def rotate_agent_token(self, agent_id: str) -> tuple[AgentRecord, str]:
+        """Issue a fresh agent token for an enrolled agent, returning (record, plaintext_token)."""
+
+    def soft_delete_agent(self, agent_id: str) -> AgentRecord:
+        """Mark an agent soft-deleted; hidden from default listings, connectivity forced to disconnected."""
+
+    def preview_selector_resolution(
+        self,
+        selector,
+        *,
+        exclude_agent_ids: tuple[str, ...] = (),
+    ) -> list[dict[str, object]]:
+        """Return every candidate row a selector matches, with no ambiguity enforcement."""
 
     def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         """Return mirrored runtime-health detail for a registered agent."""
@@ -619,6 +669,225 @@ class AbstractRegistryStore(Protocol):
 
     def export_conversation(self, conversation_id: str) -> str:
         """Export conversation as markdown events."""
+
+    # ------------------------------------------------------------------
+    # Protocol definitions and runs
+    # ------------------------------------------------------------------
+
+    def list_protocols(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 50,
+        lifecycle_state: str = "",
+        slug: str = "",
+        created_after: str = "",
+    ) -> list[ProtocolDefinitionRecord]:
+        """Return protocol definitions in UI-ready form."""
+
+    def get_protocol_template(
+        self,
+        slug: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionDocumentRecord:
+        """Return one builtin protocol template document by slug."""
+
+    def list_protocol_templates(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTemplateSummaryRecord]:
+        """Return template metadata for protocol authoring."""
+
+    def get_protocol_authoring_manifest(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAuthoringManifestRecord:
+        """Return protocol-authoring sections, templates, and option lists."""
+
+    def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        """Return one protocol definition with latest validation/version metadata."""
+
+    def get_protocol_version(
+        self,
+        protocol_id: str,
+        version_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionVersionRecord:
+        """Return one immutable protocol definition version."""
+
+    def save_protocol_draft(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        protocol_id: str,
+        slug: str,
+        display_name: str,
+        description: str,
+        definition_json: RegistryJsonRecord,
+        expected_revision: int | None = None,
+    ) -> ProtocolMutationRecord:
+        """Create or update one protocol draft."""
+
+    def create_protocol_draft(
+        self,
+        payload: ProtocolDraftCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolMutationRecord:
+        """Create one persisted draft from a blank starter, template, or existing protocol."""
+
+    def delete_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        """Discard one unpublished protocol draft."""
+
+    def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        """Validate the current draft for one protocol."""
+
+    def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        """Publish the current validated draft as a new immutable version."""
+
+    def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        """Archive one published protocol definition."""
+
+    def list_protocol_runs(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        status: str = "",
+        protocol_id: str = "",
+        entry_agent_id: str = "",
+        origin_channel: str = "",
+    ) -> list[ProtocolRunRecord]:
+        """Return protocol runs in UI-ready form."""
+
+    def parse_protocol_document_text(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        definition_text: str,
+        format: str = "json",
+        validation_mode: str = "strict",
+    ) -> ProtocolTextDocumentRecord:
+        """Parse protocol text into a draft-safe or strict validated document."""
+
+    def export_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolTextDocumentRecord:
+        """Export the current protocol draft document as JSON or YAML text."""
+
+    def diff_protocol_draft(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        format: str = "json",
+    ) -> ProtocolDefinitionDiffRecord:
+        """Return a unified diff between the current draft and the latest published version."""
+
+    def list_protocol_issues(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        issue_kind: str = "",
+        protocol_run_id: str = "",
+        protocol_id: str = "",
+    ) -> list[ProtocolIssueRecord]:
+        """Return protocol support/admin issues for visible runs."""
+
+    def create_protocol_run(
+        self,
+        payload: ProtocolRunCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunMutationRecord:
+        """Create a protocol run and dispatch its first stage."""
+
+    def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
+        """Return one protocol run with participants, stages, artifacts, and transitions."""
+
+    def get_protocol_run_participants(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolRunParticipantRecord]:
+        """Return participant resolution state for one run."""
+
+    def get_protocol_run_artifacts(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolArtifactRecord]:
+        """Return artifact history for one run."""
+
+    def get_protocol_run_timeline(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTransitionRecord]:
+        """Return transition history for one run."""
+
+    def export_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolRunExportRecord:
+        """Return one export-safe protocol run bundle."""
+
+    def act_on_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        action: str,
+        reason: str,
+        idempotency_key: str = "",
+        expected_version: int | None = None,
+    ) -> ProtocolRunMutationRecord:
+        """Apply one idempotent operator action to a protocol run."""
+
+    def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
+        """Sweep protocol maintenance work such as overdue timeouts."""
+
+    def list_protocol_scenarios(
+        self,
+        *,
+        protocol_id: str = "",
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolScenarioRecord]:
+        """Return canned rehearsal scenarios for this org, optionally filtered by protocol."""
+
+    def create_protocol_scenario(
+        self,
+        *,
+        payload: Mapping[str, object],
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolScenarioRecord:
+        """Create a canned rehearsal scenario."""
+
+    def delete_protocol_scenario(
+        self,
+        *,
+        scenario_id: str,
+        access: ProtocolAccessContextRecord,
+    ) -> bool:
+        """Delete a canned rehearsal scenario; returns True if a row was removed."""
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

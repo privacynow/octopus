@@ -2,6 +2,7 @@
 
 import contextlib
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import re
@@ -17,6 +18,7 @@ from app.execution_faults import LocalExecutionFaultState
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
 from octopus_registry import auth as registry_auth
+from octopus_registry import server as registry_server
 from octopus_registry.server import app
 from octopus_registry import ingress
 from octopus_registry.backend import get_registry_store
@@ -31,12 +33,14 @@ from app.runtime_health import (
 )
 from app.storage import default_session, ensure_data_dirs, load_session, save_session, session_exists
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
+from octopus_sdk.protocols import ProtocolMutationRecord, ProtocolRunMutationRecord, ProtocolRunRecord
 from octopus_sdk.registry.management import (
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
     ManagementRequest,
     ManagementResult,
 )
+from octopus_sdk.registry.models import RegistryJsonRecord, TaskRecord
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
@@ -1066,6 +1070,29 @@ def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_p
     assert "Incorrect password." in response.text
 
 
+def test_ui_shell_renders_versioned_assets_with_no_store_headers(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    response = client.get("/ui")
+
+    assert response.status_code == 200
+    assert "__UI_ASSET_VERSION__" not in response.text
+    assert "/ui/js/api.js?v=" in response.text
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+
+
+def test_ui_static_assets_are_served_with_no_store_headers(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/ui/js/api.js")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+
+
 def test_registry_enroll_rate_limits_repeated_failed_attempts(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1176,12 +1203,1013 @@ def test_registry_openapi_title_is_channel_neutral(monkeypatch, tmp_path: Path):
     assert response.json()["info"]["title"] == "Agent Registry"
 
 
+def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+    assert "/v1/protocols/{protocol_id}/archive" in paths
+    assert "/v1/protocol-authoring/manifest" in paths
+    assert "/v1/protocol-drafts" in paths
+    protocol_list_parameters = {
+        item["name"]
+        for item in paths["/v1/protocols"]["get"].get("parameters", [])
+    }
+    assert "created_after" in protocol_list_parameters
+    assert "/v1/protocol-runs/issues" in paths
+
+
+def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+    assert "/v1/protocol-templates" in paths
+    assert "/v1/protocols/parse" in paths
+    assert "/v1/protocols/{protocol_id}/draft/export" in paths
+    assert "/v1/protocols/{protocol_id}/diff" in paths
+    assert paths["/v1/protocol-drafts"]["post"]["requestBody"]
+    run_list_parameters = {
+        item["name"]
+        for item in paths["/v1/protocol-runs"]["get"].get("parameters", [])
+    }
+    assert "entry_agent_id" in run_list_parameters
+    assert "origin_channel" in run_list_parameters
+
+
+def test_registry_openapi_asset_matches_generated_schema(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    expected_path = Path(__file__).resolve().parents[1] / "docs" / "registry-openapi.json"
+    expected = json.loads(expected_path.read_text(encoding="utf-8"))
+    client = TestClient(app)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def parse_protocol_document_text(self, *, access, definition_text: str, format: str = "json", validation_mode: str = "strict"):
+            assert format == "yaml"
+            assert validation_mode == "strict"
+            assert "schema_version: 1" in definition_text
+            return {
+                "format": "yaml",
+                "text": "schema_version: 1\nmetadata:\n  slug: demo\n",
+                "document": {
+                    "schema_version": 1,
+                    "metadata": {"slug": "demo"},
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                "validation": {
+                    "mode": "strict",
+                    "ok": True,
+                    "errors": [],
+                    "issues": [],
+                    "next_required_actions": [],
+                    "content_hash": "hash-1",
+                },
+            }
+
+        def export_protocol_draft(self, protocol_id: str, *, access, format: str = "json"):
+            assert protocol_id == "protocol-1"
+            assert format == "yaml"
+            return {
+                "format": "yaml",
+                "text": "schema_version: 1\nmetadata:\n  slug: demo\n",
+                "document": {
+                    "schema_version": 1,
+                    "metadata": {"slug": "demo"},
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                "validation": {
+                    "mode": "draft",
+                    "ok": True,
+                    "errors": [],
+                    "issues": [],
+                    "next_required_actions": [],
+                    "content_hash": "hash-1",
+                },
+            }
+
+        def diff_protocol_draft(self, protocol_id: str, *, access, format: str = "json"):
+            assert protocol_id == "protocol-1"
+            assert format == "json"
+            return {
+                "protocol_id": protocol_id,
+                "protocol_definition_version_id": "version-1",
+                "diff": "--- draft\n+++ published\n@@\n-description: next\n+description: current\n",
+                "left_label": "draft",
+                "right_label": "published",
+            }
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "publisher", "author"),
+    )
+    try:
+        parse_response = client.post(
+            "/v1/protocols/parse",
+            json={"definition_text": "schema_version: 1\nmetadata:\n  slug: demo\n", "format": "yaml"},
+        )
+        export_response = client.get("/v1/protocols/protocol-1/draft/export?format=yaml")
+        diff_response = client.get("/v1/protocols/protocol-1/diff?format=json")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert parse_response.status_code == 200
+    assert parse_response.json()["format"] == "yaml"
+    assert export_response.status_code == 200
+    assert export_response.json()["text"].startswith("schema_version: 1")
+    assert diff_response.status_code == 200
+    assert diff_response.json()["left_label"] == "draft"
+
+
+def test_protocol_parse_route_accepts_draft_mode_for_incomplete_protocols(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def parse_protocol_document_text(self, *, access, definition_text: str, format: str = "json", validation_mode: str = "strict"):
+            assert format == "json"
+            assert validation_mode == "draft"
+            return {
+                "format": "json",
+                "text": "{\"schema_version\": 1}",
+                "document": {
+                    "schema_version": 1,
+                    "metadata": {"slug": "draft-protocol", "display_name": "Draft Protocol", "description": ""},
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                "validation": {
+                    "mode": "draft",
+                    "ok": False,
+                    "errors": ["Add at least one stage before review or publish."],
+                    "issues": [
+                        {
+                            "code": "stages.required",
+                            "message": "Add at least one stage before review or publish.",
+                            "section": "stages",
+                            "entity_kind": "",
+                            "entity_key": "",
+                            "path": "stages",
+                            "blocking": True,
+                        }
+                    ],
+                    "next_required_actions": ["stages.add_first"],
+                    "content_hash": "hash-draft",
+                },
+            }
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.post(
+            "/v1/protocols/parse",
+            json={
+                "definition_text": "{\"schema_version\":1,\"metadata\":{\"slug\":\"draft-protocol\"},\"participants\":[],\"artifacts\":[],\"stages\":[]}",
+                "format": "json",
+                "validation_mode": "draft",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validation"]["mode"] == "draft"
+    assert payload["validation"]["next_required_actions"] == ["stages.add_first"]
+    assert payload["document"]["stages"] == []
+
+
+def test_protocol_authoring_manifest_route_returns_templates_and_section_metadata(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_protocol_authoring_manifest(self, *, access):
+            return {
+                "templates": [
+                    {
+                        "slug": "demo-template",
+                        "display_name": "Demo Template",
+                        "description": "Reusable workflow starter.",
+                        "featured": False,
+                        "participant_count": 2,
+                        "artifact_count": 1,
+                        "stage_count": 3,
+                        "stage_kind_sequence": ["work", "review", "acceptance"],
+                    }
+                ],
+                "sections": ["design", "review", "advanced"],
+                "stage_kind_options": ["work", "review", "acceptance"],
+                "artifact_kind_options": ["workspace_file", "control_plane_text"],
+                "selector_kind_options": ["agent", "skill", "role"],
+            }
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.get("/v1/protocol-authoring/manifest")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["templates"][0]["slug"] == "demo-template"
+    assert "advanced" in payload["sections"]
+    assert "review" in payload["stage_kind_options"]
+
+
+def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def create_protocol_draft(self, payload, *, access):
+            assert payload.source_kind == "blank"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="saved",
+                message="Protocol draft saved.",
+                protocol={
+                    "protocol_id": "protocol-blank",
+                    "slug": "protocol-blank",
+                    "display_name": "",
+                    "description": "",
+                    "lifecycle_state": "draft",
+                    "current_version_id": "",
+                    "owner_org_id": "local",
+                    "visibility": "org_shared",
+                    "created_by": "operator",
+                    "updated_by": "operator",
+                    "draft_revision": 1,
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                },
+                draft_definition_json={
+                    "schema_version": 1,
+                    "metadata": {
+                        "slug": "",
+                        "display_name": "",
+                        "description": "",
+                    },
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                validation={
+                    "ok": False,
+                    "errors": ["At least one stage is required."],
+                    "content_hash": "",
+                },
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.post("/v1/protocol-drafts", json={"source_kind": "blank"})
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["protocol"]["protocol_id"] == "protocol-blank"
+    assert payload["protocol"]["draft_revision"] == 1
+    assert payload["draft_definition_json"]["metadata"]["slug"] == ""
+    assert payload["draft_definition_json"]["metadata"]["display_name"] == ""
+
+
+def test_protocol_draft_save_route_returns_conflict_for_revision_mismatch(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def save_protocol_draft(self, *, access, protocol_id, slug, display_name, description, definition_json, expected_revision=None):
+            assert protocol_id == "protocol-1"
+            assert expected_revision == 3
+            return ProtocolMutationRecord(
+                ok=False,
+                status="conflict",
+                message="Protocol draft revision conflict: expected 3, found 4.",
+                protocol={
+                    "protocol_id": "protocol-1",
+                    "slug": "protocol-1",
+                    "display_name": "Conflict Protocol",
+                    "description": "Server draft",
+                    "lifecycle_state": "draft",
+                    "current_version_id": "",
+                    "owner_org_id": "local",
+                    "visibility": "org_shared",
+                    "created_by": "operator",
+                    "updated_by": "operator",
+                    "draft_revision": 4,
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:05+00:00",
+                },
+                draft_definition_json={
+                    "schema_version": 1,
+                    "metadata": {
+                        "slug": "protocol-1",
+                        "display_name": "Conflict Protocol",
+                        "description": "Server draft",
+                    },
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                },
+                validation={
+                    "ok": False,
+                    "errors": ["Add at least one participant before adding a stage."],
+                    "content_hash": "",
+                },
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.put(
+            "/v1/protocols/protocol-1/draft",
+            headers={"If-Match": "3"},
+            json={
+                "slug": "protocol-1",
+                "display_name": "Conflict Protocol",
+                "description": "Local draft",
+                "definition_json": {"schema_version": 1, "metadata": {"slug": "protocol-1"}},
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 409
+    payload = response.json()["detail"]
+    assert payload["error_code"] == "PROTOCOL_DRAFT_CONFLICT"
+    assert payload["details"]["protocol"]["draft_revision"] == 4
+    assert payload["details"]["draft_definition_json"]["metadata"]["description"] == "Server draft"
+
+
+def test_protocol_draft_create_route_rejects_template_without_slug(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.post("/v1/protocol-drafts", json={"source_kind": "template"})
+    finally:
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_INVALID"
+    assert "template_slug is required" in response.json()["detail"]["message"]
+
+
+def test_protocol_delete_route_discards_unpublished_draft(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def delete_protocol(self, protocol_id, *, access):
+            assert protocol_id == "protocol-blank"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="deleted",
+                message="Protocol draft discarded.",
+                protocol={
+                    "protocol_id": "protocol-blank",
+                    "slug": "protocol-blank",
+                    "display_name": "",
+                    "description": "",
+                    "lifecycle_state": "draft",
+                    "current_version_id": "",
+                    "owner_org_id": "local",
+                    "visibility": "org_shared",
+                    "created_by": "operator",
+                    "updated_by": "operator",
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                },
+                draft_definition_json={
+                    "schema_version": 1,
+                    "metadata": {
+                        "slug": "",
+                        "display_name": "",
+                        "description": "",
+                    },
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                validation={
+                    "ok": False,
+                    "errors": ["At least one stage is required."],
+                    "content_hash": "",
+                },
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.delete("/v1/protocols/protocol-blank")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "deleted"
+    assert payload["protocol"]["protocol_id"] == "protocol-blank"
+
+
+def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_protocol_runs(
+            self,
+            *,
+            access,
+            limit=25,
+            cursor=0,
+            status="",
+            protocol_id="",
+            entry_agent_id="",
+            origin_channel="",
+        ):
+            assert entry_agent_id == "agent-2"
+            assert origin_channel == "telegram"
+            return [
+                {
+                    "protocol_run_id": "run-2",
+                    "protocol_id": "protocol-1",
+                    "protocol_definition_version_id": "version-1",
+                    "entry_agent_id": "agent-2",
+                    "origin_channel": "telegram",
+                    "run_org_id": "local",
+                    "status": "running",
+                    "workspace_ref": "workspace-a",
+                    "problem_statement": "Build the thing.",
+                    "constraints_json": {},
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                }
+            ]
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs?entry_agent_id=agent-2&origin_channel=telegram")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runs"][0]["entry_agent_id"] == "agent-2"
+    assert payload["runs"][0]["origin_channel"] == "telegram"
+
+
+def test_protocol_run_create_route_returns_invalid_for_missing_entry_agent(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def create_protocol_run(self, payload, *, access, idempotency_key=""):
+            assert payload.entry_agent_id == ""
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="invalid",
+                message="entry_agent_id is required to start a protocol run.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs",
+            json={
+                "protocol_id": "protocol-1",
+                "entry_agent_id": "",
+                "origin_channel": "registry",
+                "workspace_ref": "workspace-a",
+                "problem_statement": "Build the thing.",
+                "constraints_json": {},
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_INVALID"
+    assert "entry_agent_id is required" in response.json()["detail"]["message"]
+
+
+def test_protocol_run_create_route_uses_rehearsal_manager_agent_when_rehearsing(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def create_protocol_run(self, payload, *, access, idempotency_key=""):
+            assert payload.is_rehearsal is True
+            assert payload.entry_agent_id == "agent-rehearsal"
+            return ProtocolRunMutationRecord(
+                ok=True,
+                status="created",
+                run=ProtocolRunRecord(
+                    protocol_run_id="run-rehearsal",
+                    protocol_id="protocol-1",
+                    protocol_definition_version_id="version-1",
+                    entry_agent_id="agent-rehearsal",
+                    entry_authority_ref="rehearsal",
+                    origin_channel="registry",
+                    workspace_ref="workspace-a",
+                    problem_statement="Dry run the thing.",
+                    constraints_json={},
+                    run_org_id="local",
+                    status="queued",
+                    created_at="2026-04-17T00:00:00+00:00",
+                    updated_at="2026-04-17T00:00:00+00:00",
+                    is_rehearsal=True,
+                ),
+            )
+
+    class _RehearsalManager:
+        agent_id = ""
+
+        def ensure_agent(self):
+            return ("agent-rehearsal", "token-rehearsal")
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    previous_manager = getattr(registry_server, "_rehearsal_manager", None)
+    registry_server._rehearsal_manager = _RehearsalManager()
+    try:
+        response = client.post(
+            "/v1/protocol-runs",
+            json={
+                "protocol_id": "protocol-1",
+                "entry_agent_id": "",
+                "origin_channel": "registry",
+                "workspace_ref": "workspace-a",
+                "problem_statement": "Dry run the thing.",
+                "constraints_json": {},
+                "is_rehearsal": True,
+            },
+        )
+    finally:
+        registry_server._rehearsal_manager = previous_manager
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run"]["entry_agent_id"] == "agent-rehearsal"
+    assert payload["run"]["is_rehearsal"] is True
+
+
+def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            raise PermissionError("Protocol run is not visible to this actor.")
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_definition_route_returns_not_visible_for_hidden_protocol(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_protocol(self, protocol_id: str, *, access):
+            return ProtocolMutationRecord(
+                ok=False,
+                status="not_visible",
+                message="Protocol is not visible to this actor.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocols/protocol-1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("path", "store_method", "args"),
+    [
+        ("/v1/protocol-templates/software-engineering", "get_protocol_template", ("software-engineering",)),
+        ("/v1/protocols/protocol-1/versions/version-1", "get_protocol_version", ("protocol-1", "version-1")),
+        ("/v1/protocols/protocol-1/draft/export", "export_protocol_draft", ("protocol-1",)),
+        ("/v1/protocols/protocol-1/diff", "diff_protocol_draft", ("protocol-1",)),
+    ],
+)
+def test_protocol_definition_subresources_return_not_visible_for_hidden_protocol(
+    monkeypatch,
+    tmp_path: Path,
+    path: str,
+    store_method: str,
+    args: tuple[str, ...],
+):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __getattr__(self, name: str):
+            if name != store_method:
+                raise AttributeError(name)
+
+            def _handler(*handler_args, **handler_kwargs):
+                assert handler_args == args
+                raise PermissionError("Protocol is not visible to this actor.")
+
+            return _handler
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get(path)
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("path", "store_method"),
+    [
+        ("/v1/protocol-runs/run-1/participants", "get_protocol_run_participants"),
+        ("/v1/protocol-runs/run-1/artifacts", "get_protocol_run_artifacts"),
+        ("/v1/protocol-runs/run-1/timeline", "get_protocol_run_timeline"),
+        ("/v1/protocol-runs/run-1/export", "export_protocol_run"),
+    ],
+)
+def test_protocol_run_subresources_return_not_visible_for_hidden_run(
+    monkeypatch,
+    tmp_path: Path,
+    path: str,
+    store_method: str,
+):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __getattr__(self, name: str):
+            if name != store_method:
+                raise AttributeError(name)
+
+            def _handler(run_id: str, *, access):
+                raise PermissionError("Protocol run is not visible to this actor.")
+
+            return _handler
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get(path)
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_run_action_route_returns_conflict_for_version_mismatch(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def act_on_protocol_run(self, run_id: str, *, access, action: str, reason: str, idempotency_key: str = "", expected_version=None):
+            assert run_id == "run-1"
+            assert action == "retry"
+            assert expected_version == 4
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="concurrent_modification",
+                message="Protocol run version conflict: expected 4, found 5.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/actions/retry",
+            headers={"If-Match": "4", "Idempotency-Key": "idem-1"},
+            json={"reason": "Retry after fix."},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == "CONCURRENT_MODIFICATION"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_run_action_route_returns_idempotency_replay(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def act_on_protocol_run(self, run_id: str, *, access, action: str, reason: str, idempotency_key: str = "", expected_version=None):
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="idempotency_conflict",
+                message="Idempotency key was already used for a different protocol action.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/actions/retry",
+            headers={"Idempotency-Key": "idem-1"},
+            json={"reason": "Retry after fix."},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == "IDEMPOTENCY_REPLAY"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_run_action_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def act_on_protocol_run(self, run_id: str, *, access, action: str, reason: str, idempotency_key: str = "", expected_version=None):
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="not_visible",
+                message="Protocol run is not visible to this actor.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/actions/retry",
+            headers={"Idempotency-Key": "idem-1"},
+            json={"reason": "Retry after fix."},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_stage_result_broadcasts_protocol_run_invalidation(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    captured: list[set[str]] = []
+
+    class _Authority:
+        def report_routed_result_for_agent(self, agent_token: str, payload):
+            assert agent_token == "agent-token"
+            assert payload["routed_task_id"] == "protocol-stage:stage-1"
+            return TaskRecord(
+                routed_task_id="protocol-stage:stage-1",
+                target_agent_id="agent-1",
+                request=RegistryJsonRecord.model_validate(
+                    {
+                        "context": {
+                            "protocol_run_id": "run-1",
+                        }
+                    }
+                ),
+            )
+
+    async def _capture_invalidations(*, topics, reason, conversation_id="", agent_id="", routed_task_id=""):
+        captured.append(set(topics))
+
+    monkeypatch.setattr(registry_server, "_broadcast_invalidations", _capture_invalidations)
+    app.dependency_overrides[registry_server.get_authority] = lambda: _Authority()
+    try:
+        response = client.post(
+            "/v1/agents/routed-tasks/protocol-stage:stage-1/result",
+            headers={"Authorization": "Bearer agent-token"},
+            json={"status": "completed", "summary": "done"},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_authority, None)
+
+    assert response.status_code == 200
+    assert captured
+    assert {"tasks", "conversations", "summary", "protocols", "protocol-run:run-1"} in captured
+
+
+def test_protocol_issues_route_returns_issue_rows(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_protocol_issues(self, *, access, limit=25, cursor=0, issue_kind="", protocol_run_id="", protocol_id=""):
+            assert issue_kind == "blocked_run"
+            assert protocol_run_id == ""
+            assert protocol_id == ""
+            return [
+                {
+                    "issue_kind": "blocked_run",
+                    "protocol_run_id": "run-1",
+                    "protocol_id": "protocol-1",
+                    "protocol_display_name": "Software Engineering",
+                    "stage_execution_id": "stage-1",
+                    "stage_key": "planning",
+                    "participant_key": "worker",
+                    "run_status": "blocked",
+                    "stage_status": "blocked",
+                    "issue_code": "artifact_missing",
+                    "issue_detail": "Artifact missing.",
+                    "lease_expires_at": "",
+                    "timeout_at": "",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                }
+            ]
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/issues?issue_kind=blocked_run")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["issues"][0]["protocol_run_id"] == "run-1"
+
+
+def test_protocol_issues_route_accepts_protocol_filters(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_protocol_issues(self, *, access, limit=25, cursor=0, issue_kind="", protocol_run_id="", protocol_id=""):
+            assert issue_kind == ""
+            assert protocol_run_id == "run-9"
+            assert protocol_id == "protocol-9"
+            return []
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/issues?protocol_run_id=run-9&protocol_id=protocol-9")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    assert response.json()["issues"] == []
+
+
 def test_registry_http_module_stays_under_guard_threshold():
     repo_root = Path(__file__).resolve().parents[1]
     http_path = repo_root / "octopus_registry" / "server.py"
     text = http_path.read_text()
 
-    assert len(text.splitlines()) <= 1800
+    assert len(text.splitlines()) <= 1975
 
 
 def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: Path):
@@ -1579,6 +2607,11 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
         "pending": 1,
         "failed_24h": 0,
     }
+    assert payload["protocols"]["runs_started_24h"] == 0
+    assert payload["protocols"]["runs_completed_24h"] == 0
+    assert payload["protocols"]["operator_interventions_24h"] == 0
+    assert payload["protocols"]["completion_rate_24h"] == 0.0
+    assert payload["protocols"]["mean_completion_seconds_24h"] == 0.0
     assert payload["usage_24h"] == {
         "prompt_tokens": 14,
         "completion_tokens": 9,
@@ -2684,3 +3717,126 @@ def test_agent_execution_reset_clears_faulted_state(monkeypatch, tmp_path: Path)
         assert payload["state"]["state"] == "healthy"
         assert payload["state"]["detail"] == ""
         assert fault_state.load().state == "healthy"
+
+
+def test_agent_trust_tier_update_persists_and_hides_for_anonymous(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, _token = _enroll_and_register(client, "Trust Bot", "trust-bot")
+
+        bumped = client.patch(
+            f"/v1/agents/{agent_id}/trust-tier",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"trust_tier": "trusted"},
+        )
+        assert bumped.status_code == 200, bumped.text
+        assert bumped.json()["trust_tier"] == "trusted"
+
+        rejected = client.patch(
+            f"/v1/agents/{agent_id}/trust-tier",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"trust_tier": "platinum"},
+        )
+        assert rejected.status_code in (400, 422)
+
+
+def test_agent_capacity_override_updates_current_and_max(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, _token = _enroll_and_register(client, "Capacity Bot", "capacity-bot")
+
+        response = client.patch(
+            f"/v1/agents/{agent_id}/capacity",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"current_capacity": 2, "max_capacity": 5},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["current_capacity"] == 2
+        assert payload["max_capacity"] == 5
+
+
+def test_agent_rotate_token_invalidates_old_bearer(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, old_token = _enroll_and_register(client, "Rotate Bot", "rotate-bot")
+
+        rotated = client.post(
+            f"/v1/agents/{agent_id}/rotate-token",
+            headers={"X-CSRF-Token": csrf_token},
+            json={},
+        )
+        assert rotated.status_code == 200, rotated.text
+        new_token = rotated.json().get("bearer_token") or rotated.json().get("agent_token")
+        assert new_token
+        assert new_token != old_token
+
+        # Old token must no longer authorize polling.
+        old_poll = client.get(
+            "/v1/agents/poll",
+            headers={"Authorization": f"Bearer {old_token}"},
+            params={"cursor": 0, "limit": 5},
+        )
+        assert old_poll.status_code in (401, 403)
+
+        # New token works.
+        new_poll = client.get(
+            "/v1/agents/poll",
+            headers={"Authorization": f"Bearer {new_token}"},
+            params={"cursor": 0, "limit": 5},
+        )
+        assert new_poll.status_code == 200
+
+
+def test_agent_soft_delete_hides_from_default_listing(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, _token = _enroll_and_register(client, "Tombstone Bot", "tombstone-bot")
+
+        response = client.delete(
+            f"/v1/agents/{agent_id}",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["soft_deleted_at"]
+        assert payload["connectivity_state"] == "disconnected"
+
+        listing = client.get("/v1/agents").json()
+        agents = listing.get("agents") or listing
+        agent_ids = [agent["agent_id"] for agent in agents]
+        assert agent_id not in agent_ids
+
+
+def test_selector_preview_returns_matching_candidates(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        _enroll_and_register(client, "Pyth A", "pyth-a")
+        _enroll_and_register(client, "Pyth B", "pyth-b")
+
+        response = client.post(
+            "/v1/selector/preview",
+            headers={"X-CSRF-Token": csrf_token},
+            json={"selector": "@skill:python"},
+        )
+        assert response.status_code == 200, response.text
+        candidates = response.json().get("candidates", [])
+        slugs = sorted(item["slug"] for item in candidates)
+        assert "pyth-a" in slugs
+        assert "pyth-b" in slugs

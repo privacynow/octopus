@@ -285,6 +285,84 @@ class AgentHeartbeatRequest(RegistryRecordModel):
     runtime_health: "RuntimeHealthPayload | None" = None
 
 
+class AgentTrustTierUpdate(RegistryRecordModel):
+    """Request body for PATCH /v1/agents/{agent_id}/trust-tier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trust_tier: str
+
+    @field_validator("trust_tier")
+    @classmethod
+    def _tier_allowed(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"community", "trusted", "verified", "restricted"}:
+            raise ValueError(
+                "trust_tier must be one of community|trusted|verified|restricted"
+            )
+        return normalized
+
+
+class AgentCapacityUpdate(RegistryRecordModel):
+    """Request body for PATCH /v1/agents/{agent_id}/capacity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_capacity: int | None = None
+    max_capacity: int | None = None
+
+
+class AgentTokenRotationResult(RegistryRecordModel):
+    """Response payload for POST /v1/agents/{agent_id}/rotate-token."""
+
+    agent_id: str = ""
+    agent_token: str = ""
+    slug: str = ""
+    registry_epoch: str = ""
+
+
+class SelectorPreviewRequest(RegistryRecordModel):
+    """Request body for POST /v1/selector/preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selector: str
+    authority_ref: str = ""
+    exclude_agent_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("selector")
+    @classmethod
+    def _selector_not_blank(cls, value: str) -> str:
+        if not str(value or "").strip():
+            raise ValueError("selector must not be blank")
+        return str(value).strip()
+
+
+class SelectorPreviewCandidate(RegistryRecordModel):
+    """A single agent resolved for a selector preview."""
+
+    agent_id: str = ""
+    display_name: str = ""
+    slug: str = ""
+    role: str = ""
+    connectivity_state: str = ""
+    trust_tier: str = "community"
+    current_capacity: int = 0
+    max_capacity: int = 1
+    routing_skills: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+class SelectorPreviewResult(RegistryRecordModel):
+    """Response payload for POST /v1/selector/preview."""
+
+    selector: str = ""
+    authority_ref: str = ""
+    candidates: list[SelectorPreviewCandidate] = Field(default_factory=list)
+    total_considered: int = 0
+    rejected_reasons: list[str] = Field(default_factory=list)
+
+
 class AgentRecord(RegistryRecordModel):
     agent_id: str = ""
     bot_key: str = ""
@@ -303,6 +381,8 @@ class AgentRecord(RegistryRecordModel):
     channel_capabilities: list[str] = Field(default_factory=list)
     management_capabilities: list[str] = Field(default_factory=list)
     version: str = ""
+    trust_tier: str = "community"
+    soft_deleted_at: str = ""
     created_at: str = ""
     updated_at: str = ""
     last_heartbeat_at: str = ""
@@ -481,6 +561,7 @@ class RegistrySummaryRecord(RegistryRecordModel):
     agents: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     conversations: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     tasks: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    protocols: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     usage_24h: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
 
@@ -534,8 +615,12 @@ class RoutedTaskRequest(RegistryRecordModel):
     title: str
     instructions: str
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
+    internal_context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
     constraints: RoutedTaskConstraintsRecord = Field(default_factory=RoutedTaskConstraintsRecord)
     requested_skills: list[str] = Field(default_factory=list)
+    session_key_override: str = ""
+    project_id_override: str = ""
+    file_policy_override: str = ""
     priority: str = "normal"
     created_at: str = Field(default_factory=utcnow_iso, min_length=1)
 

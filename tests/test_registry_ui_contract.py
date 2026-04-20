@@ -135,9 +135,10 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Kit.detailsPanel(" in workspace
     assert "Kit.validationSurface(" in workspace
     assert "Kit.rehearsalPanel(" in workspace
-    assert "Kit.selectorResolutionPreview(" in workspace
     assert "API.listAgents({ limit: 100 })" in workspace
     assert "API.listRoutingSkills()" in workspace
+    assert "_agentsAdvertisingSkill(" in workspace
+    assert "_selectorAgentSkillsSection(" in workspace
 
     # Rehearsal API the workspace drives
     assert "API.listRehearsalSessions(" in workspace
@@ -147,7 +148,6 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
 
     # Authoring API the kit surface drives
     assert "API.getProtocolAuthoringManifest()" in workspace
-    assert "API.previewSelectorResolution(" in workspace
     assert "API.createProtocolDraft(" in workspace
     assert "created?.run?.protocol_run_id" in workspace
     assert "API.saveProtocolDraft(" in workspace
@@ -158,6 +158,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "ifMatch: draftRevision" in workspace
     assert "PROTOCOL_DRAFT_CONFLICT" in workspace
     assert "state: 'conflict'" in workspace
+    assert "API.previewSelectorResolution(" not in workspace
     assert "_reloadServerDraftConflict" in workspace
     assert "_overwriteServerDraftConflict" in workspace
     assert "let editorMode = { kind: 'idle'" in workspace
@@ -174,8 +175,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_documentSelectorValues(" in workspace
     assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
     assert "_selectorEditor(" in workspace
-    assert "showForm: false" in workspace
-    assert "showSuggestions: false" in workspace
+    assert "kit-selector-preview-row" in workspace
+    assert "quickstart-chip static" in workspace
     assert "let canvasViewport = { zoom: 'fit' }" in workspace
     assert "_selectionFromQuery(" in workspace
     assert "_selectionQueryState(" in workspace

@@ -166,13 +166,6 @@ function renderProtocolWorkspace(container) {
     let availableAgents = [];
     let availableRoutingSkills = [];
     let draftConflict = null;
-    let selectorPreview = {
-        ownerKey: '',
-        query: '',
-        candidates: [],
-        busy: false,
-        message: '',
-    };
     let renderInFlight = false;
     let renderQueued = false;
     let editorMode = { kind: 'idle', sourceStageKey: '', decision: '' };
@@ -839,13 +832,11 @@ function renderProtocolWorkspace(container) {
         const previousCanvasViewport = canvasViewport;
         const previousPendingStage = pendingStage;
         const previousPendingRoute = pendingRoute;
-        const previousSelectorPreview = selectorPreview;
         currentProtocol = detail;
         draftRevision = Number(detail?.protocol?.draft_revision || 0) || 0;
         draftConflict = null;
         documentHistory = { undo: [], redo: [] };
         if (!preserveLocalState) {
-            _resetSelectorPreview('', '');
             canvasViewport = { zoom: 'fit' };
         }
         if (previousProtocolId && previousProtocolId !== String(detail?.protocol?.protocol_id || '')) {
@@ -876,7 +867,6 @@ function renderProtocolWorkspace(container) {
             canvasViewport = previousCanvasViewport;
             pendingStage = previousPendingStage;
             pendingRoute = previousPendingRoute;
-            selectorPreview = previousSelectorPreview;
         } else {
             selection = _repairSelection(_selectionFromQuery(draft.document), draft.document);
             _resetEditorMode();
@@ -1160,7 +1150,6 @@ function renderProtocolWorkspace(container) {
         rehearsal.scenarios = [];
         rehearsal.runDetail = null;
         documentHistory = { undo: [], redo: [] };
-        _resetSelectorPreview('', '');
         draft = { slug: '', display_name: '', description: '', document: _blankDocument() };
         selection = { sectionKey: 'overview', nodeKey: '' };
         saveState = { state: 'idle', lastSavedAt: '', error: '' };
@@ -1423,18 +1412,9 @@ function renderProtocolWorkspace(container) {
         }
         items[idx] = next;
         doc[plural] = items;
-        const previewTracksOwner = kind === 'stage' && String(selectorPreview.ownerKey || '') === String(nodeKey || '');
-        if (previewTracksOwner) {
-            selectorPreview.ownerKey = String(nextNodeKey || '');
-            selectorPreview.query = _selectorString(next.selector || null);
-            selectorPreview.message = '';
-        }
         _commitDocument(doc, {
             nextSelection: { sectionKey: plural, nodeKey: String(nextNodeKey || '') },
         });
-        if (kind === 'stage' && (key === 'selector_kind' || key === 'selector_value')) {
-            _syncSelectorPreview(String(nextNodeKey || ''), String(next.selector?.kind || ''), String(next.selector?.value || ''));
-        }
     }
 
     function _commitPendingStageField(_target, key, value) {
@@ -1475,16 +1455,12 @@ function renderProtocolWorkspace(container) {
         if (['participant_key', 'selector_kind', 'selector_value', 'stage_kind'].includes(String(key || ''))) {
             queueMicrotask(() => render());
         }
-        if (key === 'selector_kind' || key === 'selector_value') {
-            _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
-        }
     }
 
     function _commitPendingStageSelector(selectorKind, selectorValue) {
         pendingStage.selector_kind = String(selectorKind || '');
         pendingStage.selector_value = String(selectorValue || '');
         queueMicrotask(() => render());
-        _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
     }
 
     function _syncPendingStageFromMountedEditor() {
@@ -1595,20 +1571,13 @@ function renderProtocolWorkspace(container) {
         items[idx] = next;
         doc.stages = items;
         const nextNodeKey = String(nodeKey || '');
-        if (String(selectorPreview.ownerKey || '') === nextNodeKey) {
-            selectorPreview.ownerKey = nextNodeKey;
-            selectorPreview.query = _selectorString(next.selector || null);
-            selectorPreview.message = '';
-        }
         _commitDocument(doc, {
             nextSelection: { sectionKey: 'stages', nodeKey: nextNodeKey },
         });
-        _syncSelectorPreview(nextNodeKey, String(next.selector?.kind || ''), String(next.selector?.value || ''));
     }
 
     function _startStageInsert({ sourceStageKey = '', decision = '' } = {}) {
         pendingStage = _blankStageDraft(_defaultStageParticipantKey());
-        _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
         editorMode = {
             kind: 'insert-stage',
             sourceStageKey: String(sourceStageKey || ''),
@@ -1703,7 +1672,6 @@ function renderProtocolWorkspace(container) {
     }
 
     function _cancelStageInsert() {
-        _resetSelectorPreview('', '');
         _resetEditorMode();
         render();
     }
@@ -1916,49 +1884,6 @@ function renderProtocolWorkspace(container) {
         );
     }
 
-    async function _resolveSelectorPreview(ownerKey, selectorValue) {
-        selectorPreview = {
-            ownerKey: String(ownerKey || ''),
-            query: String(selectorValue || ''),
-            candidates: [],
-            busy: true,
-            message: '',
-        };
-        render();
-        try {
-            const result = await API.previewSelectorResolution({ selector: selectorValue });
-            selectorPreview.candidates = _authoringAssignableCandidates(result?.candidates);
-            selectorPreview.message = selectorPreview.candidates.length
-                ? ''
-                : Kit.dict.label('agents.selector.no_matches');
-        } catch (err) {
-            selectorPreview.message = err.message || String(err);
-        } finally {
-            selectorPreview.busy = false;
-            render();
-        }
-    }
-
-    function _resetSelectorPreview(ownerKey = '', query = '') {
-        selectorPreview = {
-            ownerKey: String(ownerKey || ''),
-            query: String(query || ''),
-            candidates: [],
-            busy: false,
-            message: '',
-        };
-    }
-
-    function _syncSelectorPreview(ownerKey, selectorKind, selectorValue) {
-        const query = _selectorString(_selectorFromFields(selectorKind, selectorValue));
-        if (!query) {
-            _resetSelectorPreview(ownerKey, '');
-            render();
-            return;
-        }
-        void _resolveSelectorPreview(ownerKey || '__draft__', query);
-    }
-
     function _isAuthoringAssignableAgent(agent) {
         const slug = String(agent?.slug || '').trim().toLowerCase();
         const role = String(agent?.role || '').trim().toLowerCase();
@@ -2147,34 +2072,6 @@ function renderProtocolWorkspace(container) {
         return 'Enter the exact value you want to match at runtime.';
     }
 
-    function _selectorPreviewState(ownerKey, query) {
-        if (String(ownerKey || '') === String(selectorPreview.ownerKey || '')) {
-            return {
-                query: String(selectorPreview.query || query || ''),
-                candidates: selectorPreview.candidates || [],
-                busy: Boolean(selectorPreview.busy),
-                message: String(selectorPreview.message || ''),
-            };
-        }
-        return {
-            query: String(query || ''),
-            candidates: [],
-            busy: false,
-            message: query ? Kit.dict.label('protocol.participant.selector_hint') : '',
-        };
-    }
-
-    function _selectorPreviewSummary(previewState) {
-        if (!previewState?.query) return 'Choose an assignment rule first, then check who currently matches it.';
-        if (previewState.busy) return 'Checking current matches…';
-        if (Array.isArray(previewState.candidates) && previewState.candidates.length) {
-            const count = previewState.candidates.length;
-            return `${count} connected agent${count === 1 ? '' : 's'} match right now.`;
-        }
-        if (previewState.message) return String(previewState.message || '');
-        return Kit.dict.label('protocol.participant.selector_hint');
-    }
-
     function _selectorAgentRecord(selectorValue = '') {
         const normalized = String(selectorValue || '').trim().toLowerCase();
         if (!normalized) return null;
@@ -2192,27 +2089,93 @@ function renderProtocolWorkspace(container) {
             .filter((item) => _isAuthoringRoutingSkill({ skill_name: item }))));
     }
 
-    function _selectorSkillMatchSection({ query = '', previewState = null, readOnly = false, onSuggestionSelect = null } = {}) {
-        if (!query) return null;
+    function _agentsAdvertisingSkill(selectorValue = '') {
+        const normalized = String(selectorValue || '').trim().toLowerCase();
+        if (!normalized) return [];
+        const seen = new Set();
+        const rows = [];
+        const push = (agent) => {
+            const slug = String(agent?.slug || '').trim().toLowerCase();
+            if (!slug || seen.has(slug)) return;
+            seen.add(slug);
+            rows.push(agent);
+        };
+        const availableBySlug = new Map(_availableAuthoringAgents().map((agent) => [
+            String(agent?.slug || '').trim().toLowerCase(),
+            agent,
+        ]));
+        const advertised = (availableRoutingSkills || []).find((item) =>
+            String(item?.skill_name || item || '').trim().toLowerCase() === normalized,
+        );
+        (Array.isArray(advertised?.advertised_by_agents) ? advertised.advertised_by_agents : []).forEach((slug) => {
+            push(availableBySlug.get(String(slug || '').trim().toLowerCase()));
+        });
+        _availableAuthoringAgents().forEach((agent) => {
+            const skills = _selectorAgentSkills(agent).map((item) => item.toLowerCase());
+            if (skills.includes(normalized)) {
+                push(agent);
+            }
+        });
+        return rows.sort((left, right) =>
+            String(left?.display_name || left?.slug || '').localeCompare(String(right?.display_name || right?.slug || '')));
+    }
+
+    function _selectorSkillMatchSection({ selectorValue = '', readOnly = false, onSuggestionSelect = null } = {}) {
+        if (!selectorValue) return null;
         const section = document.createElement('section');
         section.className = 'kit-selector-editor-preview';
-        section.appendChild(Kit.selectorResolutionPreview({
-            selector: String(previewState?.query || query || ''),
-            candidates: Array.isArray(previewState?.candidates) ? previewState.candidates : [],
-            busy: Boolean(previewState?.busy),
-            message: String(previewState?.message || ''),
-            onSuggestionSelect: typeof onSuggestionSelect === 'function' ? onSuggestionSelect : null,
-            showForm: false,
-            showSuggestions: false,
-            title: 'Agents with this skill',
-            help: readOnly
-                ? 'These connected agents currently advertise the selected skill.'
-                : 'These connected agents currently advertise the selected skill. Leave the step on skill assignment to keep it dynamic, or choose one to pin the step to a specific agent.',
-            emptyHint: Kit.dict.label('agents.selector.no_matches'),
-            resultTitle: typeof onSuggestionSelect === 'function'
-                ? 'Available agents — choose one to pin this step'
-                : 'Available agents',
-        }));
+        const body = document.createElement('div');
+        body.className = 'kit-selector-preview';
+        const header = document.createElement('div');
+        header.className = 'kit-selector-preview-header';
+        const title = document.createElement('strong');
+        title.textContent = 'Agents with this skill';
+        header.appendChild(title);
+        const help = document.createElement('p');
+        help.className = 'quiet-note';
+        help.textContent = readOnly
+            ? 'These connected agents currently advertise the selected skill.'
+            : 'These connected agents currently advertise the selected skill. Leave the step on skill assignment to keep it dynamic, or choose one below to pin the step to a specific agent.';
+        header.appendChild(help);
+        body.appendChild(header);
+        const results = document.createElement('div');
+        results.className = 'kit-selector-preview-results';
+        const resultTitle = document.createElement('div');
+        resultTitle.className = 'detail-label';
+        resultTitle.textContent = typeof onSuggestionSelect === 'function'
+            ? 'Available agents — choose one to pin this step'
+            : 'Available agents';
+        results.appendChild(resultTitle);
+        const matches = _agentsAdvertisingSkill(selectorValue);
+        if (!matches.length) {
+            results.appendChild(UI.renderEmptyState('No connected agents currently advertise this skill.', true));
+        } else {
+            matches.forEach((candidate) => {
+                const row = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'div');
+                row.className = 'kit-selector-preview-row';
+                if (row instanceof HTMLButtonElement) {
+                    row.type = 'button';
+                    row.addEventListener('click', () => onSuggestionSelect(candidate));
+                }
+                const label = document.createElement('span');
+                label.className = 'kit-selector-preview-row-title';
+                label.textContent = String(candidate?.display_name || candidate?.slug || candidate?.agent_id || '');
+                row.appendChild(label);
+                const sub = document.createElement('span');
+                sub.className = 'kit-selector-preview-row-subtitle';
+                sub.textContent = [
+                    String(candidate?.role || '').trim(),
+                    candidate?.slug ? `@${String(candidate.slug || '').trim()}` : '',
+                    String(candidate?.connectivity_state || '').trim().toLowerCase() === 'connected'
+                        ? ''
+                        : String(candidate?.connectivity_state || '').trim(),
+                ].filter(Boolean).join(' · ');
+                row.appendChild(sub);
+                results.appendChild(row);
+            });
+        }
+        body.appendChild(results);
+        section.appendChild(body);
         return section;
     }
 
@@ -2350,7 +2313,6 @@ function renderProtocolWorkspace(container) {
     function _selectorEditor({
         selectorKind = '',
         selectorValue = '',
-        previewKey = '',
         readOnly = false,
         onChange = null,
         onSelectorChange = null,
@@ -2445,8 +2407,6 @@ function renderProtocolWorkspace(container) {
             wrap.appendChild(note);
         }
 
-        const query = _selectorString(_selectorFromFields(selectorKind, selectorValue));
-        const previewState = _selectorPreviewState(previewKey || '__draft__', query);
         const handleCandidateSelect = !readOnly && normalizedKind === 'skill'
             ? (candidate) => {
                 const targetValue = String(candidate?.slug || candidate?.agent_id || '').trim();
@@ -2454,10 +2414,9 @@ function renderProtocolWorkspace(container) {
                 emitSelector('agent', targetValue);
             }
             : null;
-        if (normalizedKind === 'skill' && query) {
+        if (normalizedKind === 'skill' && selectorValue) {
             const matchesSection = _selectorSkillMatchSection({
-                query,
-                previewState,
+                selectorValue,
                 readOnly,
                 onSuggestionSelect: handleCandidateSelect,
             });
@@ -3483,7 +3442,6 @@ function renderProtocolWorkspace(container) {
         grid.appendChild(_stageEditorSection('Assignment', _selectorEditor({
             selectorKind: String(target?.selector_kind || ''),
             selectorValue: String(target?.selector_value || ''),
-            previewKey: String(target?.stage_key || '__draft__'),
             readOnly,
             onChange: onCommit,
             onSelectorChange: createAction
@@ -3642,9 +3600,6 @@ function renderProtocolWorkspace(container) {
                 const primaryStageKey = _segmentPrimaryStageKey(segment);
                 const target = (doc.stages || []).find((item) => String(item.stage_key) === primaryStageKey);
                 if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-                if (target.selector && String(selectorPreview.ownerKey || '') !== String(primaryStageKey || '')) {
-                    _syncSelectorPreview(String(primaryStageKey || ''), String(target.selector.kind || ''), String(target.selector.value || ''));
-                }
                 return _stageEditorShell({
                     target: {
                         ...target,
@@ -3676,9 +3631,6 @@ function renderProtocolWorkspace(container) {
         if (selection.sectionKey === 'stages') {
             const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
             if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            if (target.selector && String(selectorPreview.ownerKey || '') !== String(selection.nodeKey || '')) {
-                _syncSelectorPreview(String(selection.nodeKey || ''), String(target.selector.kind || ''), String(target.selector.value || ''));
-            }
             return _stageEditorShell({
                 target: {
                     ...target,

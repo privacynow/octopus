@@ -3840,7 +3840,7 @@ function renderProtocolWorkspace(container) {
         }
         const validation = _validationEl();
         if (validation) detailsColumn.appendChild(validation);
-        if (rehearsal.runId) {
+        if (editorMode.kind === 'rehearse' || rehearsal.runId) {
             detailsColumn.appendChild(Kit.rehearsalPanel({
                 runId: rehearsal.runId,
                 sessions: rehearsal.sessions,

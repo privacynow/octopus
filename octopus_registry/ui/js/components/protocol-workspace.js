@@ -1959,6 +1959,7 @@ function renderProtocolWorkspace(container) {
         const normalized = String(kind || '').trim().toLowerCase();
         const entries = [];
         const seen = new Set();
+        const agentSkillCounts = new Map();
         const push = (value, label, meta = '') => {
             const nextValue = String(value || '').trim();
             if (!nextValue || seen.has(nextValue)) return;
@@ -1969,6 +1970,15 @@ function renderProtocolWorkspace(container) {
                 meta: String(meta || '').trim(),
             });
         };
+        _availableAuthoringAgents().forEach((agent) => {
+            (Array.isArray(agent?.routing_skills) ? agent.routing_skills : [])
+                .filter((item) => _isAuthoringRoutingSkill(item))
+                .forEach((item) => {
+                    const skillName = String(item?.skill_name || item || '').trim();
+                    if (!skillName) return;
+                    agentSkillCounts.set(skillName, Number(agentSkillCounts.get(skillName) || 0) + 1);
+                });
+        });
         if (normalized === 'agent') {
             _availableAuthoringAgents().forEach((agent) => {
                 const slug = String(agent?.slug || '').trim();
@@ -1988,7 +1998,16 @@ function renderProtocolWorkspace(container) {
             (availableRoutingSkills || []).filter((item) => _isAuthoringRoutingSkill(item)).forEach((item) => {
                 const skillName = String(item?.skill_name || item || '').trim();
                 if (!skillName || item?.enabled === false) return;
-                const advertisedBy = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents.length : 0;
+                const advertisedBy = Array.isArray(item?.advertised_by_agents)
+                    ? item.advertised_by_agents.length
+                    : Number(agentSkillCounts.get(skillName) || 0);
+                push(
+                    skillName,
+                    _titleCaseWords(skillName),
+                    advertisedBy > 0 ? `${advertisedBy} agent${advertisedBy === 1 ? '' : 's'}` : '',
+                );
+            });
+            Array.from(agentSkillCounts.entries()).forEach(([skillName, advertisedBy]) => {
                 push(
                     skillName,
                     _titleCaseWords(skillName),

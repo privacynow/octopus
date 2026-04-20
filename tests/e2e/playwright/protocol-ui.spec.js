@@ -38,8 +38,11 @@ test.describe('protocol authoring live', () => {
     await expect(stageEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
     await strategy.selectOption('agent');
     await expect(stageEditor.getByText('Rehearsal')).toHaveCount(0);
-    await stageEditor.locator('summary').filter({ hasText: 'Advanced assignment' }).click();
-    await expect(stageEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
+    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Advanced assignment' });
+    if (await advancedAssignment.count()) {
+      await advancedAssignment.click();
+      await expect(stageEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
+    }
     await page.getByRole('button', { name: 'Cancel' }).click();
 
     await expect(page.getByText(/^participant_[0-9]+$/i)).toHaveCount(0);

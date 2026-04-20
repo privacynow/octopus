@@ -110,16 +110,19 @@ async function createStep(page, {
   if (openEditor) {
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
   }
-  const stageEditor = page.locator('.kit-stage-editor-grid');
+  const detailsPanel = page.locator('.kit-details-panel').filter({ has: page.locator('.kit-stage-editor-grid') }).first();
+  await expect(detailsPanel).toBeVisible();
+  const stageEditor = detailsPanel.locator('.kit-stage-editor-grid').first();
   await expect(stageEditor).toBeVisible();
-  const stepBasicsSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
+  const stepBasicsSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: stageEditor.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
   await stepBasicsSection.getByLabel('Name').fill(name);
   const ownerRoleSelect = stepBasicsSection.getByLabel('Owner role');
   if (ownerRole) {
     await ownerRoleSelect.selectOption(ownerRole);
   } else {
     await ownerRoleSelect.selectOption('__new__');
-    const newRoleSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
+    const newRoleSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: stageEditor.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
+    await expect(newRoleSection.getByLabel('Role name')).toBeVisible();
     await newRoleSection.getByLabel('Role name').fill(roleName || `${name} role`);
     if (roleKey) {
       await newRoleSection.getByLabel('Role key').fill(roleKey);
@@ -131,7 +134,7 @@ async function createStep(page, {
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);
   }
-  const assignmentSection = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
+  const assignmentSection = stageEditor.locator('.kit-stage-editor-section').filter({ has: stageEditor.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
   await assignmentSection.getByLabel('Strategy', { exact: true }).selectOption(selectorKind);
   const valueLabel = selectorKind === 'agent' ? 'Choose agent' : selectorKind === 'skill' ? 'Choose skill' : 'Choose runtime role tag';
   const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true });

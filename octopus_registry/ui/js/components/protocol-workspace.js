@@ -1487,6 +1487,68 @@ function renderProtocolWorkspace(container) {
         _syncSelectorPreview('__draft__', pendingStage.selector_kind, pendingStage.selector_value);
     }
 
+    function _bindPendingStageEditorControls(root) {
+        if (!(root instanceof Element) || root.dataset.pendingStageBindings === 'true') return;
+        root.dataset.pendingStageBindings = 'true';
+        const bindText = (selector, key) => {
+            const control = root.querySelector(selector);
+            if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLTextAreaElement)) return;
+            const commit = () => _commitPendingStageField(null, key, control.value);
+            control.addEventListener('input', commit);
+            control.addEventListener('change', commit);
+            control.addEventListener('blur', commit);
+        };
+        const bindSelect = (selector, key) => {
+            const control = root.querySelector(selector);
+            if (!(control instanceof HTMLSelectElement)) return;
+            control.addEventListener('change', () => _commitPendingStageField(null, key, control.value));
+        };
+        bindText('#kit-details-display_name', 'display_name');
+        bindSelect('#kit-details-participant_key', 'participant_key');
+        bindSelect('#kit-details-stage_kind', 'stage_kind');
+        bindText('#kit-details-role_display_name', 'role_display_name');
+        bindText('#kit-details-role_participant_key', 'role_participant_key');
+        bindText('#kit-details-role_instructions', 'role_instructions');
+        bindText('#kit-details-instructions', 'instructions');
+        bindText('#kit-details-max_rounds', 'max_rounds');
+        bindText('#kit-details-timeout_seconds', 'timeout_seconds');
+
+        const strategy = root.querySelector('select[aria-label="Strategy"]');
+        if (strategy instanceof HTMLSelectElement) {
+            strategy.addEventListener('change', () => {
+                const nextKind = String(strategy.value || '');
+                _commitPendingStageSelector(
+                    nextKind,
+                    _nextSelectorValueForKind(nextKind, nextKind === String(pendingStage.selector_kind || '') ? pendingStage.selector_value : ''),
+                );
+            });
+        }
+        const advancedStrategy = root.querySelector('select[aria-label="Advanced strategy"]');
+        if (advancedStrategy instanceof HTMLSelectElement) {
+            advancedStrategy.addEventListener('change', () => {
+                const nextKind = String(advancedStrategy.value || '').trim();
+                const fallbackKind = String(pendingStage.selector_kind || '') || _selectorPrimaryKinds()[0] || '';
+                const targetKind = nextKind || fallbackKind;
+                _commitPendingStageSelector(
+                    targetKind,
+                    _nextSelectorValueForKind(targetKind, targetKind === String(pendingStage.selector_kind || '') ? pendingStage.selector_value : ''),
+                );
+            });
+        }
+        Array.from(root.querySelectorAll('select[aria-label="Choose agent"], select[aria-label="Choose skill"], select[aria-label="Choose runtime role tag"], input[aria-label="Choose agent"], input[aria-label="Choose skill"], input[aria-label="Choose runtime role tag"], input[aria-label="Custom value"]'))
+            .forEach((control) => {
+                const commit = () => {
+                    const value = control instanceof HTMLInputElement || control instanceof HTMLSelectElement ? control.value : '';
+                    _commitPendingStageSelector(String(pendingStage.selector_kind || ''), value);
+                };
+                control.addEventListener('change', commit);
+                if (control instanceof HTMLInputElement) {
+                    control.addEventListener('input', commit);
+                    control.addEventListener('blur', commit);
+                }
+            });
+    }
+
     function _commitStageSelector(nodeKey, selectorKind, selectorValue) {
         const doc = _cloneDoc(draft.document);
         const items = [...(doc.stages || [])];
@@ -3744,6 +3806,9 @@ function renderProtocolWorkspace(container) {
             }
             if (detailsColumn.childElementCount) {
                 activeWorkspace.appendChild(detailsColumn);
+                if (editorMode.kind === 'insert-stage') {
+                    _bindPendingStageEditorControls(detailsColumn);
+                }
             }
         }
         const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');

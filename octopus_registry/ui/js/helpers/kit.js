@@ -1236,6 +1236,7 @@ window.Kit = (() => {
 
         let cy = null;
         let disposed = false;
+        let syncingFit = false;
         let currentZoom = viewportState?.zoom === 'fit'
             ? 'fit'
             : Math.max(0.35, Math.min(2.25, Number(viewportState?.zoom || 1) || 1));
@@ -1251,21 +1252,25 @@ window.Kit = (() => {
                 const delta = event.shiftKey ? 140 : 64;
                 if (event.key === 'ArrowRight') {
                     event.preventDefault();
+                    currentZoom = Number(cy.zoom() || 1);
                     cy.panBy({ x: -delta, y: 0 });
                     return;
                 }
                 if (event.key === 'ArrowLeft') {
                     event.preventDefault();
+                    currentZoom = Number(cy.zoom() || 1);
                     cy.panBy({ x: delta, y: 0 });
                     return;
                 }
                 if (event.key === 'ArrowDown') {
                     event.preventDefault();
+                    currentZoom = Number(cy.zoom() || 1);
                     cy.panBy({ x: 0, y: -delta });
                     return;
                 }
                 if (event.key === 'ArrowUp') {
                     event.preventDefault();
+                    currentZoom = Number(cy.zoom() || 1);
                     cy.panBy({ x: 0, y: delta });
                     return;
                 }
@@ -1309,12 +1314,19 @@ window.Kit = (() => {
             if (!fitElements.length) return;
             const animate = !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
             if (currentZoom === 'fit' || force) {
+                syncingFit = true;
                 instance.animate({
                     fit: {
                         eles: fitElements,
                         padding: Number(graphScene.fitPadding || 72),
                     },
                     duration: animate ? 220 : 0,
+                    complete: () => {
+                        syncingFit = false;
+                        if (typeof onViewportChange === 'function') {
+                            onViewportChange('fit');
+                        }
+                    },
                 });
             }
         }
@@ -1661,9 +1673,13 @@ window.Kit = (() => {
                     onSelect({ kind: 'transition', id: String(event.target.id() || '') });
                 }
             });
-            cy.on('zoom pan', () => {
+            cy.on('zoom pan', (event) => {
+                if (syncingFit) return;
+                if (currentZoom === 'fit' && event?.originalEvent) {
+                    currentZoom = Number(cy.zoom() || 1);
+                }
                 if (typeof onViewportChange === 'function') {
-                    onViewportChange(Number(cy.zoom() || 1));
+                    onViewportChange(currentZoom === 'fit' ? 'fit' : Number(cy.zoom() || 1));
                 }
             });
 

@@ -4027,8 +4027,27 @@ select {
 }
 
 @media (max-width: 960px) {
+    .kit-lifecycle-header.is-compact {
+        padding: var(--space-2-5);
+    }
+
     .kit-lifecycle-header.is-compact .kit-lifecycle-header-top {
         align-items: stretch;
+    }
+
+    .kit-lifecycle-title {
+        flex-basis: 100%;
+    }
+
+    .kit-lifecycle-title-input {
+        font-size: 1.22rem;
+        padding-inline: 0;
+    }
+
+    .kit-lifecycle-slug-input,
+    .kit-lifecycle-slug-chip,
+    .kit-workflow-viewbar-subtitle {
+        display: none;
     }
 
     .kit-lifecycle-primary {
@@ -4063,11 +4082,11 @@ select {
 
     .kit-workflow-cy-host {
         min-width: 100%;
-        min-height: 12.5rem;
+        min-height: 10.5rem;
     }
 
     .kit-workflow-viewport-cy {
-        min-height: 12.5rem;
+        min-height: 10.5rem;
     }
 
     .kit-stage-editor-hero {

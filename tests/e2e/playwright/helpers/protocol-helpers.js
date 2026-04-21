@@ -187,19 +187,14 @@ async function createStep(page, {
 }
 
 async function outlineStepNode(page, stageKey) {
-  const inlineNode = page.getByTestId(`workflow-stage-${stageKey}`);
-  if (await inlineNode.count()) {
-    return inlineNode.first();
-  }
-  const stageNode = page.getByTestId(`workflow-outline-${stageKey}`);
-  if (await stageNode.count()) {
-    return stageNode.first();
-  }
-  return page.getByTestId(`workflow-outline-segment:${stageKey}`).first();
+  const stageNode = page.getByTestId(`workflow-stage-${stageKey}`);
+  await expect(stageNode).toHaveCount(1, { timeout: 15000 });
+  return stageNode.first();
 }
 
 async function selectStep(page, stageKey) {
   const node = await outlineStepNode(page, stageKey);
+  await node.scrollIntoViewIfNeeded();
   await expect(node).toBeVisible();
   const alreadySelected = await node.evaluate((element) => element.classList.contains('is-selected'));
   if (!alreadySelected) {

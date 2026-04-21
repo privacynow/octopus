@@ -26,7 +26,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await lifecycle.getByLabel('Name').blur();
   await waitForSaved(page);
 
-  await page.getByRole('button', { name: /Add first step/i }).first().click();
+  await page.getByRole('button', { name: /Add( first)? step/i }).first().click();
   const participantEditor = page.locator('.kit-stage-editor').first();
   const stepBasics = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
   const newRole = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
@@ -41,7 +41,7 @@ test('capture protocol authoring states', async ({ page }) => {
     roleName: 'Planner',
     roleKey: 'planner',
     selectorKind: 'skill',
-    selectorValue: 'planning',
+    selectorValue: '__first__',
   });
   const reviewKey = await createStep(page, {
     name: 'Review',
@@ -49,7 +49,7 @@ test('capture protocol authoring states', async ({ page }) => {
     roleName: 'Reviewer',
     roleKey: 'reviewer',
     selectorKind: 'skill',
-    selectorValue: 'review',
+    selectorValue: '__first__',
     stageKind: 'review',
   });
 
@@ -84,7 +84,9 @@ test('capture protocol authoring states', async ({ page }) => {
   await selectStep(page, 'planning');
   await expect(page.locator('.kit-stage-editor')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-page.png', fullPage: true });
-  await page.locator('.kit-workflow-viewport-cy').screenshot({
+  await page.getByRole('button', { name: 'Show workflow map', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Hide workflow map', exact: true })).toBeVisible();
+  await page.locator('.kit-workflow-canvas').first().screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-graph.png',
   });
 
@@ -92,7 +94,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
   await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png' });
-  await page.getByTestId('workflow-stage-planning').click();
+  await selectStep(page, 'planning');
   await expect(page.locator('.kit-stage-editor')).toContainText('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png' });
 

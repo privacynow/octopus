@@ -3562,30 +3562,13 @@ function renderProtocolWorkspace(container) {
         const head = document.createElement('div');
         head.className = 'kit-protocol-segment-head';
         const title = document.createElement('h3');
-        title.className = 'kit-stage-editor-hero-title';
+        title.className = 'kit-protocol-segment-step-title';
         title.textContent = String(segment?.label || 'Section');
         head.appendChild(title);
         const subtitle = document.createElement('p');
-        subtitle.className = 'kit-stage-editor-hero-note';
+        subtitle.className = 'kit-protocol-segment-step-meta';
         subtitle.textContent = `${Array.isArray(segment?.stages) ? segment.stages.length : 0} step${segment?.stages?.length === 1 ? '' : 's'} in this section.`;
         head.appendChild(subtitle);
-        if (!context.readOnly && segment?.endStageKey) {
-            const headActions = document.createElement('div');
-            headActions.className = 'kit-protocol-segment-head-actions';
-            const add = document.createElement('button');
-            add.type = 'button';
-            add.className = 'btn btn-small';
-            add.textContent = `Add below ${String(segment.label || 'section')}`;
-            add.addEventListener('click', () => {
-                const anchorStage = (context.doc.stages || []).find((item) =>
-                    String(item.stage_key || '') === String(segment.endStageKey || ''),
-                ) || null;
-                const anchor = anchorStage ? _insertAnchorForStage(anchorStage, context.projection) : null;
-                _startStageInsert(anchor || {});
-            });
-            headActions.appendChild(add);
-            head.appendChild(headActions);
-        }
         panel.appendChild(head);
 
         const activeStageKey = _activeStageKey();
@@ -3631,7 +3614,7 @@ function renderProtocolWorkspace(container) {
             row.appendChild(summary);
             entry.appendChild(row);
 
-            if (!context.readOnly) {
+            if (!context.readOnly && activeStageKey === stageKey) {
                 const actions = document.createElement('div');
                 actions.className = 'kit-protocol-segment-step-actions';
                 const add = document.createElement('button');
@@ -3742,44 +3725,6 @@ function renderProtocolWorkspace(container) {
         }
         section.appendChild(panel);
         return section;
-    }
-
-    function _stageEditorHero(target) {
-        const hero = document.createElement('section');
-        hero.className = 'kit-stage-editor-hero';
-
-        const title = document.createElement('h3');
-        title.className = 'kit-stage-editor-hero-title';
-        title.textContent = String(target?.display_name || target?.stage_key || 'Untitled step');
-        hero.appendChild(title);
-
-        const meta = document.createElement('div');
-        meta.className = 'kit-stage-editor-hero-meta';
-
-        [
-            _participantDisplayName(target?.participant_key, draft.document),
-            _stageAssignmentSummary(target),
-            String(target?.stage_kind || 'work') !== 'work'
-                ? Kit.dict.label(`protocol.stage.kind.${String(target?.stage_kind || 'work')}`, _titleCaseWords(target?.stage_kind || 'work'))
-                : '',
-            `${Object.keys(target?.transitions || {}).length} route${Object.keys(target?.transitions || {}).length === 1 ? '' : 's'}`,
-            ((target?.inputs || []).length || (target?.outputs || []).length)
-                ? `${(target?.inputs || []).length} read · ${(target?.outputs || []).length} write`
-                : '',
-        ].filter(Boolean).forEach((item) => {
-            const chip = document.createElement('span');
-            chip.className = 'kit-stage-editor-hero-chip';
-            chip.textContent = String(item || '');
-            meta.appendChild(chip);
-        });
-        hero.appendChild(meta);
-
-        const note = document.createElement('p');
-        note.className = 'kit-stage-editor-hero-note';
-        note.textContent = 'Edit ownership, routing, artifacts, and instructions here. The canvas stays in sync.';
-        hero.appendChild(note);
-
-        return hero;
     }
 
     function _stageRoutingPanel(stage, { readOnly = false, connectAction = null } = {}) {
@@ -3903,9 +3848,7 @@ function renderProtocolWorkspace(container) {
             })));
         const shell = document.createElement('div');
         shell.className = 'kit-stage-editor';
-        if (!createAction) {
-            shell.appendChild(_stageEditorHero(target));
-        } else if (createHint) {
+        if (createAction && createHint) {
             const note = document.createElement('p');
             note.className = 'kit-stage-editor-hero-note';
             note.textContent = String(createHint || '');
@@ -3981,7 +3924,7 @@ function renderProtocolWorkspace(container) {
         grid.appendChild(_stageEditorSection('Instructions', instructionsPanel, {
             wide: true,
             collapsible: !createAction,
-            open: createAction || (!_isCompactViewport() && Boolean(String(target?.instructions || '').trim())),
+            open: Boolean(createAction),
         }));
 
         const artifactsPanel = Kit.detailsPanel({
@@ -3996,7 +3939,7 @@ function renderProtocolWorkspace(container) {
         grid.appendChild(_stageEditorSection('Artifacts', artifactsPanel, {
             wide: true,
             collapsible: !createAction,
-            open: createAction || (!_isCompactViewport() && Boolean((target?.inputs || []).length || (target?.outputs || []).length)),
+            open: Boolean(createAction),
         }));
 
         const advancedActions = [];
@@ -4779,6 +4722,7 @@ function renderProtocolRuns(container) {
             runSearch,
             timelineParticipantFilter,
         }, () => {
+            const compact = _isCompactViewport();
             const board = document.createElement('div');
             board.className = 'dashboard-board';
             board.dataset.route = 'protocol-runs';
@@ -4794,7 +4738,9 @@ function renderProtocolRuns(container) {
             detailColumn.appendChild(_buildRunDetailPanel());
 
             board.appendChild(listColumn);
-            board.appendChild(detailColumn);
+            if (!compact || currentRunId) {
+                board.appendChild(detailColumn);
+            }
             return board;
         });
     }

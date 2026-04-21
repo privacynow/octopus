@@ -173,8 +173,9 @@ test.describe('protocol authoring live', () => {
     await expect(assignment.getByText('Agents with this skill')).toBeVisible();
     await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
     expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
-    const planningEntry = page.locator('.kit-protocol-segment-entry').filter({ has: page.getByTestId('workflow-stage-plan_review') }).first();
-    await planningEntry.getByRole('button', { name: 'Add below', exact: true }).click();
+    await selectStep(page, 'plan_review');
+    const reviewEntry = page.locator('.kit-protocol-segment-entry').filter({ has: page.getByTestId('workflow-stage-plan_review') }).first();
+    await reviewEntry.getByRole('button', { name: 'Add below', exact: true }).click();
     await createStep(page, {
       name: 'Secondary Approval',
       key: 'secondary-approval',

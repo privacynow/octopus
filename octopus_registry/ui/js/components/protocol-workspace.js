@@ -3457,7 +3457,7 @@ function renderProtocolWorkspace(container) {
     }
 
     function _inlineStageInsertEl(context) {
-        return _stageEditorShell({
+        const shell = _stageEditorShell({
             target: pendingStage,
             participantOptions: context.stageParticipantOptions,
             kindOptions: context.kindOptions,
@@ -3467,6 +3467,15 @@ function renderProtocolWorkspace(container) {
             cancelAction: _cancelStageInsert,
             createHint: _workflowInsertHint(),
         });
+        shell.dataset.key = [
+            'protocol-inline-insert',
+            String(editorMode.sessionKey || ''),
+            String(editorMode.sourceStageKey || ''),
+            String(editorMode.decision || ''),
+            String(pendingStage.participant_key || ''),
+            String(pendingStage.role_display_name || ''),
+        ].join(':');
+        return shell;
     }
 
     function _inlineRouteEditorEl(stageKey, context) {
@@ -3512,7 +3521,7 @@ function renderProtocolWorkspace(container) {
     }
 
     function _stageEditorEl(stage, context) {
-        return _stageEditorShell({
+        const shell = _stageEditorShell({
             target: _stageEditorTarget(stage),
             readOnly: context.readOnly,
             participantOptions: context.participantOptions,
@@ -3524,6 +3533,8 @@ function renderProtocolWorkspace(container) {
             connectAction: context.readOnly ? null : () => _startRouteInsert(String(stage.stage_key || '')),
             deleteAction: context.readOnly ? null : () => _confirmStageDelete(String(stage.stage_key || '')),
         });
+        shell.dataset.key = `protocol-stage-editor:${String(stage.stage_key || '')}`;
+        return shell;
     }
 
     function _protocolSettingsSectionEl(context) {

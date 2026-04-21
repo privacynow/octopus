@@ -665,16 +665,21 @@ window.Kit = (() => {
                 (field.options || []).forEach((opt) => {
                     const itemLabel = document.createElement('label');
                     itemLabel.className = 'kit-details-checklist-item';
+                    itemLabel.addEventListener('click', (event) => event.stopPropagation());
                     const checkbox = document.createElement('input');
                     checkbox.type = 'checkbox';
                     checkbox.value = String(opt.value);
                     checkbox.checked = selectedValues.includes(String(opt.value));
                     if (field.disabled || field.readOnly) checkbox.disabled = true;
+                    checkbox.addEventListener('click', (event) => event.stopPropagation());
+                    checkbox.addEventListener('mousedown', (event) => event.stopPropagation());
                     if (typeof onCommit === 'function') {
                         checkbox.addEventListener('change', () => {
                             const values = Array.from(control.querySelectorAll('input[type="checkbox"]:checked'))
                                 .map((el) => String(el.value || ''));
-                            onCommit(target, field.key, values);
+                            requestAnimationFrame(() => {
+                                onCommit(target, field.key, values);
+                            });
                         });
                     }
                     const text = document.createElement('span');

@@ -29,6 +29,83 @@ const DOCUMENT_APPROVAL_STAGE_KEYS = [
   'approve_document',
 ];
 
+async function apiJson(page, method, path, body = undefined) {
+  return page.evaluate(async ({ httpMethod, requestPath, requestBody }) => {
+    async function csrfToken() {
+      const response = await fetch('/v1/auth/csrf', { credentials: 'same-origin' });
+      const payload = await response.json();
+      return String(payload.csrf_token || payload.token || '');
+    }
+    const headers = {};
+    if (requestBody !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (!['GET', 'HEAD'].includes(httpMethod)) {
+      headers['X-CSRF-Token'] = await csrfToken();
+    }
+    const response = await fetch(requestPath, {
+      method: httpMethod,
+      credentials: 'same-origin',
+      headers,
+      body: requestBody === undefined ? undefined : JSON.stringify(requestBody),
+    });
+    const text = await response.text();
+    let payload = null;
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch (error) {
+      payload = { raw: text, parse_error: String(error || '') };
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload,
+    };
+  }, { httpMethod: method, requestPath: path, requestBody: body });
+}
+
+async function createProtocolScenario(page, payload) {
+  const response = await apiJson(page, 'POST', '/v1/protocol-scenarios', payload);
+  expect(response.ok).toBe(true);
+  return response.payload;
+}
+
+async function deleteProtocolScenario(page, scenarioId) {
+  const response = await apiJson(page, 'DELETE', `/v1/protocol-scenarios/${encodeURIComponent(scenarioId)}`);
+  expect(response.ok).toBe(true);
+}
+
+async function getRunDetail(page, runId) {
+  const response = await apiJson(page, 'GET', `/v1/protocol-runs/${encodeURIComponent(runId)}`);
+  expect(response.ok).toBe(true);
+  return response.payload;
+}
+
+async function waitForRunStage(page, runId, stageKey) {
+  await expect.poll(async () => {
+    const detail = await getRunDetail(page, runId);
+    return String(detail.run?.current_stage_key || '');
+  }, { timeout: 30000 }).toBe(stageKey);
+}
+
+async function waitForRunStatus(page, runId, status) {
+  await expect.poll(async () => {
+    const detail = await getRunDetail(page, runId);
+    return String(detail.run?.status || '');
+  }, { timeout: 60000 }).toBe(status);
+}
+
+async function waitForLatestRehearsalRunId(page) {
+  await expect.poll(async () => {
+    const response = await apiJson(page, 'GET', '/v1/protocol-runs?limit=10&status=running');
+    const runs = Array.isArray(response.payload?.runs) ? response.payload.runs : [];
+    return String(runs.find((item) => item.is_rehearsal)?.protocol_run_id || '');
+  }, { timeout: 15000 }).not.toBe('');
+  const response = await apiJson(page, 'GET', '/v1/protocol-runs?limit=10&status=running');
+  const runs = Array.isArray(response.payload?.runs) ? response.payload.runs : [];
+  return String(runs.find((item) => item.is_rehearsal)?.protocol_run_id || '');
+}
+
 test.describe('protocol authoring live', () => {
   test('blank draft uses step-first authoring with inline role creation', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
@@ -49,15 +126,17 @@ test.describe('protocol authoring live', () => {
     const assignmentHeading = stageEditor.getByRole('heading', { name: 'Assignment' }).first();
     await assignmentHeading.scrollIntoViewIfNeeded();
     await expect(assignmentHeading).toBeVisible();
+    await expect(stageEditor.getByRole('tab', { name: 'By skill', exact: true })).toBeVisible();
+    await expect(stageEditor.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
     await expect(stageEditor.getByLabel('Required skill', { exact: true })).toBeVisible();
-    await expect(stageEditor.getByLabel('Pinned agent', { exact: true })).toBeVisible();
+    await expect(stageEditor.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
     await expect(stageEditor.locator('.kit-selector-preview-input')).toHaveCount(0);
     await expect(stageEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
     await expect(stageEditor.getByText('Rehearsal')).toHaveCount(0);
-    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Runtime role tag or custom selector' });
+    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Custom runtime selector' });
     if (await advancedAssignment.count()) {
       await advancedAssignment.click();
-      await expect(stageEditor.getByLabel('Advanced strategy')).toContainText('Runtime role tag');
+      await expect(stageEditor.getByLabel('Custom selector type')).toContainText('Runtime role tag');
     }
     await page.getByRole('button', { name: 'Cancel' }).click();
 
@@ -174,20 +253,21 @@ test.describe('protocol authoring live', () => {
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
     await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
-    await expect(assignment.getByText('Agents with this skill')).toBeVisible();
+    await expect(assignment.getByText('Matching agents')).toBeVisible();
     await expect(assignment.locator('.quickstart-chip').filter({ hasText: 'M1' }).first()).toBeVisible();
     await assignment.locator('.quickstart-chip').filter({ hasText: 'M1' }).first().click();
     await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
-    await expect(assignment.getByLabel('Pinned agent', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
-    await assignment.getByLabel('Pinned agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
-    await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
-    await expect(assignment).toContainText('Available here:');
+    await expect(assignment.getByLabel('Pin matching agent (optional)', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
+    await assignment.getByRole('tab', { name: 'Specific agent', exact: true }).click();
+    await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
+    await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
+    await expect(assignment).toContainText('Leave the skill blank to keep the assignment agent-only');
+    await assignment.getByLabel('Agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
     await expect(assignment.locator('.quickstart-chip').filter({ hasText: 'Architecture' }).first()).toBeVisible();
     await assignment.locator('.quickstart-chip').filter({ hasText: 'Architecture' }).first().click();
-    await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
-    await expect(assignment.getByLabel('Pinned agent', { exact: true })).toHaveValue('lift-and-shift-m2-bot');
-    await expect(assignment.getByText('Agents with this skill')).toBeVisible();
-    await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
+    await expect(assignment.getByLabel('Limit to one of this agent\'s skills (optional)', { exact: true })).toHaveValue('architecture');
+    await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue('lift-and-shift-m2-bot');
+    await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
     await selectStep(page, 'plan_review');
     const reviewEntry = page.locator('.kit-protocol-segment-entry').filter({ has: page.getByTestId('workflow-stage-plan_review') }).first();
@@ -270,12 +350,274 @@ test.describe('protocol authoring live', () => {
     const documentAssignmentHeading = details.getByRole('heading', { name: 'Assignment' }).first();
     await documentAssignmentHeading.scrollIntoViewIfNeeded();
     await expect(documentAssignmentHeading).toBeVisible();
+    await expect(details.getByRole('tab', { name: 'By skill', exact: true })).toBeVisible();
+    await expect(details.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
     await expect(details.getByLabel('Required skill', { exact: true })).toBeVisible();
-    await expect(details.getByLabel('Pinned agent', { exact: true })).toBeVisible();
+    await expect(details.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
     await expect(details.getByText('Rehearsal')).toHaveCount(0);
     await expect(details).toContainText('Current assignment:');
 
     await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('software engineering rehearsal proves revise loops and completion visually', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+    await login(page);
+    await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await lifecycle.getByRole('button', { name: 'Publish' }).click();
+    await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
+    const protocolId = protocolIdFromUrl(page.url());
+
+    const scenarioIds = [];
+    for (const payload of [
+      {
+        protocol_id: protocolId,
+        stage_key: 'planning',
+        participant_key: 'planner',
+        display_name: 'Planning pass 1',
+        decision: 'completed',
+        decision_summary: 'Planning completed.',
+        response_text: 'Plan the audit logging change, include failure handling, rollout, and tests.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'planning',
+        participant_key: 'planner',
+        display_name: 'Planning pass 2',
+        decision: 'completed',
+        decision_summary: 'Planning revised.',
+        response_text: 'Plan updated with rollback handling, log format, and explicit test coverage.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'plan_review',
+        participant_key: 'plan_reviewer',
+        display_name: 'Plan review revise',
+        decision: 'revise',
+        decision_summary: 'Missing rollback and failure details.',
+        response_text: 'Send the plan back. It does not explain rollback handling or failure-mode coverage.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'plan_review',
+        participant_key: 'plan_reviewer',
+        display_name: 'Plan review accept',
+        decision: 'accept',
+        decision_summary: 'Plan accepted.',
+        response_text: 'The revised plan is coherent and ready for architecture.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'architecture',
+        participant_key: 'architect',
+        display_name: 'Architecture pass',
+        decision: 'completed',
+        decision_summary: 'Architecture completed.',
+        response_text: 'Architecture updated with API boundaries, log schema, persistence, and observability.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'architecture_review',
+        participant_key: 'architecture_reviewer',
+        display_name: 'Architecture review accept',
+        decision: 'accept',
+        decision_summary: 'Architecture accepted.',
+        response_text: 'Architecture is coherent, safe, and maintainable.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'implementation',
+        participant_key: 'implementer',
+        display_name: 'Implementation pass 1',
+        decision: 'completed',
+        decision_summary: 'Implementation pass 1 completed.',
+        response_text: 'Implementation updated, but coverage gaps remain in failure-path tests.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'implementation',
+        participant_key: 'implementer',
+        display_name: 'Implementation pass 2',
+        decision: 'completed',
+        decision_summary: 'Implementation revised.',
+        response_text: 'Implementation updated with failure-path tests and status summary.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'implementation_review',
+        participant_key: 'implementation_reviewer',
+        display_name: 'Implementation review revise',
+        decision: 'revise',
+        decision_summary: 'Add failure-path tests.',
+        response_text: 'Send this back until the failure-path tests are covered.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'implementation_review',
+        participant_key: 'implementation_reviewer',
+        display_name: 'Implementation review accept',
+        decision: 'accept',
+        decision_summary: 'Implementation accepted.',
+        response_text: 'Implementation now matches the plan and includes the necessary tests.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'acceptance',
+        participant_key: 'acceptance',
+        display_name: 'Acceptance pass',
+        decision: 'accept',
+        decision_summary: 'Run accepted.',
+        response_text: 'The change is ready to complete.',
+      },
+    ]) {
+      const scenario = await createProtocolScenario(page, payload);
+      scenarioIds.push(String(scenario.protocol_scenario_id || ''));
+    }
+
+    try {
+      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
+      const runId = await waitForLatestRehearsalRunId(page);
+
+      const sequence = [
+        ['planning', 'Planning pass 1', 'plan_review'],
+        ['plan_review', 'Plan review revise', 'planning'],
+        ['planning', 'Planning pass 2', 'plan_review'],
+        ['plan_review', 'Plan review accept', 'architecture'],
+        ['architecture', 'Architecture pass', 'architecture_review'],
+        ['architecture_review', 'Architecture review accept', 'implementation'],
+        ['implementation', 'Implementation pass 1', 'implementation_review'],
+        ['implementation_review', 'Implementation review revise', 'implementation'],
+        ['implementation', 'Implementation pass 2', 'implementation_review'],
+        ['implementation_review', 'Implementation review accept', 'acceptance'],
+      ];
+
+      for (const [stageKey, scenarioName, nextStage] of sequence) {
+        const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
+        await expect(session).toBeVisible({ timeout: 20000 });
+        await session.getByRole('button', { name: scenarioName, exact: true }).click();
+        await session.getByRole('button', { name: 'Submit response', exact: true }).click();
+        await waitForRunStage(page, runId, nextStage);
+      }
+
+      const acceptance = page.locator('.kit-rehearsal-session[data-stage-key="acceptance"]').first();
+      await expect(acceptance).toBeVisible({ timeout: 20000 });
+      await acceptance.getByRole('button', { name: 'Acceptance pass', exact: true }).click();
+      await acceptance.getByRole('button', { name: 'Submit response', exact: true }).click();
+      await waitForRunStatus(page, runId, 'completed');
+
+      const finalDetail = await getRunDetail(page, runId);
+      expect(String(finalDetail.run?.status || '')).toBe('completed');
+      expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'plan_review' && String(item.decision || '') === 'revise')).toBe(true);
+      expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'implementation_review' && String(item.decision || '') === 'revise')).toBe(true);
+    } finally {
+      for (const scenarioId of scenarioIds.filter(Boolean)) {
+        await deleteProtocolScenario(page, scenarioId);
+      }
+    }
+
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('document approval rehearsal proves revise then approve visually', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+    await login(page);
+    await openTemplateDraft(page, 'Document Approval', { expectedStageKeys: DOCUMENT_APPROVAL_STAGE_KEYS });
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await lifecycle.getByRole('button', { name: 'Publish' }).click();
+    await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
+    const protocolId = protocolIdFromUrl(page.url());
+
+    const scenarioIds = [];
+    for (const payload of [
+      {
+        protocol_id: protocolId,
+        stage_key: 'draft_document',
+        participant_key: 'author',
+        display_name: 'Draft v1',
+        decision: 'completed',
+        decision_summary: 'Draft completed.',
+        response_text: 'Drafted the quarterly risk summary without an executive summary section.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'draft_document',
+        participant_key: 'author',
+        display_name: 'Draft v2',
+        decision: 'completed',
+        decision_summary: 'Draft revised.',
+        response_text: 'Added an executive summary and clarified the outstanding risk items.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'review_document',
+        participant_key: 'reviewer',
+        display_name: 'Review revise',
+        decision: 'revise',
+        decision_summary: 'Missing executive summary.',
+        response_text: 'Send this back until it includes an executive summary.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'review_document',
+        participant_key: 'reviewer',
+        display_name: 'Review accept',
+        decision: 'accept',
+        decision_summary: 'Review accepted.',
+        response_text: 'The revised document is ready for approval.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: 'approve_document',
+        participant_key: 'approver',
+        display_name: 'Approve accept',
+        decision: 'accept',
+        decision_summary: 'Document approved.',
+        response_text: 'Approve the document and finish the workflow.',
+      },
+    ]) {
+      const scenario = await createProtocolScenario(page, payload);
+      scenarioIds.push(String(scenario.protocol_scenario_id || ''));
+    }
+
+    try {
+      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
+      const runId = await waitForLatestRehearsalRunId(page);
+
+      const sequence = [
+        ['draft_document', 'Draft v1', 'review_document'],
+        ['review_document', 'Review revise', 'draft_document'],
+        ['draft_document', 'Draft v2', 'review_document'],
+        ['review_document', 'Review accept', 'approve_document'],
+      ];
+      for (const [stageKey, scenarioName, nextStage] of sequence) {
+        const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
+        await expect(session).toBeVisible({ timeout: 20000 });
+        await session.getByRole('button', { name: scenarioName, exact: true }).click();
+        await session.getByRole('button', { name: 'Submit response', exact: true }).click();
+        await waitForRunStage(page, runId, nextStage);
+      }
+
+      const approval = page.locator('.kit-rehearsal-session[data-stage-key="approve_document"]').first();
+      await expect(approval).toBeVisible({ timeout: 20000 });
+      await approval.getByRole('button', { name: 'Approve accept', exact: true }).click();
+      await approval.getByRole('button', { name: 'Submit response', exact: true }).click();
+      await waitForRunStatus(page, runId, 'completed');
+
+      const finalDetail = await getRunDetail(page, runId);
+      expect(String(finalDetail.run?.status || '')).toBe('completed');
+      expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'review_document' && String(item.decision || '') === 'revise')).toBe(true);
+    } finally {
+      for (const scenarioId of scenarioIds.filter(Boolean)) {
+        await deleteProtocolScenario(page, scenarioId);
+      }
+    }
+
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });

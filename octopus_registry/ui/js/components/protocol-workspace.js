@@ -121,6 +121,13 @@ function _selectorFromFields(kind, value, preferredAgentId = '') {
     return selector;
 }
 
+function _selectorModeFromKind(kind, fallback = 'skill') {
+    const normalized = String(kind || '').trim().toLowerCase();
+    if (normalized === 'agent' || normalized === 'skill') return normalized;
+    if (normalized) return 'advanced';
+    return String(fallback || 'skill');
+}
+
 function _protocolDecisionLabel(value) {
     const key = String(value || '').trim().toLowerCase();
     if (!key) return '';
@@ -182,8 +189,10 @@ function renderProtocolWorkspace(container) {
         display_name: '',
         stage_key: '',
         participant_key: '__new__',
+        selector_mode: 'skill',
         selector_kind: '',
         selector_value: '',
+        selector_preferred_agent_id: '',
         role_display_name: '',
         role_participant_key: '',
         role_instructions: '',
@@ -202,6 +211,7 @@ function renderProtocolWorkspace(container) {
     let documentHistory = { undo: [], redo: [] };
     let canvasViewport = { zoom: 'fit' };
     let workflowMapMode = 'auto';
+    let stageAssignmentEditor = { stageKey: '', mode: '' };
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
     let draft = {
@@ -296,6 +306,7 @@ function renderProtocolWorkspace(container) {
             display_name: '',
             stage_key: '',
             participant_key: String(participantKey || '__new__'),
+            selector_mode: 'skill',
             selector_kind: '',
             selector_value: '',
             selector_preferred_agent_id: '',
@@ -1206,6 +1217,7 @@ function renderProtocolWorkspace(container) {
         saveState = { state: 'idle', lastSavedAt: '', error: '' };
         canvasViewport = { zoom: 'fit' };
         workflowMapMode = 'auto';
+        stageAssignmentEditor = { stageKey: '', mode: '' };
         _resetEditorMode();
     }
 
@@ -1279,12 +1291,14 @@ function renderProtocolWorkspace(container) {
         await _refreshRehearsalSessions();
     }
 
-    async function _respondRehearsal({ routedTaskId, responseText, stageKey, participantKey }) {
+    async function _respondRehearsal({ routedTaskId, responseText, decision, decisionSummary, stageKey, participantKey }) {
         if (!rehearsal.runId || !routedTaskId) return;
         try {
             await API.respondRehearsalSession(rehearsal.runId, {
                 routed_task_id: routedTaskId,
                 response_text: String(responseText || ''),
+                decision: String(decision || ''),
+                decision_summary: String(decisionSummary || ''),
                 stage_key: stageKey || '',
                 participant_key: participantKey || '',
             });
@@ -1488,6 +1502,8 @@ function renderProtocolWorkspace(container) {
                 pendingStage.role_participant_key = '';
                 pendingStage.role_instructions = '';
             }
+        } else if (key === 'selector_mode') {
+            pendingStage.selector_mode = _selectorModeFromKind(value, pendingStage.selector_mode || 'skill');
         } else if (key === 'selector_kind' || key === 'selector_value' || key === 'selector_preferred_agent_id') {
             pendingStage[key] = String(value || '');
         } else if (key === 'role_display_name') {
@@ -1506,12 +1522,15 @@ function renderProtocolWorkspace(container) {
         } else if (key === 'max_rounds' || key === 'timeout_seconds') {
             pendingStage[key] = Number.parseInt(String(value || '0'), 10) || 0;
         }
-        if (['participant_key', 'selector_kind', 'selector_value', 'selector_preferred_agent_id', 'stage_kind'].includes(String(key || ''))) {
+        if (['participant_key', 'selector_mode', 'selector_kind', 'selector_value', 'selector_preferred_agent_id', 'stage_kind'].includes(String(key || ''))) {
             queueMicrotask(() => render());
         }
     }
 
     function _commitPendingStageSelector(selectorKind, selectorValue, selectorPreferredAgentId = '') {
+        if (String(selectorKind || '').trim()) {
+            pendingStage.selector_mode = _selectorModeFromKind(selectorKind, pendingStage.selector_mode || 'skill');
+        }
         pendingStage.selector_kind = String(selectorKind || '');
         pendingStage.selector_value = String(selectorValue || '');
         pendingStage.selector_preferred_agent_id = String(selectorPreferredAgentId || '');
@@ -1536,10 +1555,17 @@ function renderProtocolWorkspace(container) {
         pendingStage.instructions = readValue('#kit-details-instructions');
         pendingStage.max_rounds = Number.parseInt(readValue('#kit-details-max_rounds') || '0', 10) || 0;
         pendingStage.timeout_seconds = Number.parseInt(readValue('#kit-details-timeout_seconds') || '0', 10) || 0;
-        const advancedKind = readValue('select[aria-label="Advanced strategy"]');
+        const activeModeButton = editor.querySelector('.segmented-control-btn.active');
+        pendingStage.selector_mode = _selectorModeFromKind(
+            activeModeButton instanceof HTMLButtonElement ? activeModeButton.dataset.value || '' : pendingStage.selector_mode,
+            pendingStage.selector_mode || 'skill',
+        );
+        const advancedKind = readValue('select[aria-label="Custom selector type"]');
         const selector = _selectorFromEditorFields({
             requiredSkill: readValue('[aria-label="Required skill"]'),
-            pinnedAgent: readValue('[aria-label="Pinned agent"]'),
+            pinnedAgent: readValue('[aria-label="Pin matching agent (optional)"]')
+                || readValue('[aria-label="Pinned agent"]')
+                || readValue('[aria-label="Agent"]'),
             advancedKind,
             advancedValue: advancedKind === 'role'
                 ? (readValue('[aria-label="Choose runtime role tag"]') || readValue('[aria-label="Custom value"]'))
@@ -1582,6 +1608,10 @@ function renderProtocolWorkspace(container) {
         const items = [...(doc.stages || [])];
         const idx = items.findIndex((item) => String(item.stage_key || '') === String(nodeKey || ''));
         if (idx < 0) return;
+        stageAssignmentEditor = {
+            stageKey: String(nodeKey || ''),
+            mode: _selectorModeFromKind(selectorKind, stageAssignmentEditor.mode || 'skill'),
+        };
         const next = Object.assign({}, items[idx], {
             selector: _selectorFromFields(selectorKind, selectorValue, selectorPreferredAgentId),
         });
@@ -2128,14 +2158,37 @@ function renderProtocolWorkspace(container) {
         return supportsSkill ? String(agent.agent_id || '').trim() : '';
     }
 
+    function _currentStageAssignmentMode(stageKey = '', selectorKind = '') {
+        const normalizedStageKey = String(stageKey || '').trim();
+        if (normalizedStageKey
+            && normalizedStageKey === String(stageAssignmentEditor.stageKey || '').trim()
+            && String(stageAssignmentEditor.mode || '').trim()) {
+            return _selectorModeFromKind(stageAssignmentEditor.mode, 'skill');
+        }
+        const derived = _selectorModeFromKind(selectorKind, 'skill');
+        return derived === 'advanced' ? 'skill' : derived;
+    }
+
+    function _setStageAssignmentMode(stageKey = '', mode = '') {
+        stageAssignmentEditor = {
+            stageKey: String(stageKey || '').trim(),
+            mode: _selectorModeFromKind(mode, 'skill'),
+        };
+        render();
+    }
+
     function _selectorEditorState({
+        selectorMode = '',
         selectorKind = '',
         selectorValue = '',
         selectorPreferredAgentId = '',
     } = {}) {
         const normalizedKind = String(selectorKind || '').trim().toLowerCase();
+        const requestedMode = _selectorModeFromKind(selectorMode || normalizedKind, 'skill');
+        const primaryMode = requestedMode === 'advanced' ? 'skill' : requestedMode;
         if (normalizedKind === 'skill') {
             return {
+                mode: primaryMode,
                 requiredSkill: String(selectorValue || '').trim(),
                 pinnedAgent: _selectorAgentControlValue(selectorPreferredAgentId),
                 advancedKind: '',
@@ -2144,6 +2197,7 @@ function renderProtocolWorkspace(container) {
         }
         if (normalizedKind === 'agent') {
             return {
+                mode: primaryMode,
                 requiredSkill: '',
                 pinnedAgent: _selectorAgentControlValue(selectorValue),
                 advancedKind: '',
@@ -2151,6 +2205,7 @@ function renderProtocolWorkspace(container) {
             };
         }
         return {
+            mode: primaryMode,
             requiredSkill: '',
             pinnedAgent: '',
             advancedKind: normalizedKind,
@@ -2248,51 +2303,32 @@ function renderProtocolWorkspace(container) {
     } = {}) {
         if (!selectorValue) return null;
         const section = document.createElement('section');
-        section.className = 'kit-selector-editor-preview';
+        section.className = 'kit-selector-editor-context';
         section.dataset.key = `selector-skill-match:${String(selectorValue || '').trim().toLowerCase()}`;
-        const body = document.createElement('div');
-        body.className = 'kit-selector-preview';
-        body.dataset.key = `${section.dataset.key}:body`;
-        const header = document.createElement('div');
-        header.className = 'kit-selector-preview-header';
-        header.dataset.key = `${section.dataset.key}:header`;
         const title = document.createElement('strong');
-        title.textContent = 'Agents with this skill';
+        title.className = 'kit-selector-editor-context-title';
+        title.textContent = 'Matching agents';
         title.dataset.key = `${section.dataset.key}:title`;
-        header.appendChild(title);
+        section.appendChild(title);
         const matches = _agentsAdvertisingSkill(selectorValue);
         const preferredAgent = _selectorAgentRecord(preferredAgentId || '');
         const matchLabels = matches.map((candidate) => String(candidate?.display_name || candidate?.slug || '').trim()).filter(Boolean);
         const help = document.createElement('p');
-        help.className = 'quiet-note';
+        help.className = 'kit-selector-editor-note';
         help.dataset.key = `${section.dataset.key}:note`;
         help.textContent = readOnly
             ? 'Connected agents that currently advertise this skill.'
-            : 'Leave the agent blank to keep this step dynamic, or choose a chip below to pin one matching agent.';
+            : 'Leave the pinned-agent field blank to keep this step dynamic, or use a quick pick below to pin one matching agent.';
         help.textContent += matchLabels.length
             ? ` Available now: ${matchLabels.join(', ')}.`
             : ' No connected agents currently advertise this skill.';
         if (preferredAgent) {
             help.textContent += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
         }
+        section.appendChild(help);
         if (!matches.length) {
-            section.className = 'kit-selector-editor-context';
-            title.className = 'kit-selector-editor-context-title';
-            help.className = 'kit-selector-editor-note';
-            section.appendChild(title);
-            section.appendChild(help);
             return section;
         }
-        header.appendChild(help);
-        body.appendChild(header);
-        const results = document.createElement('div');
-        results.className = 'kit-selector-preview-results';
-        results.dataset.key = `${section.dataset.key}:results`;
-        const resultTitle = document.createElement('div');
-        resultTitle.className = 'detail-label';
-        resultTitle.dataset.key = `${section.dataset.key}:results-title`;
-        resultTitle.textContent = 'Available agents';
-        results.appendChild(resultTitle);
         const chips = document.createElement('div');
         chips.className = 'chip-row';
         chips.dataset.key = `${section.dataset.key}:chips`;
@@ -2306,14 +2342,13 @@ function renderProtocolWorkspace(container) {
             chip.textContent = String(candidate?.display_name || candidate?.slug || '');
             if (chip instanceof HTMLButtonElement) {
                 chip.type = 'button';
+                chip.title = `Pin ${String(candidate?.display_name || candidate?.slug || '')}`;
                 chip.addEventListener('click', () => onSuggestionSelect(candidate));
             }
             chip.dataset.key = `${section.dataset.key}:chip:${String(candidate?.slug || '').trim().toLowerCase()}`;
             chips.appendChild(chip);
         });
-        results.appendChild(chips);
-        body.appendChild(results);
-        section.appendChild(body);
+        section.appendChild(chips);
         return section;
     }
 
@@ -2330,7 +2365,7 @@ function renderProtocolWorkspace(container) {
         const title = document.createElement('strong');
         title.className = 'kit-selector-editor-context-title';
         title.dataset.key = `${section.dataset.key}:title`;
-        title.textContent = 'Skills advertised by this agent';
+        title.textContent = 'Optional skill requirement';
         section.appendChild(title);
         const note = document.createElement('p');
         note.className = 'kit-selector-editor-note';
@@ -2339,9 +2374,9 @@ function renderProtocolWorkspace(container) {
         const skills = _selectorAgentSkills(agent);
         const selectedSkillLabel = String(selectedSkill || '').trim() ? _titleCaseWords(selectedSkill) : '';
         if (agentLabel && selectedSkillLabel) {
-            note.textContent = `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}. Choose another chip below to keep ${agentLabel} pinned with a different skill.`;
+            note.textContent = `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}. Choose another quick pick only if you want to keep ${agentLabel} pinned with a different skill requirement.`;
         } else if (agentLabel) {
-            note.textContent = `Pinned to ${agentLabel}. Choose a chip below to keep ${agentLabel} pinned and add a skill requirement.`;
+            note.textContent = `Pinned to ${agentLabel}. Leave the skill blank to keep the assignment agent-only, or choose a quick pick below to add a skill requirement.`;
         } else {
             note.textContent = 'Advertised routing skills for this pinned agent.';
         }
@@ -2365,6 +2400,7 @@ function renderProtocolWorkspace(container) {
             chip.textContent = _titleCaseWords(skillName);
             if (chip instanceof HTMLButtonElement) {
                 chip.type = 'button';
+                chip.title = `Limit to ${_titleCaseWords(skillName)}`;
                 chip.addEventListener('click', () => onSuggestionSelect(skillName));
             }
             chip.dataset.key = `${section.dataset.key}:chip:${String(skillName || '').trim().toLowerCase()}`;
@@ -2381,6 +2417,11 @@ function renderProtocolWorkspace(container) {
         onChange = null,
         onSelectorChange = null,
         label = '',
+        catalogEntries = null,
+        emptyHint = '',
+        placeholderText = '',
+        disabled = false,
+        allowCustom = true,
     } = {}) {
         const normalized = String(selectorKind || '').trim().toLowerCase();
         const block = document.createElement('div');
@@ -2391,13 +2432,14 @@ function renderProtocolWorkspace(container) {
         valueLabel.className = 'kit-details-label';
         valueLabel.textContent = label || `Choose ${_selectorValueLabel(normalized)}`;
         row.appendChild(valueLabel);
-        const catalog = _selectorCatalogEntries(normalized);
-        if (catalog.length || normalized === 'agent' || normalized === 'skill') {
+        const catalog = Array.isArray(catalogEntries) ? catalogEntries : _selectorCatalogEntries(normalized);
+        const shouldRenderSelect = Array.isArray(catalogEntries) || normalized === 'agent' || normalized === 'skill';
+        if (catalog.length || shouldRenderSelect) {
             const select = document.createElement('select');
             select.className = 'kit-details-control';
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = `(choose ${_selectorValueLabel(normalized)})`;
+            placeholder.textContent = placeholderText || `(choose ${_selectorValueLabel(normalized)})`;
             select.appendChild(placeholder);
             catalog.forEach((item) => {
                 const option = document.createElement('option');
@@ -2406,14 +2448,14 @@ function renderProtocolWorkspace(container) {
                 if (String(selectorValue || '') === String(item.value || '')) option.selected = true;
                 select.appendChild(option);
             });
-            if (selectorValue && !catalog.some((item) => item.value === String(selectorValue || ''))) {
+            if (allowCustom && selectorValue && !catalog.some((item) => item.value === String(selectorValue || ''))) {
                 const custom = document.createElement('option');
                 custom.value = String(selectorValue || '');
                 custom.textContent = `Custom · ${String(selectorValue || '')}`;
                 custom.selected = true;
                 select.appendChild(custom);
             }
-            select.disabled = Boolean(readOnly);
+            select.disabled = Boolean(readOnly || disabled);
             if (!readOnly) {
                 if (typeof onSelectorChange === 'function') {
                     select.addEventListener('change', () => onSelectorChange(normalized, select.value));
@@ -2426,16 +2468,16 @@ function renderProtocolWorkspace(container) {
             if (!catalog.length) {
                 const hint = document.createElement('p');
                 hint.className = 'kit-selector-editor-note';
-                hint.textContent = _selectorCatalogEmptyHint(normalized);
+                hint.textContent = emptyHint || _selectorCatalogEmptyHint(normalized);
                 block.appendChild(hint);
             }
         } else {
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'kit-details-control';
-            input.placeholder = Kit.dict.label('protocol.participant.selector_value.placeholder', 'e.g. legal-review, approver, m1');
+            input.placeholder = placeholderText || Kit.dict.label('protocol.participant.selector_value.placeholder', 'e.g. legal-review, approver, m1');
             input.value = String(selectorValue || '');
-            input.readOnly = Boolean(readOnly);
+            input.readOnly = Boolean(readOnly || disabled);
             if (!readOnly) {
                 if (typeof onSelectorChange === 'function') {
                     const commit = () => onSelectorChange(normalized, input.value);
@@ -2451,7 +2493,7 @@ function renderProtocolWorkspace(container) {
             row.appendChild(input);
             const hint = document.createElement('p');
             hint.className = 'kit-selector-editor-note';
-            hint.textContent = _selectorCatalogEmptyHint(normalized);
+            hint.textContent = emptyHint || _selectorCatalogEmptyHint(normalized);
             block.appendChild(hint);
         }
         block.prepend(row);
@@ -2487,6 +2529,8 @@ function renderProtocolWorkspace(container) {
     }
 
     function _selectorEditor({
+        stageKey = '',
+        selectorMode = '',
         selectorKind = '',
         selectorValue = '',
         selectorPreferredAgentId = '',
@@ -2498,6 +2542,14 @@ function renderProtocolWorkspace(container) {
         wrap.className = 'kit-selector-editor';
         const emit = (key, value) => {
             if (typeof onChange === 'function') onChange(null, key, value);
+        };
+        const emitMode = (mode) => {
+            const nextMode = _selectorModeFromKind(mode, 'skill');
+            if (stageKey) {
+                _setStageAssignmentMode(stageKey, nextMode);
+            } else {
+                emit('selector_mode', nextMode);
+            }
         };
         const emitSelector = (kind, value, preferredAgentId = '') => {
             if (typeof onSelectorChange === 'function') {
@@ -2513,16 +2565,18 @@ function renderProtocolWorkspace(container) {
         heading.className = 'kit-selector-editor-head';
         const copy = document.createElement('p');
         copy.className = 'kit-stage-routing-copy';
-        copy.textContent = 'Choose the required skill, the pinned agent, or both. Leaving the agent blank keeps the step dynamic across matching agents.';
+        copy.textContent = 'Choose how this step resolves at runtime. The second control, when shown, is optional refinement rather than a second required field.';
         heading.appendChild(copy);
         wrap.appendChild(heading);
 
         const {
+            mode,
             requiredSkill,
             pinnedAgent,
             advancedKind,
             advancedValue,
         } = _selectorEditorState({
+            selectorMode,
             selectorKind,
             selectorValue,
             selectorPreferredAgentId,
@@ -2531,6 +2585,16 @@ function renderProtocolWorkspace(container) {
         const activeAgent = _selectorAgentRecord(pinnedAgent);
         const activeAgentId = String(activeAgent?.agent_id || '').trim();
         const activeAgentLabel = String(activeAgent?.display_name || activeAgent?.slug || pinnedAgent || '').trim();
+        const requiredSkillMatches = _agentsAdvertisingSkill(requiredSkill).map((candidate) => ({
+            value: String(candidate?.slug || '').trim(),
+            label: String(candidate?.display_name || candidate?.slug || '').trim(),
+            meta: String(candidate?.role || '').trim(),
+        })).filter((item) => item.value);
+        const agentSkillEntries = _selectorAgentSkills(activeAgent).map((skillName) => ({
+            value: String(skillName || '').trim(),
+            label: _titleCaseWords(skillName),
+            meta: '',
+        }));
         const emitAssignment = ({
             nextSkill = requiredSkill,
             nextAgent = pinnedAgent,
@@ -2549,37 +2613,102 @@ function renderProtocolWorkspace(container) {
                 String(selector?.preferred_agent_id || ''),
             );
         };
+        const modeControl = UI.createSegmentedControl([
+            { value: 'skill', label: 'By skill' },
+            { value: 'agent', label: 'Specific agent' },
+        ], (nextMode) => {
+            emitMode(nextMode);
+            if (nextMode === 'skill' && advancedKind && advancedValue) {
+                emitAssignment({
+                    nextSkill: '',
+                    nextAgent: '',
+                    nextAdvancedKind: '',
+                    nextAdvancedValue: '',
+                });
+            } else if (nextMode === 'agent' && advancedKind && advancedValue) {
+                emitAssignment({
+                    nextSkill: '',
+                    nextAgent: '',
+                    nextAdvancedKind: '',
+                    nextAdvancedValue: '',
+                });
+            }
+        }, { label: 'Assignment mode', value: mode });
+        modeControl.dataset.key = 'selector-assignment-mode';
+        wrap.appendChild(modeControl);
 
         if (advancedKind && advancedValue) {
             const note = document.createElement('p');
             note.className = 'kit-selector-editor-note';
-            note.textContent = 'This step currently uses an advanced runtime selector. Choosing a required skill or pinned agent below will replace it.';
+            note.textContent = 'This step currently uses a custom runtime selector. Choosing one of the primary modes below will replace it.';
             wrap.appendChild(note);
         }
 
-        const { element: skillField } = _buildSelectorValueField({
-            selectorKind: 'skill',
-            selectorValue: requiredSkill,
-            readOnly,
-            onSelectorChange: (_kind, nextValue) => emitAssignment({
-                nextSkill: String(nextValue || ''),
-                nextAgent: pinnedAgent,
-            }),
-            label: 'Required skill',
-        });
-        wrap.appendChild(skillField);
+        if (mode === 'skill') {
+            const skillField = _buildSelectorValueField({
+                selectorKind: 'skill',
+                selectorValue: requiredSkill,
+                readOnly,
+                onSelectorChange: (_kind, nextValue) => emitAssignment({
+                    nextSkill: String(nextValue || ''),
+                    nextAgent: requiredSkillMatches.some((item) => item.value === pinnedAgent) ? pinnedAgent : '',
+                }),
+                label: 'Required skill',
+                allowCustom: false,
+            });
+            wrap.appendChild(skillField.element);
 
-        const { element: agentField } = _buildSelectorValueField({
-            selectorKind: 'agent',
-            selectorValue: pinnedAgent,
-            readOnly,
-            onSelectorChange: (_kind, nextValue) => emitAssignment({
-                nextSkill: requiredSkill,
-                nextAgent: String(nextValue || ''),
-            }),
-            label: 'Pinned agent',
-        });
-        wrap.appendChild(agentField);
+            const agentField = _buildSelectorValueField({
+                selectorKind: 'agent',
+                selectorValue: pinnedAgent,
+                readOnly,
+                onSelectorChange: (_kind, nextValue) => emitAssignment({
+                    nextSkill: requiredSkill,
+                    nextAgent: String(nextValue || ''),
+                }),
+                label: 'Pin matching agent (optional)',
+                catalogEntries: requiredSkillMatches,
+                emptyHint: requiredSkill
+                    ? 'No connected agents currently advertise this skill. Leave the agent blank to keep the step dynamic.'
+                    : 'Choose a required skill first if you want to pin one matching agent.',
+                placeholderText: requiredSkill ? '(leave dynamic)' : '(choose a skill first)',
+                disabled: !requiredSkill,
+                allowCustom: false,
+            });
+            wrap.appendChild(agentField.element);
+        } else {
+            const agentField = _buildSelectorValueField({
+                selectorKind: 'agent',
+                selectorValue: pinnedAgent,
+                readOnly,
+                onSelectorChange: (_kind, nextValue) => emitAssignment({
+                    nextSkill: pinnedAgent === String(nextValue || '') ? requiredSkill : '',
+                    nextAgent: String(nextValue || ''),
+                }),
+                label: 'Agent',
+                allowCustom: false,
+            });
+            wrap.appendChild(agentField.element);
+
+            const skillField = _buildSelectorValueField({
+                selectorKind: 'skill',
+                selectorValue: requiredSkill,
+                readOnly,
+                onSelectorChange: (_kind, nextValue) => emitAssignment({
+                    nextSkill: String(nextValue || ''),
+                    nextAgent: pinnedAgent,
+                }),
+                label: 'Limit to one of this agent\'s skills (optional)',
+                catalogEntries: agentSkillEntries,
+                emptyHint: pinnedAgent
+                    ? 'This agent does not currently advertise any routing skills. Leave the skill blank to keep the assignment agent-only.'
+                    : 'Choose an agent first if you want to constrain it to one of its skills.',
+                placeholderText: pinnedAgent ? '(leave agent-only)' : '(choose an agent first)',
+                disabled: !pinnedAgent,
+                allowCustom: false,
+            });
+            wrap.appendChild(skillField.element);
+        }
 
         if (requiredSkill || pinnedAgent) {
             const summary = document.createElement('p');
@@ -2601,7 +2730,7 @@ function renderProtocolWorkspace(container) {
             wrap.appendChild(warning);
         }
 
-        if (requiredSkill) {
+        if (mode === 'skill' && requiredSkill) {
             const matchesSection = _selectorSkillMatchSection({
                 selectorValue: requiredSkill,
                 preferredAgentId: activeAgentId,
@@ -2615,7 +2744,7 @@ function renderProtocolWorkspace(container) {
             });
             if (matchesSection) wrap.appendChild(matchesSection);
         }
-        if (pinnedAgent) {
+        if (mode === 'agent' && pinnedAgent) {
             const skillsSection = _selectorAgentSkillsSection({
                 selectorValue: pinnedAgent,
                 selectedSkill: requiredSkill,
@@ -2637,14 +2766,14 @@ function renderProtocolWorkspace(container) {
         advancedSummary.className = 'kit-stage-editor-summary';
         const advancedTitle = document.createElement('h4');
         advancedTitle.className = 'kit-stage-editor-title';
-        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Runtime role tag or custom selector');
+        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Custom runtime selector');
         advancedSummary.appendChild(advancedTitle);
         advanced.appendChild(advancedSummary);
         const advancedBody = document.createElement('div');
         advancedBody.className = 'kit-selector-editor-override-body';
         const advancedNote = document.createElement('p');
         advancedNote.className = 'kit-selector-editor-note';
-        advancedNote.textContent = 'Use this only for a runtime role tag or another custom selector value that the agent and skill pickers cannot express.';
+        advancedNote.textContent = 'Use this only for a runtime role tag or another selector value that the normal skill and agent modes cannot express.';
         advancedBody.appendChild(advancedNote);
 
         if (advancedKinds.length) {
@@ -2652,13 +2781,13 @@ function renderProtocolWorkspace(container) {
             advancedKindRow.className = 'kit-details-row';
             const advancedKindLabel = document.createElement('label');
             advancedKindLabel.className = 'kit-details-label';
-            advancedKindLabel.textContent = Kit.dict.label('protocol.participant.selector_advanced.strategy', 'Advanced strategy');
+            advancedKindLabel.textContent = Kit.dict.label('protocol.participant.selector_advanced.strategy', 'Custom selector type');
             advancedKindRow.appendChild(advancedKindLabel);
             const advancedKindControl = document.createElement('select');
             advancedKindControl.className = 'kit-details-control';
             const defaultOption = document.createElement('option');
             defaultOption.value = '';
-            defaultOption.textContent = '(use the default strategy above)';
+            defaultOption.textContent = '(none)';
             advancedKindControl.appendChild(defaultOption);
             _selectorKindOptions(advancedKinds).forEach((item) => {
                 const option = document.createElement('option');
@@ -3419,6 +3548,7 @@ function renderProtocolWorkspace(container) {
     function _stageEditorTarget(stage) {
         return {
             ...stage,
+            selector_mode: _currentStageAssignmentMode(String(stage?.stage_key || ''), String(stage?.selector?.kind || '')),
             selector_kind: String(stage?.selector?.kind || ''),
             selector_value: String(stage?.selector?.value || ''),
             selector_preferred_agent_id: String(stage?.selector?.preferred_agent_id || ''),
@@ -3901,6 +4031,8 @@ function renderProtocolWorkspace(container) {
             grid.appendChild(roleSection);
         }
         grid.appendChild(_stageEditorSection('Assignment', _selectorEditor({
+            stageKey: createAction ? '' : String(target?.stage_key || ''),
+            selectorMode: String(target?.selector_mode || ''),
             selectorKind: String(target?.selector_kind || ''),
             selectorValue: String(target?.selector_value || ''),
             selectorPreferredAgentId: String(target?.selector_preferred_agent_id || ''),

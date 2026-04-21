@@ -527,6 +527,8 @@ class ProtocolScenarioRecord(RegistryRecordModel):
     stage_key: str = ""
     participant_key: str = ""
     display_name: str = ""
+    decision: str = ""
+    decision_summary: str = ""
     response_text: str = ""
     run_org_id: str = PROTOCOL_DEFAULT_RUN_ORG_ID
     created_by: str = ""

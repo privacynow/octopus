@@ -391,12 +391,17 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_scenarios (
     stage_key TEXT NOT NULL DEFAULT '',
     participant_key TEXT NOT NULL DEFAULT '',
     display_name TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL DEFAULT '',
+    decision_summary TEXT NOT NULL DEFAULT '',
     response_text TEXT NOT NULL DEFAULT '',
     run_org_id TEXT NOT NULL DEFAULT 'local',
     created_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.protocol_scenarios
+    ADD COLUMN IF NOT EXISTS decision TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS decision_summary TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_protocol_scenarios_protocol
     ON agent_registry.protocol_scenarios (protocol_id, stage_key);
 CREATE INDEX IF NOT EXISTS idx_protocol_scenarios_org

@@ -171,11 +171,25 @@ async function createStep(page, {
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);
   }
-  const valueLabel = selectorKind === 'agent' ? 'Pinned agent' : selectorKind === 'skill' ? 'Required skill' : 'Choose runtime role tag';
   const assignmentSection = stageEditorShell
     .locator('.kit-stage-editor-section')
     .filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) })
     .first();
+  if (selectorKind === 'agent') {
+    await assignmentSection.getByRole('tab', { name: 'Specific agent', exact: true }).click();
+  } else if (selectorKind === 'skill') {
+    await assignmentSection.getByRole('tab', { name: 'By skill', exact: true }).click();
+  } else {
+    const advanced = assignmentSection.locator('summary').filter({ hasText: 'Custom runtime selector' }).first();
+    if (await advanced.count()) {
+      await advanced.click();
+    }
+  }
+  const valueLabel = selectorKind === 'agent'
+    ? 'Agent'
+    : selectorKind === 'skill'
+      ? 'Required skill'
+      : 'Choose runtime role tag';
   const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true }).first();
   const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
   if (valueTag === 'select') {

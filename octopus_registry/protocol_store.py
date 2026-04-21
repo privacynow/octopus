@@ -2623,6 +2623,8 @@ class ProtocolPostgresAdapter:
                 "stage_key": row.get("stage_key", ""),
                 "participant_key": row.get("participant_key", ""),
                 "display_name": row.get("display_name", ""),
+                "decision": row.get("decision", ""),
+                "decision_summary": row.get("decision_summary", ""),
                 "response_text": row.get("response_text", ""),
                 "run_org_id": row.get("run_org_id", PROTOCOL_DEFAULT_RUN_ORG_ID),
                 "created_by": row.get("created_by", ""),
@@ -2672,6 +2674,8 @@ class ProtocolPostgresAdapter:
         if not protocol_id:
             raise ValueError("protocol_id is required to create a scenario.")
         display_name = str(candidate.display_name or "").strip() or "Untitled scenario"
+        decision = str(candidate.decision or "").strip().lower()
+        decision_summary = str(candidate.decision_summary or "").strip()
         response_text = str(candidate.response_text or "")
         now = utcnow_iso()
         scenario_id = uuid.uuid4().hex
@@ -2683,9 +2687,9 @@ class ProtocolPostgresAdapter:
                     f"""
                     INSERT INTO {SCHEMA}.protocol_scenarios (
                         protocol_scenario_id, protocol_id, stage_key, participant_key,
-                        display_name, response_text, run_org_id, created_by,
+                        display_name, decision, decision_summary, response_text, run_org_id, created_by,
                         created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
@@ -2694,6 +2698,8 @@ class ProtocolPostgresAdapter:
                         str(candidate.stage_key or "").strip(),
                         str(candidate.participant_key or "").strip(),
                         display_name,
+                        decision,
+                        decision_summary,
                         response_text,
                         org_id,
                         actor_ref,

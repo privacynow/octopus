@@ -88,8 +88,8 @@ window.Kit = (() => {
         'protocol.participant.selector_none': 'No rule yet',
         'protocol.participant.selector_current': 'Currently matches',
         'protocol.participant.selector_hint': 'Build a rule first, then preview who currently matches it.',
-        'protocol.participant.selector_advanced.label': 'Runtime role tag or custom selector',
-        'protocol.participant.selector_advanced.strategy': 'Advanced strategy',
+        'protocol.participant.selector_advanced.label': 'Custom runtime selector',
+        'protocol.participant.selector_advanced.strategy': 'Custom selector type',
         'protocol.participant.selector_override.label': 'Custom value',
 
         // Details — stages
@@ -1928,6 +1928,20 @@ window.Kit = (() => {
             card.className = 'kit-rehearsal-session';
             card.dataset.routedTaskId = String(session.routed_task_id || '');
             card.dataset.stageKey = String(session.stage_key || '');
+            const stageKind = String(session.stage_kind || 'work').trim().toLowerCase() || 'work';
+            const decisionOptions = stageKind === 'work'
+                ? [{ value: 'completed', label: 'Completed' }]
+                : stageKind === 'acceptance'
+                    ? [
+                        { value: 'accept', label: 'Accept' },
+                        { value: 'revise', label: 'Revise' },
+                        { value: 'fail', label: 'Fail' },
+                    ]
+                    : [
+                        { value: 'accept', label: 'Accept' },
+                        { value: 'revise', label: 'Revise' },
+                        { value: 'fail', label: 'Fail' },
+                    ];
 
             const sessionTitle = document.createElement('div');
             sessionTitle.className = 'kit-rehearsal-session-title';
@@ -1957,6 +1971,45 @@ window.Kit = (() => {
             textarea.rows = 4;
             textarea.placeholder = dictValue('protocol.rehearsal.response.placeholder', 'Type the response this participant would send…');
             form.appendChild(textarea);
+            const summaryInput = document.createElement('input');
+            summaryInput.type = 'hidden';
+            summaryInput.value = '';
+            form.appendChild(summaryInput);
+
+            if (decisionOptions.length > 1) {
+                const decisionRow = document.createElement('div');
+                decisionRow.className = 'kit-details-row';
+                const decisionLabel = document.createElement('label');
+                decisionLabel.className = 'kit-details-label';
+                decisionLabel.textContent = 'Decision';
+                decisionRow.appendChild(decisionLabel);
+                const decisionSelect = document.createElement('select');
+                decisionSelect.className = 'kit-details-control';
+                decisionSelect.setAttribute('aria-label', 'Rehearsal decision');
+                decisionOptions.forEach((option) => {
+                    const node = document.createElement('option');
+                    node.value = String(option.value || '');
+                    node.textContent = String(option.label || option.value || '');
+                    decisionSelect.appendChild(node);
+                });
+                decisionRow.appendChild(decisionSelect);
+                form.appendChild(decisionRow);
+                form.dataset.decisionControl = 'present';
+                form.__decisionSelect = decisionSelect;
+            }
+
+            const outputArtifacts = Array.isArray(session.output_artifacts) ? session.output_artifacts : [];
+            if (outputArtifacts.length) {
+                const artifactNote = document.createElement('p');
+                artifactNote.className = 'kit-selector-editor-note';
+                const keys = outputArtifacts
+                    .map((item) => String(item?.artifact_key || '').trim())
+                    .filter(Boolean);
+                artifactNote.textContent = session.require_output_verification
+                    ? `Declared outputs will be simulated from this response for rehearsal: ${keys.join(', ')}.`
+                    : `Declared outputs for rehearsal: ${keys.join(', ')}.`;
+                form.appendChild(artifactNote);
+            }
 
             const stageScenarios = [
                 ...(scenariosByStage.get(String(session.stage_key || '')) || []),
@@ -1975,6 +2028,10 @@ window.Kit = (() => {
                     btn.textContent = scenario.display_name || dictValue('protocol.rehearsal.scenarios.unnamed', 'Untitled');
                     btn.addEventListener('click', () => {
                         textarea.value = String(scenario.response_text || '');
+                        summaryInput.value = String(scenario.decision_summary || '');
+                        if (form.__decisionSelect instanceof HTMLSelectElement && String(scenario.decision || '')) {
+                            form.__decisionSelect.value = String(scenario.decision || '');
+                        }
                         textarea.focus();
                     });
                     scenarioRow.appendChild(btn);
@@ -1994,6 +2051,10 @@ window.Kit = (() => {
                     onRespond({
                         routedTaskId: session.routed_task_id,
                         responseText: textarea.value,
+                        decision: form.__decisionSelect instanceof HTMLSelectElement
+                            ? String(form.__decisionSelect.value || '')
+                            : 'completed',
+                        decisionSummary: String(summaryInput.value || ''),
                         stageKey: session.stage_key,
                         participantKey: session.participant_key,
                     });

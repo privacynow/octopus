@@ -139,7 +139,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
-    assert "Skills advertised by this agent" in workspace
+    assert "Optional skill requirement" in workspace
     assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
@@ -178,11 +178,12 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
     assert "_selectorEditor(" in workspace
     assert "Available now:" in workspace
-    assert "Available agents" in workspace
+    assert "Matching agents" in workspace
     assert "quickstart-chip" in workspace
     assert "Pinned to " in workspace
     assert "Required skill" in workspace
-    assert "Pinned agent" in workspace
+    assert "Pin matching agent (optional)" in workspace
+    assert "Specific agent" in workspace
     assert "Show workflow map" in workspace
     assert "Hide workflow map" in workspace
     assert "workflow_map" in workspace
@@ -204,7 +205,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "'Create new role…'" in workspace
     assert "Assignment" in workspace
     assert "Runtime role tag" in workspace
-    assert "Runtime role tag or custom selector" in workspace
+    assert "Custom runtime selector" in workspace
     assert "Workflow stages" in workspace
     assert "Edit participant assignment" not in workspace
     assert "+ Add participant" not in workspace

@@ -1,107 +1,110 @@
-**Protocol UX Fix Plan**
+**Protocol UX And Rehearsal Fix Plan**
 
-## Current State
+## Current Problem
 
-Protocol authoring now ships as a single progressive workflow editor on the live Octopus deployment.
+The progressive stage stack is the right primary authoring surface now, but two
+real issues remain:
 
-Primary surface:
-- section and stage stack
-- one inline expanded editor at a time
-- local `Add below` on the selected stage only
-- local route insertion from the routing list
-- workflow map hidden by default and opened on demand
+1. The assignment editor still exposes too much selector-model complexity.
+- `Required skill` and `Pinned agent` are both visible together all the time.
+- The chips mix context and action too loosely.
+- `Advanced` is still present without a clear end-user purpose.
 
-Secondary surface:
-- workflow map as optional reference only
-- mobile runs list without the empty detail placeholder
+2. Rehearsal is real, but the visual proof is still too shallow.
+- We already prove that rehearsal runs are routed to the reserved rehearsal
+  authority.
+- We do not yet prove meaningful built-in template outcomes visually through the
+  live harness.
+- The current scenario model only prefills response text, which is too weak for
+  Software Engineering and Document Approval outcome testing.
 
-This replaces the old split model of:
-- detached editor column
-- always-prominent map
-- duplicated add-stage controls across every row and section
+## Product Direction
 
-## What Is Verified Done
+### Assignment editor
 
-These are implemented and verified on the deployed Octopus build:
+The normal editor should be mode-driven again:
 
-- step-first authoring is the main path
-- `Create new role…` works inline during step creation
-- assignment uses one combined editor with:
-  - `Required skill`
-  - `Pinned agent`
-- choosing skill then agent and agent then skill converges to the same selector model
-- `preferred_agent_id` survives the normal editor path
-- refresh no longer drops the workflow surface
-- the workflow map is hidden by default and can be shown on demand
-- the misleading top-level `Add route` path is gone
-- branch editing stays inside routing
-- stage insertion works in the middle of an existing workflow
-- stage deletion works from the inline editor
-- selected-stage insertion is local instead of being offered on every stage and section row
-- section headers no longer repeat the same stage title when the section and first stage are the same label
-- empty assignment-context panels are compact instead of rendering large empty boxes
-- mobile runs no longer render an empty detail panel before a run is selected
-- live skill-assigned and agent-assigned execution both complete through the runs surface
-- live exhaustive audit now completes cleanly
+- `By skill`
+  - primary input: `Required skill`
+  - optional refinement: `Pin matching agent`
+- `Specific agent`
+  - primary input: `Agent`
+  - optional refinement: `Limit to one of this agent's skills`
+- `Custom runtime selector`
+  - advanced disclosure only
+  - not a peer to the primary modes
 
-## Live Verification Summary
+Rules:
+- chips may remain clickable only when they are clearly quick-picks for the
+  visible primary input
+- informational chips must be visually non-interactive
+- `Advanced` must stay secondary and explain exactly what it is for
 
-Deployed target:
-- `http://127.0.0.1:8787`
-- deployed through `/Users/tinker/octopus` only
+### Rehearsal proof
 
-Current verification status:
-- contract suite passes
-- protocol authoring live suite passes
-- capture suite passes
-- live execution smoke passes
-- exhaustive live audit passes
+Rehearsal must prove real workflow outcomes, not just panel visibility.
 
-Most recent exhaustive audit:
-- 559 screenshots in `.tmp/playwright/live-audit`
-- blank draft lifecycle covered
-- Software Engineering template covered on desktop/tablet/mobile
-- Document Approval template covered on desktop/tablet/mobile
-- insert/delete/mutation path covered
-- runs surface covered on desktop/tablet/mobile
-- agent and skill execution verified against the live registry
+Target scenarios:
+- Software Engineering:
+  - planning
+  - plan review revise
+  - planning again
+  - plan review accept
+  - architecture review accept
+  - implementation review revise
+  - implementation again
+  - implementation review accept
+  - acceptance accept
+- Document Approval:
+  - draft
+  - review revise
+  - draft again
+  - review accept
+  - approve accept
 
-## No Verified Blocking Defects Remain
+## Implementation Sequence
 
-The current exhaustive live pass did not leave any open blocking protocol-authoring or protocol-run defects.
+1. Rework the assignment editor in place.
+- no duplicate editor
+- no parallel selector path
+- primary mode choice
+- advanced hidden behind disclosure
 
-That means there are no currently verified issues in this file that block:
-- creating a protocol from scratch
-- adding stages
-- deleting stages
-- assigning by skill
-- assigning by agent
-- inserting between stages
-- publishing
-- rehearsing
-- executing through the live registry
-- reviewing runs on desktop or mobile
+2. Extend rehearsal scenarios and responses so the live UI can drive real stage
+   outcomes.
+- scenarios carry decision metadata, not just response text
+- rehearsal responses support the decision path cleanly
+- write-capable rehearsal stages can satisfy output verification without
+  requiring a separate fake execution system
 
-## Non-Blocking Refinements If Revisited Later
+3. Add visual, outcome-based rehearsal coverage for the built-in templates.
+- Software Engineering review loop
+- Document Approval revise/approve loop
 
-These are not blockers from the current live pass, but they are the only remaining areas worth tightening if the surface is revisited:
+4. Redeploy to `/Users/tinker/octopus` only.
 
-1. Compact mobile runs filters further.
-- The runs list is functional and no longer shows an empty detail panel, but the segmented controls and status chips still consume a lot of vertical space on very narrow screens.
+5. Run the exhaustive live audit again.
+- 500+ screenshots minimum
+- authoring
+- assignment by skill
+- assignment by agent
+- stage insertion
+- stage deletion
+- rehearsal progression
+- published execution
+- runs inspection
 
-2. Compress workflow header copy slightly more.
-- The progressive stack is readable now, but the view-bar copy could be shortened further if more vertical headroom is needed.
+6. If the live audit finds defects, add them here immediately and continue until
+   none remain.
 
-3. Reduce secondary copy in the assignment editor when there are no live matches.
-- The empty-state assignment context is much smaller than before, but it could still be reduced to an even terser note if future mobile tightening is needed.
+## Done Means
 
-## Cleanup Rule
+This work is finished only when:
 
-Do not reintroduce:
-- detached protocol step editors
-- always-visible workflow maps
-- duplicate add-stage controls on every row
-- separate assignment surfaces
-- participant-first authoring flows
-
-Any future changes should extend the current progressive stack in place.
+- the assignment editor feels like one clear authoring path instead of a
+  selector-model projection
+- `Advanced` is clearly secondary
+- rehearsal visually proves meaningful outcomes on Software Engineering and
+  Document Approval
+- live Octopus authoring, rehearsal, execution, and runs flows all pass again
+- the exhaustive audit completes with 500+ fresh screenshots

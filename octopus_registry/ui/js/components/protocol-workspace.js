@@ -3886,6 +3886,10 @@ function renderProtocolWorkspace(container) {
             String(pendingStage.display_name || ''),
             String(pendingStage.stage_kind || ''),
             String(pendingStage.participant_key || ''),
+            String(pendingStage.selector_mode || ''),
+            String(pendingStage.selector_kind || ''),
+            String(pendingStage.selector_value || ''),
+            String(pendingStage.selector_preferred_agent_id || ''),
             String(pendingStage.role_display_name || ''),
             String(pendingStage.role_participant_key || ''),
         ].join(':');

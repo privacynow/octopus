@@ -4326,9 +4326,9 @@ function renderProtocolWorkspace(container) {
             selectorValue: String(target?.selector_value || ''),
             selectorPreferredAgentId: String(target?.selector_preferred_agent_id || ''),
             readOnly,
-            onChange: createAction ? null : onCommit,
+            onChange: createAction ? _commitPendingStageField : onCommit,
             onSelectorChange: createAction
-                ? null
+                ? (kind, value, preferredAgentId) => _commitPendingStageSelector(kind, value, preferredAgentId)
                 : (typeof onCommit === 'function' && target?.stage_key
                     ? (kind, value, preferredAgentId) => _commitStageSelector(String(target.stage_key || ''), kind, value, preferredAgentId)
                     : null),

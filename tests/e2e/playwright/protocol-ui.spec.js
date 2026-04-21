@@ -402,6 +402,8 @@ test.describe('protocol authoring live', () => {
     } else {
       await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     }
+    const connectedAgent = await firstConnectedAgent(page);
+    expect(connectedAgent.slug).toBeTruthy();
     await selectStep(page, 'plan_review');
     const reviewEntry = page.locator('.kit-protocol-segment-entry').filter({ has: page.getByTestId('workflow-stage-plan_review') }).first();
     await reviewEntry.getByRole('button', { name: 'Add below', exact: true }).click();
@@ -411,7 +413,7 @@ test.describe('protocol authoring live', () => {
       roleName: 'Secondary Approver',
       roleKey: 'secondary-approver',
       selectorKind: 'agent',
-      selectorValue: 'lift-and-shift-m1-bot',
+      selectorValue: connectedAgent.slug,
       openEditor: false,
     });
     await waitForSaved(page);

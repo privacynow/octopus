@@ -3636,11 +3636,7 @@ function renderProtocolWorkspace(container) {
             if (activeStageKey === stageKey) {
                 const inline = document.createElement('div');
                 inline.className = 'kit-protocol-inline-editor';
-                inline.appendChild(_stageEditorEl(stage, context));
                 const routeEditor = _inlineRouteEditorEl(stageKey, context);
-                if (routeEditor) {
-                    inline.appendChild(routeEditor);
-                }
                 const showPendingInsert = editorMode.kind === 'insert-stage'
                     && String(editorMode.sourceStageKey || '') === stageKey
                     && (
@@ -3649,6 +3645,12 @@ function renderProtocolWorkspace(container) {
                             && String(selectedTransition.decision || '') === String(editorMode.decision || ''))
                         || _stageInsertMatchesDefaultAnchor(stage, context.projection)
                     );
+                if (!showPendingInsert) {
+                    inline.appendChild(_stageEditorEl(stage, context));
+                }
+                if (routeEditor) {
+                    inline.appendChild(routeEditor);
+                }
                 if (showPendingInsert) {
                     inline.appendChild(_inlineStageInsertEl(context));
                 }

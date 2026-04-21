@@ -108,31 +108,61 @@ async function createStep(page, {
   openEditor = true,
 } = {}) {
   if (openEditor) {
-    await page.getByRole('button', { name: /Add (first )?step/i }).first().click();
+    const addStep = page.getByRole('button', { name: /(\+ )?Add (first )?step/i }).first();
+    if (await addStep.count() && await addStep.isVisible().catch(() => false)) {
+      await addStep.click();
+    } else {
+      const inlineAdd = page
+        .locator('.kit-protocol-segment-entry')
+        .filter({ has: page.locator('.kit-protocol-segment-step.is-selected') })
+        .getByRole('button', { name: 'Add below', exact: true })
+        .first();
+      if (await inlineAdd.count()) {
+        await inlineAdd.click();
+      } else {
+        await page.getByRole('button', { name: 'Add below', exact: true }).first().click();
+      }
+    }
   }
-  const stageEditor = page.locator('.kit-stage-editor-grid').last();
-  await expect(stageEditor).toBeVisible();
-  await stageEditor.getByLabel('Name').first().fill(name);
-  const ownerRoleSelect = stageEditor.getByLabel('Owner role').first();
+  const stageEditorShell = page
+    .locator('.kit-stage-editor')
+    .filter({ has: page.getByRole('button', { name: 'Create step', exact: true }) })
+    .last();
+  await expect(stageEditorShell).toBeVisible();
+  const stageEditor = stageEditorShell.locator('.kit-stage-editor-grid');
+  const stepBasics = stageEditorShell
+    .locator('.kit-stage-editor-section')
+    .filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) })
+    .first();
+  await stepBasics.getByLabel('Name').first().fill(name);
+  const ownerRoleSelect = stepBasics.getByLabel('Owner role').first();
   if (ownerRole) {
     await ownerRoleSelect.selectOption(ownerRole);
   } else {
     await ownerRoleSelect.selectOption('__new__');
-    const roleNameControl = stageEditor.getByLabel('Role name').first();
+    const roleSection = stageEditorShell
+      .locator('.kit-stage-editor-section')
+      .filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) })
+      .first();
+    const roleNameControl = roleSection.getByLabel('Role name').first();
     await expect(roleNameControl).toBeVisible();
     await roleNameControl.fill(roleName || `${name} role`);
     if (roleKey) {
-      await stageEditor.getByLabel('Role key').first().fill(roleKey);
+      await roleSection.getByLabel('Role key').first().fill(roleKey);
     }
   }
   if (stageKind) {
-    await stageEditor.getByLabel('Stage type').first().selectOption(stageKind);
+    await stepBasics.getByLabel('Stage type').first().selectOption(stageKind);
   }
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);
   }
   const valueLabel = selectorKind === 'agent' ? 'Pinned agent' : selectorKind === 'skill' ? 'Required skill' : 'Choose runtime role tag';
-  const valueControl = stageEditor.getByLabel(valueLabel, { exact: true }).first();
+  const assignmentSection = stageEditorShell
+    .locator('.kit-stage-editor-section')
+    .filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) })
+    .first();
+  const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true }).first();
   const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
   if (valueTag === 'select') {
     let targetValue = selectorValue;
@@ -150,14 +180,7 @@ async function createStep(page, {
     await valueControl.blur();
   }
   await page.waitForTimeout(150);
-  await page.evaluate(() => {
-    const button = Array.from(document.querySelectorAll('.kit-details-panel button'))
-      .find((node) => String(node.textContent || '').trim() === 'Create step');
-    if (!button) {
-      throw new Error('Create step button not found');
-    }
-    button.click();
-  });
+  await stageEditorShell.getByRole('button', { name: 'Create step', exact: true }).click();
   const stageKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const node = await outlineStepNode(page, stageKey);
   await expect(node).toBeVisible();
@@ -179,7 +202,10 @@ async function outlineStepNode(page, stageKey) {
 async function selectStep(page, stageKey) {
   const node = await outlineStepNode(page, stageKey);
   await expect(node).toBeVisible();
-  await node.click();
+  const alreadySelected = await node.evaluate((element) => element.classList.contains('is-selected'));
+  if (!alreadySelected) {
+    await node.click();
+  }
 }
 
 async function connectStep(page, sourceStageKey, targetNodeId) {

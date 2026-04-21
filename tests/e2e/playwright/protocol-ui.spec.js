@@ -13,6 +13,22 @@ const {
   waitForSaved,
 } = require('./helpers/protocol-helpers');
 
+const SOFTWARE_ENGINEERING_STAGE_KEYS = [
+  'planning',
+  'plan_review',
+  'architecture',
+  'architecture_review',
+  'implementation',
+  'implementation_review',
+  'acceptance',
+];
+
+const DOCUMENT_APPROVAL_STAGE_KEYS = [
+  'draft_document',
+  'review_document',
+  'approve_document',
+];
+
 test.describe('protocol authoring live', () => {
   test('blank draft uses step-first authoring with inline role creation', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
@@ -128,7 +144,7 @@ test.describe('protocol authoring live', () => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
-    await openTemplateDraft(page, 'Software Engineering');
+    await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
     const protocolId = protocolIdFromUrl(page.url());
     await page.reload({ waitUntil: 'networkidle' });
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
@@ -239,7 +255,7 @@ test.describe('protocol authoring live', () => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
-    await openTemplateDraft(page, 'Document Approval');
+    await openTemplateDraft(page, 'Document Approval', { expectedStageKeys: DOCUMENT_APPROVAL_STAGE_KEYS });
 
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
@@ -269,7 +285,7 @@ test.describe('protocol authoring live', () => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
-    await openTemplateDraft(page, 'Software Engineering');
+    await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
     await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();

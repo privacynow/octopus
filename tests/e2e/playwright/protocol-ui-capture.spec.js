@@ -11,6 +11,22 @@ const {
   waitForSaved,
 } = require('./helpers/protocol-helpers');
 
+const SOFTWARE_ENGINEERING_STAGE_KEYS = [
+  'planning',
+  'plan_review',
+  'architecture',
+  'architecture_review',
+  'implementation',
+  'implementation_review',
+  'acceptance',
+];
+
+const DOCUMENT_APPROVAL_STAGE_KEYS = [
+  'draft_document',
+  'review_document',
+  'approve_document',
+];
+
 test('capture protocol authoring states', async ({ page }) => {
   await login(page);
 
@@ -67,7 +83,7 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await discardDraft(page);
 
-  await openTemplateDraft(page, 'Software Engineering');
+  await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
   await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-page.png', fullPage: true });
   await page.locator('.kit-authoring-primary-column').screenshot({
@@ -100,7 +116,7 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await discardDraft(page);
 
-  await openTemplateDraft(page, 'Document Approval');
+  await openTemplateDraft(page, 'Document Approval', { expectedStageKeys: DOCUMENT_APPROVAL_STAGE_KEYS });
   await expect(page.getByTestId('workflow-stage-draft_document')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-page.png', fullPage: true });
   await page.getByTestId('workflow-stage-draft_document').click();

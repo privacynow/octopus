@@ -2275,6 +2275,14 @@ function renderProtocolWorkspace(container) {
         if (preferredAgent) {
             help.textContent += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
         }
+        if (!matches.length) {
+            section.className = 'kit-selector-editor-context';
+            title.className = 'kit-selector-editor-context-title';
+            help.className = 'kit-selector-editor-note';
+            section.appendChild(title);
+            section.appendChild(help);
+            return section;
+        }
         header.appendChild(help);
         body.appendChild(header);
         const results = document.createElement('div');
@@ -2285,29 +2293,25 @@ function renderProtocolWorkspace(container) {
         resultTitle.dataset.key = `${section.dataset.key}:results-title`;
         resultTitle.textContent = 'Available agents';
         results.appendChild(resultTitle);
-        if (!matches.length) {
-            results.appendChild(UI.renderEmptyState('No connected agents currently advertise this skill.', true));
-        } else {
-            const chips = document.createElement('div');
-            chips.className = 'chip-row';
-            chips.dataset.key = `${section.dataset.key}:chips`;
-            matches.forEach((candidate) => {
-                const chip = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'span');
-                chip.className = [
-                    'quickstart-chip',
-                    typeof onSuggestionSelect === 'function' ? '' : 'static',
-                    String(candidate?.agent_id || '') === String(preferredAgentId || '') ? 'busy' : '',
-                ].filter(Boolean).join(' ');
-                chip.textContent = String(candidate?.display_name || candidate?.slug || '');
-                if (chip instanceof HTMLButtonElement) {
-                    chip.type = 'button';
-                    chip.addEventListener('click', () => onSuggestionSelect(candidate));
-                }
-                chip.dataset.key = `${section.dataset.key}:chip:${String(candidate?.slug || '').trim().toLowerCase()}`;
-                chips.appendChild(chip);
-            });
-            results.appendChild(chips);
-        }
+        const chips = document.createElement('div');
+        chips.className = 'chip-row';
+        chips.dataset.key = `${section.dataset.key}:chips`;
+        matches.forEach((candidate) => {
+            const chip = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'span');
+            chip.className = [
+                'quickstart-chip',
+                typeof onSuggestionSelect === 'function' ? '' : 'static',
+                String(candidate?.agent_id || '') === String(preferredAgentId || '') ? 'busy' : '',
+            ].filter(Boolean).join(' ');
+            chip.textContent = String(candidate?.display_name || candidate?.slug || '');
+            if (chip instanceof HTMLButtonElement) {
+                chip.type = 'button';
+                chip.addEventListener('click', () => onSuggestionSelect(candidate));
+            }
+            chip.dataset.key = `${section.dataset.key}:chip:${String(candidate?.slug || '').trim().toLowerCase()}`;
+            chips.appendChild(chip);
+        });
+        results.appendChild(chips);
         body.appendChild(results);
         section.appendChild(body);
         return section;
@@ -2346,7 +2350,6 @@ function renderProtocolWorkspace(container) {
             : ' No advertised routing skills are currently available for this agent.';
         section.appendChild(note);
         if (!skills.length) {
-            section.appendChild(UI.renderEmptyState('No advertised routing skills are currently available for this agent.', true));
             return section;
         }
         const chips = document.createElement('div');
@@ -3561,10 +3564,15 @@ function renderProtocolWorkspace(container) {
 
         const head = document.createElement('div');
         head.className = 'kit-protocol-segment-head';
+        const firstStageLabel = String(segment?.stages?.[0]?.display_name || segment?.stages?.[0]?.stage_key || '').trim().toLowerCase();
+        const segmentLabel = String(segment?.label || 'Section');
+        const showSegmentTitle = Boolean(segmentLabel.trim()) && segmentLabel.trim().toLowerCase() !== firstStageLabel;
         const title = document.createElement('h3');
         title.className = 'kit-protocol-segment-step-title';
-        title.textContent = String(segment?.label || 'Section');
-        head.appendChild(title);
+        title.textContent = segmentLabel;
+        if (showSegmentTitle) {
+            head.appendChild(title);
+        }
         const subtitle = document.createElement('p');
         subtitle.className = 'kit-protocol-segment-step-meta';
         subtitle.textContent = `${Array.isArray(segment?.stages) ? segment.stages.length : 0} step${segment?.stages?.length === 1 ? '' : 's'} in this section.`;

@@ -88,12 +88,27 @@ async function openBlankDraft(page) {
   await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
 }
 
-async function openTemplateDraft(page, templateName) {
+async function openTemplateDraft(page, templateName, { expectedStageKeys = [], retry = true } = {}) {
   await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
   const templateCard = page.locator('.protocol-template-card').filter({ hasText: templateName }).first();
   await expect(templateCard).toBeVisible();
   await templateCard.getByRole('button', { name: 'Use template' }).click();
   await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
+  if (expectedStageKeys.length) {
+    await expect(page.locator('[data-testid^="workflow-stage-"]').first()).toBeVisible({ timeout: 15000 });
+    const actualStageKeys = await page.locator('[data-testid^="workflow-stage-"]').evaluateAll((nodes) =>
+      Array.from(new Set(nodes
+        .map((node) => String(node.getAttribute('data-testid') || '').replace('workflow-stage-', ''))
+        .filter(Boolean))),
+    );
+    const expected = [...expectedStageKeys].sort();
+    const actual = [...actualStageKeys].sort();
+    const matches = expected.length === actual.length && expected.every((value, index) => value === actual[index]);
+    if (!matches && retry) {
+      await discardDraft(page);
+      await openTemplateDraft(page, templateName, { expectedStageKeys, retry: false });
+    }
+  }
 }
 
 async function createStep(page, {
@@ -183,6 +198,7 @@ async function createStep(page, {
   const stageKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const node = await outlineStepNode(page, stageKey);
   await expect(node).toBeVisible();
+  await waitForSaved(page);
   return stageKey;
 }
 

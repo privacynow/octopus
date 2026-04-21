@@ -1379,6 +1379,7 @@ window.Kit = (() => {
         const shell = document.createElement('div');
         shell.className = 'kit-workflow-shell kit-workflow-shell-scene';
         shell.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
+        shell.dataset.showOutline = showOutline ? 'true' : 'false';
         root.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
 
         let outline = null;

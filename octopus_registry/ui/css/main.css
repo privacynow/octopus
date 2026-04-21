@@ -3867,6 +3867,10 @@ select {
     grid-template-columns: 1fr;
 }
 
+.kit-workflow-shell-scene[data-show-outline="false"] {
+    grid-template-columns: 1fr;
+}
+
 .kit-workflow-controls {
     display: flex;
     justify-content: flex-start;

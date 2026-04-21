@@ -1,110 +1,76 @@
-**Protocol UX And Rehearsal Fix Plan**
+**Protocol UX Verification Status**
 
-## Current Problem
+## Current Verified State
 
-The progressive stage stack is the right primary authoring surface now, but two
-real issues remain:
+The current protocol authoring, rehearsal, execution, and runs surfaces have
+been re-verified on the live Octopus deployment from commit `94ce099`.
 
-1. The assignment editor still exposes too much selector-model complexity.
-- `Required skill` and `Pinned agent` are both visible together all the time.
-- The chips mix context and action too loosely.
-- `Advanced` is still present without a clear end-user purpose.
+Live verification completed against:
+- `/Users/tinker/octopus`
+- `http://127.0.0.1:8787`
 
-2. Rehearsal is real, but the visual proof is still too shallow.
-- We already prove that rehearsal runs are routed to the reserved rehearsal
-  authority.
-- We do not yet prove meaningful built-in template outcomes visually through the
-  live harness.
-- The current scenario model only prefills response text, which is too weak for
-  Software Engineering and Document Approval outcome testing.
+## What Was Fixed In This Pass
 
-## Product Direction
+1. Inline create-step assignment controls now stay functional after the
+   progressive editor rerenders.
+- Pending-stage bindings are rebound against the current rendered controls.
+- The create-step shell key now tracks the authoring fields users actually edit
+  before assignment, so the inline editor stays coherent.
 
-### Assignment editor
+2. Segmented controls now use delegated click handling in the shared UI helper.
+- This removes dependence on per-button listeners surviving DOM reconciliation.
 
-The normal editor should be mode-driven again:
+3. The tracked Playwright coverage now matches the real assignment behavior.
+- Existing-stage assignment tests no longer assume a second matching agent
+  exists when only one agent matches the chosen skill.
 
-- `By skill`
-  - primary input: `Required skill`
-  - optional refinement: `Pin matching agent`
-- `Specific agent`
-  - primary input: `Agent`
-  - optional refinement: `Limit to one of this agent's skills`
-- `Custom runtime selector`
-  - advanced disclosure only
-  - not a peer to the primary modes
+## Live Audit Results
 
-Rules:
-- chips may remain clickable only when they are clearly quick-picks for the
-  visible primary input
-- informational chips must be visually non-interactive
-- `Advanced` must stay secondary and explain exactly what it is for
+The current live audit is clean.
 
-### Rehearsal proof
+Verification completed:
+- `./.venv/bin/python -m pytest tests/test_registry_ui_contract.py tests/test_registry_ui_kit_contract.py -q`
+  - `41 passed`
+- `./.venv/bin/python -m pytest tests/test_protocol_rehearsal.py tests/test_protocol_engine.py tests/test_protocols.py tests/test_db_postgres.py -q`
+  - `75 passed`
+- `./.tmp/playwright/node_modules/.bin/playwright test tests/e2e/playwright/protocol-ui.spec.js --config=tests/e2e/playwright.config.js`
+  - `7 passed`
+- `./.tmp/playwright/node_modules/.bin/playwright test .tmp/playwright/live-execution-smoke.spec.js --config=.tmp/playwright/playwright.live.config.js`
+  - `1 passed`
+- `./.tmp/playwright/node_modules/.bin/playwright test .tmp/playwright/live-exhaustive-audit.spec.js --config=.tmp/playwright/playwright.live.config.js`
+  - `9 passed`
+- `./.tmp/playwright/node_modules/.bin/playwright test .tmp/playwright/live-runs-filter-matrix.spec.js --config=.tmp/playwright/playwright.live.config.js`
+  - `1 passed`
 
-Rehearsal must prove real workflow outcomes, not just panel visibility.
+Fresh live audit artifacts:
+- `.tmp/playwright/live-audit`
+- `619` files captured
 
-Target scenarios:
-- Software Engineering:
-  - planning
-  - plan review revise
-  - planning again
-  - plan review accept
-  - architecture review accept
-  - implementation review revise
-  - implementation again
-  - implementation review accept
-  - acceptance accept
-- Document Approval:
-  - draft
-  - review revise
-  - draft again
-  - review accept
-  - approve accept
+## Coverage Included
 
-## Implementation Sequence
-
-1. Rework the assignment editor in place.
-- no duplicate editor
-- no parallel selector path
-- primary mode choice
-- advanced hidden behind disclosure
-
-2. Extend rehearsal scenarios and responses so the live UI can drive real stage
-   outcomes.
-- scenarios carry decision metadata, not just response text
-- rehearsal responses support the decision path cleanly
-- write-capable rehearsal stages can satisfy output verification without
-  requiring a separate fake execution system
-
-3. Add visual, outcome-based rehearsal coverage for the built-in templates.
-- Software Engineering review loop
-- Document Approval revise/approve loop
-
-4. Redeploy to `/Users/tinker/octopus` only.
-
-5. Run the exhaustive live audit again.
-- 500+ screenshots minimum
-- authoring
+The live sweep covered:
+- blank draft creation
+- inline role creation
 - assignment by skill
-- assignment by agent
-- stage insertion
+- assignment by specific agent
+- inline stage insertion
 - stage deletion
-- rehearsal progression
-- published execution
-- runs inspection
+- branch/finish editing
+- Software Engineering template editing
+- Document Approval template editing
+- mobile authoring
+- rehearsal flows
+- published execution flows
+- runs matrix capture across desktop/tablet/mobile
 
-6. If the live audit finds defects, add them here immediately and continue until
-   none remain.
+## Open Defects
 
-## Done Means
+None verified in the current live pass.
 
-This work is finished only when:
+## Rule Going Forward
 
-- the assignment editor feels like one clear authoring path instead of a
-  selector-model projection
-- `Advanced` is clearly secondary
-- rehearsal visually proves meaningful outcomes on Software Engineering and
-  Document Approval
-- live Octopus authoring, rehearsal, execution, and runs flows all pass again
-- the exhaustive audit completes with 500+ fresh screenshots
+Any newly observed problem must be:
+1. reproduced against the live Octopus deployment
+2. added here as a concrete defect
+3. fixed and re-verified through the same live harness before this file is
+   considered changed again

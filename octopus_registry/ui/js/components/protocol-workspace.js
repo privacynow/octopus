@@ -4106,11 +4106,7 @@ function renderProtocolWorkspace(container) {
     function _toggleStageSelection(stageKey) {
         const nextKey = String(stageKey || '');
         if (!nextKey) return;
-        if (selection.sectionKey === 'stages' && String(selection.nodeKey || '') === nextKey && editorMode.kind === 'idle') {
-            selection = { sectionKey: 'overview', nodeKey: '' };
-        } else {
-            selection = { sectionKey: 'stages', nodeKey: nextKey };
-        }
+        selection = { sectionKey: 'stages', nodeKey: nextKey };
         render();
     }
 

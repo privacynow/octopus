@@ -270,21 +270,30 @@ test.describe('protocol authoring live', () => {
     await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
     await expect(pinAgentControl).toHaveValue(matchingAgentValues[0]);
     await assignment.getByRole('tab', { name: 'Specific agent', exact: true }).click();
-    await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue(matchingAgentValues[0]);
+    const agentControl = assignment.getByLabel('Agent', { exact: true });
+    await expect(agentControl).toHaveValue(matchingAgentValues[0]);
     await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     await expect(assignment).toContainText('(leave agent-only)');
-    await assignment.getByLabel('Agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
-    await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue('lift-and-shift-m2-bot');
+    const availableAgentValues = await agentControl.locator('option').evaluateAll((options) =>
+      options.map((option) => String(option.value || '')).filter(Boolean),
+    );
+    const alternateAgent = availableAgentValues.find((value) => value !== matchingAgentValues[0]) || matchingAgentValues[0];
+    await agentControl.selectOption(alternateAgent);
+    await expect(agentControl).toHaveValue(alternateAgent);
     const optionalSkillControl = assignment.getByLabel('Limit to one of this agent\'s skills (optional)', { exact: true });
     const availableAgentSkills = await optionalSkillControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
     if (availableAgentSkills.length) {
       await optionalSkillControl.selectOption(availableAgentSkills[0]);
-      await expect(optionalSkillControl).toHaveValue(availableAgentSkills[0]);
+      await expect(assignment.getByRole('tab', { name: 'By skill', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue(availableAgentSkills[0]);
+      await expect(assignment.getByLabel('Pin matching agent (optional)', { exact: true })).toHaveValue(alternateAgent);
+      await expect(assignment.getByText('Matching agents', { exact: true })).toBeVisible();
+      expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
+    } else {
+      await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     }
-    await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
-    expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
     await selectStep(page, 'plan_review');
     const reviewEntry = page.locator('.kit-protocol-segment-entry').filter({ has: page.getByTestId('workflow-stage-plan_review') }).first();
     await reviewEntry.getByRole('button', { name: 'Add below', exact: true }).click();

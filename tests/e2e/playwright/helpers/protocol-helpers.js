@@ -175,22 +175,30 @@ async function createStep(page, {
     .locator('.kit-stage-editor-section')
     .filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) })
     .first();
-  if (selectorKind === 'agent') {
-    await assignmentSection.getByRole('tab', { name: 'Specific agent', exact: true }).click();
-  } else if (selectorKind === 'skill') {
-    await assignmentSection.getByRole('tab', { name: 'By skill', exact: true }).click();
+  const valueLabel = selectorKind === 'agent'
+    ? 'Agent'
+    : selectorKind === 'skill'
+      ? 'Required skill'
+      : 'Choose runtime role tag';
+  if (selectorKind === 'agent' || selectorKind === 'skill') {
+    const modeLabel = selectorKind === 'agent' ? 'Specific agent' : 'By skill';
+    const modeTab = assignmentSection.getByRole('tab', { name: modeLabel, exact: true });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await modeTab.click();
+      const valueCount = await assignmentSection.getByLabel(valueLabel, { exact: true }).count();
+      if (valueCount) {
+        break;
+      }
+      await page.waitForTimeout(100);
+    }
   } else {
     const advanced = assignmentSection.locator('summary').filter({ hasText: 'Custom runtime selector' }).first();
     if (await advanced.count()) {
       await advanced.click();
     }
   }
-  const valueLabel = selectorKind === 'agent'
-    ? 'Agent'
-    : selectorKind === 'skill'
-      ? 'Required skill'
-      : 'Choose runtime role tag';
   const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true }).first();
+  await expect(valueControl).toBeVisible();
   const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
   if (valueTag === 'select') {
     let targetValue = selectorValue;

@@ -662,6 +662,15 @@ window.UI = (() => {
             });
         }
 
+        function applyValue(nextValue, target = null) {
+            const normalizedValue = String(nextValue ?? '');
+            setActive(normalizedValue);
+            if (typeof onChange === 'function') {
+                const match = (options || []).find((option) => String(option.value ?? '') === normalizedValue) || null;
+                onChange(normalizedValue, match, target);
+            }
+        }
+
         (options || []).forEach((option, index) => {
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -675,22 +684,17 @@ window.UI = (() => {
             if (option.title) btn.title = option.title;
             group.appendChild(btn);
             buttons.set(String(option.value ?? ''), btn);
-            btn.addEventListener('click', () => {
-                const nextValue = String(option.value ?? '');
-                setActive(nextValue);
-                if (typeof onChange === 'function') {
-                    onChange(nextValue, option, btn);
-                }
-            });
+        });
+        group.addEventListener('click', (event) => {
+            const target = event.target instanceof Element
+                ? event.target.closest('.segmented-control-btn')
+                : null;
+            if (!(target instanceof HTMLButtonElement) || !group.contains(target)) return;
+            applyValue(target.dataset.value || '', target);
         });
 
         bindSegmentedControlKeyboard(group, (target) => {
-            const nextValue = String(target.dataset.value || '');
-            setActive(nextValue);
-            if (typeof onChange === 'function') {
-                const match = (options || []).find((option) => String(option.value ?? '') === nextValue) || null;
-                onChange(nextValue, match, target);
-            }
+            applyValue(target.dataset.value || '', target);
         });
         setActive(value);
 

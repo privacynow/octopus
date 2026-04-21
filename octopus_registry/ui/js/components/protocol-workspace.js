@@ -1577,20 +1577,34 @@ function renderProtocolWorkspace(container) {
     }
 
     function _bindPendingStageEditorControls(root) {
-        if (!(root instanceof Element) || root.dataset.pendingStageBindings === 'true') return;
-        root.dataset.pendingStageBindings = 'true';
+        if (!(root instanceof Element)) return;
+        const syncAssignment = () => {
+            _syncPendingStageFromMountedEditor();
+            queueMicrotask(() => render());
+        };
         const bindText = (selector, key) => {
             const control = root.querySelector(selector);
             if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLTextAreaElement)) return;
+            if (control.__pendingStageBound === true) return;
+            control.__pendingStageBound = true;
             const commit = () => _commitPendingStageField(null, key, control.value);
             control.addEventListener('input', commit);
             control.addEventListener('change', commit);
-            control.addEventListener('blur', commit);
         };
         const bindSelect = (selector, key) => {
             const control = root.querySelector(selector);
             if (!(control instanceof HTMLSelectElement)) return;
+            if (control.__pendingStageBound === true) return;
+            control.__pendingStageBound = true;
             control.addEventListener('change', () => _commitPendingStageField(null, key, control.value));
+        };
+        const bindAssignmentControl = (selector, eventName = 'change') => {
+            const control = root.querySelector(selector);
+            if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLSelectElement) && !(control instanceof HTMLTextAreaElement)) return;
+            const bindingKey = `__pendingAssignmentBound_${eventName}`;
+            if (control[bindingKey] === true) return;
+            control[bindingKey] = true;
+            control.addEventListener(eventName, syncAssignment);
         };
         bindText('#kit-details-display_name', 'display_name');
         bindSelect('#kit-details-participant_key', 'participant_key');
@@ -1601,6 +1615,45 @@ function renderProtocolWorkspace(container) {
         bindText('#kit-details-instructions', 'instructions');
         bindText('#kit-details-max_rounds', 'max_rounds');
         bindText('#kit-details-timeout_seconds', 'timeout_seconds');
+        root.querySelectorAll('.segmented-control[aria-label="Assignment mode"] .segmented-control-btn').forEach((button) => {
+            if (!(button instanceof HTMLButtonElement) || button.__pendingStageBound === true) return;
+            button.__pendingStageBound = true;
+            button.addEventListener('click', () => _commitPendingStageField(null, 'selector_mode', button.dataset.value || ''));
+        });
+        bindAssignmentControl('[aria-label="Required skill"]');
+        bindAssignmentControl('[aria-label="Pin matching agent (optional)"]');
+        bindAssignmentControl('[aria-label="Agent"]');
+        bindAssignmentControl('[aria-label="Limit to one of this agent\'s skills (optional)"]');
+        bindAssignmentControl('[aria-label="Custom selector type"]');
+        bindAssignmentControl('[aria-label="Choose runtime role tag"]');
+        bindAssignmentControl('[aria-label="Custom value"]', 'input');
+        bindAssignmentControl('[aria-label="Custom value"]', 'change');
+        root.querySelectorAll('.kit-selector-editor-context .quickstart-chip').forEach((chip) => {
+            if (!(chip instanceof HTMLButtonElement) || chip.__pendingStageBound === true) return;
+            chip.__pendingStageBound = true;
+            chip.addEventListener('click', () => {
+                const context = chip.closest('.kit-selector-editor-context');
+                if (!(context instanceof Element)) return;
+                const chipKey = String(chip.dataset.key || '');
+                if (String(context.dataset.key || '').startsWith('selector-skill-match:')) {
+                    const requiredSkill = String((root.querySelector('[aria-label="Required skill"]') || {}).value || '').trim();
+                    const agentSlug = chipKey.split(':chip:')[1] || '';
+                    const agentId = String(_selectorAgentRecord(agentSlug)?.agent_id || '').trim();
+                    if (requiredSkill && agentId) {
+                        _commitPendingStageSelector('skill', requiredSkill, agentId);
+                    }
+                    return;
+                }
+                if (String(context.dataset.key || '').startsWith('selector-agent-skills:')) {
+                    const pinnedAgent = String((root.querySelector('[aria-label="Agent"]') || {}).value || '').trim();
+                    const skillName = chipKey.split(':chip:')[1] || '';
+                    const agentId = String(_selectorAgentRecord(pinnedAgent)?.agent_id || '').trim();
+                    if (skillName && agentId) {
+                        _commitPendingStageSelector('skill', skillName, agentId);
+                    }
+                }
+            });
+        });
     }
 
     function _commitStageSelector(nodeKey, selectorKind, selectorValue, selectorPreferredAgentId = '') {
@@ -2581,6 +2634,15 @@ function renderProtocolWorkspace(container) {
             selectorValue,
             selectorPreferredAgentId,
         });
+        wrap.dataset.key = [
+            'selector-editor',
+            String(stageKey || 'new'),
+            String(mode || ''),
+            String(requiredSkill || '').trim().toLowerCase(),
+            String(pinnedAgent || '').trim().toLowerCase(),
+            String(advancedKind || '').trim().toLowerCase(),
+            String(advancedValue || '').trim().toLowerCase(),
+        ].join(':');
         const advancedKinds = _selectorAdvancedKinds();
         const activeAgent = _selectorAgentRecord(pinnedAgent);
         const activeAgentId = String(activeAgent?.agent_id || '').trim();
@@ -3622,8 +3684,11 @@ function renderProtocolWorkspace(container) {
             String(editorMode.sessionKey || ''),
             String(editorMode.sourceStageKey || ''),
             String(editorMode.decision || ''),
+            String(pendingStage.display_name || ''),
+            String(pendingStage.stage_kind || ''),
             String(pendingStage.participant_key || ''),
             String(pendingStage.role_display_name || ''),
+            String(pendingStage.role_participant_key || ''),
         ].join(':');
         return shell;
     }
@@ -4053,9 +4118,9 @@ function renderProtocolWorkspace(container) {
             selectorValue: String(target?.selector_value || ''),
             selectorPreferredAgentId: String(target?.selector_preferred_agent_id || ''),
             readOnly,
-            onChange: onCommit,
+            onChange: createAction ? null : onCommit,
             onSelectorChange: createAction
-                ? _commitPendingStageSelector
+                ? null
                 : (typeof onCommit === 'function' && target?.stage_key
                     ? (kind, value, preferredAgentId) => _commitStageSelector(String(target.stage_key || ''), kind, value, preferredAgentId)
                     : null),

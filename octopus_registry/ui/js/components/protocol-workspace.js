@@ -2634,8 +2634,8 @@ function renderProtocolWorkspace(container) {
                 });
             }
         }, { label: 'Assignment mode', value: mode });
-        modeControl.dataset.key = 'selector-assignment-mode';
-        wrap.appendChild(modeControl);
+        modeControl.element.dataset.key = 'selector-assignment-mode';
+        wrap.appendChild(modeControl.element);
 
         if (advancedKind && advancedValue) {
             const note = document.createElement('p');

@@ -1121,6 +1121,33 @@ window.Kit = (() => {
         body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Add the first step in the workflow and create its owner role inline if needed.'));
         card.appendChild(body);
 
+        if (Array.isArray(firstRun.steps) && firstRun.steps.length) {
+            const steps = document.createElement('ol');
+            steps.className = 'kit-workflow-first-run-steps';
+            firstRun.steps.forEach((item) => {
+                const row = document.createElement('li');
+                const state = String(item?.state || '').trim().toLowerCase();
+                row.className = `kit-workflow-first-run-step${state ? ` is-${state}` : ''}`;
+                const badge = document.createElement('span');
+                badge.className = 'kit-workflow-first-run-step-badge';
+                badge.textContent = String(item?.badge || '');
+                row.appendChild(badge);
+                const text = document.createElement('span');
+                text.className = 'kit-workflow-first-run-step-text';
+                text.textContent = String(item?.text || '');
+                row.appendChild(text);
+                steps.appendChild(row);
+            });
+            card.appendChild(steps);
+        }
+
+        if (String(firstRun.note || '').trim()) {
+            const note = document.createElement('p');
+            note.className = 'kit-workflow-first-run-note';
+            note.textContent = String(firstRun.note || '');
+            card.appendChild(note);
+        }
+
         const actions = document.createElement('div');
         actions.className = 'kit-workflow-first-run-actions';
         (Array.isArray(firstRun.actions) ? firstRun.actions : []).forEach((action) => {

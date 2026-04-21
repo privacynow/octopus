@@ -1,600 +1,799 @@
-**Protocol Product Fix Plan**
+**Protocol Product Plan: Interactive Workflow Builder**
 
 ## Problem Statement
 
-This document started from a real product failure state. The protocol product was not acceptable when this plan was created because it failed the real bar for success:
+The product has moved past its earliest structural failures, but it is still not
+fully shaped around the job it is supposed to do.
 
-- not "the code path exists"
-- not "the tests pass"
-- not "the workflow engine can execute it"
+The goal is not to expose a protocol schema editor. The goal is to let a normal
+human author create, test, and evolve real multi-step workflows through the UI.
 
-The bar is:
+The current gaps are now clearer:
 
-- can a normal author build the workflows they actually care about through the UI
-- can they understand what each step does, who does it, what it reads/writes, and what happens next
-- can they rehearse those workflows visually and trust the outcomes
-- can they do this without being exposed to internal protocol-engine concepts that are not needed for standard authoring
+1. The **workflow map** was demoted correctly in principle but degraded in
+practice.
+- `Show workflow map` currently reveals a narrow, fit-to-column graph that is
+  hard to read and effectively loses its value.
+- The map is still technically mounted, but when explicitly opened it does not
+  behave like a useful interactive workspace.
 
-Those were real product gaps, not cosmetic concerns.
+2. The **artifact model** is still too implicit.
+- Authors can see artifact checkboxes on steps, but the product does not teach
+  clearly where artifacts come from or how they map to real files, code, repos,
+  reports, or documents.
+- This makes the workflow feel abstract at exactly the point where it needs to
+  become concrete.
 
-The most visible symptom at the time was that internal escape hatches were present in the default editor:
+3. The **authoring surface** is better, but still not sufficiently
+workflow-shaped for 0-to-1 creation.
+- A real author needs to create new workflows from a business goal, not from a
+  mental model of stage schemas and runtime internals.
+- The product must support practical “build a new process” work, not just edit
+  seeded templates.
 
-- `Custom runtime selector` still appears inside Assignment
-- `Advanced` still appears as a named stage section
+4. The **test suite** is stronger than before, but it still needs to align even
+more tightly with product-purpose behavior.
+- We need tests that prove a human can manifest useful workflows through the UI
+  and APIs.
+- We must not confuse “the engine can run it” with “the product made it easy and
+  legible to author.”
 
-The deeper issue was broader:
+5. The next frontier is **composition**.
+- The product should support creating new protocol-driven assistants by
+  combining protocols and skills through the UI.
+- That must be done through the same registry APIs the product owns, not via
+  direct database manipulation or hidden server-side shortcuts.
 
-- the product still behaves too much like a protocol schema editor
-- the tests still prove too much at the control/mechanics level and not enough at the workflow-usability level
+This plan replaces the earlier “cleanup and closeout” framing with a product
+plan for the next coherent version of protocol authoring.
 
-So the real problem was not just visibility of two sections. The real problem was that the product rule
-"normal authors do not see internal escape hatches" was not enforced as a system invariant, and the
-test suite was not centered enough on the real workflows this product is meant to support.
+## Product Vision
 
-**Feature-complete means scenario-complete.**
+The product should feel like a **workflow builder with runtime-backed proof**.
 
-A feature is only complete when at least one UI scenario spec for each target workflow passes end-to-end:
+A normal author should be able to:
 
-- author
-- rehearse
-- execute
+1. define the workflow steps
+2. define what each step consumes and produces
+3. decide who can do each step
+4. define review / branch / finish behavior
+5. rehearse the workflow visually
+6. execute it against real connected agents
+7. refine it without leaving the UI
 
-Isolated control tests, API tests, or engine tests are necessary, but they are not sufficient on their own.
+The UI should support:
 
-## Current Verified State
+- **standard authoring**
+  for normal workflow builders
+- **operator tooling**
+  for rare internal/runtime controls
 
-The latest full pass against the live Octopus deployment verifies:
+And it must do so without duplicating the implementation pipeline.
 
-- the standard authoring surface is the default and the product-facing workflow builder path is usable inline
-- `Custom runtime selector`, `Advanced`, `stage_key`, `max_rounds`, and `timeout_seconds` are not rendered on the standard path
-- Software Engineering passes author -> rehearse -> execute
-- Document Approval passes author -> rehearse -> execute
-- Data Analysis / Reporting passes author -> rehearse -> execute
-- the live audit passes with 619 fresh screenshots across desktop, tablet, and mobile
-- no verified blocking authoring, rehearsal, execution, or runs-surface defects remain from the latest exhaustive pass
+## Design Principles
 
-## Context
+### 1. Workflow first, schema second
 
-### Current authoring model
+Authors think in:
 
-The progressive inline stage stack is now the primary authoring surface. That part is directionally right:
+- steps
+- artifacts
+- people/bots
+- outcomes
 
-- stage list is primary
-- editor is inline under the selected stage
-- workflow map is optional
-- assignment can be authored by skill or agent
-- insertion, deletion, rehearsal, and execution all work in the current runtime
+They do not think first in:
 
-### Original product mismatch
+- selectors
+- stage keys
+- timeout knobs
+- protocol internals
 
-Before these fixes, the standard authoring path leaked internal concepts:
+The product should lead with workflow concepts and hide schema mechanics unless
+they are truly needed.
 
-- custom runtime selector values
-- direct internal stage tuning fields
-- advanced headings and surfaces that imply operator-level control is part of ordinary authoring
+### 2. Progressive disclosure with real power on demand
 
-That matters because the product is being built for workflows like:
+Power features must remain available, but only when deliberately invoked.
 
-1. Software Engineering
-- planning
-- review
-- architecture
-- review
-- implementation
-- review
-- acceptance
+This applies to:
 
-2. Document Approval
-- draft
-- review
-- revise loop
-- approve
+- operator-only internals
+- the workflow map
+- advanced composition flows
 
-3. Data Analysis / Reporting
-- load spreadsheet or CSV
-- filter dataset
-- run Python analytics
-- render templated PDF report
-- upload or publish the final report
+Important rule:
 
-Those workflows should be authorable and rehearseable through a clean workflow-builder UI. They should not
-require users to understand runtime selector internals, stage key management, or per-stage internal tuning
-unless they are explicitly in an operator/power-user path.
+- **hidden by default** must not mean **crippled when opened**
 
-## Product Rule
+### 3. One surface per job
 
-This plan makes one product rule explicit and enforceable:
+If two controls change the same thing, that is a product smell.
 
-**Normal authors do not see internal protocol-engine escape hatches in the default authoring path.**
+If two panels compete to be the primary editor, that is a product smell.
 
-That means:
+The solution is not more toggles. The solution is cleaner ownership:
 
-- no `Custom runtime selector` in the standard Assignment UI
-- no `Advanced` stage section in the standard stage editor
-- no visible `stage_key`, `max_rounds`, or `timeout_seconds` controls in standard authoring
+- stage stack is the primary authoring surface
+- artifact catalog is the primary artifact-definition surface
+- workflow map is an optional interactive reference surface
+- operator controls live only on the operator path
 
-If those controls still exist, they must exist only in a deliberately gated operator surface.
+### 4. Concrete over abstract
 
-## Decisions
+A human building a real process needs to see:
 
-1. There are two authoring surfaces, conceptually:
-- `standard`
-- `operator`
+- file paths
+- repo locations
+- document outputs
+- report artifacts
+- review loops
 
-2. The default UI is always `standard`.
+The UI should bias toward concrete terms and concrete outputs.
 
-3. The `standard` surface must not render internal controls in the DOM at all.
-- not collapsed
-- not hidden with CSS
-- not behind `<details>`
+### 5. UI manifests truth through APIs
 
-4. The `operator` surface may expose internal controls, but only behind explicit gating.
+No DB patching. No “make the database right and let the UI catch up.”
 
-5. The gating must be enforceable in both UI and API.
-- UI-only hiding is not sufficient
+Everything the user authors must be manifested through:
 
-6. Scenario-based workflow tests become the primary product acceptance bar.
-- Software Engineering
-- Document Approval
-- Data Analysis / Reporting
+- protocol draft/version APIs
+- skills/catalog/guidance APIs
+- run/rehearsal APIs
+- existing registry management surfaces
 
-7. Existing broad live audits remain valuable, but they are secondary to workflow-purpose tests.
+If a workflow cannot be created through the product UI and its APIs, it is not
+done.
 
-8. Canonical operator entry is capability-based.
-- PR CI and the default product path use only `standard`
-- operator-only UI may exist for support/platform use, but it is not part of the standard path and should not be assumed in PR CI
+## Core User Journeys
 
-## Discussion
+These are the workflows the product must make natural.
 
-### Why collapsed disclosures are not enough
+### A. Software Engineering
 
-Treating `Custom runtime selector` and `Advanced` as collapsed disclosures was the wrong design decision.
-That still exposes the model to users and keeps the product semantically cluttered.
+The user should be able to:
 
-If the product rule is "normal authors should not need these controls," the correct implementation is:
+- open or create a software engineering workflow
+- define planning, review, architecture, implementation, and acceptance stages
+- model revise loops
+- rehearse revise/accept behavior
+- execute the run and inspect the result
 
-- do not render them in the standard surface
+### B. Document Approval
 
-Anything weaker turns the rule into opinion rather than invariant.
+The user should be able to:
 
-### Why this is not only a UI issue
+- create draft/review/approve flow
+- define revise loop behavior
+- assign steps clearly
+- rehearse revise then approve
+- execute and inspect the completed run
 
-If the UI hides `stage_key`, timeouts, or custom selectors but the normal session can still submit those
-fields through the same API without restriction, the product rule is theater.
+### C. Data Analysis / Reporting
 
-The rule must hold across:
+The user should be able to build a pipeline like:
 
-- rendered UI
-- request/patch acceptance
-- tests
-- live audit
+- ingest CSV or Excel from the workspace
+- filter the dataset
+- run analytics in Python
+- generate a PDF report
+- upload or publish the final result
 
-### Why workflow examples must drive the tests
+This is a critical product-spec scenario because it forces the UI to model real
+artifacts and not just abstract steps.
 
-A passing control-level test suite is not enough.
+### D. Meta Protocol Assistant
 
-The product is meant to support real authoring outcomes:
+The user should be able to create a **protocol-driven assistant that creates new
+protocols** by composing:
 
-- a software engineering workflow with revise loops
-- a document approval workflow with revise/approve decisions
-- a data-analysis/reporting workflow with explicit data and report artifacts
+- existing skills
+- newly authored skills
+- existing protocol templates
+- new protocol drafts
 
-If the tests do not prove those workflows are authorable, rehearseable, and executable through the UI,
-the test suite is still too shallow.
+Example:
 
-## Target State
+- gather a business goal
+- identify missing capabilities
+- author or refine skills
+- assemble a new workflow from stages
+- rehearse the draft process
+- publish the new assistant
 
-### Standard authoring path
+This must happen through the UI and APIs, not through database seeding.
 
-Normal authors see:
+## Target Product Model
 
-- step purpose
-- assignment by skill or specific agent
-- optional refinement where appropriate
-- instructions
-- artifacts in/out
-- routing / next-step behavior
-- delete action in a normal destructive-action location
-- rehearsal as a first-class safe proving ground
+## 1. Standard Authoring Surface
 
-Normal authors do not see:
+The standard surface should be the default and should present:
+
+- stage stack
+- inline stage editor
+- add-below / insert-before-target actions
+- artifact catalog
+- rehearsal entry point
+- publish/archive lifecycle
+- optional workflow map entry point
+
+The standard surface must not render:
 
 - custom runtime selector
-- direct stage key editing
-- per-stage internal retry/timeout knobs
-- generic "Advanced" sections containing internal system controls
+- generic `Advanced` stage section
+- stage key editing
+- timeout knobs
+- per-stage internal retry knobs
 
-### Operator path
+## 2. Operator Surface
 
-Operators may access:
+The operator surface may expose:
 
 - custom runtime selector
 - stage key editing
+- timeout controls
 - max rounds
-- timeout seconds
-- any other internal protocol tooling that is truly needed
+- other runtime-internal tooling
 
-But this must be explicitly gated, not part of the standard authoring flow.
+But only with explicit capability-based gating.
 
-## Recommended Gating Model
+## 3. Workflow Map Model
 
-Use one coherent gating model. The recommended implementation is:
+The workflow map stays in the product, but with different prominence:
 
-1. **Surface mode**
-- `standard`
-- `operator`
+- hidden by default
+- opened on demand
+- fully interactive when opened
 
-2. **Capability source**
-- session capability such as `can_edit_protocol_internals`
+When opened:
 
-3. **Optional route/query support for operator entry**
-- only if needed for support/debugging
-- but capability remains the authority
+- desktop: map gets real space
+- mobile: map opens in a full-screen or nearly full-screen panel
+- interactions remain live:
+  - click/tap nodes
+  - inspect routes
+  - zoom
+  - fit
+  - preserve selection
+  - preserve viewport where sensible
 
-Recommended rule:
+The map is a secondary reference workspace, not a permanently cramped sidebar.
 
-- UI derives `authoringSurface` from capability
-- API enforces the same capability for internal fields
+## 4. Artifact Model
 
-This keeps the product coherent and testable.
+Artifacts are the durable contract between steps.
 
-## Scenario Assertion Contract
+The product must teach that clearly:
 
-Every primary workflow scenario must satisfy the same assertion categories. These are not optional notes;
-they are the contract that turns "usable for the purpose" into something testable.
+1. artifacts are defined at the protocol level
+2. steps read and write those artifacts
+3. runtime verifies or observes them
 
-### Structure
+The current raw artifact shape is not enough for usability, so the product layer
+must be more concrete.
 
-- stage order is readable inline in the progressive editor
-- section/step organization is understandable without relying on the workflow map
-- standard authoring path does not expose operator-only controls
+### Product-facing artifact presets
 
-### Routing
+The UI should present artifact presets such as:
 
-- revise / approve / complete transitions are visible and correct in UI state
-- route targets match the authored intent
-- where the product uses URLs or selected state, those reflect the same routing truth
+- Dataset / spreadsheet
+- Code file
+- Document / notes
+- Structured data
+- PDF report
+- Published record
+- Repository location
+- Control-plane note
 
-### Assignment
+These do not require immediate backend duplication.
 
-- every touched step is authored using only the standard assignment UI
-- skill vs agent choice is understandable per step
-- optional refinement is clear and does not force internal-selector understanding
+The UX can map them to the existing canonical types where possible:
 
-### Artifacts
+- `workspace_file`
+- `control_plane_text`
 
-- when the workflow depends on data flow, the inputs/outputs chain is visible and understandable
-- artifacts are verified as part of the workflow model, not just checked for existence
+If the current canonical model is too weak for a useful product expression, then
+the SDK/API should be extended deliberately rather than compensated for with
+browser-only invention.
 
-### Rehearsal
+### Artifact authoring must answer
 
-- rehearsal proves ordered stage/state progression, not just panel visibility
-- revise / approve / accept / fail loops progress in the expected order
-- the same progression is visible in both workflow and run surfaces where the product exposes it
+For each artifact:
 
-### Execution
+- what is it called
+- what type of thing is it
+- where does it live
+- is it expected to already exist, or be created by the workflow
+- should completion require verification
 
-- the run reaches the expected terminal state
-- where the product defines artifact or outcome state, that state is also verified
+### Step attachment must answer
 
-### Negative Invariants
+For each step:
 
-These are gates inside every scenario, not a separate-only suite:
+- what does it read
+- what does it write
+- are those inputs/outputs understandable without reading raw keys
 
-- no `Custom runtime selector` on the standard path
-- no `Advanced` stage section on the standard path
-- no `stage_key`, `max_rounds`, or `timeout_seconds` on the standard path
+The checkbox model alone is not sufficient unless it is wrapped in a clearer
+artifact-definition experience.
+
+## 5. Assignment Model
+
+Assignment remains stage-owned and standard-path friendly.
+
+The normal authoring modes are:
+
+- By skill
+- Specific agent
+
+Refinement remains optional:
+
+- small match sets: pills only
+- larger match sets: selector only
+
+The product must not show duplicate controls for the same field.
+
+The operator-only selector escape hatch remains operator-only.
+
+## 6. Composition Model
+
+The product should support composing a new protocol-driven assistant through the
+UI.
+
+That means one coherent authoring flow where a user can:
+
+1. define a new capability goal
+2. inspect available skills
+3. create or refine missing skills through skill-management APIs
+4. create a new protocol draft
+5. add stages that use those skills
+6. rehearse the draft workflow
+7. publish the result
+
+This is the beginning of a meta-authoring product:
+
+- protocols can help create protocols
+- skills can help power protocol stages
+- the UI remains the manifestation layer
+
+## Detailed Product Behavior
+
+## A. Workflow Map
+
+### Current problem
+
+`Show workflow map` reveals a surface that is too small to be useful.
+
+### Correct behavior
+
+When a user explicitly asks for the map:
+
+- it should open in a **focused map mode**
+- it should stay interactive
+- it should be legible
+
+### Desktop behavior
+
+Preferred order:
+
+1. Open a large split mode with the map taking substantial width
+2. If that still feels cramped, use a full-width map mode with an editor return
+   action
+
+Not acceptable:
+
+- a narrow sticky side column that reduces the graph to a thumbnail
+
+### Mobile behavior
+
+Open the map in:
+
+- full-screen sheet
+- or dedicated full-screen panel
+
+The map should not be a tiny embedded preview at the bottom of the flow.
+
+### Interaction rules
+
+The map must support:
+
+- node/edge selection
+- route inspection
+- zoom/fit
+- stage-focus navigation back into the inline editor
+
+### Aesthetic rules
+
+- high contrast
+- generous width
+- clear active selection
+- no attempt to cram dense graph labels into a sidebar
+
+## B. Artifact Authoring
+
+### Current problem
+
+The user sees artifact checkboxes on steps before understanding how artifacts are
+declared or how they map to real work outputs.
+
+### Correct behavior
+
+Artifacts become a first-class catalog with a clearer “Things this workflow
+uses and creates” frame.
+
+### Standard UI structure
+
+1. Artifact catalog panel
+- add artifact
+- choose preset/type
+- set display name
+- set location/path/reference
+- set verification requirement
+
+2. Step-level attachment
+- reads
+- writes
+- presented in human-readable form
+
+3. Runtime evidence
+- when runs happen, artifacts show observation / verification state clearly
+
+### Concrete examples
+
+For Data Analysis:
+
+- `source-data`
+  - type: Dataset / spreadsheet
+  - location: `data/source.xlsx`
+- `filtered-data`
+  - type: Dataset
+  - location: `data/filtered.csv`
+- `analysis-summary`
+  - type: Structured data
+  - location: `reports/summary.json`
+- `report-pdf`
+  - type: PDF report
+  - location: `reports/final.pdf`
+- `publication-record`
+  - type: Published record
+  - location: `reports/published.json`
+
+For Software Engineering:
+
+- `plan-doc`
+  - type: Document
+  - location: `docs/plan.md`
+- `architecture-doc`
+  - type: Document
+  - location: `docs/architecture.md`
+- `implementation-diff`
+  - type: Code output
+  - location: repo/workspace path(s)
+
+### Design rules
+
+- artifact names should be visible in step context
+- locations must be concrete
+- the product should visually distinguish:
+  - existing input
+  - generated output
+  - published output
+
+## C. 0-to-1 New Protocol Flow
+
+### Current problem
+
+The product is still easier to understand when editing a template than when
+starting from a blank idea.
+
+### Correct behavior
+
+The blank-state authoring flow should help the user build a workflow from a
+business goal.
+
+### Proposed flow
+
+1. Start a new protocol
+2. Enter workflow name and short goal
+3. Add the first step inline
+4. Define what it does
+5. Define what it reads/writes
+6. Define who does it
+7. Add next step below
+8. Repeat until the flow is complete
+9. Add branches/review loops only where needed
+10. Rehearse
+11. Publish
+
+### Blank-state copy
+
+Blank states should guide:
+
+- Add first step
+- Add artifact
+- Use a template
+- Show workflow map only after structure exists
+
+### Good design rule
+
+The blank flow should feel like assembling a pipeline, not configuring a
+runtime state machine.
+
+## D. Meta Protocol Assistant
+
+### Goal
+
+Let a user build a protocol-driven assistant that itself helps design new
+protocols and skills.
+
+### Example flow
+
+The user wants to create an assistant that:
+
+- asks for a business process goal
+- suggests required steps
+- identifies missing skills
+- drafts those skills
+- creates a new protocol draft
+- assigns stages to those skills
+- rehearses the result
+- publishes the assistant
+
+### Product implication
+
+The UI must support composition across:
+
+- skill catalog
+- skill authoring/publishing
+- protocol templates
+- protocol drafts
+- rehearsal
+
+### API rule
+
+This must happen through existing or deliberately extended registry APIs:
+
+- create/update skill drafts
+- publish/archive skills
+- create/update protocol drafts
+- clone templates
+- publish protocols
+- start rehearsals
+
+No database mutation as a product-authoring shortcut.
+
+### Testing implication
+
+We need one scenario spec that proves a user can:
+
+- create or refine at least one skill through the UI/API
+- use it in a new protocol
+- rehearse that new protocol
+- publish it
 
 ## Implementation Plan
 
-### Phase 1. Define surface capabilities explicitly
+### Phase 1. Replace the optional-map layout model
 
 Files likely involved:
+
 - [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js)
-- any session/capability plumbing already used by the registry UI
+- [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js)
+- [main.css](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/css/main.css)
 
 Work:
-- introduce one explicit surface decision in the workspace: `standard` vs `operator`
-- do not infer this from local editor state
-- keep one editor pipeline; conditionally omit subtrees based on surface
 
-Guidance:
-- extend existing workspace/session state rather than adding a second editor implementation
-- standard path must be the default everywhere
+- remove the “tiny sticky side map” as the explicit-open default
+- introduce focused map presentation for standard authors
+- keep one workflow canvas implementation
+- preserve interactivity and state sync
 
-### Phase 2. Remove internal selector escape hatches from standard Assignment
+Acceptance:
 
-Files:
-- [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js)
+- opening the map yields a legible interactive surface on desktop and mobile
+- selection in the map and selection in the inline editor stay synchronized
 
-Work:
-- stop rendering the `Custom runtime selector` disclosure in standard mode
-- keep it only in operator mode
-
-Guidance:
-- do not hide it with CSS
-- do not render it and then collapse it
-- remove it from the DOM entirely in standard mode
-
-### Phase 3. Remove `Advanced` stage section from standard authoring
-
-Files:
-- [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js)
-
-Work:
-- stop rendering the `Advanced` section in standard mode
-- relocate `Delete step` to a normal destructive-action location in the standard editor
-- keep `stage_key`, `max_rounds`, and `timeout_seconds` operator-only
-
-Guidance:
-- use an existing action placement pattern if one already exists
-- do not create another special-purpose section just to hold delete
-
-### Phase 4. Align API behavior with the product rule
+### Phase 2. Redesign artifact authoring around real outputs
 
 Files likely involved:
-- protocol HTTP / save/update handling in the registry
-- any document patch/update surface that accepts stage field mutation
+
+- [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js)
+- [kit.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/kit.js)
+- [models.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/models.py)
+- [documents.py](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/documents.py)
 
 Work:
-- enforce that standard sessions cannot submit or mutate operator-only fields
-- reject or ignore internal-field writes unless operator capability is present
 
-Guidance:
-- do not rely on UI hiding alone
-- document the allowed field set per surface
+- redesign artifact catalog UX to emphasize concrete artifact presets
+- make source/output/location/verification clearer
+- keep one canonical artifact model underneath
+- extend the canonical model only if the existing two-type model is truly too
+  weak for product clarity
 
-### Phase 5. Rework test strategy around workflow-purpose scenarios
+Acceptance:
 
-The test suite must prove real user goals, not just field mechanics.
+- a new author can create a data/report workflow and understand where each
+  artifact comes from and where it goes
 
-#### 5A. Software Engineering scenario
+### Phase 3. Tighten the blank-state 0-to-1 workflow builder
 
-The UI test must validate that a normal author can:
-- author or edit the workflow inline
-- assign stages cleanly by skill or agent
-- model revise loops
-- rehearse `revise -> accept` review cycles visually
-- publish and execute successfully
+Files likely involved:
 
-It must assert:
-- **Structure:** the stage stack is readable inline and is the primary authoring surface
-- **Routing:** review stages route back correctly on revise and forward correctly on accept
-- **Assignment:** touched stages are configured through the standard assignment editor only
-- **Artifacts:** required planning / architecture / implementation outputs align with the workflow
-- **Rehearsal:** revise and accept loops progress in the expected order
-- **Execution:** the run reaches the expected terminal state
-- **Negative invariants:** no custom selector or stage-advanced internals appear on the standard path
+- [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js)
+- [main.css](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/css/main.css)
 
-#### 5B. Document Approval scenario
+Work:
 
-The UI test must validate:
-- draft -> review -> revise -> draft -> review -> approve
-- clear assignment and step editing
-- clean rehearsal of revise/approve outcomes
-- successful final execution
+- refine new-protocol blank states
+- make “Add first step” and “Add artifact” first-class starting actions
+- ensure inline step creation naturally leads into artifact attachment and
+  routing
 
-It must assert:
-- **Structure:** the draft / review / approve flow is readable inline
-- **Routing:** revise returns to draft and approve completes the flow
-- **Assignment:** touched stages use only the standard assignment UI
-- **Artifacts:** the document flow remains understandable in the authored pipeline
-- **Rehearsal:** revise then approve progression is visible and ordered
-- **Execution:** the run reaches the expected terminal state
-- **Negative invariants:** no custom selector or stage-advanced internals appear on the standard path
+Acceptance:
 
-#### 5C. Data Analysis / Reporting scenario
+- a new protocol can be built from blank through the UI without template
+  dependence
 
-This scenario is now implemented as a first-class end-to-end test fixture.
+### Phase 4. Refine assignment semantics without duplicating controls
 
-Through the UI, the test should build and verify:
-- load spreadsheet or CSV
-- filter data
-- run analysis
-- render PDF report
-- upload/publish report
+Files likely involved:
 
-It must assert:
-- **Structure:** the pipeline reads as a sequence of real workflow steps, not protocol internals
-- **Routing:** any review/publish branches are visible and correct
-- **Assignment:** every touched step is authored through the standard assignment UI
-- **Artifacts:** raw data -> filtered data -> analysis output -> report -> published output is visible and correct
-- **Rehearsal:** meaningful workflow progression is visible where the scenario defines it
-- **Execution:** the workflow reaches the final publish/upload step correctly
-- **Negative invariants:** no custom selector or stage-advanced internals appear on the standard path
+- [protocol-workspace.js](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js)
+- [main.css](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/css/main.css)
 
-#### Readiness for 5C
+Work:
 
-5C should not be treated as "implicitly testable later." It needed explicit readiness conditions, and the current live environment now satisfies them:
+- keep standard assignment modes clean
+- keep small-match pills and large-match select behavior
+- ensure artifact + assignment + routing do not compete for visual prominence
 
-- a template or deterministic UI-build path exists for:
-  - load data
-  - filter data
-  - analyze
-  - render report
-  - publish/upload
-- the artifact kinds needed by that flow exist in the environment under test
-- any integration assumptions needed for report publication are available in the test environment
+Acceptance:
 
-If any of the above regresses, 5C becomes blocked as a product milestone, not merely deferred as test work.
+- assignment remains understandable and does not regress into duplicated control
+  surfaces
 
-### Phase 6. Add negative tests for the product rule
+### Phase 5. Implement meta-composition flow through UI and APIs
 
-Tests should explicitly fail if the rule is violated.
+Files likely involved:
 
-These tests are necessary but not sufficient. They run on every PR, but they do not replace the
-scenario-driven release bar in Phase 5.
+- protocol workspace UI
+- skill catalog/management UI
+- registry management API surfaces
+- shared SDK models where needed
 
-Standard authoring assertions:
-- `Custom runtime selector` has count `0`
-- `Advanced` has count `0`
-- `stage_key` input has count `0`
-- `max_rounds` input has count `0`
-- `timeout_seconds` input has count `0`
+Work:
 
-Operator-only tests:
-- if operator path exists, confirm those controls appear only there
+- add a guided composition path for “build a new assistant/process”
+- allow users to pick existing skills
+- allow creation/refinement of missing skills through UI/API
+- allow those skills to be used immediately in protocol stage assignment
 
-### Phase 7. Update exhaustive live audit
+Acceptance:
 
-The live audit should remain broad, but it must now explicitly include:
+- a new protocol-driven assistant can be created through the UI without DB
+  manipulation
 
-- standard-path assertions that forbidden controls never appear
-- scenario-driven authoring, rehearsal, and execution for:
-  - Software Engineering
-  - Document Approval
-  - Data Analysis / Reporting
+### Phase 6. Keep standard/operator separation strict
 
-This is in addition to the existing broad UI matrix.
+Files likely involved:
 
-The hierarchy is:
+- protocol workspace UI
+- registry API write surfaces
 
-- Phase 5 scenarios = release depth bar
-- Phase 6 negative invariants = PR gate
-- Phase 7 live audit = breadth validation
+Work:
 
-The live audit must include the same forbidden-control checks, but it should not outrank the scenario specs.
+- retain capability-based gating
+- ensure new artifact/map/composition features do not reintroduce standard-path
+  leakage of operator-only controls
 
-### Phase 8. Clean up stale tests and assumptions
+Acceptance:
 
-Delete or rewrite tests that assert `Advanced`, `Custom runtime selector`, or internal fields on the standard path.
+- product power increases without reopening internal escape hatches for normal
+  authors
 
-Keep:
-- low-level contract tests that guard core editor/runtime behavior
-- low-level tests that are necessary preconditions for the scenario specs
+## Test Strategy
 
-Add:
-- one primary owning spec for each major scenario
-- negative product-rule tests on the standard path
-- audit coverage only as supplementary breadth
+## 1. Scenario Specs Are The Release Bar
 
-## Parallel Workstreams
+The release bar remains:
 
-### Track A: Surface and API enforcement
+- Software Engineering: author -> rehearse -> execute
+- Document Approval: author -> rehearse -> execute
+- Data Analysis / Reporting: author -> rehearse -> execute
+- Meta Protocol Assistant: create skill/protocol composition via UI/API -> rehearse -> publish
 
-- implement `standard` vs `operator`
-- remove internal controls from the standard DOM
-- align API permissions with the same rule
+## 2. Map Interaction Must Be Tested
 
-### Track B: Scenario specs and release gating
+We need explicit tests for:
 
-- add scenario skeletons early, even if initially red or skipped
-- wire negative invariants as soon as the standard surface exists
-- turn scenarios green only after Track A lands
+- opening the map
+- selecting nodes from the map
+- returning to inline editor from the map
+- preserving map interactivity
+- mobile map presentation
 
-Recommended execution order:
+## 3. Artifact Flow Must Be Tested
 
-1. write or tighten scenario specs and negative expectations
-2. implement surface/API gating
-3. make scenarios green
-4. run the broad live audit
+We need explicit tests for:
 
-## Implementation Guidance
+- defining artifacts from the catalog
+- attaching them to steps
+- validating required paths
+- runtime verification visibility
+- real data/reporting pipeline manifestation
 
-1. Use the existing editor pipeline.
-- do not build a second stage editor
-- do not fork a second assignment editor
+## 4. Negative Invariants Stay In Force
 
-2. Omit subtrees instead of hiding them.
-- standard mode should not render operator-only controls
+Standard path must continue to omit:
 
-3. Keep one selector model underneath.
-- simplify the UI surface, not the runtime truth model
+- custom runtime selector
+- advanced stage internals
+- operator-only fields
 
-4. Keep delete accessible in standard mode.
-- simplification must not remove essential workflow authoring actions
+## 5. Breadth Audit Remains Required
 
-5. Treat rehearsal as a workflow-proofing tool, not a side mode.
-- tests should demonstrate this value directly
+The live audit remains required and should continue to produce:
 
-6. Prefer scenario fixtures and templates over abstract test scaffolding.
-- the product is about workflows, not generic protocol objects
-
-7. Treat 5C honestly.
-- keep the data-analysis scenario tied to the real artifact pipeline
-- do not claim Data Analysis / Reporting support based only on generic authoring mechanics
-
-## Acceptance Criteria
-
-This work is done only when all of the following are true:
-
-1. In the standard authoring surface:
-- `Custom runtime selector` is not rendered
-- `Advanced` is not rendered
-- `stage_key`, `max_rounds`, and `timeout_seconds` are not rendered
-
-2. The standard UI still supports:
-- add step
-- delete step
-- assign by skill
-- assign by agent
-- inline role creation
-- artifact flow authoring
-- routing / revise loops
-
-3. The API enforces the same separation.
-
-4. The Software Engineering UI scenario passes end-to-end:
-- author
-- rehearse revise/accept loops
-- execute
-- standard-path negative invariants hold during the same run
-
-5. The Document Approval UI scenario passes end-to-end:
-- author
-- rehearse revise/approve loops
-- execute
-- standard-path negative invariants hold during the same run
-
-6. The Data Analysis / Reporting UI scenario passes end-to-end, or is explicitly marked blocked by unmet 5C readiness conditions:
-- author
-- rehearse where applicable
-- execute
-- standard-path negative invariants hold during the same run
-
-7. The live Octopus audit includes:
-- standard-path negative checks
-- rehearsal proof
-- real execution proof
 - 500+ screenshots minimum
+- desktop, tablet, mobile coverage
+- authoring, rehearsal, execution, and runs surfaces
+
+But breadth does not replace depth. Scenario specs remain the release gate.
+
+## Decisions
+
+1. The workflow map stays in the product.
+2. The workflow map is hidden by default.
+3. When explicitly opened, the workflow map must be fully interactive and
+   legible.
+4. Artifacts become a first-class product concept, not just a checkbox list.
+5. Artifact authoring must map to real files, documents, datasets, reports, and
+   publishable outputs.
+6. The UI manifests all changes through APIs, not DB writes.
+7. Standard and operator paths remain distinct.
+8. One editor pipeline remains the rule. No duplicate authoring systems.
 
 ## Risks
 
-1. API enforcement may affect existing drafts that were previously edited through the old UI surface.
-- legacy behavior needs either migration or explicit operator-only handling
+1. The current canonical artifact type model may be too narrow for the desired
+   product clarity.
+- If so, the right answer is deliberate SDK/API extension, not browser-only
+  hacks.
 
-2. Data Analysis / Reporting can regress if the live environment no longer supports the required artifact pipeline.
-- that remains a product readiness issue, not merely a testing gap
+2. The meta-protocol composition flow depends on skill-management surfaces being
+   reliable enough for real authoring.
+- If those APIs or UI surfaces are incomplete, that becomes a product milestone,
+  not a documentation footnote.
 
-## Verification Matrix
+3. The map refactor must preserve existing canvas logic.
+- We should not fork a second graph implementation just to get a focused map
+  mode.
 
-### PR Gate
+## Definition Of Done
 
-- `pytest` UI and runtime contract suites
-  - proves the single pipeline and core invariants still hold
-- negative standard-path UI tests
-  - prove forbidden controls do not appear for normal authors
-- scenario specs
-  - prove workflow-purpose authoring/rehearsal/execution for target workflows
+This work is done only when all of the following are true:
 
-### Release Bar
-
-- all primary scenario specs green
-- live Octopus audit green
-
-### Breadth Audit
-
-- 500+ screenshots minimum
-- matrix coverage across desktop/tablet/mobile
-- supplementary to scenario depth, not a replacement for it
+1. `Show workflow map` opens a legible, interactive, on-demand map surface.
+2. The map is useful on desktop and mobile.
+3. Artifact authoring clearly explains where artifacts come from and what they
+   map to.
+4. A normal user can build a realistic Data Analysis / Reporting workflow from
+   scratch through the UI.
+5. A normal user can build or refine Software Engineering and Document Approval
+   workflows through the UI.
+6. A user can create a new protocol-driven assistant by composing skills and
+   protocols through UI/API flows, not DB mutation.
+7. Standard-path negative invariants still hold.
+8. Scenario specs pass end to end.
+9. The exhaustive live audit passes with 500+ screenshots.
 
 ## Immediate Next Steps
 
-1. Add or tighten scenario specs first, including negative invariants.
-2. Implement `standard` vs `operator` surface gating in the workspace.
-3. Remove `Custom runtime selector` from standard Assignment.
-4. Remove `Advanced` from standard stage editing and relocate delete.
-5. Align API restrictions for internal-only fields.
-6. Keep the Data Analysis / Reporting scenario fixture green as part of the release bar.
-7. Redeploy to `/Users/tinker/octopus` for any future product changes.
-8. Rerun exhaustive live audit and update this file whenever a verified regression is found.
+1. Fix the workflow map presentation so explicit-open yields a focused
+   interactive map mode.
+2. Redesign artifact authoring so protocol-level artifact definitions are
+   concrete and obvious.
+3. Tighten the blank-state 0-to-1 creation flow around steps + artifacts +
+   routing.
+4. Add the first meta-protocol assistant scenario spec and identify any missing
+   UI/API pieces required to make it real.
+5. Re-run the full live scenario and audit matrix after each phase.

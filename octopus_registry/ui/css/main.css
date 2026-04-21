@@ -3352,13 +3352,6 @@ select {
     min-width: 0;
 }
 
-.kit-authoring-map-column {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-}
-
 .kit-protocol-stage-stack {
     display: grid;
     gap: var(--space-4);
@@ -3385,6 +3378,23 @@ select {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--bg);
+}
+
+.kit-authoring-map-panel {
+    gap: var(--space-4);
+}
+
+.kit-authoring-map-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.kit-authoring-map-copy {
+    display: grid;
+    gap: var(--space-2);
 }
 
 .kit-selector-editor {
@@ -4007,6 +4017,55 @@ select {
     height: 100%;
 }
 
+.kit-authoring-map-panel .kit-workflow-viewport-cy,
+.kit-authoring-map-panel .kit-workflow-cy-host {
+    min-height: min(76vh, 52rem);
+}
+
+.kit-artifact-guide {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.kit-artifact-guide-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: var(--space-2);
+}
+
+.kit-artifact-guide-fact,
+.kit-artifact-usage-group {
+    display: grid;
+    gap: 0.35rem;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(17, 24, 39, 0.08);
+    background: rgba(255, 255, 255, 0.58);
+}
+
+.kit-artifact-guide-fact-label,
+.kit-artifact-usage-label {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.kit-artifact-guide-fact-value {
+    line-height: 1.5;
+}
+
+.kit-artifact-usage {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.kit-artifact-usage-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
 .kit-workflow-node-state {
     align-self: flex-start;
     border-radius: var(--radius-pill);
@@ -4224,26 +4283,22 @@ select {
 
 @media (min-width: 980px) {
     .kit-authoring-workspace {
-        grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.9fr);
-        align-items: start;
-    }
-
-    .kit-authoring-workspace[data-map-visible="false"] {
         grid-template-columns: 1fr;
-    }
-
-    .kit-authoring-map-column {
-        position: sticky;
-        top: var(--space-4);
-        max-height: calc(100vh - (var(--space-4) * 2));
-        overflow: auto;
-        padding-right: var(--space-1);
+        align-items: start;
     }
 }
 
 @media (min-width: 1320px) {
-    .kit-authoring-workspace {
-        grid-template-columns: minmax(0, 1.55fr) minmax(340px, 0.85fr);
+    .kit-authoring-map-panel .kit-workflow-viewport-cy,
+    .kit-authoring-map-panel .kit-workflow-cy-host {
+        min-height: min(80vh, 58rem);
+    }
+}
+
+@media (max-width: 960px) {
+    .kit-authoring-map-panel .kit-workflow-viewport-cy,
+    .kit-authoring-map-panel .kit-workflow-cy-host {
+        min-height: min(72vh, 42rem);
     }
 }
 

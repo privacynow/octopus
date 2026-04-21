@@ -37,6 +37,61 @@ function _protocolArtifactLabel(item) {
     return parts.join(' · ');
 }
 
+function _artifactDefinitionPath(item) {
+    return String(item?.path || item?.workspace_path || item?.location || '').trim();
+}
+
+function _artifactPurposeLabel(item) {
+    const normalizedKind = String(item?.kind || 'workspace_file').trim().toLowerCase();
+    const normalizedPath = _artifactDefinitionPath(item).toLowerCase();
+    if (normalizedKind === 'control_plane_text') {
+        return 'Notes or structured text carried with the run';
+    }
+    if (/\.(csv|tsv|xls|xlsx|json|jsonl|parquet)$/i.test(normalizedPath)) {
+        return 'Dataset or structured data file';
+    }
+    if (/\.(py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(normalizedPath)) {
+        return 'Code file or script';
+    }
+    if (/\.(pdf|md|txt|doc|docx|html)$/i.test(normalizedPath)) {
+        return 'Document or report';
+    }
+    if (/(^|\/)(src|app|lib|scripts|reports|docs|data)\//i.test(normalizedPath)) {
+        return 'Workspace file or folder';
+    }
+    return 'Workspace file or folder';
+}
+
+function _artifactUsage(doc, artifactKey) {
+    const normalizedArtifactKey = String(artifactKey || '').trim();
+    const reads = [];
+    const writes = [];
+    (doc?.stages || []).forEach((stage) => {
+        const stageLabel = String(stage?.display_name || stage?.stage_key || 'Untitled step').trim();
+        if ((stage?.inputs || []).includes(normalizedArtifactKey)) reads.push(stageLabel);
+        if ((stage?.outputs || []).includes(normalizedArtifactKey)) writes.push(stageLabel);
+    });
+    return { reads, writes };
+}
+
+function _artifactUsageSummary(doc, artifactKey) {
+    const usage = _artifactUsage(doc, artifactKey);
+    const parts = [];
+    if (usage.writes.length) parts.push(`${usage.writes.length} producer${usage.writes.length === 1 ? '' : 's'}`);
+    if (usage.reads.length) parts.push(`${usage.reads.length} consumer${usage.reads.length === 1 ? '' : 's'}`);
+    return parts.join(' · ');
+}
+
+function _artifactOptionLabel(item) {
+    const label = String(item?.display_name || item?.artifact_key || 'Untitled artifact').trim();
+    const pathLabel = _artifactDefinitionPath(item);
+    if (pathLabel) return `${label} · ${pathLabel}`;
+    if (String(item?.kind || '').trim().toLowerCase() === 'control_plane_text') {
+        return `${label} · text carried with the run`;
+    }
+    return label;
+}
+
 function _protocolTransitionParticipantKey(transition, stageById) {
     const toStage = stageById.get(String(transition.to_stage_execution_id || ''));
     if (toStage && toStage.participant_key) {
@@ -224,6 +279,11 @@ function renderProtocolWorkspace(container) {
             && _operatorSurfaceAvailable()
             ? 'operator'
             : 'standard';
+    }
+
+    function _openArtifactCatalog(nodeKey = '') {
+        selection = { sectionKey: 'artifacts', nodeKey: String(nodeKey || '') };
+        render();
     }
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
@@ -508,12 +568,14 @@ function renderProtocolWorkspace(container) {
     function _workflowProgress(doc = draft.document) {
         const normalized = doc || _blankDocument();
         const participantCount = Array.isArray(normalized.participants) ? normalized.participants.length : 0;
+        const artifactCount = Array.isArray(normalized.artifacts) ? normalized.artifacts.length : 0;
         const stageCount = Array.isArray(normalized.stages) ? normalized.stages.length : 0;
         const edgeCount = _transitionEntries(normalized).length;
         let nextStep = '';
         if (!stageCount) nextStep = 'stage';
         else if (!edgeCount) nextStep = 'transition';
-        return { participantCount, stageCount, edgeCount, nextStep };
+        else if (!artifactCount) nextStep = 'artifact';
+        return { participantCount, artifactCount, stageCount, edgeCount, nextStep };
     }
 
     function _participantDisplayName(participantKey, doc = draft.document) {
@@ -3178,13 +3240,33 @@ function renderProtocolWorkspace(container) {
 
     function _firstRunState(progress) {
         const stageCount = progress.stageCount;
+        const artifactCount = progress.artifactCount;
         return editorMode.kind === 'idle' && !stageCount
             ? {
                 active: true,
                 title: Kit.dict.label('protocol.canvas.empty.title'),
-                body: 'Start by adding the first step. Choose an existing owner role or create a new role inline as part of the step.',
+                body: 'Start with the first step, then define any shared files, datasets, code, or reports that later steps should read or produce.',
+                steps: [
+                    {
+                        badge: '1',
+                        text: 'Add the first step and create its owner role inline if you need a new one.',
+                        state: 'active',
+                    },
+                    {
+                        badge: '2',
+                        text: 'Define shared workflow files and outputs once, then attach them to step inputs and outputs.',
+                        state: artifactCount ? 'complete' : '',
+                    },
+                    {
+                        badge: '3',
+                        text: 'Open the workflow map only when you want route context or a spatial review of the whole flow.',
+                    },
+                ],
+                note: 'For assistant-building flows, open the skills catalog to publish or install a capability first, then come back here and assign steps by skill.',
                 actions: [
                     { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
+                    { label: 'Define shared files', tone: '', onClick: () => _openArtifactCatalog() },
+                    { label: 'Open skills catalog', tone: '', onClick: () => Router.navigate('/ui/skills') },
                     { label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/gallery') },
                 ],
             }
@@ -3611,6 +3693,38 @@ function renderProtocolWorkspace(container) {
         });
     }
 
+    function _workflowMapPanelEl(workflow) {
+        const panel = document.createElement('section');
+        panel.className = 'kit-protocol-inline-card kit-authoring-map-panel';
+        panel.dataset.key = 'protocol-authoring-map-panel';
+
+        const head = document.createElement('div');
+        head.className = 'kit-authoring-map-head';
+
+        const copy = document.createElement('div');
+        copy.className = 'kit-authoring-map-copy';
+        const title = document.createElement('h3');
+        title.className = 'kit-stage-editor-hero-title';
+        title.textContent = 'Workflow map';
+        copy.appendChild(title);
+        const note = document.createElement('p');
+        note.className = 'kit-stage-editor-hero-note';
+        note.textContent = 'Use the map for route context and structure review. It stays fully interactive here: click a step to jump back into the inline editor, zoom when needed, then close it to continue authoring.';
+        copy.appendChild(note);
+        head.appendChild(copy);
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'btn btn-small';
+        close.textContent = 'Hide workflow map';
+        close.addEventListener('click', () => _setWorkflowMapMode('hidden'));
+        head.appendChild(close);
+
+        panel.appendChild(head);
+        panel.appendChild(_workflowMapEl(workflow));
+        return panel;
+    }
+
     function _editorContext(workflow = null) {
         const doc = draft.document;
         const projection = workflow?.projection || _buildWorkflowProjection(doc);
@@ -3636,7 +3750,7 @@ function renderProtocolWorkspace(container) {
         }));
         const artifactOptions = (doc.artifacts || []).map((item) => ({
             value: String(item.artifact_key || ''),
-            label: String(item.display_name || item.artifact_key || ''),
+            label: _artifactOptionLabel(item),
         }));
         return {
             doc,
@@ -3704,6 +3818,46 @@ function renderProtocolWorkspace(container) {
         shell.className = 'kit-stage-editor';
         shell.dataset.key = `protocol-artifact-editor:${artifactKey}`;
 
+        const guide = document.createElement('div');
+        guide.className = 'kit-artifact-guide';
+        const guideNote = document.createElement('p');
+        guideNote.className = 'kit-stage-editor-hero-note';
+        guideNote.textContent = 'Artifacts are the concrete files or text that steps pass between each other. Use workspace files for datasets, code, documents, PDFs, and reports. Use run-carried text only for small notes or structured text that should not live in the workspace.';
+        guide.appendChild(guideNote);
+
+        const facts = document.createElement('div');
+        facts.className = 'kit-artifact-guide-facts';
+        [
+            {
+                label: 'Represents',
+                value: _artifactPurposeLabel(artifact),
+            },
+            {
+                label: 'Stored at',
+                value: _artifactDefinitionPath(artifact) || (String(artifact?.kind || '').trim().toLowerCase() === 'control_plane_text'
+                    ? 'In the run record instead of the workspace'
+                    : 'Pick a workspace-relative path'),
+            },
+            {
+                label: 'Verification',
+                value: artifact?.verify === false ? 'Optional' : 'Required before a writing step can complete',
+            },
+        ].forEach((item) => {
+            const stat = document.createElement('div');
+            stat.className = 'kit-artifact-guide-fact';
+            const statLabel = document.createElement('strong');
+            statLabel.className = 'kit-artifact-guide-fact-label';
+            statLabel.textContent = String(item.label || '');
+            stat.appendChild(statLabel);
+            const statValue = document.createElement('span');
+            statValue.className = 'kit-artifact-guide-fact-value';
+            statValue.textContent = String(item.value || '');
+            stat.appendChild(statValue);
+            facts.appendChild(stat);
+        });
+        guide.appendChild(facts);
+        shell.appendChild(guide);
+
         const kindOptions = _manifestArtifactKindOptions().map((value) => ({
             value,
             label: Kit.dict.label(`protocol.artifact.kind.${value}`, value),
@@ -3724,9 +3878,11 @@ function renderProtocolWorkspace(container) {
             surfaceKey: 'protocol.artifact',
             onCommit,
             schema: context.applyReadOnly([
-                { key: 'display_name', kind: 'text', label: 'Artifact name', required: true },
-                { key: 'kind', kind: 'select', label: 'Artifact type', options: kindOptions },
-                { key: 'path', kind: 'text', label: 'Workspace path', help: 'Relative to the workspace root.' },
+                { key: 'display_name', kind: 'text', label: 'Name', required: true },
+                { key: 'kind', kind: 'select', label: 'What it represents', options: kindOptions, help: 'Most datasets, code files, documents, and reports should stay as workspace files.' },
+                ...(String(artifact?.kind || 'workspace_file').trim().toLowerCase() === 'control_plane_text'
+                    ? []
+                    : [{ key: 'path', kind: 'text', label: 'Workspace path', help: 'Relative to the workspace root. Examples: data/source.csv, src/analyze.py, reports/final.pdf.' }]),
             ]),
             actions: context.readOnly
                 ? []
@@ -3744,7 +3900,7 @@ function renderProtocolWorkspace(container) {
                     key: 'verify',
                     kind: 'checkbox',
                     label: 'Require verification',
-                    help: 'Keep this enabled when a stage should not complete until the artifact is observed or verified.',
+                    help: 'Keep this enabled when a writing step should not complete until the artifact is observed or verified.',
                 },
             ]),
         });
@@ -3752,6 +3908,41 @@ function renderProtocolWorkspace(container) {
             wide: true,
             collapsible: true,
             open: Boolean(String(artifact?.description || '').trim()),
+        }));
+
+        const usage = _artifactUsage(context.doc, artifactKey);
+        const usagePanel = document.createElement('div');
+        usagePanel.className = 'kit-artifact-usage';
+        if (!usage.reads.length && !usage.writes.length) {
+            usagePanel.appendChild(UI.renderEmptyState('This artifact is not attached to any step yet. Define it here first, then attach it in a step’s inputs and outputs section.', true));
+        } else {
+            [
+                { label: 'Needed by', items: usage.reads },
+                { label: 'Produced by', items: usage.writes },
+            ].forEach((group) => {
+                if (!group.items.length) return;
+                const groupEl = document.createElement('div');
+                groupEl.className = 'kit-artifact-usage-group';
+                const groupLabel = document.createElement('strong');
+                groupLabel.className = 'kit-artifact-usage-label';
+                groupLabel.textContent = String(group.label || '');
+                groupEl.appendChild(groupLabel);
+                const list = document.createElement('div');
+                list.className = 'kit-artifact-usage-list';
+                group.items.forEach((item) => {
+                    const chip = document.createElement('span');
+                    chip.className = 'badge';
+                    chip.textContent = String(item || '');
+                    list.appendChild(chip);
+                });
+                groupEl.appendChild(list);
+                usagePanel.appendChild(groupEl);
+            });
+        }
+        shell.appendChild(_stageEditorSection('Used by steps', usagePanel, {
+            wide: true,
+            collapsible: true,
+            open: Boolean(usage.reads.length || usage.writes.length),
         }));
         return shell;
     }
@@ -3761,11 +3952,11 @@ function renderProtocolWorkspace(container) {
         panel.className = 'kit-protocol-inline-card';
         const title = document.createElement('h3');
         title.className = 'kit-stage-editor-hero-title';
-        title.textContent = 'Artifacts';
+        title.textContent = 'Workflow files and outputs';
         panel.appendChild(title);
         const subtitle = document.createElement('p');
         subtitle.className = 'kit-stage-editor-hero-note';
-        subtitle.textContent = 'Define the files or text outputs the workflow consumes and produces, then connect them to steps below.';
+        subtitle.textContent = 'Define shared datasets, code files, documents, reports, or run-carried text once here. Steps only attach reads and writes to these definitions later.';
         panel.appendChild(subtitle);
 
         const actions = document.createElement('div');
@@ -3810,8 +4001,9 @@ function renderProtocolWorkspace(container) {
             const summary = document.createElement('div');
             summary.className = 'kit-protocol-segment-step-meta';
             summary.textContent = [
-                Kit.dict.label(`protocol.artifact.kind.${String(artifact.kind || 'workspace_file')}`, String(artifact.kind || 'workspace_file')),
-                _protocolArtifactLabel(artifact),
+                _artifactPurposeLabel(artifact),
+                _artifactDefinitionPath(artifact),
+                _artifactUsageSummary(context.doc, artifactKey),
             ].filter(Boolean).join(' · ');
             row.appendChild(summary);
             entry.appendChild(row);
@@ -3827,7 +4019,7 @@ function renderProtocolWorkspace(container) {
             list.appendChild(entry);
         });
         if (!list.childElementCount) {
-            list.appendChild(UI.renderEmptyState('No artifacts yet. Add one here, then attach it to a step.', true));
+            list.appendChild(UI.renderEmptyState('No shared files or outputs yet. Add one here, then attach it from a step’s inputs and outputs section.', true));
         }
         panel.appendChild(list);
         return panel;
@@ -4109,6 +4301,10 @@ function renderProtocolWorkspace(container) {
             toolbarActions: workflow.toolbarActions,
         }));
 
+        if (_workflowMapVisible()) {
+            root.appendChild(_workflowMapPanelEl(workflow));
+        }
+
         if (selection.sectionKey === 'protocol' || selection.sectionKey === 'artifacts') {
             root.appendChild(_protocolSettingsSectionEl(context));
         }
@@ -4159,6 +4355,59 @@ function renderProtocolWorkspace(container) {
         }
         section.appendChild(panel);
         return section;
+    }
+
+    function _stageArtifactsEditor({
+        target,
+        readOnly = false,
+        onCommit = null,
+        artifactOptions = [],
+    } = {}) {
+        const shell = document.createElement('div');
+        shell.className = 'kit-stage-artifacts';
+
+        const note = document.createElement('p');
+        note.className = 'kit-stage-editor-hero-note';
+        note.textContent = 'Attach the shared files or text this step needs and produces. Define them once in Workflow files and outputs, then connect them here.';
+        shell.appendChild(note);
+
+        if (!artifactOptions.length) {
+            shell.appendChild(UI.renderEmptyState('No workflow files or outputs are defined yet.', true));
+            if (!readOnly) {
+                const actions = document.createElement('div');
+                actions.className = 'kit-stage-routing-actions';
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-small';
+                button.textContent = 'Open workflow files and outputs';
+                button.addEventListener('click', () => _openArtifactCatalog());
+                actions.appendChild(button);
+                shell.appendChild(actions);
+            }
+            return shell;
+        }
+
+        shell.appendChild(Kit.detailsPanel({
+            target,
+            surfaceKey: 'protocol.stage',
+            onCommit,
+            schema: [
+                { key: 'inputs', kind: 'checklist', options: artifactOptions, label: 'Needs from earlier steps', help: 'Check the shared files or text this step reads before it can run.', disabled: readOnly },
+                { key: 'outputs', kind: 'checklist', options: artifactOptions, label: 'Produces for later steps', help: 'Check the shared files or text this step should create or update for later steps.', disabled: readOnly },
+            ],
+        }));
+        if (!readOnly) {
+            const actions = document.createElement('div');
+            actions.className = 'kit-stage-routing-actions';
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-small';
+            button.textContent = 'Edit workflow files and outputs';
+            button.addEventListener('click', () => _openArtifactCatalog());
+            actions.appendChild(button);
+            shell.appendChild(actions);
+        }
+        return shell;
     }
 
     function _stageRoutingPanel(stage, { readOnly = false, connectAction = null } = {}) {
@@ -4367,16 +4616,13 @@ function renderProtocolWorkspace(container) {
             open: Boolean(createAction),
         }));
 
-        const artifactsPanel = Kit.detailsPanel({
+        const artifactsPanel = _stageArtifactsEditor({
             target,
-            surfaceKey: 'protocol.stage',
+            readOnly,
             onCommit,
-            schema: applyReadOnly([
-                { key: 'inputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.inputs.label', helpKey: 'protocol.stage.inputs.help' },
-                { key: 'outputs', kind: 'checklist', options: artifactOptions, labelKey: 'protocol.stage.outputs.label', helpKey: 'protocol.stage.outputs.help' },
-            ]),
+            artifactOptions,
         });
-        grid.appendChild(_stageEditorSection('Artifacts', artifactsPanel, {
+        grid.appendChild(_stageEditorSection('Inputs and outputs', artifactsPanel, {
             wide: true,
             collapsible: !createAction,
             open: Boolean(createAction),
@@ -4522,14 +4768,6 @@ function renderProtocolWorkspace(container) {
         workspace.dataset.editorMode = String(editorMode.kind || 'idle');
         workspace.dataset.mapVisible = _workflowMapVisible() ? 'true' : 'false';
         workspace.appendChild(_progressiveWorkflowEl(workflow));
-        if (_workflowMapVisible()) {
-            const mapColumn = document.createElement('div');
-            mapColumn.className = 'kit-authoring-map-column';
-            mapColumn.dataset.key = 'protocol-authoring-map-column';
-            const mapRoot = _workflowMapEl(workflow);
-            mapColumn.appendChild(mapRoot);
-            workspace.appendChild(mapColumn);
-        }
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
         UI.reconcileChildren(contentEl, [headerEl, workspace]);

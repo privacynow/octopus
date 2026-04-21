@@ -135,7 +135,7 @@ async function openProtocolSettings(page) {
 }
 
 async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
-  const catalog = page.locator('.kit-protocol-inline-card').filter({ has: page.getByRole('heading', { name: 'Artifacts', exact: true }) }).first();
+  const catalog = page.locator('.kit-protocol-inline-card').filter({ has: page.getByRole('heading', { name: 'Workflow files and outputs', exact: true }) }).first();
   const beforeCount = await page.locator('[data-testid^="workflow-artifact-"]').count();
   const artifactKey = `artifact_${beforeCount + 1}`;
   await catalog.getByRole('button', { name: 'Add artifact', exact: true }).click();
@@ -145,17 +145,18 @@ async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
   await expect(artifactNode).toHaveClass(/is-selected/);
   let editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
   await expect(editor.getByRole('heading', { name: 'Artifact basics', exact: true })).toBeVisible();
-  await editor.getByLabel('Name').fill(name);
-  await editor.getByLabel('Name').blur();
+  await expect(editor).toContainText('datasets, code, documents, PDFs, and reports');
+  await editor.getByLabel('Name', { exact: true }).fill(name);
+  await editor.getByLabel('Name', { exact: true }).blur();
   await page.waitForTimeout(600);
   await waitForSaved(page);
   editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
-  await editor.getByLabel('Kind').selectOption(kind);
+  await editor.getByLabel('What it represents', { exact: true }).selectOption(kind);
   await page.waitForTimeout(600);
   await waitForSaved(page);
   editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
-  await editor.getByLabel('Workspace path').fill(path);
-  await editor.getByLabel('Workspace path').blur();
+  await editor.getByLabel('Workspace path', { exact: true }).fill(path);
+  await editor.getByLabel('Workspace path', { exact: true }).blur();
   await page.waitForTimeout(600);
   await waitForSaved(page);
 }
@@ -165,7 +166,7 @@ async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] 
   async function artifactRows() {
     const editor = page.locator('.kit-stage-editor').last();
     const artifactsSection = editor.locator('.kit-stage-editor-section').filter({
-      has: page.getByRole('heading', { name: 'Artifacts', exact: true }),
+      has: page.getByRole('heading', { name: 'Inputs and outputs', exact: true }),
     }).first();
     const summary = artifactsSection.locator('summary').first();
     if (await summary.count()) {
@@ -175,19 +176,19 @@ async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] 
       }
     }
     return {
-      readsRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Reads artifacts' }).first(),
-      writesRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Writes artifacts' }).first(),
+      readsRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first(),
+      writesRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first(),
     };
   }
   for (const label of reads) {
     const { readsRow } = await artifactRows();
-    await readsRow.getByLabel(label, { exact: true }).check();
+    await readsRow.getByLabel(new RegExp(`^${label}\\b`)).check();
     await page.waitForTimeout(600);
     await waitForSaved(page);
   }
   for (const label of writes) {
     const { writesRow } = await artifactRows();
-    await writesRow.getByLabel(label, { exact: true }).check();
+    await writesRow.getByLabel(new RegExp(`^${label}\\b`)).check();
     await page.waitForTimeout(600);
     await waitForSaved(page);
   }
@@ -209,7 +210,9 @@ test.describe('protocol authoring live', () => {
     const lifecycle = page.locator('.kit-lifecycle-header');
     await expect(lifecycle.getByLabel('Name')).toHaveValue('');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start the workflow');
-    await expect(page.locator('.kit-workflow-first-run')).toContainText('Start by adding the first step.');
+    await expect(page.locator('.kit-workflow-first-run')).toContainText('Start with the first step');
+    await expect(page.getByRole('button', { name: 'Define shared files', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open skills catalog', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
 
     await page.getByRole('button', { name: /(\+ )?Add (first )?step/i }).first().click();
@@ -334,6 +337,8 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: '100%', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
+    const mapWidth = await page.locator('.kit-authoring-map-panel .kit-workflow-viewport-cy').evaluate((element) => element.getBoundingClientRect().width);
+    expect(mapWidth).toBeGreaterThan(700);
     const assignment = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
     await expect.poll(async () => assignment.getByLabel('Required skill', { exact: true }).locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
@@ -968,8 +973,10 @@ test.describe('protocol authoring live', () => {
     const canvasOverflow = await page.locator('.kit-workflow-viewport-cy').evaluate((element) => ({
       scrollWidth: element.scrollWidth,
       clientWidth: element.clientWidth,
+      height: element.getBoundingClientRect().height,
     }));
     expect(canvasOverflow.scrollWidth).toBeLessThanOrEqual(canvasOverflow.clientWidth + 2);
+    expect(canvasOverflow.height).toBeGreaterThan(420);
 
     await page.getByTestId('workflow-stage-planning').click();
     await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Planning');

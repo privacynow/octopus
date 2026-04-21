@@ -95,15 +95,16 @@ async function waitForRunStatus(page, runId, status) {
   }, { timeout: 60000 }).toBe(status);
 }
 
-async function waitForLatestRehearsalRunId(page) {
+async function waitForLatestRehearsalRunId(page, protocolId) {
+  const expectedProtocolId = String(protocolId || '');
   await expect.poll(async () => {
     const response = await apiJson(page, 'GET', '/v1/protocol-runs?limit=10&status=running');
     const runs = Array.isArray(response.payload?.runs) ? response.payload.runs : [];
-    return String(runs.find((item) => item.is_rehearsal)?.protocol_run_id || '');
+    return String(runs.find((item) => item.is_rehearsal && String(item.protocol_id || '') === expectedProtocolId)?.protocol_run_id || '');
   }, { timeout: 15000 }).not.toBe('');
   const response = await apiJson(page, 'GET', '/v1/protocol-runs?limit=10&status=running');
   const runs = Array.isArray(response.payload?.runs) ? response.payload.runs : [];
-  return String(runs.find((item) => item.is_rehearsal)?.protocol_run_id || '');
+  return String(runs.find((item) => item.is_rehearsal && String(item.protocol_id || '') === expectedProtocolId)?.protocol_run_id || '');
 }
 
 test.describe('protocol authoring live', () => {
@@ -480,7 +481,7 @@ test.describe('protocol authoring live', () => {
     try {
       await page.getByRole('button', { name: 'Rehearse' }).click();
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
-      const runId = await waitForLatestRehearsalRunId(page);
+      const runId = await waitForLatestRehearsalRunId(page, protocolId);
 
       const sequence = [
         ['planning', 'Planning pass 1', 'plan_review'],
@@ -587,7 +588,7 @@ test.describe('protocol authoring live', () => {
     try {
       await page.getByRole('button', { name: 'Rehearse' }).click();
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
-      const runId = await waitForLatestRehearsalRunId(page);
+      const runId = await waitForLatestRehearsalRunId(page, protocolId);
 
       const sequence = [
         ['draft_document', 'Draft v1', 'review_document'],

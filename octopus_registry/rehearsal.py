@@ -87,6 +87,14 @@ class RehearsalSessionManager:
     _stop_event: asyncio.Event | None = None
     _task: asyncio.Task[None] | None = None
 
+    @staticmethod
+    def _heartbeat_payload() -> dict[str, Any]:
+        return {
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 16,
+        }
+
     def ensure_agent(self) -> tuple[str, str]:
         """Idempotently enroll the reserved rehearsal agent; cache the token."""
         if self._agent_id and self._agent_token:
@@ -111,10 +119,7 @@ class RehearsalSessionManager:
         self._agent_id = str(enrollment.agent_id or "")
         self._agent_token = str(enrollment.agent_token or "")
         try:
-            self.store.heartbeat(
-                self._agent_token,
-                {"connectivity_state": "connected", "current_capacity": 0, "max_capacity": 16},
-            )
+            self.store.heartbeat(self._agent_token, self._heartbeat_payload())
         except Exception:
             log.warning("Rehearsal bot initial heartbeat failed", exc_info=True)
         return self._agent_id, self._agent_token
@@ -161,6 +166,7 @@ class RehearsalSessionManager:
         if not self._agent_token:
             return
         try:
+            self.store.heartbeat(self._agent_token, self._heartbeat_payload())
             result = self.store.poll(
                 self._agent_token,
                 cursor=int(self._poll_cursor or "0") if str(self._poll_cursor).isdigit() else 0,

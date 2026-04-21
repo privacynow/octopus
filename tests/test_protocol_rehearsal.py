@@ -10,6 +10,8 @@ Postgres store.
 
 from __future__ import annotations
 
+import time
+
 from octopus_sdk.protocols import REHEARSAL_AUTHORITY_REF, software_engineering_protocol_document
 from octopus_registry.rehearsal import RehearsalSessionManager, REHEARSAL_AGENT_SLUG
 from octopus_registry.store_postgres import RegistryPostgresStore
@@ -189,6 +191,27 @@ def test_rehearsal_manager_queues_and_completes_stage_without_external_egress(
     rehearsal_card = agents[0]
     assert str(rehearsal_card.slug or "") == REHEARSAL_AGENT_SLUG
     assert str(rehearsal_card.role or "") == "rehearsal"
+
+
+def test_rehearsal_poll_refreshes_reserved_agent_heartbeat(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
+
+    agents_before = store.list_agents(for_agent_id=rehearsal_agent_id, limit=1)
+    assert agents_before
+    first_seen = str(agents_before[0].last_heartbeat_at or "")
+    assert first_seen
+
+    time.sleep(0.02)
+    manager._poll_once_sync()
+
+    agents_after = store.list_agents(for_agent_id=rehearsal_agent_id, limit=1)
+    assert agents_after
+    refreshed = str(agents_after[0].last_heartbeat_at or "")
+    assert refreshed
+    assert refreshed >= first_seen
 
 
 def test_rehearsal_synthesizes_required_outputs_for_write_capable_stage(

@@ -2656,6 +2656,7 @@ function renderProtocolWorkspace(container) {
                 label: 'Required skill',
                 allowCustom: false,
             });
+            skillField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:skill:required`;
             wrap.appendChild(skillField.element);
 
             const agentField = _buildSelectorValueField({
@@ -2675,6 +2676,7 @@ function renderProtocolWorkspace(container) {
                 disabled: !requiredSkill,
                 allowCustom: false,
             });
+            agentField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:skill:agent-refinement`;
             wrap.appendChild(agentField.element);
         } else {
             const agentField = _buildSelectorValueField({
@@ -2688,6 +2690,7 @@ function renderProtocolWorkspace(container) {
                 label: 'Agent',
                 allowCustom: false,
             });
+            agentField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:agent:pinned`;
             wrap.appendChild(agentField.element);
 
             const skillField = _buildSelectorValueField({
@@ -2707,6 +2710,7 @@ function renderProtocolWorkspace(container) {
                 disabled: !pinnedAgent,
                 allowCustom: false,
             });
+            skillField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:agent:skill-refinement`;
             wrap.appendChild(skillField.element);
         }
 

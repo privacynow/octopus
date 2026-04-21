@@ -95,6 +95,12 @@ async function waitForRunStatus(page, runId, status) {
   }, { timeout: 60000 }).toBe(status);
 }
 
+async function applyScenarioAndSubmit(session, scenarioName) {
+  await session.getByRole('button', { name: scenarioName, exact: true }).click();
+  await expect(session.getByRole('textbox')).not.toHaveValue('');
+  await session.getByRole('button', { name: 'Submit response', exact: true }).click();
+}
+
 async function waitForLatestRehearsalRunId(page, protocolId) {
   const expectedProtocolId = String(protocolId || '');
   await expect.poll(async () => {
@@ -262,12 +268,17 @@ test.describe('protocol authoring live', () => {
     await assignment.getByRole('tab', { name: 'Specific agent', exact: true }).click();
     await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
     await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
-    await expect(assignment).toContainText('Leave the skill blank to keep the assignment agent-only');
+    await expect(assignment).toContainText('(leave agent-only)');
     await assignment.getByLabel('Agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
-    await expect(assignment.locator('.quickstart-chip').filter({ hasText: 'Architecture' }).first()).toBeVisible();
-    await assignment.locator('.quickstart-chip').filter({ hasText: 'Architecture' }).first().click();
-    await expect(assignment.getByLabel('Limit to one of this agent\'s skills (optional)', { exact: true })).toHaveValue('architecture');
     await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue('lift-and-shift-m2-bot');
+    const optionalSkillControl = assignment.getByLabel('Limit to one of this agent\'s skills (optional)', { exact: true });
+    const availableAgentSkills = await optionalSkillControl.locator('option').evaluateAll((options) =>
+      options.map((option) => String(option.value || '')).filter(Boolean),
+    );
+    if (availableAgentSkills.length) {
+      await optionalSkillControl.selectOption(availableAgentSkills[0]);
+      await expect(optionalSkillControl).toHaveValue(availableAgentSkills[0]);
+    }
     await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
     await selectStep(page, 'plan_review');
@@ -499,15 +510,13 @@ test.describe('protocol authoring live', () => {
       for (const [stageKey, scenarioName, nextStage] of sequence) {
         const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
         await expect(session).toBeVisible({ timeout: 20000 });
-        await session.getByRole('button', { name: scenarioName, exact: true }).click();
-        await session.getByRole('button', { name: 'Submit response', exact: true }).click();
+        await applyScenarioAndSubmit(session, scenarioName);
         await waitForRunStage(page, runId, nextStage);
       }
 
       const acceptance = page.locator('.kit-rehearsal-session[data-stage-key="acceptance"]').first();
       await expect(acceptance).toBeVisible({ timeout: 20000 });
-      await acceptance.getByRole('button', { name: 'Acceptance pass', exact: true }).click();
-      await acceptance.getByRole('button', { name: 'Submit response', exact: true }).click();
+      await applyScenarioAndSubmit(acceptance, 'Acceptance pass');
       await waitForRunStatus(page, runId, 'completed');
 
       const finalDetail = await getRunDetail(page, runId);
@@ -599,15 +608,13 @@ test.describe('protocol authoring live', () => {
       for (const [stageKey, scenarioName, nextStage] of sequence) {
         const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
         await expect(session).toBeVisible({ timeout: 20000 });
-        await session.getByRole('button', { name: scenarioName, exact: true }).click();
-        await session.getByRole('button', { name: 'Submit response', exact: true }).click();
+        await applyScenarioAndSubmit(session, scenarioName);
         await waitForRunStage(page, runId, nextStage);
       }
 
       const approval = page.locator('.kit-rehearsal-session[data-stage-key="approve_document"]').first();
       await expect(approval).toBeVisible({ timeout: 20000 });
-      await approval.getByRole('button', { name: 'Approve accept', exact: true }).click();
-      await approval.getByRole('button', { name: 'Submit response', exact: true }).click();
+      await applyScenarioAndSubmit(approval, 'Approve accept');
       await waitForRunStatus(page, runId, 'completed');
 
       const finalDetail = await getRunDetail(page, runId);

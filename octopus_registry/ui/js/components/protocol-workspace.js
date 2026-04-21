@@ -265,7 +265,7 @@ function renderProtocolWorkspace(container) {
     };
     let documentHistory = { undo: [], redo: [] };
     let canvasViewport = { zoom: 'fit' };
-    let workflowMapMode = 'auto';
+    let workflowMapMode = _workflowMapModeFromQuery();
     let stageAssignmentEditor = { stageKey: '', mode: '' };
     let collapsibleSectionState = {};
     let pendingAutosaveSelection = null;
@@ -322,7 +322,7 @@ function renderProtocolWorkspace(container) {
     };
 
     // The canvas/details interaction works off one selection.
-    let selection = { sectionKey: 'overview', nodeKey: '' };
+    let selection = _selectionFromQuery(_blankDocument());
 
     let saveState = { state: 'idle', lastSavedAt: '', error: '' };
     let autosaveTimer = 0;

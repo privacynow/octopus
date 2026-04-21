@@ -3380,11 +3380,13 @@ select {
     background: var(--bg);
 }
 
-.kit-authoring-map-panel {
+.kit-authoring-map-panel,
+.kit-authoring-secondary-surface {
     gap: var(--space-4);
 }
 
-.kit-authoring-map-head {
+.kit-authoring-map-head,
+.kit-authoring-surface-head {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
@@ -3392,9 +3394,14 @@ select {
     flex-wrap: wrap;
 }
 
-.kit-authoring-map-copy {
+.kit-authoring-map-copy,
+.kit-authoring-surface-copy {
     display: grid;
     gap: var(--space-2);
+}
+
+.kit-authoring-secondary-surface .kit-workflow-canvas {
+    min-height: min(72vh, 820px);
 }
 
 .kit-selector-editor {

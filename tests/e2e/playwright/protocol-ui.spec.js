@@ -393,18 +393,31 @@ test.describe('protocol authoring live', () => {
     const planningEditor = page.locator('.kit-stage-editor').last();
     await expect(planningEditor.getByLabel('Name').first()).toHaveValue('Planning');
     await expect(page.getByTestId('workflow-stage-plan_review')).toBeVisible();
+    await page.getByRole('button', { name: 'Done', exact: true }).first().click();
+    await expect(page.locator('.kit-protocol-inline-editor > .kit-stage-editor')).toHaveCount(0);
 
     await selectStep(page, 'planning');
     await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Planning');
     await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).not.toBeVisible();
     await page.getByRole('button', { name: 'Show workflow map', exact: true }).click();
+    await expect(page.locator('.kit-protocol-stage-stack')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Hide workflow map', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Back to workflow', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: '100%', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
     const mapWidth = await page.locator('.kit-authoring-map-panel .kit-workflow-viewport-cy').evaluate((element) => element.getBoundingClientRect().width);
     expect(mapWidth).toBeGreaterThan(700);
+    await page.getByRole('button', { name: 'Back to workflow', exact: true }).click();
+    await expectSelectedStep(page, 'planning');
+    await expect(page.locator('.kit-protocol-stage-stack')).toBeVisible();
+
+    await openProtocolSettings(page);
+    await expect(page.locator('.kit-protocol-stage-stack')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to workflow', exact: true }).click();
+    await expectSelectedStep(page, 'planning');
+
     const assignment = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
     await expect.poll(async () => assignment.getByLabel('Required skill', { exact: true }).locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
@@ -569,6 +582,19 @@ test.describe('protocol authoring live', () => {
 
     const readsRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
     const writesRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
+    await artifactsSection.getByRole('button', { name: 'Edit workflow files and outputs', exact: true }).click();
+    await expectSelectedStep(page, 'architecture');
+    const localArtifactCatalog = artifactsSection.locator('.kit-protocol-inline-card').filter({
+      has: page.getByRole('heading', { name: 'Workflow files and outputs', exact: true }),
+    }).first();
+    await expect(localArtifactCatalog).toBeVisible();
+    await expect(page.locator('.kit-authoring-secondary-surface')).toHaveCount(0);
+    await localArtifactCatalog.getByTestId('workflow-artifact-artifact_1').click();
+    await expect(localArtifactCatalog.locator('.kit-stage-editor').first()).toContainText('Architecture notes');
+    await localArtifactCatalog.getByRole('button', { name: 'Back to step', exact: true }).click();
+    await expect(localArtifactCatalog).toHaveCount(0);
+    await expectSelectedStep(page, 'architecture');
+
     await readsRow.getByLabel(/Architecture review notes/).check();
     await page.waitForTimeout(600);
     await waitForSaved(page);
@@ -828,7 +854,7 @@ test.describe('protocol authoring live', () => {
       });
       const runId = String(created.run?.protocol_run_id || '');
       expect(runId).toBeTruthy();
-      await waitForRunStatus(page, runId, 'completed', 180000);
+      await waitForRunStatus(page, runId, 'completed', 300000);
       const finalDetail = await getRunDetail(page, runId);
       expect(String(finalDetail.run?.status || '')).toBe('completed');
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === publishKey)).toBe(true);

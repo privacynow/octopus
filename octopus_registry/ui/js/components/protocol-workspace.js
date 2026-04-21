@@ -1560,6 +1560,8 @@ function renderProtocolWorkspace(container) {
             const control = editor.querySelector(selector);
             return control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
                 ? String(control.value || '')
+                : control instanceof Element && Object.prototype.hasOwnProperty.call(control.dataset || {}, 'value')
+                    ? String(control.dataset.value || '')
                 : '';
         };
         pendingStage.display_name = readValue('#kit-details-display_name');
@@ -1616,11 +1618,14 @@ function renderProtocolWorkspace(container) {
         };
         const bindAssignmentControl = (selector, eventName = 'change') => {
             const control = root.querySelector(selector);
-            if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLSelectElement) && !(control instanceof HTMLTextAreaElement)) return;
+            if (!(control instanceof HTMLInputElement)
+                && !(control instanceof HTMLSelectElement)
+                && !(control instanceof HTMLTextAreaElement)
+                && !(control instanceof Element && control.dataset.selectorPillGroup === 'true')) return;
             const bindingKey = `__pendingAssignmentBound_${eventName}`;
             if (control[bindingKey] === true) return;
             control[bindingKey] = true;
-            control.addEventListener(eventName, syncAssignment);
+            control.addEventListener(control instanceof Element && control.dataset.selectorPillGroup === 'true' ? 'click' : eventName, syncAssignment);
         };
         bindText('#kit-details-display_name', 'display_name');
         bindSelect('#kit-details-participant_key', 'participant_key');
@@ -1644,32 +1649,6 @@ function renderProtocolWorkspace(container) {
         bindAssignmentControl('[aria-label="Choose runtime role tag"]');
         bindAssignmentControl('[aria-label="Custom value"]', 'input');
         bindAssignmentControl('[aria-label="Custom value"]', 'change');
-        root.querySelectorAll('.kit-selector-editor-context .quickstart-chip').forEach((chip) => {
-            if (!(chip instanceof HTMLButtonElement) || chip.__pendingStageBound === true) return;
-            chip.__pendingStageBound = true;
-            chip.addEventListener('click', () => {
-                const context = chip.closest('.kit-selector-editor-context');
-                if (!(context instanceof Element)) return;
-                const chipKey = String(chip.dataset.key || '');
-                if (String(context.dataset.key || '').startsWith('selector-skill-match:')) {
-                    const requiredSkill = String((root.querySelector('[aria-label="Required skill"]') || {}).value || '').trim();
-                    const agentSlug = chipKey.split(':chip:')[1] || '';
-                    const agentId = String(_selectorAgentRecord(agentSlug)?.agent_id || '').trim();
-                    if (requiredSkill && agentId) {
-                        _commitPendingStageSelector('skill', requiredSkill, agentId);
-                    }
-                    return;
-                }
-                if (String(context.dataset.key || '').startsWith('selector-agent-skills:')) {
-                    const pinnedAgent = String((root.querySelector('[aria-label="Agent"]') || {}).value || '').trim();
-                    const skillName = chipKey.split(':chip:')[1] || '';
-                    const agentId = String(_selectorAgentRecord(pinnedAgent)?.agent_id || '').trim();
-                    if (skillName && agentId) {
-                        _commitPendingStageSelector('skill', skillName, agentId);
-                    }
-                }
-            });
-        });
     }
 
     function _commitStageSelector(nodeKey, selectorKind, selectorValue, selectorPreferredAgentId = '') {
@@ -2377,7 +2356,7 @@ function renderProtocolWorkspace(container) {
         selectorValue = '',
         preferredAgentId = '',
         readOnly = false,
-        onSuggestionSelect = null,
+        compact = false,
     } = {}) {
         if (!selectorValue) return null;
         const section = document.createElement('section');
@@ -2396,37 +2375,18 @@ function renderProtocolWorkspace(container) {
         help.dataset.key = `${section.dataset.key}:note`;
         help.textContent = readOnly
             ? 'Connected agents that currently advertise this skill.'
-            : 'Leave the pinned-agent field blank to keep this step dynamic, or use a quick pick below to pin one matching agent.';
-        help.textContent += matchLabels.length
+            : compact
+                ? 'Leave the assignment dynamic unless you want to pin one of the matching agents shown above.'
+                : 'Leave the pinned-agent field blank to keep this step dynamic.';
+        if (!compact) {
+            help.textContent += matchLabels.length
             ? ` Available now: ${matchLabels.join(', ')}.`
             : ' No connected agents currently advertise this skill.';
-        if (preferredAgent) {
+        }
+        if (preferredAgent && !compact) {
             help.textContent += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
         }
         section.appendChild(help);
-        if (!matches.length) {
-            return section;
-        }
-        const chips = document.createElement('div');
-        chips.className = 'chip-row';
-        chips.dataset.key = `${section.dataset.key}:chips`;
-        matches.forEach((candidate) => {
-            const chip = document.createElement(typeof onSuggestionSelect === 'function' ? 'button' : 'span');
-            chip.className = [
-                'quickstart-chip',
-                typeof onSuggestionSelect === 'function' ? '' : 'static',
-                String(candidate?.agent_id || '') === String(preferredAgentId || '') ? 'busy' : '',
-            ].filter(Boolean).join(' ');
-            chip.textContent = String(candidate?.display_name || candidate?.slug || '');
-            if (chip instanceof HTMLButtonElement) {
-                chip.type = 'button';
-                chip.title = `Pin ${String(candidate?.display_name || candidate?.slug || '')}`;
-                chip.addEventListener('click', () => onSuggestionSelect(candidate));
-            }
-            chip.dataset.key = `${section.dataset.key}:chip:${String(candidate?.slug || '').trim().toLowerCase()}`;
-            chips.appendChild(chip);
-        });
-        section.appendChild(chips);
         return section;
     }
 
@@ -2434,7 +2394,7 @@ function renderProtocolWorkspace(container) {
         selectorValue = '',
         selectedSkill = '',
         readOnly = false,
-        onSuggestionSelect = null,
+        compact = false,
     } = {}) {
         const agent = _selectorAgentRecord(selectorValue);
         const section = document.createElement('section');
@@ -2452,39 +2412,24 @@ function renderProtocolWorkspace(container) {
         const skills = _selectorAgentSkills(agent);
         const selectedSkillLabel = String(selectedSkill || '').trim() ? _titleCaseWords(selectedSkill) : '';
         if (agentLabel && selectedSkillLabel) {
-            note.textContent = `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}. Choose another quick pick only if you want to keep ${agentLabel} pinned with a different skill requirement.`;
+            note.textContent = compact
+                ? `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}.`
+                : `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}.`;
         } else if (agentLabel) {
-            note.textContent = `Pinned to ${agentLabel}. Leave the skill blank to keep the assignment agent-only, or choose a quick pick below to add a skill requirement.`;
+            note.textContent = compact
+                ? `Pinned to ${agentLabel}. Leave the skill blank to keep the assignment agent-only.`
+                : `Pinned to ${agentLabel}. Leave the skill blank to keep the assignment agent-only.`;
         } else {
             note.textContent = 'Advertised routing skills for this pinned agent.';
         }
-        note.textContent += skills.length
+        if (!compact) {
+            note.textContent += skills.length
             ? ` Available here: ${skills.map((skillName) => _titleCaseWords(skillName)).join(', ')}.`
             : ' No advertised routing skills are currently available for this agent.';
-        section.appendChild(note);
-        if (!skills.length) {
-            return section;
+        } else if (!skills.length) {
+            note.textContent += ' No advertised routing skills are currently available for this agent.';
         }
-        const chips = document.createElement('div');
-        chips.className = 'chip-row';
-        chips.dataset.key = `${section.dataset.key}:chips`;
-        skills.forEach((skillName) => {
-            const chip = document.createElement(typeof onSuggestionSelect === 'function' && !readOnly ? 'button' : 'span');
-            chip.className = [
-                'quickstart-chip',
-                typeof onSuggestionSelect === 'function' && !readOnly ? '' : 'static',
-                String(skillName || '').trim().toLowerCase() === String(selectedSkill || '').trim().toLowerCase() ? 'busy' : '',
-            ].filter(Boolean).join(' ');
-            chip.textContent = _titleCaseWords(skillName);
-            if (chip instanceof HTMLButtonElement) {
-                chip.type = 'button';
-                chip.title = `Limit to ${_titleCaseWords(skillName)}`;
-                chip.addEventListener('click', () => onSuggestionSelect(skillName));
-            }
-            chip.dataset.key = `${section.dataset.key}:chip:${String(skillName || '').trim().toLowerCase()}`;
-            chips.appendChild(chip);
-        });
-        section.appendChild(chips);
+        section.appendChild(note);
         return section;
     }
 
@@ -2500,6 +2445,8 @@ function renderProtocolWorkspace(container) {
         placeholderText = '',
         disabled = false,
         allowCustom = true,
+        preferPillsWhenCountAtMost = 0,
+        emptyChoiceLabel = '',
     } = {}) {
         const normalized = String(selectorKind || '').trim().toLowerCase();
         const block = document.createElement('div');
@@ -2512,7 +2459,60 @@ function renderProtocolWorkspace(container) {
         row.appendChild(valueLabel);
         const catalog = Array.isArray(catalogEntries) ? catalogEntries : _selectorCatalogEntries(normalized);
         const shouldRenderSelect = Array.isArray(catalogEntries) || normalized === 'agent' || normalized === 'skill';
-        if (catalog.length || shouldRenderSelect) {
+        const canRenderPills = !readOnly
+            && !disabled
+            && !allowCustom
+            && shouldRenderSelect
+            && Number(preferPillsWhenCountAtMost || 0) > 0
+            && catalog.length > 0
+            && catalog.length <= Number(preferPillsWhenCountAtMost || 0);
+        if (canRenderPills) {
+            const chips = document.createElement('div');
+            chips.className = 'chip-row kit-selector-pill-group';
+            chips.dataset.selectorPillGroup = 'true';
+            chips.dataset.value = String(selectorValue || '');
+            chips.setAttribute('role', 'group');
+            chips.setAttribute('aria-label', valueLabel.textContent);
+            const entries = [
+                {
+                    value: '',
+                    label: String(emptyChoiceLabel || placeholderText || '(none)').replace(/^\(|\)$/g, ''),
+                    meta: '',
+                },
+                ...catalog,
+            ];
+            const updateSelection = (nextValue) => {
+                chips.dataset.value = String(nextValue || '');
+                chips.querySelectorAll('.quickstart-chip').forEach((chip) => {
+                    if (!(chip instanceof HTMLButtonElement)) return;
+                    const isSelected = String(chip.dataset.value || '') === String(nextValue || '');
+                    chip.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+                    chip.classList.toggle('is-selected', isSelected);
+                });
+            };
+            entries.forEach((item) => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'quickstart-chip';
+                chip.dataset.value = String(item.value || '');
+                chip.textContent = String(item.label || '');
+                chip.title = String(item.meta || '').trim()
+                    ? `${String(item.label || '')} · ${String(item.meta || '').trim()}`
+                    : String(item.label || '');
+                chips.appendChild(chip);
+                chip.addEventListener('click', () => {
+                    const nextValue = String(item.value || '');
+                    updateSelection(nextValue);
+                    if (typeof onSelectorChange === 'function') {
+                        onSelectorChange(normalized, nextValue);
+                    } else if (typeof onChange === 'function') {
+                        onChange(null, 'selector_value', nextValue);
+                    }
+                });
+            });
+            updateSelection(selectorValue);
+            row.appendChild(chips);
+        } else if (catalog.length || shouldRenderSelect) {
             const select = document.createElement('select');
             select.className = 'kit-details-control';
             const placeholder = document.createElement('option');
@@ -2575,7 +2575,7 @@ function renderProtocolWorkspace(container) {
             block.appendChild(hint);
         }
         block.prepend(row);
-        return { element: block, catalog };
+        return { element: block, catalog, presentation: canRenderPills ? 'pills' : (catalog.length || shouldRenderSelect ? 'select' : 'input') };
     }
 
     function _buildSelectorManualOverrideField({
@@ -2778,6 +2778,8 @@ function renderProtocolWorkspace(container) {
                 placeholderText: requiredSkill ? '(leave dynamic)' : '(choose a skill first)',
                 disabled: !requiredSkill,
                 allowCustom: false,
+                preferPillsWhenCountAtMost: 5,
+                emptyChoiceLabel: 'Dynamic',
             });
             agentField.element.dataset.key = [
                 'selector-field',
@@ -2818,6 +2820,8 @@ function renderProtocolWorkspace(container) {
                 placeholderText: pinnedAgent ? '(leave agent-only)' : '(choose an agent first)',
                 disabled: !pinnedAgent,
                 allowCustom: false,
+                preferPillsWhenCountAtMost: 5,
+                emptyChoiceLabel: 'Agent only',
             });
             skillField.element.dataset.key = [
                 'selector-field',
@@ -2854,12 +2858,7 @@ function renderProtocolWorkspace(container) {
                 selectorValue: requiredSkill,
                 preferredAgentId: activeAgentId,
                 readOnly,
-                onSuggestionSelect: !readOnly
-                    ? (candidate) => emitAssignment({
-                        nextSkill: requiredSkill,
-                        nextAgent: String(candidate?.slug || ''),
-                    })
-                    : null,
+                compact: agentField.presentation === 'pills',
             });
             if (matchesSection) wrap.appendChild(matchesSection);
         }
@@ -2868,12 +2867,7 @@ function renderProtocolWorkspace(container) {
                 selectorValue: pinnedAgent,
                 selectedSkill: requiredSkill,
                 readOnly,
-                onSuggestionSelect: !readOnly
-                    ? (skillName) => emitAssignment({
-                        nextSkill: String(skillName || ''),
-                        nextAgent: pinnedAgent,
-                    })
-                    : null,
+                compact: skillField.presentation === 'pills',
             });
             if (skillsSection) wrap.appendChild(skillsSection);
         }

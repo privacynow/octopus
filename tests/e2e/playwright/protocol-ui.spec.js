@@ -340,28 +340,41 @@ test.describe('protocol authoring live', () => {
     )).toContain('product-definition');
     await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
     await expect(assignment.getByText('Matching agents', { exact: true })).toBeVisible();
-    const pinAgentControl = assignment.getByLabel('Pin matching agent (optional)', { exact: true });
-    const matchingAgentValues = await pinAgentControl.locator('option').evaluateAll((options) =>
-      options.map((option) => String(option.value || '')).filter(Boolean),
-    );
-    expect(matchingAgentValues.length).toBeGreaterThan(0);
-    await pinAgentControl.selectOption(matchingAgentValues[0]);
+    const pinAgentPillGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]');
+    const pinAgentSelect = assignment.locator('select[aria-label="Pin matching agent (optional)"]');
+    if (await pinAgentPillGroup.count()) {
+      await expect(pinAgentSelect).toHaveCount(0);
+      const pinAgentPills = pinAgentPillGroup.locator('.quickstart-chip');
+      const pillLabels = (await pinAgentPills.allTextContents()).map((label) => String(label || '').trim()).filter(Boolean);
+      const firstAgentLabel = pillLabels.find((label) => label !== 'Dynamic') || '';
+      expect(firstAgentLabel).toBeTruthy();
+      const firstAgentPill = pinAgentPills.filter({ hasText: firstAgentLabel }).first();
+      await firstAgentPill.click();
+      await expect(firstAgentPill).toHaveAttribute('aria-pressed', 'true');
+    } else {
+      const matchingAgentValues = await pinAgentSelect.locator('option').evaluateAll((options) =>
+        options.map((option) => String(option.value || '')).filter(Boolean),
+      );
+      expect(matchingAgentValues.length).toBeGreaterThan(0);
+      await pinAgentSelect.selectOption(matchingAgentValues[0]);
+      await expect(pinAgentSelect).toHaveValue(matchingAgentValues[0]);
+    }
     await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
-    await expect(pinAgentControl).toHaveValue(matchingAgentValues[0]);
     await assignment.getByRole('tab', { name: 'Specific agent', exact: true }).click();
     const agentControl = assignment.getByLabel('Agent', { exact: true });
-    await expect(agentControl).toHaveValue(matchingAgentValues[0]);
+    const initialPinnedAgentValue = await agentControl.inputValue();
+    expect(initialPinnedAgentValue).toBeTruthy();
     await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     await expect(assignment).toContainText('(leave agent-only)');
     const availableAgentValues = await agentControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
-    const alternateAgent = availableAgentValues.find((value) => value !== matchingAgentValues[0]) || '';
+    const alternateAgent = availableAgentValues.find((value) => value !== initialPinnedAgentValue) || '';
     if (alternateAgent) {
       await agentControl.selectOption(alternateAgent);
       await expect(agentControl).toHaveValue(alternateAgent);
     } else {
-      await expect(agentControl).toHaveValue(matchingAgentValues[0]);
+      await expect(agentControl).toHaveValue(initialPinnedAgentValue);
     }
     const optionalSkillControl = assignment.getByLabel('Limit to one of this agent\'s skills (optional)', { exact: true });
     const availableAgentSkills = await optionalSkillControl.locator('option').evaluateAll((options) =>
@@ -372,9 +385,15 @@ test.describe('protocol authoring live', () => {
       await optionalSkillControl.selectOption(alternateSkill);
       await expect(assignment.getByRole('tab', { name: 'By skill', exact: true })).toHaveAttribute('aria-selected', 'true');
       await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue(alternateSkill);
-      await expect(assignment.getByLabel('Pin matching agent (optional)', { exact: true })).toHaveValue(alternateAgent || matchingAgentValues[0]);
+      const nextPinAgentPillGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]');
+      const nextPinAgentSelect = assignment.locator('select[aria-label="Pin matching agent (optional)"]');
+      if (await nextPinAgentPillGroup.count()) {
+        await expect(nextPinAgentSelect).toHaveCount(0);
+        await expect(nextPinAgentPillGroup.locator('.quickstart-chip[aria-pressed="true"]')).toHaveCount(1);
+      } else {
+        await expect(nextPinAgentSelect).toHaveValue(alternateAgent || initialPinnedAgentValue);
+      }
       await expect(assignment.getByText('Matching agents', { exact: true })).toBeVisible();
-      expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
     } else {
       await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     }

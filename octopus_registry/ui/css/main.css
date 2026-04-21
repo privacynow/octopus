@@ -1282,6 +1282,13 @@ select {
     border-color: rgba(149, 76, 47, 0.28);
 }
 
+.quickstart-chip.is-selected,
+.quickstart-chip[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--accent, #954c2f) 12%, var(--bg));
+    border-color: rgba(149, 76, 47, 0.45);
+    color: var(--text);
+}
+
 .quickstart-chip.busy {
     opacity: 0.65;
 }

@@ -195,7 +195,7 @@ def document_approval_protocol_document() -> ProtocolDefinitionDocumentRecord:
                     "strict_completion": True,
                     "require_output_verification": True,
                     "timeout_seconds": 1800,
-                    "inputs": ["document"],
+                    "inputs": [],
                     "outputs": ["document"],
                     "transitions": {"completed": "review_document"},
                     "instructions": "Draft or revise the document so it is ready for review.",

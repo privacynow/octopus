@@ -253,7 +253,7 @@ test.describe('protocol authoring live', () => {
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
     await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
-    await expect(assignment.getByText('Matching agents')).toBeVisible();
+    await expect(assignment.getByText('Matching agents', { exact: true })).toBeVisible();
     await expect(assignment.locator('.quickstart-chip').filter({ hasText: 'M1' }).first()).toBeVisible();
     await assignment.locator('.quickstart-chip').filter({ hasText: 'M1' }).first().click();
     await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');

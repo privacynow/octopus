@@ -3606,14 +3606,6 @@ select {
     grid-column: 1 / -1;
 }
 
-.kit-stage-editor-grid[data-create-mode="true"] .kit-stage-editor-new-role {
-    display: none;
-}
-
-.kit-stage-editor-grid[data-create-mode="true"]:has(#kit-details-participant_key option[value="__new__"]:checked) .kit-stage-editor-new-role {
-    display: grid;
-}
-
 .kit-stage-editor-title {
     margin: 0;
     padding: 0 var(--space-1);

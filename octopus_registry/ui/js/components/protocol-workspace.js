@@ -3901,9 +3901,6 @@ function renderProtocolWorkspace(container) {
 
         const grid = document.createElement('div');
         grid.className = 'kit-stage-editor-grid';
-        if (createAction) {
-            grid.dataset.createMode = 'true';
-        }
 
         const summaryActions = [];
         if (createAction) {
@@ -3924,7 +3921,7 @@ function renderProtocolWorkspace(container) {
             actions: summaryActions,
         });
         grid.appendChild(_stageEditorSection('Step basics', summaryPanel));
-        if (createAction || String(target?.participant_key || '') === '__new__') {
+        if (createAction && String(target?.participant_key || '') === '__new__') {
             const rolePanel = Kit.detailsPanel({
                 target,
                 surfaceKey: 'protocol.participant',

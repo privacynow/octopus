@@ -3713,13 +3713,6 @@ function renderProtocolWorkspace(container) {
         copy.appendChild(note);
         head.appendChild(copy);
 
-        const close = document.createElement('button');
-        close.type = 'button';
-        close.className = 'btn btn-small';
-        close.textContent = 'Hide workflow map';
-        close.addEventListener('click', () => _setWorkflowMapMode('hidden'));
-        head.appendChild(close);
-
         panel.appendChild(head);
         panel.appendChild(_workflowMapEl(workflow));
         return panel;

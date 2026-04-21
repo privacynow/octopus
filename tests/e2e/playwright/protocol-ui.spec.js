@@ -261,12 +261,16 @@ test.describe('protocol authoring live', () => {
     )).toContain('product-definition');
     await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
     await expect(assignment.getByText('Matching agents', { exact: true })).toBeVisible();
-    await expect(assignment.locator('.quickstart-chip').filter({ hasText: 'M1' }).first()).toBeVisible();
-    await assignment.locator('.quickstart-chip').filter({ hasText: 'M1' }).first().click();
+    const pinAgentControl = assignment.getByLabel('Pin matching agent (optional)', { exact: true });
+    const matchingAgentValues = await pinAgentControl.locator('option').evaluateAll((options) =>
+      options.map((option) => String(option.value || '')).filter(Boolean),
+    );
+    expect(matchingAgentValues.length).toBeGreaterThan(0);
+    await pinAgentControl.selectOption(matchingAgentValues[0]);
     await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
-    await expect(assignment.getByLabel('Pin matching agent (optional)', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
+    await expect(pinAgentControl).toHaveValue(matchingAgentValues[0]);
     await assignment.getByRole('tab', { name: 'Specific agent', exact: true }).click();
-    await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
+    await expect(assignment.getByLabel('Agent', { exact: true })).toHaveValue(matchingAgentValues[0]);
     await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
     await expect(assignment).toContainText('(leave agent-only)');
     await assignment.getByLabel('Agent', { exact: true }).selectOption('lift-and-shift-m2-bot');

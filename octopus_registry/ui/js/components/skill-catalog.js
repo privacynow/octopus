@@ -517,18 +517,31 @@ function renderSkillCatalog(container) {
             return false;
         }
         if (selected.origin === 'local') {
+            const nextLifecycle = RegistrySkillHub.lifecycleState(detail);
             selectedLocalDetail = {
                 ...(selectedLocalDetail && selectedLocalDetail.name === detail.name ? selectedLocalDetail : selected.skill || {}),
                 ...detail,
             };
             selectedLifecycle = detail;
+            allSkills = (allSkills || []).map((item) => (
+                String(item?.name || '') === String(detail.name || '')
+                    ? {
+                        ...item,
+                        ...detail,
+                        lifecycle_status: nextLifecycle.effectiveStatus || detail.lifecycle_status || item.lifecycle_status || '',
+                        runtime_available: Boolean(detail.runtime_available),
+                        has_unpublished_changes: Boolean(detail.published_revision_id)
+                            && String(detail.published_revision_id || '') !== String(detail.active_revision_id || ''),
+                    }
+                    : item
+            ));
             selectionLoading = false;
             if (_isSelectedCustom(selected.skill, selectedLocalDetail || detail)) {
                 _resetDraftState(selectedLocalDetail || detail, detail);
             } else {
                 _clearDraftState();
             }
-            renderDetail();
+            renderList();
             return true;
         }
         return false;
@@ -1652,8 +1665,8 @@ function renderSkillCatalog(container) {
                 const result = await op();
                 _invalidateSkillCaches(currentAgentId, detail.name);
                 const appliedMutationDetail = _applyStudioMutationDetail(result?.detail || null);
-                await loadSkills({ soft: true, forceCatalog: true });
                 if (!appliedMutationDetail) {
+                    await loadSkills({ soft: true, forceCatalog: true });
                     await loadSelectionData({ soft: true });
                 }
             } catch (err) {

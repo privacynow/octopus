@@ -2756,8 +2756,10 @@ function renderProtocolWorkspace(container) {
             wrap.appendChild(note);
         }
 
+        let skillField = null;
+        let agentField = null;
         if (mode === 'skill') {
-            const skillField = _buildSelectorValueField({
+            skillField = _buildSelectorValueField({
                 selectorKind: 'skill',
                 selectorValue: requiredSkill,
                 readOnly,
@@ -2771,7 +2773,7 @@ function renderProtocolWorkspace(container) {
             skillField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:skill:required`;
             wrap.appendChild(skillField.element);
 
-            const agentField = _buildSelectorValueField({
+            agentField = _buildSelectorValueField({
                 selectorKind: 'agent',
                 selectorValue: pinnedAgent,
                 readOnly,
@@ -2799,7 +2801,7 @@ function renderProtocolWorkspace(container) {
             ].join(':');
             wrap.appendChild(agentField.element);
         } else {
-            const agentField = _buildSelectorValueField({
+            agentField = _buildSelectorValueField({
                 selectorKind: 'agent',
                 selectorValue: pinnedAgent,
                 readOnly,
@@ -2813,7 +2815,7 @@ function renderProtocolWorkspace(container) {
             agentField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:agent:pinned`;
             wrap.appendChild(agentField.element);
 
-            const skillField = _buildSelectorValueField({
+            skillField = _buildSelectorValueField({
                 selectorKind: 'skill',
                 selectorValue: requiredSkill,
                 readOnly,

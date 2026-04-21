@@ -2535,10 +2535,19 @@ function renderProtocolWorkspace(container) {
             }
             select.disabled = Boolean(readOnly || disabled);
             if (!readOnly) {
+                const commitSelect = () => {
+                    if (typeof onSelectorChange === 'function') {
+                        onSelectorChange(normalized, select.value);
+                    } else if (typeof onChange === 'function') {
+                        onChange(null, 'selector_value', select.value);
+                    }
+                };
                 if (typeof onSelectorChange === 'function') {
-                    select.addEventListener('change', () => onSelectorChange(normalized, select.value));
+                    select.addEventListener('input', commitSelect);
+                    select.addEventListener('change', commitSelect);
                 } else if (typeof onChange === 'function') {
-                    select.addEventListener('change', () => onChange(null, 'selector_value', select.value));
+                    select.addEventListener('input', commitSelect);
+                    select.addEventListener('change', commitSelect);
                 }
             }
             select.setAttribute('aria-label', valueLabel.textContent);

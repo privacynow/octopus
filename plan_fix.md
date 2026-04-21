@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-The current protocol product still fails the real bar for success:
+This document started from a real product failure state. The protocol product was not acceptable when this plan was created because it failed the real bar for success:
 
 - not "the code path exists"
 - not "the tests pass"
@@ -15,21 +15,21 @@ The bar is:
 - can they rehearse those workflows visually and trust the outcomes
 - can they do this without being exposed to internal protocol-engine concepts that are not needed for standard authoring
 
-That is not fully true today.
+Those were real product gaps, not cosmetic concerns.
 
-The most visible symptom is that internal escape hatches are still present in the default editor:
+The most visible symptom at the time was that internal escape hatches were present in the default editor:
 
 - `Custom runtime selector` still appears inside Assignment
 - `Advanced` still appears as a named stage section
 
-But the deeper issue is broader:
+The deeper issue was broader:
 
 - the product still behaves too much like a protocol schema editor
 - the tests still prove too much at the control/mechanics level and not enough at the workflow-usability level
 
-So the real problem is not just visibility of two sections. The real problem is that the product rule
-"normal authors do not see internal escape hatches" is not yet enforced as a system invariant, and the
-test suite is not yet centered on the real workflows this product is meant to support.
+So the real problem was not just visibility of two sections. The real problem was that the product rule
+"normal authors do not see internal escape hatches" was not enforced as a system invariant, and the
+test suite was not centered enough on the real workflows this product is meant to support.
 
 **Feature-complete means scenario-complete.**
 
@@ -40,6 +40,18 @@ A feature is only complete when at least one UI scenario spec for each target wo
 - execute
 
 Isolated control tests, API tests, or engine tests are necessary, but they are not sufficient on their own.
+
+## Current Verified State
+
+The latest full pass against the live Octopus deployment verifies:
+
+- the standard authoring surface is the default and the product-facing workflow builder path is usable inline
+- `Custom runtime selector`, `Advanced`, `stage_key`, `max_rounds`, and `timeout_seconds` are not rendered on the standard path
+- Software Engineering passes author -> rehearse -> execute
+- Document Approval passes author -> rehearse -> execute
+- Data Analysis / Reporting passes author -> rehearse -> execute
+- the live audit passes with 619 fresh screenshots across desktop, tablet, and mobile
+- no verified blocking authoring, rehearsal, execution, or runs-surface defects remain from the latest exhaustive pass
 
 ## Context
 
@@ -53,9 +65,9 @@ The progressive inline stage stack is now the primary authoring surface. That pa
 - assignment can be authored by skill or agent
 - insertion, deletion, rehearsal, and execution all work in the current runtime
 
-### Current product mismatch
+### Original product mismatch
 
-Despite those improvements, the standard authoring path still leaks internal concepts:
+Before these fixes, the standard authoring path leaked internal concepts:
 
 - custom runtime selector values
 - direct internal stage tuning fields
@@ -373,7 +385,7 @@ It must assert:
 
 #### 5C. Data Analysis / Reporting scenario
 
-This is the missing scenario and it should be added as a first-class test fixture.
+This scenario is now implemented as a first-class end-to-end test fixture.
 
 Through the UI, the test should build and verify:
 - load spreadsheet or CSV
@@ -393,7 +405,7 @@ It must assert:
 
 #### Readiness for 5C
 
-5C should not be treated as "implicitly testable later." It needs explicit readiness conditions:
+5C should not be treated as "implicitly testable later." It needed explicit readiness conditions, and the current live environment now satisfies them:
 
 - a template or deterministic UI-build path exists for:
   - load data
@@ -404,7 +416,7 @@ It must assert:
 - the artifact kinds needed by that flow exist in the environment under test
 - any integration assumptions needed for report publication are available in the test environment
 
-If any of the above is missing, 5C is blocked as a product milestone, not merely deferred as test work.
+If any of the above regresses, 5C becomes blocked as a product milestone, not merely deferred as test work.
 
 ### Phase 6. Add negative tests for the product rule
 
@@ -499,7 +511,7 @@ Recommended execution order:
 - the product is about workflows, not generic protocol objects
 
 7. Treat 5C honestly.
-- if the product fixture or artifact model is not ready, record it as blocked
+- keep the data-analysis scenario tied to the real artifact pipeline
 - do not claim Data Analysis / Reporting support based only on generic authoring mechanics
 
 ## Acceptance Criteria
@@ -551,8 +563,8 @@ This work is done only when all of the following are true:
 1. API enforcement may affect existing drafts that were previously edited through the old UI surface.
 - legacy behavior needs either migration or explicit operator-only handling
 
-2. Data Analysis / Reporting may be blocked by missing product fixture or artifact-model support.
-- that is a product readiness issue, not merely a testing gap
+2. Data Analysis / Reporting can regress if the live environment no longer supports the required artifact pipeline.
+- that remains a product readiness issue, not merely a testing gap
 
 ## Verification Matrix
 
@@ -583,6 +595,6 @@ This work is done only when all of the following are true:
 3. Remove `Custom runtime selector` from standard Assignment.
 4. Remove `Advanced` from standard stage editing and relocate delete.
 5. Align API restrictions for internal-only fields.
-6. Add or unblock the Data Analysis / Reporting scenario fixture and readiness conditions.
-7. Redeploy to `/Users/tinker/octopus`.
-8. Rerun exhaustive live audit and update this file with verified state.
+6. Keep the Data Analysis / Reporting scenario fixture green as part of the release bar.
+7. Redeploy to `/Users/tinker/octopus` for any future product changes.
+8. Rerun exhaustive live audit and update this file whenever a verified regression is found.

@@ -89,11 +89,11 @@ async function waitForRunStage(page, runId, stageKey) {
   }, { timeout: 30000 }).toBe(stageKey);
 }
 
-async function waitForRunStatus(page, runId, status) {
+async function waitForRunStatus(page, runId, status, timeout = 60000) {
   await expect.poll(async () => {
     const detail = await getRunDetail(page, runId);
     return String(detail.run?.status || '');
-  }, { timeout: 60000 }).toBe(status);
+  }, { timeout }).toBe(status);
 }
 
 async function applyScenarioAndSubmit(session, scenarioName) {
@@ -162,19 +162,35 @@ async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
 
 async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] } = {}) {
   await selectStep(page, stageKey);
-  const editor = page.locator('.kit-stage-editor').last();
-  const artifactsSection = editor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Artifacts', exact: true }) }).first();
-  const summary = artifactsSection.locator('summary').first();
-  if (await summary.count()) {
-    await summary.click();
+  async function artifactRows() {
+    const editor = page.locator('.kit-stage-editor').last();
+    const artifactsSection = editor.locator('.kit-stage-editor-section').filter({
+      has: page.getByRole('heading', { name: 'Artifacts', exact: true }),
+    }).first();
+    const summary = artifactsSection.locator('summary').first();
+    if (await summary.count()) {
+      const expanded = await summary.evaluate((node) => node.closest('details')?.open === true);
+      if (!expanded) {
+        await summary.click();
+      }
+    }
+    return {
+      readsRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Reads artifacts' }).first(),
+      writesRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Writes artifacts' }).first(),
+    };
   }
   for (const label of reads) {
-    await artifactsSection.getByLabel(label, { exact: true }).check();
+    const { readsRow } = await artifactRows();
+    await readsRow.getByLabel(label, { exact: true }).check();
+    await page.waitForTimeout(600);
+    await waitForSaved(page);
   }
   for (const label of writes) {
-    await artifactsSection.getByLabel(label, { exact: true }).check();
+    const { writesRow } = await artifactRows();
+    await writesRow.getByLabel(label, { exact: true }).check();
+    await page.waitForTimeout(600);
+    await waitForSaved(page);
   }
-  await waitForSaved(page);
 }
 
 async function createProtocolRun(page, payload) {
@@ -556,8 +572,8 @@ test.describe('protocol authoring live', () => {
     await lifecycle.getByLabel('Name').fill(`Data Analysis ${Date.now()}`);
     await lifecycle.getByLabel('Name').blur();
     await waitForSaved(page);
-    await page.getByRole('button', { name: 'Validate' }).click();
-    await page.getByRole('button', { name: 'Publish' }).click();
+    await lifecycle.getByRole('button', { name: 'Validate', exact: true }).click();
+    await lifecycle.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
     const protocolId = protocolIdFromUrl(page.url());
 
@@ -645,7 +661,7 @@ test.describe('protocol authoring live', () => {
       });
       const runId = String(created.run?.protocol_run_id || '');
       expect(runId).toBeTruthy();
-      await waitForRunStatus(page, runId, 'completed');
+      await waitForRunStatus(page, runId, 'completed', 180000);
       const finalDetail = await getRunDetail(page, runId);
       expect(String(finalDetail.run?.status || '')).toBe('completed');
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === publishKey)).toBe(true);

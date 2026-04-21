@@ -5,6 +5,7 @@ const {
   connectStep,
   createStep,
   discardDraft,
+  expectSelectedStep,
   login,
   outlineStepNode,
   openBlankDraft,
@@ -249,12 +250,14 @@ async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] 
     await readsRow.getByLabel(artifactLabelPattern(label)).check();
     await page.waitForTimeout(600);
     await waitForSaved(page);
+    await expectSelectedStep(page, stageKey);
   }
   for (const label of writes) {
     const { writesRow } = await artifactRows();
     await writesRow.getByLabel(artifactLabelPattern(label)).check();
     await page.waitForTimeout(600);
     await waitForSaved(page);
+    await expectSelectedStep(page, stageKey);
   }
 }
 
@@ -523,6 +526,79 @@ test.describe('protocol authoring live', () => {
         : [];
     expect(afterDeleteStages.some((item) => String(item.stage_key || '') === 'secondary-approval')).toBe(false);
     expect(afterDeleteStages.find((item) => String(item.stage_key || '') === 'plan_review')?.transitions?.accept).toBe('architecture');
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('software engineering artifact edits keep architecture selected', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
+    await page.getByRole('button', { name: 'Protocol settings', exact: true }).click();
+
+    await addArtifact(page, {
+      name: 'Architecture notes',
+      path: 'docs/architecture-notes.md',
+      kind: 'workspace_file',
+    });
+    await addArtifact(page, {
+      name: 'Architecture review notes',
+      path: 'docs/architecture-review.md',
+      kind: 'workspace_file',
+    });
+
+    await selectStep(page, 'architecture');
+    const selectedEntry = page.locator('.kit-protocol-segment-entry').filter({
+      has: page.locator('[data-testid="workflow-stage-architecture"].is-selected'),
+    }).first();
+    const stageEditor = selectedEntry.locator('.kit-stage-editor').first();
+    const artifactsSection = stageEditor.locator('.kit-stage-editor-section').filter({
+      has: page.getByRole('heading', { name: 'Inputs and outputs', exact: true }),
+    }).first();
+    const summary = artifactsSection.locator('summary').first();
+    if (await summary.count()) {
+      const expanded = await summary.evaluate((node) => node.closest('details')?.open === true);
+      if (!expanded) {
+        await summary.click();
+        await expect.poll(async () => summary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
+      }
+    }
+
+    const readsRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
+    const writesRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
+    await readsRow.getByLabel(/Architecture review notes/).check();
+    await page.waitForTimeout(600);
+    await waitForSaved(page);
+    await expectSelectedStep(page, 'architecture');
+
+    await writesRow.getByLabel(/Architecture notes/).check();
+    await page.waitForTimeout(600);
+    await waitForSaved(page);
+    await expectSelectedStep(page, 'architecture');
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expectSelectedStep(page, 'architecture');
+
+    const reloadedEntry = page.locator('.kit-protocol-segment-entry').filter({
+      has: page.locator('[data-testid="workflow-stage-architecture"].is-selected'),
+    }).first();
+    const reloadedStageEditor = reloadedEntry.locator('.kit-stage-editor').first();
+    const reloadedArtifactsSection = reloadedStageEditor.locator('.kit-stage-editor-section').filter({
+      has: page.getByRole('heading', { name: 'Inputs and outputs', exact: true }),
+    }).first();
+    const reloadedSummary = reloadedArtifactsSection.locator('summary').first();
+    if (await reloadedSummary.count()) {
+      const expanded = await reloadedSummary.evaluate((node) => node.closest('details')?.open === true);
+      if (!expanded) {
+        await reloadedSummary.click();
+        await expect.poll(async () => reloadedSummary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
+      }
+    }
+    await expect(reloadedArtifactsSection.getByLabel(/Architecture review notes/)).toBeChecked();
+    await expect(reloadedArtifactsSection.getByLabel(/Architecture notes/)).toBeChecked();
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

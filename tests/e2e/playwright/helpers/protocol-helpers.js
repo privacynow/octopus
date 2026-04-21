@@ -262,6 +262,17 @@ async function selectStep(page, stageKey) {
   if (!alreadySelected) {
     await node.click();
   }
+  await expectSelectedStep(page, stageKey);
+}
+
+async function expectSelectedStep(page, stageKey) {
+  const node = await outlineStepNode(page, stageKey);
+  await expect(node).toHaveClass(/is-selected/);
+  await expect(page).toHaveURL(new RegExp(`stage_key=${stageKey}`));
+  const selectedEntry = page.locator('.kit-protocol-segment-entry').filter({
+    has: page.locator(`[data-testid="workflow-stage-${stageKey}"].is-selected`),
+  }).first();
+  await expect(selectedEntry.locator('.kit-stage-editor').first()).toBeVisible();
 }
 
 async function connectStep(page, sourceStageKey, targetNodeId) {
@@ -300,6 +311,7 @@ module.exports = {
   openTemplateDraft,
   outlineStepNode,
   protocolIdFromUrl,
+  expectSelectedStep,
   selectStep,
   waitForSaved,
 };

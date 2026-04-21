@@ -267,6 +267,7 @@ function renderProtocolWorkspace(container) {
     let canvasViewport = { zoom: 'fit' };
     let workflowMapMode = 'auto';
     let stageAssignmentEditor = { stageKey: '', mode: '' };
+    let collapsibleSectionState = {};
 
     function _operatorSurfaceAvailable() {
         return Boolean(authoringManifest?.operator_surface_available);
@@ -284,6 +285,31 @@ function renderProtocolWorkspace(container) {
     function _openArtifactCatalog(nodeKey = '') {
         selection = { sectionKey: 'artifacts', nodeKey: String(nodeKey || '') };
         render();
+    }
+
+    function _sectionStateValue(stateKey, fallback = false) {
+        const normalizedKey = String(stateKey || '').trim();
+        if (!normalizedKey) return Boolean(fallback);
+        if (Object.prototype.hasOwnProperty.call(collapsibleSectionState, normalizedKey)) {
+            return Boolean(collapsibleSectionState[normalizedKey]);
+        }
+        return Boolean(fallback);
+    }
+
+    function _setSectionStateValue(stateKey, isOpen) {
+        const normalizedKey = String(stateKey || '').trim();
+        if (!normalizedKey) return;
+        collapsibleSectionState = {
+            ...(collapsibleSectionState || {}),
+            [normalizedKey]: Boolean(isOpen),
+        };
+    }
+
+    function _captureCollapsibleSectionState(root = contentEl) {
+        if (!(root instanceof Element)) return;
+        root.querySelectorAll('details.kit-stage-editor-section.is-collapsible[data-section-state-key]').forEach((section) => {
+            _setSectionStateValue(section.dataset.sectionStateKey || '', section.open);
+        });
     }
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
@@ -1007,6 +1033,7 @@ function renderProtocolWorkspace(container) {
         } else {
             selection = _repairSelection(_selectionFromQuery(draft.document), draft.document);
             workflowMapMode = _workflowMapModeFromQuery();
+            collapsibleSectionState = {};
             _resetEditorMode();
         }
     }
@@ -3931,6 +3958,7 @@ function renderProtocolWorkspace(container) {
             wide: true,
             collapsible: true,
             open: Boolean(String(artifact?.description || '').trim()),
+            stateKey: `artifact:${artifactKey}:details`,
         }));
 
         const usage = _artifactUsage(context.doc, artifactKey);
@@ -3966,6 +3994,7 @@ function renderProtocolWorkspace(container) {
             wide: true,
             collapsible: true,
             open: Boolean(usage.reads.length || usage.writes.length),
+            stateKey: `artifact:${artifactKey}:usage`,
         }));
         return shell;
     }
@@ -4360,11 +4389,15 @@ function renderProtocolWorkspace(container) {
         return root;
     }
 
-    function _stageEditorSection(title, panel, { wide = false, collapsible = false, open = true } = {}) {
+    function _stageEditorSection(title, panel, { wide = false, collapsible = false, open = true, stateKey = '' } = {}) {
         const section = document.createElement(collapsible ? 'details' : 'section');
         section.className = `kit-stage-editor-section${wide ? ' is-wide' : ''}${collapsible ? ' is-collapsible' : ''}`;
         if (collapsible) {
-            section.open = Boolean(open);
+            section.dataset.sectionStateKey = String(stateKey || '');
+            section.open = _sectionStateValue(stateKey, open);
+            if (String(stateKey || '').trim()) {
+                section.addEventListener('toggle', () => _setSectionStateValue(stateKey, section.open));
+            }
             const summary = document.createElement('summary');
             summary.className = 'kit-stage-editor-summary';
             const heading = document.createElement('h4');
@@ -4555,6 +4588,8 @@ function renderProtocolWorkspace(container) {
                 readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
             })));
         const operatorSurface = _currentAuthoringSurface() === 'operator';
+        const stageSectionKeyBase = String(target?.stage_key || '').trim()
+            || (createAction ? `pending:${String(editorMode.sessionKey || 'new')}` : '');
         const shell = document.createElement('div');
         shell.className = 'kit-stage-editor';
         if (createAction && createHint) {
@@ -4624,6 +4659,7 @@ function renderProtocolWorkspace(container) {
                 wide: true,
                 collapsible: _isCompactViewport(),
                 open: !_isCompactViewport(),
+                stateKey: `${stageSectionKeyBase}:routing`,
             }));
         }
 
@@ -4637,8 +4673,9 @@ function renderProtocolWorkspace(container) {
         });
         grid.appendChild(_stageEditorSection('Instructions', instructionsPanel, {
             wide: true,
-            collapsible: !createAction,
-            open: Boolean(createAction),
+            collapsible: createAction ? false : _isCompactViewport(),
+            open: true,
+            stateKey: `${stageSectionKeyBase}:instructions`,
         }));
 
         const artifactsPanel = _stageArtifactsEditor({
@@ -4649,8 +4686,9 @@ function renderProtocolWorkspace(container) {
         });
         grid.appendChild(_stageEditorSection('Inputs and outputs', artifactsPanel, {
             wide: true,
-            collapsible: !createAction,
-            open: Boolean(createAction),
+            collapsible: createAction ? false : _isCompactViewport(),
+            open: true,
+            stateKey: `${stageSectionKeyBase}:artifacts`,
         }));
 
         if (operatorSurface) {
@@ -4666,7 +4704,11 @@ function renderProtocolWorkspace(container) {
                 ]),
                 actions: advancedActions,
             });
-            grid.appendChild(_stageEditorSection('Advanced', advancedPanel, { collapsible: true, open: false }));
+            grid.appendChild(_stageEditorSection('Advanced', advancedPanel, {
+                collapsible: true,
+                open: false,
+                stateKey: `${stageSectionKeyBase}:advanced`,
+            }));
         }
         shell.appendChild(grid);
         return shell;
@@ -4764,6 +4806,7 @@ function renderProtocolWorkspace(container) {
         }
         renderInFlight = true;
         try {
+        _captureCollapsibleSectionState();
         if (!currentProtocolId) {
             header.hidden = false;
             _writeState();

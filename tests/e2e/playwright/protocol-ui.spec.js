@@ -127,6 +127,65 @@ async function firstConnectedAgent(page) {
   });
 }
 
+async function firstSkillLifecycleAgent(page) {
+  return page.evaluate(async () => {
+    const response = await fetch('/v1/agents?limit=100', { credentials: 'same-origin' });
+    const payload = await response.json();
+    const agents = Array.isArray(payload.agents) ? payload.agents : [];
+    const first = agents.find((agent) => {
+      const state = String(agent.connectivity_state || '').trim().toLowerCase();
+      const capabilities = Array.isArray(agent.management_capabilities) ? agent.management_capabilities : [];
+      return ['connected', 'degraded'].includes(state) && capabilities.includes('skill_lifecycle');
+    });
+    return {
+      agentId: String(first?.agent_id || ''),
+      slug: String(first?.slug || ''),
+      displayName: String(first?.display_name || first?.slug || '').trim(),
+    };
+  });
+}
+
+async function createAndPublishCustomSkill(page, {
+  agentId,
+  skillName,
+  description,
+  body,
+} = {}) {
+  await page.goto('/ui/skills', { waitUntil: 'domcontentloaded' });
+  const agentSelect = page.getByLabel('Managed bot', { exact: true });
+  await expect.poll(async () => agentSelect.locator('option').evaluateAll((options) =>
+    options.map((option) => String(option.value || '')).filter(Boolean),
+  )).toContain(agentId);
+  await agentSelect.selectOption(agentId);
+  await page.getByRole('button', { name: 'New custom skill', exact: true }).click();
+  await page.getByPlaceholder('skill-slug').fill(skillName);
+  await page.getByPlaceholder('Short description').first().fill(description);
+  await page.getByRole('button', { name: 'Create draft', exact: true }).click();
+  await expect.poll(() => page.url(), { timeout: 20000 }).toContain(`skill=${encodeURIComponent(skillName)}`);
+  await page.getByPlaceholder('Display name').fill(
+      skillName
+      .split('-')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' '),
+  );
+  await page.getByPlaceholder('Short description').last().fill(description);
+  await page.getByPlaceholder('Draft instructions').fill(body);
+  await page.getByRole('tab', { name: 'Review', exact: true }).click();
+  const reviewPanel = page.locator('.editor-panel').filter({ hasText: 'Instructions preview' }).first();
+  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled({ timeout: 60000 });
+  await page.getByRole('button', { name: 'Submit', exact: true }).click();
+  await expect(reviewPanel).toContainText('Lifecycle');
+  await expect(reviewPanel).toContainText('review', { timeout: 30000 });
+  await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeVisible({ timeout: 30000 });
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(reviewPanel).toContainText('approved', { timeout: 30000 });
+  await expect(reviewPanel).toContainText('Publish this approved draft when you are ready', { timeout: 30000 });
+  await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible({ timeout: 30000 });
+  await page.getByRole('button', { name: 'Publish', exact: true }).click();
+  await expect(page.locator('.editor-panel').filter({ hasText: 'Runtime available' }).first()).toContainText('Yes', { timeout: 30000 });
+}
+
 async function openProtocolSettings(page) {
   const lifecycle = page.locator('.kit-lifecycle-header');
   await lifecycle.getByRole('button', { name: 'Protocol' }).click();
@@ -705,6 +764,93 @@ test.describe('protocol authoring live', () => {
     }
 
     await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('meta assistant flow composes a custom skill and a protocol through UI and APIs', async ({ page }) => {
+    test.setTimeout(300_000);
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    const connectedAgent = await firstConnectedAgent(page);
+    expect(connectedAgent.agentId).toBeTruthy();
+    const lifecycleAgent = await firstSkillLifecycleAgent(page);
+    expect(lifecycleAgent.agentId).toBeTruthy();
+
+    const skillName = `meta-protocol-composer-${Date.now()}`;
+    await createAndPublishCustomSkill(page, {
+      agentId: lifecycleAgent.agentId,
+      skillName,
+      description: 'Guides a bot through assembling a protocol-driven assistant from a business goal.',
+      body: [
+        'Gather the business goal, identify missing capabilities, and outline the next protocol to create.',
+        'Prefer concise workflow structure over long narrative text.',
+        'When asked, propose the minimum viable stages, artifacts, and review loop.',
+      ].join(' '),
+    });
+
+    await openBlankDraft(page);
+    const composeKey = await createStep(page, {
+      name: 'Compose assistant protocol',
+      key: 'compose-assistant-protocol',
+      roleName: 'Protocol composer',
+      roleKey: 'protocol-composer',
+      selectorKind: 'skill',
+      selectorValue: '__first__',
+      instructions: [
+        `Use the published custom skill ${skillName} as one building block when outlining a new assistant workflow.`,
+        'Return a concise protocol outline with the purpose, the minimum required stages, and the completion rule.',
+        'End the response with PROTOCOL_SUMMARY: completed.',
+      ].join(' '),
+    });
+    await connectStep(page, composeKey, '__complete__');
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await lifecycle.getByLabel('Name').fill(`Meta Protocol Assistant ${Date.now()}`);
+    await lifecycle.getByLabel('Name').blur();
+    await waitForSaved(page);
+    await lifecycle.getByRole('button', { name: 'Validate', exact: true }).click();
+    await lifecycle.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
+    const protocolId = protocolIdFromUrl(page.url());
+
+    const scenario = await createProtocolScenario(page, {
+      protocol_id: protocolId,
+      stage_key: composeKey,
+      participant_key: 'protocol-composer',
+      display_name: 'Compose assistant complete',
+      decision: 'completed',
+      decision_summary: 'Assistant protocol drafted.',
+      response_text: `Drafted a concise assistant protocol outline using ${skillName} as part of the composition plan.`,
+    });
+
+    try {
+      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
+      const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId);
+      const session = page.locator(`.kit-rehearsal-session[data-stage-key="${composeKey}"]`).first();
+      await expect(session).toBeVisible({ timeout: 20000 });
+      await applyScenarioAndSubmit(session, 'Compose assistant complete');
+      await waitForRunStatus(page, rehearsalRunId, 'completed');
+
+      const created = await createProtocolRun(page, {
+        protocol_id: protocolId,
+        entry_agent_id: connectedAgent.agentId,
+        entry_authority_ref: 'meta-assistant-ui',
+        problem_statement: `Create a protocol-driven assistant outline using the published custom skill ${skillName}.`,
+      });
+      const runId = String(created?.run?.protocol_run_id || '');
+      expect(runId).toBeTruthy();
+      await waitForRunStatus(page, runId, 'completed', 180000);
+      const finalDetail = await getRunDetail(page, runId);
+      expect(String(finalDetail.run?.status || '')).toBe('completed');
+      expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === composeKey)).toBe(true);
+    } finally {
+      if (scenario?.protocol_scenario_id) {
+        await deleteProtocolScenario(page, String(scenario.protocol_scenario_id || ''));
+      }
+    }
+
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });

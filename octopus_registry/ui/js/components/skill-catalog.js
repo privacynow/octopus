@@ -78,12 +78,13 @@ const RegistrySkillHub = (() => {
     }
 
     function localRowMeta(skill) {
+        const lifecycle = lifecycleState(skill);
         const fragments = [];
         if (skill?.description) fragments.push(String(skill.description));
         if (skill?.runtime_available === false) fragments.push('not active until published');
         if (skill?.requires_credentials) fragments.push('setup required on activation');
         if (skill?.default_for_new_conversations) fragments.push('default for new conversations');
-        if (skill?.lifecycle_status) fragments.push(String(skill.lifecycle_status).replace(/_/g, ' '));
+        if (lifecycle.label) fragments.push(lifecycle.label);
         if (skill?.has_unpublished_changes) fragments.push('unpublished changes');
         return {
             label: skill?.display_name || skill?.name || '',
@@ -118,6 +119,26 @@ const RegistrySkillHub = (() => {
 
     function lifecycleCacheKey(agentId, skillName) {
         return `skills:lifecycle:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
+    }
+
+    function lifecycleState(item) {
+        const rawStatus = String(item?.lifecycle_status || '').trim().toLowerCase() || 'draft';
+        const approvals = Array.isArray(item?.approvals) ? item.approvals : [];
+        const latestAction = String(approvals[0]?.action || '').trim().toLowerCase();
+        const effectiveStatus = rawStatus === 'review' && latestAction === 'approved'
+            ? 'approved'
+            : rawStatus;
+        return {
+            rawStatus,
+            latestAction,
+            effectiveStatus,
+            label: String(effectiveStatus || 'draft').replace(/_/g, ' '),
+            canSubmit: rawStatus === 'draft',
+            canApprove: rawStatus === 'review' && latestAction !== 'approved',
+            canPublish: effectiveStatus === 'approved',
+            isArchived: rawStatus === 'archived',
+            isPublished: rawStatus === 'published',
+        };
     }
 
     function skillWorkspaceHref(agentId, skillName = '', { origin = 'local', tab = '' } = {}) {
@@ -177,6 +198,7 @@ const RegistrySkillHub = (() => {
         findSelectedSkill,
         localRowMeta,
         storeRowMeta,
+        lifecycleState,
         listCacheKey,
         searchCacheKey,
         detailCacheKey,
@@ -484,6 +506,32 @@ function renderSkillCatalog(container) {
         draftStatus = 'idle';
         draftStatusMessage = '';
         draftSnapshotKey = '';
+    }
+
+    function _applyStudioMutationDetail(detail) {
+        if (!detail || !detail.name) {
+            return false;
+        }
+        const selected = _findSelectedSkill();
+        if (!selected || String(selected.skill?.name || '') !== String(detail.name || '')) {
+            return false;
+        }
+        if (selected.origin === 'local') {
+            selectedLocalDetail = {
+                ...(selectedLocalDetail && selectedLocalDetail.name === detail.name ? selectedLocalDetail : selected.skill || {}),
+                ...detail,
+            };
+            selectedLifecycle = detail;
+            selectionLoading = false;
+            if (_isSelectedCustom(selected.skill, selectedLocalDetail || detail)) {
+                _resetDraftState(selectedLocalDetail || detail, detail);
+            } else {
+                _clearDraftState();
+            }
+            renderDetail();
+            return true;
+        }
+        return false;
     }
 
     function _hasUnsavedDraft() {
@@ -951,6 +999,7 @@ function renderSkillCatalog(container) {
         const lifecycle = selectedLifecycle && selected && selectedLifecycle.name === selected.skill.name
             ? selectedLifecycle
             : null;
+        const lifecycleState = RegistrySkillHub.lifecycleState(lifecycle || detail);
         UI.memoizedRender(detailEl, {
             agentId: currentAgentId,
             agentLabel: _currentAgentLabel(),
@@ -960,7 +1009,9 @@ function renderSkillCatalog(container) {
             detailLoaded: Boolean(selectedLocalDetail && selected && selectedLocalDetail.name === selected.skill.name),
             detailSnapshot: _draftSnapshot(detail, lifecycle),
             skillKind: String(lifecycle?.skill_kind || detail?.skill_kind || ''),
-            lifecycleStatus: String(lifecycle?.lifecycle_status || detail?.lifecycle_status || ''),
+            lifecycleStatus: String(lifecycleState.rawStatus || ''),
+            lifecycleEffectiveStatus: String(lifecycleState.effectiveStatus || ''),
+            lifecycleAction: String(lifecycleState.latestAction || ''),
             revisionId: String(lifecycle?.active_revision_id || ''),
             draftStatus,
             draftDirty,
@@ -1007,6 +1058,7 @@ function renderSkillCatalog(container) {
                     agentLabel: String(state.agentLabel || ''),
                     name: String((state.summary && state.summary.name) || ''),
                     lifecycle: String((state.detail && state.detail.lifecycle_status) || ''),
+                    lifecycleAction: String((state.lifecycle && state.lifecycle.approvals && state.lifecycle.approvals[0] && state.lifecycle.approvals[0].action) || ''),
                     runtimeAvailable: Boolean(state.detail && state.detail.runtime_available),
                     source: String((state.detail && state.detail.source_kind) || ''),
                     activeRevisionId: String((state.lifecycle && state.lifecycle.active_revision_id) || ''),
@@ -1024,6 +1076,7 @@ function renderSkillCatalog(container) {
         panel.dataset.key = `skill-overview:${summary.name || detail.name || ''}`;
 
         const packageState = lifecycle || detail;
+        const lifecycleState = RegistrySkillHub.lifecycleState(packageState);
         const requirements = Array.isArray(packageState.requirements) && packageState.requirements.length
             ? packageState.requirements
             : (detail.requirements || []).map((item) => ({
@@ -1081,7 +1134,7 @@ function renderSkillCatalog(container) {
             },
             {
                 label: 'Lifecycle',
-                value: String(detail.lifecycle_status || 'published').replace(/_/g, ' '),
+                value: lifecycleState.label,
             },
             detail.visibility ? { label: 'Visibility', value: detail.visibility } : null,
             detail.has_unpublished_changes ? { label: 'Draft state', value: 'Unpublished changes' } : null,
@@ -1444,8 +1497,9 @@ function renderSkillCatalog(container) {
         if (!draftBuffer || draftBuffer.name !== detail.name || (!draftDirty && draftSnapshotKey !== nextDraftSnapshot)) {
             _resetDraftState(detail, lifecycle);
         }
-        const lifecycleStatus = String(packageState.lifecycle_status || detail.lifecycle_status || 'draft');
-        const lifecycleLabel = lifecycleStatus.replace(/_/g, ' ');
+        const lifecycleState = RegistrySkillHub.lifecycleState(packageState);
+        const lifecycleStatus = lifecycleState.rawStatus;
+        const lifecycleLabel = lifecycleState.label;
         const validationProblems = Array.isArray(packageState.validation_problems) ? packageState.validation_problems : [];
         const nodes = [];
 
@@ -1470,7 +1524,7 @@ function renderSkillCatalog(container) {
         titleWrap.appendChild(subtitle);
         headerRow.appendChild(titleWrap);
         const badge = document.createElement('span');
-        badge.className = `badge badge-${lifecycleStatus}`;
+        badge.className = `badge badge-${lifecycleState.effectiveStatus || lifecycleStatus}`;
         badge.textContent = lifecycleLabel;
         headerRow.appendChild(badge);
         header.appendChild(headerRow);
@@ -1485,15 +1539,15 @@ function renderSkillCatalog(container) {
         const refreshChrome = () => {
             saveBtn.disabled = loading || draftStatus === 'saving';
             saveBtn.textContent = draftStatus === 'saving' ? 'Saving…' : 'Save draft';
-            submitBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'draft';
+            submitBtn.hidden = currentStudioTab !== 'review' || !lifecycleState.canSubmit;
             submitBtn.disabled = loading || draftStatus === 'saving' || !packageState.publish_ready;
-            approveBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'review';
+            approveBtn.hidden = currentStudioTab !== 'review' || !lifecycleState.canApprove;
             approveBtn.disabled = loading || draftStatus === 'saving';
-            rejectBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'review';
+            rejectBtn.hidden = currentStudioTab !== 'review' || !lifecycleState.canApprove;
             rejectBtn.disabled = loading || draftStatus === 'saving';
-            publishBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'approved';
+            publishBtn.hidden = currentStudioTab !== 'review' || !lifecycleState.canPublish || lifecycleState.isPublished;
             publishBtn.disabled = loading || draftStatus === 'saving';
-            archiveBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus === 'archived';
+            archiveBtn.hidden = currentStudioTab !== 'review' || lifecycleState.isArchived;
             archiveBtn.disabled = loading || draftStatus === 'saving';
         };
         const saveBtn = document.createElement('button');
@@ -1595,10 +1649,13 @@ function renderSkillCatalog(container) {
             draftStatusMessage = successLabel;
             refreshChrome();
             try {
-                await op();
+                const result = await op();
                 _invalidateSkillCaches(currentAgentId, detail.name);
+                const appliedMutationDetail = _applyStudioMutationDetail(result?.detail || null);
                 await loadSkills({ soft: true, forceCatalog: true });
-                await loadSelectionData({ soft: true });
+                if (!appliedMutationDetail) {
+                    await loadSelectionData({ soft: true });
+                }
             } catch (err) {
                 draftStatus = 'error';
                 draftStatusMessage = 'Action failed';
@@ -2033,15 +2090,15 @@ function renderSkillCatalog(container) {
         reviewPanel.appendChild(nextStepLabel);
         const nextStepNote = document.createElement('p');
         nextStepNote.className = 'quiet-note';
-        if (lifecycleStatus === 'draft') {
+        if (lifecycleState.canSubmit) {
             nextStepNote.textContent = packageState.publish_ready
                 ? 'Submit this draft for review when you are ready.'
                 : 'Fix the validation issues above, then submit this draft for review.';
-        } else if (lifecycleStatus === 'review') {
+        } else if (lifecycleState.canApprove) {
             nextStepNote.textContent = 'Approve this draft to make it publishable, or reject it if it still needs changes.';
-        } else if (lifecycleStatus === 'approved') {
+        } else if (lifecycleState.canPublish && !lifecycleState.isPublished) {
             nextStepNote.textContent = 'Publish this approved draft when you are ready for it to become active on the bot.';
-        } else if (lifecycleStatus === 'archived') {
+        } else if (lifecycleState.isArchived) {
             nextStepNote.textContent = 'This draft is archived.';
         } else {
             nextStepNote.textContent = 'This revision is already live. Archive it only if you want to retire it.';

@@ -175,7 +175,7 @@ test.describe('protocol authoring live', () => {
     await expect(assignment.getByText('Agents with this skill')).toBeVisible();
     await expect(assignment).toContainText('Preferred agent: M2.');
     await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
-    await expect(assignment).toContainText('prefers M2');
+    await expect(assignment).toContainText('Pinned to M2 and limited to Architecture.');
     expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
     const toolbarInsert = page.locator('.kit-workflow-toolbar-actions').getByRole('button', { name: 'Insert after Planning', exact: true });
     await expect(toolbarInsert).toBeVisible();

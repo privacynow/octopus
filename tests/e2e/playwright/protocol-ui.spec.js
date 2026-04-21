@@ -350,8 +350,7 @@ test.describe('protocol authoring live', () => {
     await lifecycle.getByLabel('Name').fill(`Live Authoring ${Date.now()}`);
     await lifecycle.getByLabel('Name').blur();
     await waitForSaved(page);
-    await lifecycle.getByRole('button', { name: 'Protocol' }).click();
-    await lifecycle.getByRole('button', { name: 'Protocol settings' }).click();
+    await page.getByRole('button', { name: 'Protocol settings', exact: true }).click();
     await expect(page.locator('.kit-protocol-inline-card').getByLabel('Description')).toBeVisible();
 
     await page.getByRole('button', { name: 'Validate' }).click();

@@ -307,6 +307,7 @@ function renderProtocolWorkspace(container) {
         scenarios: [],
         runDetail: null,
         pollTimer: 0,
+        drafts: {},
     };
 
     function _canvasZoomValue() {
@@ -979,6 +980,7 @@ function renderProtocolWorkspace(container) {
             rehearsal.sessions = [];
             rehearsal.scenarios = [];
             rehearsal.runDetail = null;
+            rehearsal.drafts = {};
         }
         const docFromServer = (detail && detail.draft_definition_json && Object.keys(detail.draft_definition_json).length)
             ? detail.draft_definition_json
@@ -1336,6 +1338,14 @@ function renderProtocolWorkspace(container) {
             rehearsal.sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : [];
             rehearsal.scenarios = Array.isArray(scenariosResp?.scenarios) ? scenariosResp.scenarios : [];
             rehearsal.runDetail = runDetail || null;
+            const activeDrafts = {};
+            (rehearsal.sessions || []).forEach((session) => {
+                const routedTaskId = String(session?.routed_task_id || '').trim();
+                if (routedTaskId && rehearsal.drafts[routedTaskId]) {
+                    activeDrafts[routedTaskId] = rehearsal.drafts[routedTaskId];
+                }
+            });
+            rehearsal.drafts = activeDrafts;
             render();
         } catch (err) {
             UI.reportError('Failed to refresh rehearsal state', err);
@@ -1359,6 +1369,7 @@ function renderProtocolWorkspace(container) {
         rehearsal.sessions = [];
         rehearsal.scenarios = [];
         rehearsal.runDetail = null;
+        rehearsal.drafts = {};
         if (!rehearsal.runId) {
             UI.notify('Rehearsal could not be started.', 'error');
             return;
@@ -1367,6 +1378,20 @@ function renderProtocolWorkspace(container) {
         UI.notify('Rehearsal started — dry run, external transports gated.', 'success');
         render();
         await _refreshRehearsalSessions();
+    }
+
+    function _updateRehearsalDraft({ routedTaskId, responseText, decision, decisionSummary, scenarioId } = {}) {
+        const taskId = String(routedTaskId || '').trim();
+        if (!taskId) return;
+        rehearsal.drafts = {
+            ...(rehearsal.drafts || {}),
+            [taskId]: {
+                responseText: String(responseText || ''),
+                decision: String(decision || ''),
+                decisionSummary: String(decisionSummary || ''),
+                scenarioId: String(scenarioId || ''),
+            },
+        };
     }
 
     async function _respondRehearsal({ routedTaskId, responseText, decision, decisionSummary, stageKey, participantKey }) {
@@ -1380,6 +1405,11 @@ function renderProtocolWorkspace(container) {
                 stage_key: stageKey || '',
                 participant_key: participantKey || '',
             });
+            if (rehearsal.drafts[String(routedTaskId || '')]) {
+                const nextDrafts = { ...(rehearsal.drafts || {}) };
+                delete nextDrafts[String(routedTaskId || '')];
+                rehearsal.drafts = nextDrafts;
+            }
             await _refreshRehearsalSessions();
         } catch (err) {
             UI.reportError('Failed to submit rehearsal response', err);
@@ -4322,6 +4352,8 @@ function renderProtocolWorkspace(container) {
                 runId: rehearsal.runId,
                 sessions: rehearsal.sessions,
                 scenarios: rehearsal.scenarios,
+                drafts: rehearsal.drafts,
+                onDraftChange: (payload) => { _updateRehearsalDraft(payload); },
                 onRespond: (payload) => { void _respondRehearsal(payload); },
             }));
         }

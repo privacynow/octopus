@@ -1909,6 +1909,8 @@ window.Kit = (() => {
         runId = '',
         sessions = [],
         scenarios = [],
+        drafts = {},
+        onDraftChange = null,
         onRespond = null,
         emptyHint = '',
     } = {}) {
@@ -1956,6 +1958,10 @@ window.Kit = (() => {
             card.className = 'kit-rehearsal-session';
             card.dataset.routedTaskId = String(session.routed_task_id || '');
             card.dataset.stageKey = String(session.stage_key || '');
+            const routedTaskId = String(session.routed_task_id || '');
+            const sessionDraft = drafts && typeof drafts === 'object' && drafts[routedTaskId]
+                ? drafts[routedTaskId]
+                : {};
             const stageKind = String(session.stage_kind || 'work').trim().toLowerCase() || 'work';
             const decisionOptions = stageKind === 'work'
                 ? [{ value: 'completed', label: 'Completed' }]
@@ -1998,10 +2004,11 @@ window.Kit = (() => {
             textarea.className = 'kit-rehearsal-session-response';
             textarea.rows = 4;
             textarea.placeholder = dictValue('protocol.rehearsal.response.placeholder', 'Type the response this participant would send…');
+            textarea.value = String(sessionDraft.responseText || '');
             form.appendChild(textarea);
             const summaryInput = document.createElement('input');
             summaryInput.type = 'hidden';
-            summaryInput.value = '';
+            summaryInput.value = String(sessionDraft.decisionSummary || '');
             form.appendChild(summaryInput);
 
             if (decisionOptions.length > 1) {
@@ -2024,6 +2031,32 @@ window.Kit = (() => {
                 form.appendChild(decisionRow);
                 form.dataset.decisionControl = 'present';
                 form.__decisionSelect = decisionSelect;
+                if (String(sessionDraft.decision || '')) {
+                    decisionSelect.value = String(sessionDraft.decision || '');
+                }
+            }
+
+            const writeDraft = ({ scenarioId = '', preserveScenario = false } = {}) => {
+                if (typeof onDraftChange === 'function') {
+                    onDraftChange({
+                        routedTaskId,
+                        responseText: textarea.value,
+                        decision: form.__decisionSelect instanceof HTMLSelectElement
+                            ? String(form.__decisionSelect.value || '')
+                            : 'completed',
+                        decisionSummary: String(summaryInput.value || ''),
+                        scenarioId: preserveScenario ? String(sessionDraft.scenarioId || '') : String(scenarioId || ''),
+                    });
+                }
+            };
+
+            textarea.addEventListener('input', () => {
+                writeDraft();
+            });
+            if (form.__decisionSelect instanceof HTMLSelectElement) {
+                form.__decisionSelect.addEventListener('change', () => {
+                    writeDraft();
+                });
             }
 
             const outputArtifacts = Array.isArray(session.output_artifacts) ? session.output_artifacts : [];
@@ -2054,12 +2087,17 @@ window.Kit = (() => {
                     btn.type = 'button';
                     btn.className = 'kit-rehearsal-scenario-btn';
                     btn.textContent = scenario.display_name || dictValue('protocol.rehearsal.scenarios.unnamed', 'Untitled');
+                    btn.setAttribute('aria-pressed', String(sessionDraft.scenarioId || '') === String(scenario.protocol_scenario_id || '') ? 'true' : 'false');
                     btn.addEventListener('click', () => {
                         textarea.value = String(scenario.response_text || '');
                         summaryInput.value = String(scenario.decision_summary || '');
                         if (form.__decisionSelect instanceof HTMLSelectElement && String(scenario.decision || '')) {
                             form.__decisionSelect.value = String(scenario.decision || '');
                         }
+                        scenarioRow.querySelectorAll('.kit-rehearsal-scenario-btn').forEach((node) => {
+                            node.setAttribute('aria-pressed', node === btn ? 'true' : 'false');
+                        });
+                        writeDraft({ scenarioId: String(scenario.protocol_scenario_id || '') });
                         textarea.focus();
                     });
                     scenarioRow.appendChild(btn);

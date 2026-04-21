@@ -308,7 +308,7 @@ These commands are the current verification bar and what they prove.
 
 2. `./.tmp/playwright/node_modules/.bin/playwright test tests/e2e/playwright/protocol-ui.spec.js --config=tests/e2e/playwright.config.js`
 - proves the four named workflow scenarios pass end to end through the product
-- current result: `9 passed`
+- current result: `10 passed`
 
 3. `./.tmp/playwright/node_modules/.bin/playwright test .tmp/playwright/live-execution-smoke.spec.js --config=.tmp/playwright/playwright.live.config.js`
 - proves live execution smoke for agent and skill assignment
@@ -324,7 +324,7 @@ These commands are the current verification bar and what they prove.
 
 6. `find .tmp/playwright/live-audit -type f | wc -l`
 - proves breadth of the live audit capture set
-- current result: `609`
+- current result: `549`
 
 ## Current Verified State
 
@@ -334,7 +334,10 @@ The current verified live state on Octopus is:
    execution, or runs surfaces.
 2. All four named scenarios are passing through the UI and APIs.
 3. Standard-path negative invariants are holding.
-4. The exhaustive live audit remains above the 500-screenshot bar.
+4. Refresh preserves query-driven workflow state, including selected stage and
+   explicit workflow-map visibility.
+5. Artifact edits on non-first stages preserve stage context and survive reload.
+6. The exhaustive live audit remains above the 500-screenshot bar.
 
 ## Definition Of Done
 

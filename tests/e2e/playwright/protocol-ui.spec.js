@@ -597,8 +597,10 @@ test.describe('protocol authoring live', () => {
         await expect.poll(async () => reloadedSummary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
       }
     }
-    await expect(reloadedArtifactsSection.getByLabel(/Architecture review notes/)).toBeChecked();
-    await expect(reloadedArtifactsSection.getByLabel(/Architecture notes/)).toBeChecked();
+    const reloadedReadsRow = reloadedArtifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
+    const reloadedWritesRow = reloadedArtifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
+    await expect(reloadedReadsRow.getByLabel(/Architecture review notes/)).toBeChecked();
+    await expect(reloadedWritesRow.getByLabel(/Architecture notes/)).toBeChecked();
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

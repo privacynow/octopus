@@ -259,7 +259,8 @@ async function selectStep(page, stageKey) {
   await node.scrollIntoViewIfNeeded();
   await expect(node).toBeVisible();
   const alreadySelected = await node.evaluate((element) => element.classList.contains('is-selected'));
-  if (!alreadySelected) {
+  const onStagePanel = new RegExp(`stage_key=${stageKey}(?:&|$)`).test(page.url());
+  if (!alreadySelected || !onStagePanel) {
     await node.click();
   }
   await expectSelectedStep(page, stageKey);

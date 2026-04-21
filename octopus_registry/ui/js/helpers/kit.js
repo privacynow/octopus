@@ -1154,6 +1154,7 @@ window.Kit = (() => {
                 btn.type = 'button';
                 btn.className = ['btn', action.tone || 'btn-primary'].filter(Boolean).join(' ');
                 btn.textContent = String(action.label || 'Continue');
+                btn.dataset.key = `workflow-first-run-action:${String(action.label || 'continue').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
                 btn.addEventListener('click', action.onClick);
                 actions.appendChild(btn);
             });
@@ -1196,6 +1197,7 @@ window.Kit = (() => {
                     btn.type = 'button';
                     btn.className = ['btn', action.tone || 'btn-small'].filter(Boolean).join(' ');
                     btn.textContent = String(action.label || '');
+                    btn.dataset.key = `workflow-toolbar-action:${String(action.label || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
                     btn.disabled = Boolean(action.disabled);
                     btn.addEventListener('click', action.onClick);
                     actionBar.appendChild(btn);

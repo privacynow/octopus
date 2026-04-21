@@ -1125,6 +1125,7 @@ window.Kit = (() => {
         viewState = null,
         viewportState = {},
         onViewportChange = null,
+        mapVisible = true,
     } = {}) {
         const root = document.createElement('section');
         root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
@@ -1233,6 +1234,7 @@ window.Kit = (() => {
         let disposed = false;
         let syncingFit = false;
         let mountedSceneKey = '';
+        let currentMapVisible = Boolean(mapVisible);
         let currentZoom = viewportState?.zoom === 'fit'
             ? 'fit'
             : Math.max(0.35, Math.min(2.25, Number(viewportState?.zoom || 1) || 1));
@@ -1329,6 +1331,8 @@ window.Kit = (() => {
 
         const shell = document.createElement('div');
         shell.className = 'kit-workflow-shell kit-workflow-shell-scene';
+        shell.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
+        root.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
 
         const outline = document.createElement('aside');
         outline.className = 'kit-workflow-outline';
@@ -1743,15 +1747,23 @@ window.Kit = (() => {
             } else {
                 _fitCamera(cy, true);
             }
+            if (!currentMapVisible) {
+                cy.resize();
+            }
         }
 
         root.__workflowCanvasSync = ({
             scene: nextScene = graphScene,
             selection: nextSelection = currentSelection,
             viewportState: nextViewportState = {},
+            mapVisible: nextMapVisible = currentMapVisible,
         } = {}) => {
             graphScene = nextScene || graphScene;
             currentSelection = nextSelection || currentSelection;
+            const mapVisibilityChanged = currentMapVisible !== Boolean(nextMapVisible);
+            currentMapVisible = Boolean(nextMapVisible);
+            root.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
+            shell.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
             currentZoom = nextViewportState?.zoom === 'fit'
                 ? 'fit'
                 : Math.max(0.35, Math.min(2.25, Number(nextViewportState?.zoom || currentZoom || 1) || 1));
@@ -1759,6 +1771,17 @@ window.Kit = (() => {
             requestAnimationFrame(() => {
                 if (disposed) return;
                 void _layoutAndMount();
+                if (mapVisibilityChanged && currentMapVisible && cy) {
+                    requestAnimationFrame(() => {
+                        if (!cy) return;
+                        cy.resize();
+                        if (currentZoom === 'fit') {
+                            _fitCamera(cy, true);
+                        } else {
+                            cy.center();
+                        }
+                    });
+                }
             });
         };
 

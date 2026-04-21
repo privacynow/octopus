@@ -30,13 +30,13 @@ test.describe('protocol authoring live', () => {
     const stageEditor = page.locator('.kit-stage-editor').last();
     await expect(stageEditor.getByRole('heading', { name: 'Step basics' })).toBeVisible();
     await expect(stageEditor.getByRole('heading', { name: 'New owner role' })).toBeVisible();
-    await expect(stageEditor.getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
-    const strategy = stageEditor.getByLabel('Strategy', { exact: true });
-    await expect(strategy).toContainText('Specific agent');
-    await expect(strategy).toContainText('Required skill');
+    const assignmentHeading = stageEditor.getByRole('heading', { name: 'Assignment' }).first();
+    await assignmentHeading.scrollIntoViewIfNeeded();
+    await expect(assignmentHeading).toBeVisible();
+    await expect(stageEditor.getByLabel('Required skill', { exact: true })).toBeVisible();
+    await expect(stageEditor.getByLabel('Pinned agent', { exact: true })).toBeVisible();
     await expect(stageEditor.locator('.kit-selector-preview-input')).toHaveCount(0);
     await expect(stageEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
-    await strategy.selectOption('agent');
     await expect(stageEditor.getByText('Rehearsal')).toHaveCount(0);
     const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Runtime role tag or custom selector' });
     if (await advancedAssignment.count()) {
@@ -50,8 +50,8 @@ test.describe('protocol authoring live', () => {
 
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
     const draftStageEditor = page.locator('.kit-stage-editor').last();
-    await draftStageEditor.getByLabel('Strategy', { exact: true }).first().selectOption('skill');
-    const availableSkillControl = draftStageEditor.getByLabel('Choose skill', { exact: true }).first();
+    const availableSkillControl = draftStageEditor.getByLabel('Required skill', { exact: true }).first();
+    await availableSkillControl.scrollIntoViewIfNeeded();
     await expect(availableSkillControl).toBeVisible();
     const availableSkillValues = await availableSkillControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
@@ -77,7 +77,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
-    await expect(page.locator('.kit-stage-editor')).toContainText(defaultAssignmentKind === 'skill' ? 'Required skill ·' : 'Specific agent ·');
+    await expect(page.locator('.kit-stage-editor')).toContainText('Current assignment:');
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add branch or finish' }).first()).toBeVisible();
@@ -148,30 +148,31 @@ test.describe('protocol authoring live', () => {
 
     await selectStep(page, 'planning');
     await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
-    await expect(page.locator('.kit-stage-editor')).toContainText('Required skill · Product Definition');
+    await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();
+    await expect(page.locator('.kit-workflow-cy-host')).not.toBeVisible();
+    await page.getByRole('button', { name: 'Show workflow map', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Hide workflow map', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-controls').getByRole('button', { name: '100%', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
     const assignment = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
-    await assignment.getByLabel('Strategy', { exact: true }).selectOption('skill');
-    await expect.poll(async () => assignment.getByLabel('Choose skill', { exact: true }).locator('option').evaluateAll((options) =>
+    await expect.poll(async () => assignment.getByLabel('Required skill', { exact: true }).locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
-    await assignment.getByLabel('Choose skill', { exact: true }).selectOption('architecture');
+    await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
     await expect(assignment.getByText('Agents with this skill')).toBeVisible();
     await expect(assignment.getByLabel('Pin to matching agent', { exact: true })).toBeVisible();
     await assignment.getByLabel('Pin to matching agent', { exact: true }).selectOption({ label: 'M1' });
-    await expect(assignment.getByLabel('Strategy', { exact: true })).toHaveValue('skill');
-    await expect(assignment.getByLabel('Choose skill', { exact: true })).toHaveValue('architecture');
+    await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
+    await expect(assignment.getByLabel('Pinned agent', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
     await expect(assignment).toContainText('Preferred agent: M1.');
-    await assignment.getByLabel('Strategy', { exact: true }).selectOption('agent');
-    await assignment.getByLabel('Choose agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
+    await assignment.getByLabel('Pinned agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
     await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
     await expect(assignment).toContainText('Available here:');
     await expect(assignment.getByLabel('Require one of this agent’s skills', { exact: true })).toBeVisible();
     await assignment.getByLabel('Require one of this agent’s skills', { exact: true }).selectOption('architecture');
-    await expect(assignment.getByLabel('Strategy', { exact: true })).toHaveValue('skill');
-    await expect(assignment.getByLabel('Choose skill', { exact: true })).toHaveValue('architecture');
+    await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
+    await expect(assignment.getByLabel('Pinned agent', { exact: true })).toHaveValue('lift-and-shift-m2-bot');
     await expect(assignment.getByText('Agents with this skill')).toBeVisible();
     await expect(assignment).toContainText('Preferred agent: M2.');
     await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
@@ -259,12 +260,13 @@ test.describe('protocol authoring live', () => {
     await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
     await selectStep(page, 'draft_document');
     const details = page.locator('.kit-stage-editor').first();
-    await expect(details.getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
-    const strategy = details.getByLabel('Strategy', { exact: true });
-    await expect(strategy).toContainText('Specific agent');
-    await expect(strategy).toContainText('Required skill');
+    const documentAssignmentHeading = details.getByRole('heading', { name: 'Assignment' }).first();
+    await documentAssignmentHeading.scrollIntoViewIfNeeded();
+    await expect(documentAssignmentHeading).toBeVisible();
+    await expect(details.getByLabel('Required skill', { exact: true })).toBeVisible();
+    await expect(details.getByLabel('Pinned agent', { exact: true })).toBeVisible();
     await expect(details.getByText('Rehearsal')).toHaveCount(0);
-    await expect(details).toContainText('Required skill');
+    await expect(details).toContainText('Current assignment:');
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
@@ -279,7 +281,10 @@ test.describe('protocol authoring live', () => {
     await openTemplateDraft(page, 'Software Engineering');
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
     await expect(page.locator('.kit-workflow-outline')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();
+    await expect(page.locator('.kit-workflow-cy-host')).not.toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show workflow map', exact: true }).click();
     const canvasOverflow = await page.locator('.kit-workflow-viewport-cy').evaluate((element) => ({
       scrollWidth: element.scrollWidth,
       clientWidth: element.clientWidth,

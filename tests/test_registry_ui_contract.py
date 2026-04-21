@@ -181,6 +181,11 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Pin to matching agent" in workspace
     assert "quickstart-chip" in workspace
     assert "Choose another advertised skill below to keep" in workspace
+    assert "Required skill" in workspace
+    assert "Pinned agent" in workspace
+    assert "Show workflow map" in workspace
+    assert "Hide workflow map" in workspace
+    assert "workflow_map" in workspace
     assert "let canvasViewport = { zoom: 'fit' }" in workspace
     assert "_selectionFromQuery(" in workspace
     assert "_selectionQueryState(" in workspace

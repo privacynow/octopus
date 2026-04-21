@@ -131,8 +131,7 @@ async function createStep(page, {
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);
   }
-  await stageEditor.getByLabel('Strategy', { exact: true }).first().selectOption(selectorKind);
-  const valueLabel = selectorKind === 'agent' ? 'Choose agent' : selectorKind === 'skill' ? 'Choose skill' : 'Choose runtime role tag';
+  const valueLabel = selectorKind === 'agent' ? 'Pinned agent' : selectorKind === 'skill' ? 'Required skill' : 'Choose runtime role tag';
   const valueControl = stageEditor.getByLabel(valueLabel, { exact: true }).first();
   const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
   if (valueTag === 'select') {

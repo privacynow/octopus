@@ -1,731 +1,409 @@
-**Protocol Assignment Simplification Plan**
+**Protocol UX Fix Plan**
 
-## Live Audit State — 2026-04-20
+## Current Status
 
-This section is the current source of truth. It reflects the live Octopus deployment at commit `f7cdcdd`, not stale local screenshots or earlier broken deployments.
+This file is the current source of truth. It supersedes earlier plans that assumed assignment was still participant-owned or that the main remaining work was only density tuning.
 
-### Audit coverage completed
+Current live/deployed baseline during this update:
 
-- Live Octopus only: `http://127.0.0.1:8787`
-- Protocol authoring coverage:
-  - blank draft authoring
-  - Software Engineering template
-  - Document Approval template
-  - desktop, tablet, and mobile viewports
-  - add step
-  - create new role inline
-  - select skill
-  - select agent
-  - add branch / finish
-  - insert after / insert before route target
-  - validate / publish / rehearse / archive
-- Execution coverage:
-  - published agent-assigned protocol run
-  - published skill-assigned protocol run
-  - run detail on `/ui/runs`
-  - run list filters on desktop / tablet / mobile
-- Current live suite status:
-  - `tests/e2e/playwright/protocol-ui.spec.js` passes live against Octopus
-  - `.tmp/playwright/live-exhaustive-audit.spec.js` passes live against Octopus
-  - `.tmp/playwright/live-runs-filter-matrix.spec.js` passes live against Octopus
+- repo branch: `feature/protocol`
+- latest implemented assignment commit in repo/octopus flow: `447b36a`
+- live target for verification: `http://127.0.0.1:8787`
 
-### Audit artifact count
+## What Is Actually Finished
 
-Fresh live captures under `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit`:
+These items are working and should not be replanned as if they were still missing:
 
-- 671 screenshots total on the current build
+- step-first authoring exists
+- inline `Create new role…` exists
+- stage selectors are already canonical in the product/runtime path
+- skill dropdowns and agent dropdowns are real catalog-backed controls
+- refresh no longer drops the overview graph
+- the workflow map exists and is useful as reference context
+- skill selection can surface matching agents
+- agent selection can surface that agent’s advertised skills
+- live protocol authoring Playwright coverage passes on the current deployed build
 
-Representative current-state captures:
+## What Is Not Finished
 
-- rehearsal inspector visible: `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-desktop-16-rehearsal-page.png`
-- desktop focused editor: `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-desktop-stage-00-plan_review-page.png`
-- mobile focused editor: `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-mobile-plan_review-page.png`
+The assignment editor is still conceptually wrong.
 
-### Verified working flows
+### Primary open defect
 
-These are now verified on the current live build:
+The assignment UX is still strategy-first and asymmetrical:
 
-- blank draft step-first authoring works end-to-end
-- inline `Create new role…` works in blank drafts and template insert flows
-- skill assignment dropdowns render in the insert editor and populate from live/workflow-backed data
-- agent assignment dropdowns render in the insert editor and populate from live registry data
-- insert-after between existing stages persists correctly
-- stage deletion is available and rewires the surrounding route correctly in the tested case
-- branch / finish authoring works from the step editor
-- blank-draft validate / publish / rehearse / archive works in the live UI
-- rehearsal now surfaces as the active right-column inspector
-- agent-assigned execution created a live protocol run and surfaced in `/ui/runs`
-- skill-assigned execution created a live protocol run and surfaced in `/ui/runs`
-- runs filter matrix passes on desktop / tablet / mobile
+- choose `skill`, then choose an agent:
+  - the UI can still feel like it changes shape or “resets”
+- choose `agent`, then choose a skill:
+  - the UI reorients around the other choice instead of preserving one stable surface
+- the same authored intent is represented through different editor states depending on interaction order
 
-### Previously verified defects now closed
+This is the main remaining protocol-authoring defect.
 
-These items were real defects and are no longer open on the current build:
+### Secondary open defects
 
-1. Missing stage deletion
-2. Broken first-step / single-step outline semantics
-3. Broken insert-step role creation
-4. Broken skill / agent dropdown discovery in the insert editor
-5. Rehearsal mode missing a visible inspector surface
+These are still real, but they are sequenced after the assignment editor fix:
 
-### Verified defects still open
+1. the workflow map is still too prominent by default and competes with the primary editor
+2. mobile authoring is still too dense
+3. mobile runs is still too dense
+4. desktop focused-step editing is still text-heavy
 
-The remaining issues are now predominantly UX and density problems rather than hard authoring blockers.
+## Correct Product Model
 
-#### 1. Mobile authoring is still too dense
+The normal assignment editor should not ask “what strategy?” first.
 
-The mobile surface is functional, but still too long and too crowded.
+It should expose two peer controls:
 
-Observed in the current live audit:
+1. `Required skill`
+2. `Pinned agent`
 
-- section outline
-- focused graph
-- full step editor
-- assignment preview
-- routing
-- instructions
-- artifacts
-- advanced
+Each is optional individually, but at least one must be set.
 
-still stack into a heavy one-column surface.
+The editor must behave the same regardless of interaction order:
 
-Evidence:
+- choose skill only
+- choose skill then agent
+- choose agent only
+- choose agent then skill
+- clear skill
+- clear agent
 
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-mobile-plan_review-page.png`
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/blank-mobile-add-step-page.png`
+The layout must stay stable across all of those transitions.
 
-Fix required:
+The workflow map should also stop acting like the always-primary surface.
 
-- reduce simultaneous visible concerns on compact screens
-- make advanced content more aggressively collapsed on mobile
-- keep structure selection and immediate editing higher in the visual hierarchy than lower-value detail
+- the primary authoring surface is the editor/outline flow
+- the workflow map remains available as a reference workspace
+- on desktop it should be easy to show, hide, or expand without losing state
+- on mobile it should not be permanently visible by default
 
-#### 2. Mobile runs is still too dense
+The map stays in the product, but it should no longer dominate the screen before the user asks for it.
 
-The runs route is working, but it still presents a support-heavy surface as one long stacked page on mobile.
+## Canonical Selector Mapping
 
-Evidence:
+Keep one canonical selector model. Do not add another layer.
 
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/runs-list-mobile-page.png`
+Map UI state to the existing selector model like this:
 
-Fix required:
+- no skill + no agent
+  - invalid
+- skill + no agent
+  - `TargetSelector(kind="skill", value=skill)`
+- no skill + agent
+  - `TargetSelector(kind="agent", value=agent)`
+- skill + agent
+  - `TargetSelector(kind="skill", value=skill, preferred_agent_id=agent)`
 
-- separate list vs detail more clearly on mobile
-- collapse lower-priority execution sections by default
-- stop rendering the full triage stack as one uninterrupted phone-length page
+This uses the existing runtime/storage model in place.
 
-#### 3. Desktop focused-step editing is still text-heavy
+## Important Runtime Semantics
 
-Desktop is functionally solid, but the focused step/editor composition is still denser than it should be.
+Current runtime semantics already matter here:
 
-Observed in the current live audit:
+- `skill` only
+  - dynamic among matching connected agents
+- `agent` only
+  - pinned to that agent
+- `skill + preferred_agent_id`
+  - pinned to that preferred matching agent
 
-- inspector summary text
-- assignment copy
-- preview copy
-- route copy
-- artifacts copy
+This is not currently a soft preference. It is effectively a hard pin inside the skill selector path.
 
-still compete for space in one right column.
+That behavior is acceptable for this fix because the UI language is “pin,” not “prefer if available.”
 
-Evidence:
+Do not change runtime semantics in this pass.
 
-- `/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/live-audit/se-desktop-stage-00-plan_review-page.png`
+## What To Remove From The UX
 
-Fix required:
+The current strategy-first framing is the source of confusion.
 
-- compress explanatory copy in the right column
-- tighten assignment preview wording
-- reduce repeated descriptive text where the control label already explains the section
+Remove from the normal authoring flow:
 
-### Current priority order
+- the `Strategy` dropdown as the primary control
+- mode-specific editor shapes that switch between “agent mode” and “skill mode”
+- helper sections that become the effective primary editor after a choice
+- an always-prominent workflow map that competes with the right-hand editor during ordinary step editing
 
-1. Reduce mobile authoring density
-2. Reduce mobile runs density
-3. Tighten desktop focused-step density
+Keep the advanced selector path, but demote it sharply.
 
-This plan replaces the earlier “hard blocker” state. The major authoring failures are cleared on the current live build. The remaining work is to make the shipped UX calmer and more legible without reintroducing duplicate paths.
+## Advanced Selector Decision
 
-The structural assignment simplification below remains the architectural direction that made the current authoring fix possible:
+`Runtime role tag or custom selector` is not part of the normal authoring path.
 
-- the **step** is where authors think about work
-- the **participant** is where assignment actually lives
+Keep it only because it still covers cases the normal editor does not:
 
-That split is implemented today across the shared SDK, the registry runtime/store, and the UI. The fix is to make assignment **stage-owned** and make the step editor the only primary authoring surface for assignment.
+- runtime role tags
+- custom selector values not represented by normal catalogs
+- internal/system paths
 
-## 1. Problem Statement
+But:
 
-### 1.1 What is wrong today
+- keep it collapsed
+- keep it visually separate
+- do not let it compete with the normal agent/skill editor
 
-The current product asks the author to do one job in two places.
+## Implementation Plan
 
-- In the step editor, the user chooses `participant_key` and sees a summary-only runtime-assignment panel.
-- The actual selector editor lives on the participant editor.
-- Runtime dispatch reads `participant.selector`, not the stage.
+### Phase 1. Replace strategy-first editor with a combined editor
 
-That means the user thinks:
+Primary file:
 
-- add a step
-- decide who should do it
-- choose a skill or a specific agent
+- `/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js`
 
-But the system actually requires:
+Actions:
 
-- create or pick a participant
-- configure assignment on the participant
-- return to the step and point it at that participant
+- remove `Strategy` as the primary visible authoring choice
+- render one stable assignment surface with:
+  - `Required skill`
+  - `Pinned agent`
+- keep both controls visible and editable at all times
+- derive the selector from those two fields instead of using `selector_kind` as the UI driver
 
-That is a product-model problem, not just copy.
+Acceptance for this phase:
 
-### 1.2 Where the current authority lives
+- choosing skill then agent does not change the editor shape
+- choosing agent then skill does not change the editor shape
+- both values remain visible after each interaction
 
-Shared SDK:
+### Phase 2. Normalize editor state around two fields
 
-- `octopus_sdk/protocols/models.py`
-  - `ProtocolParticipantDefinitionRecord` currently has `selector`
-  - `ProtocolStageDefinitionRecord` currently has `participant_key` but no `selector`
-- `octopus_sdk/protocols/documents.py`
-  - validation currently emits `participant.selector_*`
-  - action/waiver follow-up still points to participant assignment
-- `octopus_sdk/protocols/engine.py`
-  - `dispatch_target_selector(...)` reads `participant.selector`
-  - `build_dispatch_request(...)` passes `normalized_requested_skills(selector=participant.selector)`
+Refactor editor state so the UI works from:
 
-Registry runtime and persistence:
+- `selectedSkill`
+- `selectedAgent`
 
-- `octopus_registry/protocol_runtime.py`
-  - calls `dispatch_target_selector(run=..., participant=document.participant(...))`
-  - maps missing selector to `PARTICIPANT_SELECTOR_REQUIRED`
-- `octopus_registry/protocol_store.py`
-  - persists participant-selector-oriented snapshots and requested skills
-  - uses participant-selector naming in execution records and store rows
+Then derive the canonical selector only at commit boundaries.
 
-UI:
+For existing selectors:
 
-- `octopus_registry/ui/js/components/protocol-workspace.js`
-  - `_stageAssignmentPanel(...)` is summary-only and jumps to participant editing
-  - `_participantEditorShell(...)` contains the real selector editor
-  - selector preview state is participant-scoped (`selectorPreview.participantKey`)
+- `kind=skill`
+  - `selectedSkill = selector.value`
+  - `selectedAgent = selector.preferred_agent_id || ''`
+- `kind=agent`
+  - `selectedSkill = ''`
+  - `selectedAgent = selector.value`
+- advanced/custom
+  - normal editor empty
+  - advanced editor owns that state
 
-### 1.3 User-visible impact
+Acceptance for this phase:
 
-- `Add participant` vs `Add step` is confusing and redundant.
-- A new author cannot configure a step end-to-end from the step editor alone.
-- Shared participant selectors are a silent footgun because changing one participant changes multiple steps.
-- Skill assignment feels broken because the real matching workflow is not owned by the step editor.
+- save/reload produces the same visible editor state
+- no order-dependent reorientation remains
 
-## 2. Target State
+### Phase 3. Rework the contextual assist sections
 
-Assignment becomes **stage-owned**.
+Reuse existing helpers instead of inventing new paths:
 
-- Canonical authority: `stage.selector`
-- Runtime dispatch reads the stage selector
-- Validation reads the stage selector
-- Selector preview is keyed to the stage editor flow
-- Step editor owns assignment UI directly
-
-Participants remain, at least initially, only for:
-
-- stable role identity (`participant_key`)
-- display name
-- optional shared instructions / role-level copy
-- session/group semantics that still legitimately depend on participant identity
-
-Participants stop being the assignment authority.
-
-## 3. Decisions
-
-1. **One assignment authority**
-   Canonical assignment lives on the stage. There is no long-term dual authority.
-
-2. **One migration boundary**
-   Legacy participant-owned selectors are converted in `documents.py` during canonicalization. After canonicalization, everything else reads stage selectors only.
-
-3. **Step-first authoring**
-   The step editor owns assignment, routing, and instructions. The author should not need to visit a participant editor to configure who runs a step.
-
-4. **Participants become roles, not assignment containers**
-   In product terms, participant becomes a role/owner concept. Selector editing is removed from that surface.
-
-5. **No authored skill-plus-pinned-agent hybrid in phase 1**
-   The authored selector is one of:
-   - `agent`
-   - `skill`
-   - `role`
-
-   If the user chooses a specific agent from the skill-match preview, the stage switches to `agent` mode explicitly.
-
-6. **Rehearsal behavior is preserved**
-   Rehearsal still rewrites dispatch to the reserved `role=rehearsal` selector in the engine/runtime path. This remains a runtime rule, not authored stage data.
-
-7. **Store and API semantics move with the model**
-   If HTTP or store fields use participant-selector naming for stage-owned data, they must be renamed or explicitly deprecated in the same release boundary. Do not leave external operators reading participant language for stage-owned assignment.
-
-8. **Single release boundary**
-   The SDK canonicalization change, registry runtime/store change, and UI change ship together as one cutover. No mixed deployment where runtime/store still assume participant authority after canonical documents have moved to stage authority.
-
-## 4. Non-Goals
-
-- Do not introduce a parallel “stage override” on top of participant selectors.
-- Do not keep write-through synchronization between stage and participant selectors after cutover.
-- Do not add a new top-level authoring surface.
-- Do not add on-canvas connection editing as part of this migration.
-
-## 5. Implementation Scope
-
-This is an SDK-first change with registry/UI adoption layered on top.
-
-### 5.1 Shared SDK
-
-- `octopus_sdk/protocols/models.py`
-- `octopus_sdk/protocols/documents.py`
-- `octopus_sdk/protocols/engine.py`
-- `octopus_sdk/protocols/builtins.py`
-- any `octopus_sdk/registry/*` client/model contract that exposes selector ownership directly
-
-### 5.2 Registry runtime and persistence
-
-- `octopus_registry/protocol_runtime.py`
-- `octopus_registry/protocol_store.py`
-- store-backed selector preview paths
-- any DB/store semantics still named around participant selectors
-
-### 5.3 UI
-
-- `octopus_registry/ui/js/components/protocol-workspace.js`
-- any UI state, HTTP payload, or selector-preview cache keyed by participant assignment semantics
-
-### 5.4 Tests
-
-- protocol SDK tests
-- protocol engine tests
-- protocol runtime tests
-- protocol store tests
-- registry UI contract tests
-- Playwright authoring tests
-
-## 6. Detailed Implementation Plan
-
-### Phase 1: Extend the shared schema
-
-Files:
-
-- `octopus_sdk/protocols/models.py`
-
-Changes:
-
-- Add `selector: TargetSelector | None = None` to `ProtocolStageDefinitionRecord`.
-- Remove `selector` from the canonical role of `ProtocolParticipantDefinitionRecord`.
-- Keep `participant_key` on the stage.
-- Keep participant records for identity, naming, and optional shared instructions.
+- `_agentsAdvertisingSkill(...)`
+- `_selectorAgentSkills(...)`
+- `_selectorAgentRecord(...)`
 
 Rules:
 
-- The stage now owns the dispatch rule.
-- The participant no longer owns the dispatch rule.
+- if a skill is selected, show matching agents context
+- if an agent is selected, show that agent’s skills context
+- if both are selected, show both contexts
+- if only one is selected, show only the relevant context
 
-Acceptance:
+The context sections must become pure aids to the two-field editor, not alternate modes.
 
-- canonical stage model supports `selector`
-- canonical participant model no longer needs `selector`
+Acceptance for this phase:
 
-### Phase 2: Canonicalize legacy documents in one place
+- pills and dropdowns update the same underlying field values
+- no helper section causes the editor to switch modes
 
-Files:
+### Phase 4. Keep one commit path only
 
-- `octopus_sdk/protocols/documents.py`
+Refactor existing commit/update logic so all assignment updates go through one derivation helper.
 
-Changes:
+Areas to update in:
 
-- During migration/canonicalization:
-  - if `stage.selector` exists, keep it
-  - else if the referenced participant has a selector, copy that selector onto the stage
-  - strip participant selectors from the canonical output
-- Keep this as the only legacy bridge.
-- Do not add runtime fallback logic outside canonicalization.
+- `/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js`
 
-Validation changes:
+Specifically:
 
-- Replace `participant.selector_*` issues with `stage.selector_*`
-- Add or rename stage-level issues such as:
-  - `stage.selector_required`
-  - `stage.selector_kind_invalid`
-  - `stage.selector_value_required`
-- Update `_next_required_actions(...)` so actions/waivers no longer point to participant-assignment language by accident
-- Audit any action or waiver text that still refers to `participants.assign_selector`
-
-Acceptance:
-
-- canonical document output is stage-authoritative
-- participant selectors are not present in canonical document output
-- validation and follow-up actions are stage-oriented
-
-### Phase 3: Switch the engine to stage-owned assignment
-
-Files:
-
-- `octopus_sdk/protocols/engine.py`
-
-Changes:
-
-- Update `dispatch_target_selector(...)` to read the stage selector, not the participant selector.
-- Preserve the existing rehearsal special case:
-  - if `run.is_rehearsal`, return `TargetSelector(kind="role", value="rehearsal")`
-  - otherwise use `stage.selector`
-- Update `build_dispatch_request(...)` to derive `requested_skills` from `stage.selector`
-- Update engine snapshot fields so selector snapshots reflect stage-owned assignment semantics
+- pending-stage creation path
+- existing-stage edit path
+- summary rendering path
+- save/reload hydration path
 
 Rules:
 
-- authored assignment source is stage-owned
-- rehearsal remains a runtime-only rewrite
+- no separate save path for “skill-first”
+- no separate save path for “agent-first”
+- no temporary UI-only state that disagrees with the stored selector
 
-Acceptance:
+Acceptance for this phase:
 
-- dispatch reads `stage.selector`
-- rehearsal behavior does not regress
-- requested skills are derived from stage selector only
+- editing an existing step preserves the combined selection across save/reload
+- creating a new step preserves the combined selection across create/save/reload
 
-### Phase 4: Move the registry runtime to the same contract
+### Phase 5. Tighten validation and copy
 
-Files:
+Validation should describe the combined editor, not selector internals.
 
-- `octopus_registry/protocol_runtime.py`
+Required copy behavior:
 
-Changes:
+- no skill + no agent:
+  - “Choose a required skill, a pinned agent, or both.”
+- skill + agent where agent does not advertise skill:
+  - explicit mismatch warning/error
+- skill only:
+  - dynamic language
+- skill + agent:
+  - pinned language
 
-- Pass `stage` into dispatch-target resolution instead of only `participant`
-- Update the error mapping for missing assignment:
-  - replace participant-oriented error semantics with stage-oriented ones
-  - e.g. `STAGE_SELECTOR_REQUIRED` or equivalent final error code
-- Keep `runtime_protocol_selector(...)` behavior aligned with the new stage-owned selector input
+Copy changes:
 
-Acceptance:
+- remove primary “strategy” language from the normal flow
+- keep advanced selector wording separate and explicit
 
-- registry runtime no longer assumes participant-owned selectors
-- blocked-run semantics point at the stage, not the participant
+Acceptance for this phase:
 
-### Phase 5: Migrate persistence and snapshots
+- users understand the combined editor without having to infer internal selector kinds
 
-Files:
+### Phase 6. Demote map prominence without removing it
 
-- `octopus_registry/protocol_store.py`
-- any related SQL/store contract paths
-- store tests and contracts
+This is a layout/product step, not a selector-model step.
 
-Changes:
+Goal:
 
-- Replace any use of `participant.selector` for:
-  - `normalized_requested_skills(...)`
-  - selector snapshots
-  - resolution metadata
-- Move snapshot generation to `stage.selector`
-- Rename persistence semantics that still describe stage-owned assignment as participant-owned assignment
-- If DB/store/API fields are literally `participant_selector_*` for stage-owned data:
-  - rename them in the same release if feasible
-  - otherwise explicitly deprecate and update their documented meaning in the same release
+- keep the workflow map
+- stop making it the default dominant surface during ordinary editing
 
-Important:
+Desktop target:
 
-- This phase ships together with Phase 2. The document cutover and store cutover are one release boundary.
-- Do not ship canonical stage selectors while persistence still writes participant-owned selector semantics as if nothing changed.
+- outline + editor remain primary
+- map is available on demand or in a resizable/collapsible region
+- opening the map preserves selection and viewport state
 
-Acceptance:
+Mobile target:
 
-- execution/store snapshots reflect stage-owned assignment
-- requested skills are persisted from stage selectors
-- no new store writes depend on `participant.selector`
+- map is not always visible by default
+- it is available via an explicit `Show workflow map` action or equivalent
+- it opens in a composition that does not bury the editor or outline
 
-### Phase 6: Move preview to step-scoped semantics
+Rules:
 
-Files:
+- do not remove the map
+- do not create a second authoring workflow
+- do not fork semantics between desktop and mobile
+- map visibility is a presentation/layout decision only
 
-- `octopus_registry/ui/js/components/protocol-workspace.js`
-- any selector-preview HTTP client/helper used by the UI
-- preview-related tests
+Acceptance for this phase:
 
-Changes:
+- the editor no longer competes with a permanently dominant map during normal editing
+- the map is still one action away and preserves state when shown
+- desktop and mobile both treat the map as reference context unless the user explicitly opens it
 
-- Keep preview selector resolution selector-based at the transport level if possible
-- Move UI preview state from participant scope to stage scope:
-  - replace `selectorPreview.participantKey` semantics with stage-scoped ownership/cache keys
-- Ensure preview state is updated before or at the same time as the step editor becomes assignment-authoritative
-- Reuse the existing preview machinery; do not create a duplicate preview path
+### Phase 7. Verify execution, not just editing
 
-Acceptance:
+Live verification must include actual execution against Octopus:
 
-- preview follows the step editor, not the participant editor
-- no transient state where step editing owns assignment but preview still keys off participant ownership
+1. agent only
+2. skill only
+3. skill + pinned agent
 
-### Phase 7: Make the step editor the assignment editor
+Verify:
 
-Files:
+- saved selector shape
+- successful dispatch
+- expected target resolution behavior
 
-- `octopus_registry/ui/js/components/protocol-workspace.js`
+Do not stop at UI assertions only.
 
-Changes:
+### Phase 8. Then address density
 
-- Remove the summary-only `_stageAssignmentPanel(...)` pattern
-- Inline the selector editor directly into `_stageEditorShell(...)`
-- The step editor now owns:
-  - step basics
-  - assignment
-  - routing
-  - instructions
-  - artifacts
-- Delete the “Edit participant assignment” jump from the step editor
+Only after the assignment editor is stable and symmetric and the map no longer dominates the workspace:
 
-UX rules:
+1. reduce mobile authoring density
+2. reduce mobile runs density
+3. reduce desktop focused-step text density
 
-- assignment label becomes just `Assignment`, not `Runtime assignment`
-- the author should not need to leave the step editor to configure who runs the step
+That work stays in scope, but it is sequenced after:
 
-Acceptance:
+- the assignment-model fix
+- the map-prominence fix
 
-- step editor fully configures step assignment in one place
-- no participant-editor detour remains in the main step flow
+because those two product issues currently shape the page more than pure copy/spacing cleanup does.
 
-### Phase 8: Demote participant editing to role management
+## Tests Required
 
-Files:
+### Local
 
-- `octopus_registry/ui/js/components/protocol-workspace.js`
-- related UI strings/tests
+- `/Users/tinker/output/bots/telegram-agent-bot/tests/test_registry_ui_contract.py`
+- `/Users/tinker/output/bots/telegram-agent-bot/tests/test_registry_ui_kit_contract.py`
+- `/Users/tinker/output/bots/telegram-agent-bot/tests/e2e/playwright/protocol-ui.spec.js`
 
-Changes:
+### Live Octopus
 
-- Remove selector editing from `_participantEditorShell(...)`
-- Reframe participant editing as role management:
-  - display name
-  - shared instructions
-  - any remaining role-level metadata
-- Remove `Add participant` as a co-equal primary CTA in the main workflow authoring surface
-- Keep role management accessible, but not as the primary prerequisite path
+Always test against:
 
-Acceptance:
+- `http://127.0.0.1:8787`
 
-- participant editor no longer competes with step editor for assignment authority
-- `Add step` is the primary authoring action
+Required live flows:
 
-### Phase 9: Add inline role creation in the step flow
+1. blank draft
+   - choose skill only
+   - choose agent only
+   - choose skill then agent
+   - choose agent then skill
+   - open and close the workflow map
+2. Software Engineering template
+   - edit existing assignment both ways
+   - verify editor-first layout with map hidden and visible
+3. actual execution
+   - published run with agent only
+   - published run with skill only
+   - published run with skill + pinned agent
+4. mobile
+   - edit without map shown by default
+   - explicitly open the map and verify it is usable and dismissible
 
-Files:
+## Deployment Rule
 
-- `octopus_registry/ui/js/components/protocol-workspace.js`
+Do not test a local-only build and infer live behavior.
 
-Changes:
+Required order:
 
-- In the step editor owner field:
-  - allow selecting an existing role
-  - allow `Create new role…`
-- If `Create new role…` is chosen, show inline fields for:
-  - role name
-  - optional shared instructions
-- Persist the stage and role through the same save path
+1. commit in this repo
+2. push `feature/protocol`
+3. `git -C /Users/tinker/octopus fetch origin feature/protocol`
+4. `git -C /Users/tinker/octopus pull --ff-only`
+5. `./octopus redeploy registry --yes`
+6. test live on `http://127.0.0.1:8787`
 
-Dependency:
+## Definition Of Done
 
-- This phase is blocked until stages carry selectors and the step editor owns assignment.
+This assignment issue is done only when:
 
-Acceptance:
+- there is one stable assignment editor
+- the editor uses two peer controls:
+  - required skill
+  - pinned agent
+- picking values in either order leads to the same visible state
+- save and reload preserve the same visible state
+- the workflow map is available but no longer the default dominant editing surface
+- opening and closing the map preserves useful state instead of feeling like a separate product
+- live execution works for:
+  - skill only
+  - agent only
+  - skill + pinned agent
+- advanced selector remains available but is clearly secondary
 
-- a user can add a step and create its role inline
-- step creation no longer depends on understanding participant management first
+## Superseded Direction
 
-### Phase 10: Make skill assignment behave like users expect
+The older direction in previous versions of this file that framed the next work as:
 
-Files:
+- participant-owned assignment migration
+- stage-owned migration as if not yet implemented
+- density-only cleanup as the main remaining work
 
-- `octopus_registry/ui/js/components/protocol-workspace.js`
-- preview helpers/tests
+is superseded.
 
-Changes:
+The current main remaining fixes are:
 
-- When assignment strategy is `skill`, show matching connected agents inline in the step editor
-- If the user chooses a matching agent, switch the stage selector to explicit `agent` mode
-- Do not introduce authored `skill + preferred_agent_id` hybrid state in phase 1
-- If zero agents match:
-  - keep the warning visible in the step editor
-  - validation/publish policy remains explicit and stage-based
-
-Acceptance:
-
-- choosing a skill visibly shows current matches
-- choosing a specific matching agent becomes an explicit `agent` assignment
-
-### Phase 11: Update templates, clients, and HTTP surface names
-
-Files:
-
-- `octopus_sdk/protocols/builtins.py`
-- any protocol seed/template fixtures
-- any `octopus_sdk/registry/*` client/model contracts
-- any HTTP response fields or docs still exposing participant-owned selector naming
-
-Changes:
-
-- Update built-in templates to author selectors on stages
-- Remove template dependence on participant-owned selectors
-- Update any external/client-facing JSON fields whose names still imply participant-owned selector authority for stage data
-- If a field cannot be renamed immediately, document deprecation in the same release and remove it on the next planned boundary
-
-Acceptance:
-
-- built-ins follow the new canonical model
-- external operators do not see stage-owned data mislabeled as participant-owned data without an explicit deprecation note
-
-### Phase 12: Delete dead paths
-
-Files:
-
-- SDK, registry runtime/store, UI, and tests touched above
-
-Changes:
-
-- Delete participant-selector-based runtime fallback logic
-- Delete participant-selector-based UI flows
-- Delete stale issue/action names if replaced
-- Delete tests that only protect the old authority split
-
-Acceptance:
-
-- one coherent pipeline remains
-- no duplicate authority path survives
-
-## 7. Deployment and Release Boundary
-
-This migration must ship as one coherent cutover.
-
-### Required release boundary
-
-The following must move together:
-
-- SDK schema and canonicalization
-- engine dispatch
-- registry runtime dispatch wiring
-- registry persistence/snapshots
-- step-editor preview semantics
-- UI save/editor contract
-
-### What is allowed during rollout
-
-- legacy input documents may still contain participant selectors
-- `documents.py` canonicalization may still accept that legacy input
-
-### What is not allowed after cutover
-
-- runtime reading participant selectors
-- store writes deriving selector data from participants
-- UI persisting assignment to participants as the canonical path
-
-### Deploy rule
-
-- update branch
-- push branch
-- fast-forward `/Users/tinker/octopus`
-- deploy from `/Users/tinker/octopus` only
-
-Do not create split deployments from different working copies.
-
-## 8. Testing Plan
-
-### SDK and canonicalization
-
-Update/add tests in:
-
-- `tests/test_protocols.py`
-- `tests/test_protocol_engine.py`
-
-Required coverage:
-
-- legacy participant selector migrates to `stage.selector`
-- canonical document strips participant selectors
-- `stage.selector_required` and related issues replace participant-oriented issue codes
-- rehearsal dispatch still resolves to `role=rehearsal`
-- `build_dispatch_request(...)` uses `stage.selector`
-
-### Registry runtime
-
-Update/add tests in runtime-facing coverage, including:
-
-- `tests/test_protocol_rehearsal.py`
-- any tests covering `octopus_registry/protocol_runtime.py`
-
-Required coverage:
-
-- missing stage selector blocks with stage-oriented error semantics
-- rehearsal behavior remains unchanged
-- runtime dispatch no longer depends on participant selector authority
-
-### Store and persistence
-
-Update/add tests in:
-
-- `tests/contracts/test_registry_store_contract.py`
-- any store tests that hit insert/update paths
-- any DB/store contract tests covering selector snapshots / requested skills
-
-Required coverage:
-
-- stage selector drives requested skills persistence
-- stage selector drives snapshot persistence
-- participant-selector-named semantics are removed or explicitly deprecated as planned
-
-### UI and Playwright
-
-Update/add tests in:
-
-- `tests/test_registry_ui_contract.py`
-- `tests/test_registry_ui_kit_contract.py`
-- `tests/e2e/playwright/protocol-ui.spec.js`
-
-Required coverage:
-
-- step editor contains assignment controls directly
-- participant editor no longer contains selector editing
-- add-step flow can create a role inline
-- skill selection shows live matches in the step editor
-- choosing a matching agent switches the selector to `agent`
-- assignment to `M1` persists from the step editor
-- no “Edit participant assignment” dependency remains in the step flow
-
-## 9. Acceptance Criteria
-
-The migration is complete only when all of the following are true:
-
-1. A user can create a step and fully configure assignment without leaving the step editor.
-2. `Add step` is sufficient to begin authoring; role creation can happen inline.
-3. Runtime dispatch reads one authority: `stage.selector`.
-4. Validation, waivers/actions, and UI language all point at stage-owned assignment.
-5. Store snapshots and requested-skills persistence reflect stage-owned assignment.
-6. Rehearsal dispatch still targets the reserved rehearsal role exactly as before.
-7. Selector preview follows the step editor, not the participant editor.
-8. Participant/role editing no longer competes with step editing for assignment authority.
-9. No long-term dual authority or compatibility shim remains.
-
-## 10. Ship Blockers
-
-Do not ship if any of these remain true:
-
-- `engine.py` still reads `participant.selector`
-- `protocol_runtime.py` still maps missing assignment as a participant-owned selector problem
-- `protocol_store.py` still writes new execution/snapshot data from participant-owned selectors
-- UI preview is still keyed to participant assignment while step editor owns assignment
-- participant editor still owns selector editing
-- step editor still relies on an “Edit participant assignment” detour
-- stage-owned data is still exposed to operators only through participant-selector-named surfaces without rename/deprecation handling
-
-## 11. Execution Order
-
-1. Add `stage.selector` in the shared SDK model.
-2. Implement canonicalization and validation cutover in `documents.py`.
-3. Switch engine dispatch to stage-owned selectors, preserving rehearsal behavior.
-4. Switch registry runtime dispatch wiring and error semantics.
-5. Switch store persistence and snapshot generation.
-6. Switch preview/state ownership to step scope.
-7. Move selector editing into the step editor.
-8. Remove selector editing from participant editor and demote participant management.
-9. Add inline role creation.
-10. Update templates, client contracts, and HTTP/store naming.
-11. Delete dead paths.
-12. Run full SDK, runtime, store, and UI verification.
+1. the combined, symmetric assignment editor described above
+2. demoting workflow-map prominence so the editor becomes the clear primary workspace

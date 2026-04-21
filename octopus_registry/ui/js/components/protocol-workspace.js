@@ -198,6 +198,7 @@ function renderProtocolWorkspace(container) {
     };
     let documentHistory = { undo: [], redo: [] };
     let canvasViewport = { zoom: 'fit' };
+    let workflowMapMode = 'auto';
 
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
     let draft = {
@@ -230,6 +231,30 @@ function renderProtocolWorkspace(container) {
 
     function _isCompactViewport() {
         return window.innerWidth <= 960;
+    }
+
+    function _defaultWorkflowMapVisible(current = selection) {
+        return false;
+    }
+
+    function _workflowMapModeFromQuery() {
+        const value = String(UI.readQueryParam('workflow_map', '') || '').trim().toLowerCase();
+        if (value === 'visible' || value === 'hidden' || value === 'auto') return value;
+        return 'auto';
+    }
+
+    function _workflowMapVisible(current = selection) {
+        if (workflowMapMode === 'visible') return true;
+        if (workflowMapMode === 'hidden') return false;
+        return _defaultWorkflowMapVisible(current);
+    }
+
+    function _setWorkflowMapMode(mode, { rerender = true } = {}) {
+        workflowMapMode = ['auto', 'visible', 'hidden'].includes(String(mode || ''))
+            ? String(mode || '')
+            : 'auto';
+        _writeState();
+        if (rerender) render();
     }
 
     function _setCanvasViewport(zoom, { renderNow = false } = {}) {
@@ -844,6 +869,7 @@ function renderProtocolWorkspace(container) {
         const previousSelection = selection;
         const previousEditorMode = editorMode;
         const previousCanvasViewport = canvasViewport;
+        const previousWorkflowMapMode = workflowMapMode;
         const previousPendingStage = pendingStage;
         const previousPendingRoute = pendingRoute;
         currentProtocol = detail;
@@ -879,10 +905,12 @@ function renderProtocolWorkspace(container) {
             selection = _repairSelection(previousSelection, draft.document);
             editorMode = previousEditorMode;
             canvasViewport = previousCanvasViewport;
+            workflowMapMode = previousWorkflowMapMode;
             pendingStage = previousPendingStage;
             pendingRoute = previousPendingRoute;
         } else {
             selection = _repairSelection(_selectionFromQuery(draft.document), draft.document);
+            workflowMapMode = _workflowMapModeFromQuery();
             _resetEditorMode();
         }
     }
@@ -942,6 +970,7 @@ function renderProtocolWorkspace(container) {
             transition_id: '',
             artifact_key: '',
             panel: '',
+            workflow_map: workflowMapMode,
         };
         const key = String(current?.sectionKey || 'overview');
         const nodeKey = String(current?.nodeKey || '');
@@ -1168,6 +1197,7 @@ function renderProtocolWorkspace(container) {
         selection = { sectionKey: 'overview', nodeKey: '' };
         saveState = { state: 'idle', lastSavedAt: '', error: '' };
         canvasViewport = { zoom: 'fit' };
+        workflowMapMode = 'auto';
         _resetEditorMode();
     }
 
@@ -1499,23 +1529,17 @@ function renderProtocolWorkspace(container) {
         pendingStage.max_rounds = Number.parseInt(readValue('#kit-details-max_rounds') || '0', 10) || 0;
         pendingStage.timeout_seconds = Number.parseInt(readValue('#kit-details-timeout_seconds') || '0', 10) || 0;
         const advancedKind = readValue('select[aria-label="Advanced strategy"]');
-        const primaryKind = readValue('select[aria-label="Strategy"]');
-        const selectorKind = String(advancedKind || primaryKind || '').trim().toLowerCase();
-        let selectorValue = '';
-        let selectorPreferredAgentId = '';
-        if (selectorKind === 'agent') {
-            selectorValue = readValue('[aria-label="Choose agent"]');
-        } else if (selectorKind === 'skill') {
-            selectorValue = readValue('[aria-label="Choose skill"]');
-            selectorPreferredAgentId = readValue('[aria-label="Pin to matching agent"]');
-        } else if (selectorKind === 'role') {
-            selectorValue = readValue('[aria-label="Choose runtime role tag"]') || readValue('[aria-label="Custom value"]');
-        } else {
-            selectorValue = readValue('[aria-label="Custom value"]');
-        }
-        pendingStage.selector_kind = selectorKind;
-        pendingStage.selector_value = selectorValue;
-        pendingStage.selector_preferred_agent_id = selectorPreferredAgentId;
+        const selector = _selectorFromEditorFields({
+            requiredSkill: readValue('[aria-label="Required skill"]'),
+            pinnedAgent: readValue('[aria-label="Pinned agent"]'),
+            advancedKind,
+            advancedValue: advancedKind === 'role'
+                ? (readValue('[aria-label="Choose runtime role tag"]') || readValue('[aria-label="Custom value"]'))
+                : readValue('[aria-label="Custom value"]'),
+        });
+        pendingStage.selector_kind = String(selector?.kind || '');
+        pendingStage.selector_value = String(selector?.value || '');
+        pendingStage.selector_preferred_agent_id = String(selector?.preferred_agent_id || '');
     }
 
     function _bindPendingStageEditorControls(root) {
@@ -1543,43 +1567,6 @@ function renderProtocolWorkspace(container) {
         bindText('#kit-details-instructions', 'instructions');
         bindText('#kit-details-max_rounds', 'max_rounds');
         bindText('#kit-details-timeout_seconds', 'timeout_seconds');
-
-        const strategy = root.querySelector('select[aria-label="Strategy"]');
-        if (strategy instanceof HTMLSelectElement) {
-            strategy.addEventListener('change', () => {
-                const nextKind = String(strategy.value || '');
-                _commitPendingStageSelector(
-                    nextKind,
-                    _nextSelectorValueForKind(nextKind, nextKind === String(pendingStage.selector_kind || '') ? pendingStage.selector_value : ''),
-                    nextKind === 'agent' ? '' : String(pendingStage.selector_preferred_agent_id || ''),
-                );
-            });
-        }
-        const advancedStrategy = root.querySelector('select[aria-label="Advanced strategy"]');
-        if (advancedStrategy instanceof HTMLSelectElement) {
-            advancedStrategy.addEventListener('change', () => {
-                const nextKind = String(advancedStrategy.value || '').trim();
-                const fallbackKind = String(pendingStage.selector_kind || '') || _selectorPrimaryKinds()[0] || '';
-                const targetKind = nextKind || fallbackKind;
-                _commitPendingStageSelector(
-                    targetKind,
-                    _nextSelectorValueForKind(targetKind, targetKind === String(pendingStage.selector_kind || '') ? pendingStage.selector_value : ''),
-                    targetKind === 'agent' ? '' : String(pendingStage.selector_preferred_agent_id || ''),
-                );
-            });
-        }
-        Array.from(root.querySelectorAll('select[aria-label="Choose agent"], select[aria-label="Choose skill"], select[aria-label="Choose runtime role tag"], input[aria-label="Choose agent"], input[aria-label="Choose skill"], input[aria-label="Choose runtime role tag"], input[aria-label="Custom value"]'))
-            .forEach((control) => {
-                const commit = () => {
-                    const value = control instanceof HTMLInputElement || control instanceof HTMLSelectElement ? control.value : '';
-                    _commitPendingStageSelector(String(pendingStage.selector_kind || ''), value);
-                };
-                control.addEventListener('change', commit);
-                if (control instanceof HTMLInputElement) {
-                    control.addEventListener('input', commit);
-                    control.addEventListener('blur', commit);
-                }
-            });
     }
 
     function _commitStageSelector(nodeKey, selectorKind, selectorValue, selectorPreferredAgentId = '') {
@@ -2115,6 +2102,11 @@ function renderProtocolWorkspace(container) {
             .filter((item) => _isAuthoringRoutingSkill({ skill_name: item }))));
     }
 
+    function _selectorAgentControlValue(selectorValue = '') {
+        const agent = _selectorAgentRecord(selectorValue);
+        return String(agent?.slug || selectorValue || '').trim();
+    }
+
     function _preferredAgentForSkill(skillName = '', preferredAgentId = '') {
         const normalizedSkill = String(skillName || '').trim().toLowerCase();
         const preferred = String(preferredAgentId || '').trim();
@@ -2125,6 +2117,67 @@ function renderProtocolWorkspace(container) {
             .map((item) => String(item || '').trim().toLowerCase())
             .includes(normalizedSkill);
         return supportsSkill ? String(agent.agent_id || '').trim() : '';
+    }
+
+    function _selectorEditorState({
+        selectorKind = '',
+        selectorValue = '',
+        selectorPreferredAgentId = '',
+    } = {}) {
+        const normalizedKind = String(selectorKind || '').trim().toLowerCase();
+        if (normalizedKind === 'skill') {
+            return {
+                requiredSkill: String(selectorValue || '').trim(),
+                pinnedAgent: _selectorAgentControlValue(selectorPreferredAgentId),
+                advancedKind: '',
+                advancedValue: '',
+            };
+        }
+        if (normalizedKind === 'agent') {
+            return {
+                requiredSkill: '',
+                pinnedAgent: _selectorAgentControlValue(selectorValue),
+                advancedKind: '',
+                advancedValue: '',
+            };
+        }
+        return {
+            requiredSkill: '',
+            pinnedAgent: '',
+            advancedKind: normalizedKind,
+            advancedValue: String(selectorValue || '').trim(),
+        };
+    }
+
+    function _selectorFromEditorFields({
+        requiredSkill = '',
+        pinnedAgent = '',
+        advancedKind = '',
+        advancedValue = '',
+    } = {}) {
+        const nextAdvancedKind = String(advancedKind || '').trim().toLowerCase();
+        const nextAdvancedValue = String(advancedValue || '').trim();
+        if (nextAdvancedKind && nextAdvancedValue) {
+            return _selectorFromFields(nextAdvancedKind, nextAdvancedValue);
+        }
+        const skillName = String(requiredSkill || '').trim();
+        const agentKey = String(pinnedAgent || '').trim();
+        if (skillName) {
+            const agent = _selectorAgentRecord(agentKey);
+            return _selectorFromFields('skill', skillName, String(agent?.agent_id || '').trim());
+        }
+        if (agentKey) {
+            return _selectorFromFields('agent', agentKey);
+        }
+        return null;
+    }
+
+    function _selectorSkillAgentMismatch(requiredSkill = '', pinnedAgent = '') {
+        const skillName = String(requiredSkill || '').trim();
+        const agent = _selectorAgentRecord(pinnedAgent);
+        const agentId = String(agent?.agent_id || '').trim();
+        if (!skillName || !agentId) return false;
+        return !_preferredAgentForSkill(skillName, agentId);
     }
 
     function _agentsAdvertisingSkill(selectorValue = '') {
@@ -2508,11 +2561,9 @@ function renderProtocolWorkspace(container) {
         readOnly = false,
         onChange = null,
         onSelectorChange = null,
-        showAllPrimaryValues = false,
     } = {}) {
         const wrap = document.createElement('section');
         wrap.className = 'kit-selector-editor';
-        if (showAllPrimaryValues) wrap.dataset.showAllPrimary = 'true';
         const emit = (key, value) => {
             if (typeof onChange === 'function') onChange(null, key, value);
         };
@@ -2530,136 +2581,118 @@ function renderProtocolWorkspace(container) {
         heading.className = 'kit-selector-editor-head';
         const copy = document.createElement('p');
         copy.className = 'kit-stage-routing-copy';
-        copy.textContent = 'Choose how this step resolves at run time. Start with the available agent or skill list, then use the custom runtime rule only when the default path is not enough.';
+        copy.textContent = 'Choose the required skill, the pinned agent, or both. Leaving the agent blank keeps the step dynamic across matching agents.';
         heading.appendChild(copy);
         wrap.appendChild(heading);
 
-        const normalizedKind = String(selectorKind || '').trim().toLowerCase();
-        const primaryKinds = _selectorPrimaryKinds();
-        const advancedKinds = _selectorAdvancedKinds();
-        const primaryKind = _isPrimarySelectorKind(normalizedKind) ? normalizedKind : '';
-        const primaryCatalog = primaryKind ? _selectorCatalogEntries(primaryKind) : [];
-
-        const strategyRow = document.createElement('div');
-        strategyRow.className = 'kit-details-row';
-        const strategyLabel = document.createElement('label');
-        strategyLabel.className = 'kit-details-label';
-        strategyLabel.textContent = Kit.dict.label('protocol.participant.selector_strategy.label', 'Strategy');
-        strategyRow.appendChild(strategyLabel);
-        const strategyControl = document.createElement('select');
-        strategyControl.className = 'kit-details-control';
-        const blankStrategy = document.createElement('option');
-        blankStrategy.value = '';
-        blankStrategy.textContent = '(choose assignment strategy)';
-        strategyControl.appendChild(blankStrategy);
-        _selectorKindOptions(primaryKinds).forEach((item) => {
-            const option = document.createElement('option');
-            option.value = String(item.value || '');
-            option.textContent = String(item.label || item.value || '');
-            if (primaryKind === String(item.value || '')) option.selected = true;
-            strategyControl.appendChild(option);
+        const {
+            requiredSkill,
+            pinnedAgent,
+            advancedKind,
+            advancedValue,
+        } = _selectorEditorState({
+            selectorKind,
+            selectorValue,
+            selectorPreferredAgentId,
         });
-        strategyControl.disabled = Boolean(readOnly);
-        strategyControl.setAttribute('aria-label', strategyLabel.textContent);
-        if ((typeof onChange === 'function' || typeof onSelectorChange === 'function') && !readOnly) {
-            strategyControl.addEventListener('change', () => {
-                const nextKind = String(strategyControl.value || '');
-                const nextValue = _nextSelectorValueForKind(nextKind, nextKind === normalizedKind ? selectorValue : '');
-                const nextPreferred = nextKind === 'agent'
-                    ? ''
-                    : nextKind === 'skill'
-                        ? String(primaryKind === 'skill' ? selectorPreferredAgentId : '')
-                        : '';
-                emitSelector(nextKind, nextValue, nextPreferred);
+        const advancedKinds = _selectorAdvancedKinds();
+        const activeAgent = _selectorAgentRecord(pinnedAgent);
+        const activeAgentId = String(activeAgent?.agent_id || '').trim();
+        const activeAgentLabel = String(activeAgent?.display_name || activeAgent?.slug || pinnedAgent || '').trim();
+        const emitAssignment = ({
+            nextSkill = requiredSkill,
+            nextAgent = pinnedAgent,
+            nextAdvancedKind = '',
+            nextAdvancedValue = '',
+        } = {}) => {
+            const selector = _selectorFromEditorFields({
+                requiredSkill: nextSkill,
+                pinnedAgent: nextAgent,
+                advancedKind: nextAdvancedKind,
+                advancedValue: nextAdvancedValue,
             });
-        }
-        strategyRow.appendChild(strategyControl);
-        wrap.appendChild(strategyRow);
+            emitSelector(
+                String(selector?.kind || ''),
+                String(selector?.value || ''),
+                String(selector?.preferred_agent_id || ''),
+            );
+        };
 
-        if (showAllPrimaryValues) {
-            primaryKinds.forEach((kind) => {
-            const { element } = _buildSelectorValueField({
-                selectorKind: kind,
-                selectorValue: String(normalizedKind || '') === String(kind || '') ? selectorValue : '',
-                readOnly,
-                onChange,
-                onSelectorChange: typeof onSelectorChange === 'function'
-                    ? (nextKind, nextValue) => onSelectorChange(
-                        String(nextKind || kind || ''),
-                        nextValue,
-                        String(nextKind || kind || '') === 'skill'
-                            ? _preferredAgentForSkill(nextValue, selectorPreferredAgentId)
-                            : '',
-                    )
-                    : null,
-                label: `Choose ${_selectorValueLabel(kind)}`,
-            });
-            element.dataset.selectorKind = String(kind || '');
-                wrap.appendChild(element);
-            });
-        } else if (primaryKind) {
-            const { element } = _buildSelectorValueField({
-                selectorKind: primaryKind,
-                selectorValue,
-                readOnly,
-                onChange,
-                onSelectorChange: typeof onSelectorChange === 'function'
-                    ? (nextKind, nextValue) => onSelectorChange(
-                        nextKind,
-                        nextValue,
-                        nextKind === 'skill' ? _preferredAgentForSkill(nextValue, selectorPreferredAgentId) : '',
-                    )
-                    : null,
-                label: `Choose ${_selectorValueLabel(primaryKind)}`,
-            });
-            wrap.appendChild(element);
-        } else {
+        if (advancedKind && advancedValue) {
             const note = document.createElement('p');
             note.className = 'kit-selector-editor-note';
-            note.textContent = normalizedKind
-                ? 'This step currently uses a custom runtime rule. Edit it below.'
-                : 'Choose a strategy above to start assigning this step.';
+            note.textContent = 'This step currently uses an advanced runtime selector. Choosing a required skill or pinned agent below will replace it.';
             wrap.appendChild(note);
         }
 
-        const handleCandidateSelect = !readOnly && normalizedKind === 'skill'
-            ? (candidate) => {
-                const preferred = String(candidate?.agent_id || '').trim();
-                if (!candidate) {
-                    emitSelector('skill', selectorValue, '');
-                    return;
-                }
-                if (!preferred) return;
-                emitSelector('skill', selectorValue, preferred);
+        const { element: skillField } = _buildSelectorValueField({
+            selectorKind: 'skill',
+            selectorValue: requiredSkill,
+            readOnly,
+            onSelectorChange: (_kind, nextValue) => emitAssignment({
+                nextSkill: String(nextValue || ''),
+                nextAgent: pinnedAgent,
+            }),
+            label: 'Required skill',
+        });
+        wrap.appendChild(skillField);
+
+        const { element: agentField } = _buildSelectorValueField({
+            selectorKind: 'agent',
+            selectorValue: pinnedAgent,
+            readOnly,
+            onSelectorChange: (_kind, nextValue) => emitAssignment({
+                nextSkill: requiredSkill,
+                nextAgent: String(nextValue || ''),
+            }),
+            label: 'Pinned agent',
+        });
+        wrap.appendChild(agentField);
+
+        if (requiredSkill || pinnedAgent) {
+            const summary = document.createElement('p');
+            summary.className = 'kit-selector-editor-note';
+            if (requiredSkill && activeAgentLabel) {
+                summary.textContent = `Current assignment: requires ${_titleCaseWords(requiredSkill)} and pins the step to ${activeAgentLabel}.`;
+            } else if (requiredSkill) {
+                summary.textContent = `Current assignment: requires ${_titleCaseWords(requiredSkill)} and stays dynamic across matching agents.`;
+            } else {
+                summary.textContent = `Current assignment: pins the step to ${activeAgentLabel || 'the selected agent'}.`;
             }
-            : null;
-        if (normalizedKind === 'skill' && selectorValue) {
+            wrap.appendChild(summary);
+        }
+
+        if (_selectorSkillAgentMismatch(requiredSkill, pinnedAgent)) {
+            const warning = document.createElement('p');
+            warning.className = 'kit-selector-editor-note';
+            warning.textContent = `Pinned agent ${activeAgentLabel || 'the selected agent'} does not currently advertise ${_titleCaseWords(requiredSkill)}.`;
+            wrap.appendChild(warning);
+        }
+
+        if (requiredSkill) {
             const matchesSection = _selectorSkillMatchSection({
-                selectorValue,
-                preferredAgentId: selectorPreferredAgentId,
+                selectorValue: requiredSkill,
+                preferredAgentId: activeAgentId,
                 readOnly,
-                onSuggestionSelect: handleCandidateSelect,
+                onSuggestionSelect: !readOnly
+                    ? (candidate) => emitAssignment({
+                        nextSkill: requiredSkill,
+                        nextAgent: String(candidate?.slug || ''),
+                    })
+                    : null,
             });
             if (matchesSection) wrap.appendChild(matchesSection);
         }
-        const preferredAgentKey = normalizedKind === 'skill'
-            ? String(selectorPreferredAgentId || '')
-            : normalizedKind === 'agent'
-                ? String(selectorValue || '')
-                : '';
-        if (preferredAgentKey) {
-            const selectedAgent = _selectorAgentRecord(preferredAgentKey);
-            const preferredAgentId = String(selectedAgent?.agent_id || preferredAgentKey || '');
+        if (pinnedAgent) {
             const skillsSection = _selectorAgentSkillsSection({
-                selectorValue: preferredAgentKey,
-                selectedSkill: normalizedKind === 'skill' ? selectorValue : '',
+                selectorValue: pinnedAgent,
+                selectedSkill: requiredSkill,
                 readOnly,
                 onSuggestionSelect: !readOnly
-                    ? (skillName) => emitSelector(
-                        'skill',
-                        String(skillName || ''),
-                        preferredAgentId,
-                    )
+                    ? (skillName) => emitAssignment({
+                        nextSkill: String(skillName || ''),
+                        nextAgent: pinnedAgent,
+                    })
                     : null,
             });
             if (skillsSection) wrap.appendChild(skillsSection);
@@ -2667,10 +2700,7 @@ function renderProtocolWorkspace(container) {
 
         const advanced = document.createElement('details');
         advanced.className = 'kit-selector-editor-override';
-        advanced.open = Boolean(
-            (normalizedKind && !_isPrimarySelectorKind(normalizedKind))
-            || (primaryCatalog.length && selectorValue && !primaryCatalog.some((item) => item.value === String(selectorValue || ''))),
-        );
+        advanced.open = Boolean(advancedKind && advancedValue);
         const advancedSummary = document.createElement('summary');
         advancedSummary.className = 'kit-stage-editor-summary';
         const advancedTitle = document.createElement('h4');
@@ -2710,49 +2740,55 @@ function renderProtocolWorkspace(container) {
             if ((typeof onChange === 'function' || typeof onSelectorChange === 'function') && !readOnly) {
                 advancedKindControl.addEventListener('change', () => {
                     const nextKind = String(advancedKindControl.value || '').trim();
-                    const fallbackKind = primaryKind || _selectorPrimaryKinds()[0] || '';
-                    const targetKind = nextKind || fallbackKind;
-                    emitSelector(
-                        targetKind,
-                        _nextSelectorValueForKind(targetKind, targetKind === normalizedKind ? selectorValue : ''),
-                        targetKind === 'skill' ? String(selectorPreferredAgentId || '') : '',
-                    );
+                    if (!nextKind) {
+                        emitAssignment({
+                            nextSkill: requiredSkill,
+                            nextAgent: pinnedAgent,
+                        });
+                        return;
+                    }
+                    emitAssignment({
+                        nextSkill: '',
+                        nextAgent: '',
+                        nextAdvancedKind: nextKind,
+                        nextAdvancedValue: _nextSelectorValueForKind(nextKind, nextKind === advancedKind ? advancedValue : ''),
+                    });
                 });
             }
             advancedKindRow.appendChild(advancedKindControl);
             advancedBody.appendChild(advancedKindRow);
         }
 
-        const advancedKind = normalizedKind && !_isPrimarySelectorKind(normalizedKind) ? normalizedKind : '';
         if (advancedKind) {
             const { element, catalog } = _buildSelectorValueField({
                 selectorKind: advancedKind,
-                selectorValue,
+                selectorValue: advancedValue,
                 readOnly,
                 onChange,
-                onSelectorChange,
+                onSelectorChange: (nextKind, nextValue) => emitAssignment({
+                    nextSkill: '',
+                    nextAgent: '',
+                    nextAdvancedKind: nextKind,
+                    nextAdvancedValue: nextValue,
+                }),
                 label: `Choose ${_selectorValueLabel(advancedKind)}`,
             });
             advancedBody.appendChild(element);
             if (catalog.length) {
                 advancedBody.appendChild(_buildSelectorManualOverrideField({
-                    selectorValue,
+                    selectorValue: advancedValue,
                     readOnly,
                     onChange: typeof onSelectorChange === 'function'
-                        ? (_target, _key, nextValue) => onSelectorChange(advancedKind, nextValue)
+                        ? (_target, _key, nextValue) => emitAssignment({
+                            nextSkill: '',
+                            nextAgent: '',
+                            nextAdvancedKind: advancedKind,
+                            nextAdvancedValue: nextValue,
+                        })
                         : onChange,
                     label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
                 }));
             }
-        } else if (primaryKind && primaryCatalog.length) {
-            advancedBody.appendChild(_buildSelectorManualOverrideField({
-                selectorValue,
-                readOnly,
-                onChange: typeof onSelectorChange === 'function'
-                    ? (_target, _key, nextValue) => onSelectorChange(primaryKind, nextValue)
-                    : onChange,
-                label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
-            }));
         }
         advanced.appendChild(advancedBody);
         wrap.appendChild(advanced);
@@ -3063,6 +3099,7 @@ function renderProtocolWorkspace(container) {
                 decision: selectedTransition.decision,
             }
             : selectedStageAnchor;
+        const mapVisible = _workflowMapVisible();
         return [
             ...(selection.sectionKey !== 'overview' ? [{
                 label: 'Show full workflow',
@@ -3072,6 +3109,11 @@ function renderProtocolWorkspace(container) {
                     render();
                 },
             }] : []),
+            {
+                label: mapVisible ? 'Hide workflow map' : 'Show workflow map',
+                tone: 'btn-small',
+                onClick: () => _setWorkflowMapMode(mapVisible ? 'hidden' : 'visible'),
+            },
             {
                 label: insertAnchor ? insertLabel : Kit.dict.label('protocol.stages.add'),
                 tone: 'btn-small',
@@ -3331,6 +3373,7 @@ function renderProtocolWorkspace(container) {
             editorMode,
             viewState: workflow.viewState,
             viewportState: { zoom: _canvasZoomValue() },
+            mapVisible: _workflowMapVisible(),
             onViewportChange: (zoom) => _setCanvasViewport(zoom),
             selection: {
                 kind: selection.sectionKey === 'segments'
@@ -3697,7 +3740,6 @@ function renderProtocolWorkspace(container) {
                 : (typeof onCommit === 'function' && target?.stage_key
                     ? (kind, value, preferredAgentId) => _commitStageSelector(String(target.stage_key || ''), kind, value, preferredAgentId)
                     : null),
-            showAllPrimaryValues: Boolean(createAction),
         }), { wide: true }));
 
         if (!createAction) {
@@ -4073,6 +4115,7 @@ function renderProtocolWorkspace(container) {
         workspace.dataset.key = 'protocol-authoring-workspace';
         workspace.dataset.selection = String(selection.sectionKey || 'overview');
         workspace.dataset.editorMode = String(editorMode.kind || 'idle');
+        workspace.dataset.mapVisible = _workflowMapVisible() ? 'true' : 'false';
 
         const canvasColumn = document.createElement('div');
         canvasColumn.className = 'kit-authoring-canvas-column';
@@ -4140,6 +4183,7 @@ function renderProtocolWorkspace(container) {
                     id: selection.nodeKey,
                 },
                 viewportState: { zoom: _canvasZoomValue() },
+                mapVisible: _workflowMapVisible(),
             });
         }
         if (previousCanvasRoot && previousCanvasRoot !== activeCanvasRoot && typeof previousCanvasRoot.__workflowCanvasCleanup === 'function') {

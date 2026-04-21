@@ -139,6 +139,16 @@ def test_canonical_protocol_document_synthesizes_selector_from_legacy_required_s
     assert "selector" not in document.model_dump(mode="json")["participants"][0]
 
 
+def test_canonical_protocol_document_marks_output_stage_write_capable_when_unspecified() -> None:
+    source = protocol_document()
+    source["stages"][0].pop("write_capable", None)
+    source["stages"][0]["outputs"] = ["plan"]
+
+    document = canonical_protocol_document(source)
+
+    assert document.stage("planning").write_capable is True
+
+
 def test_canonical_protocol_document_migrates_participant_selector_to_stage_selector() -> None:
     legacy = protocol_document()
     legacy["stages"][0].pop("selector", None)

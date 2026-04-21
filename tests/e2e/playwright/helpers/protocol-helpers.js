@@ -134,6 +134,7 @@ async function createStep(page, {
   selectorKind = 'skill',
   selectorValue = '',
   stageKind = '',
+  instructions = '',
   openEditor = true,
 } = {}) {
   if (openEditor) {
@@ -163,7 +164,9 @@ async function createStep(page, {
     .locator('.kit-stage-editor-section')
     .filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) })
     .first();
-  await stepBasics.getByLabel('Name').first().fill(name);
+  const stepNameControl = stepBasics.locator('input, textarea').first();
+  await expect(stepNameControl).toBeVisible();
+  await stepNameControl.fill(name);
   const ownerRoleSelect = stepBasics.getByLabel('Owner role').first();
   if (ownerRole) {
     await ownerRoleSelect.selectOption(ownerRole);
@@ -230,6 +233,13 @@ async function createStep(page, {
     await valueControl.blur();
   }
   await page.waitForTimeout(150);
+  if (instructions) {
+    const instructionsSection = stageEditorShell
+      .locator('.kit-stage-editor-section')
+      .filter({ has: page.getByRole('heading', { name: 'Instructions', exact: true }) })
+      .first();
+    await instructionsSection.getByLabel('Instructions').fill(instructions);
+  }
   await stageEditorShell.getByRole('button', { name: 'Create step', exact: true }).click();
   const stageKey = key || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const node = await outlineStepNode(page, stageKey);

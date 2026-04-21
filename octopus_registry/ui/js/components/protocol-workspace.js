@@ -3697,6 +3697,7 @@ function renderProtocolWorkspace(container) {
         const artifactKey = String(artifact?.artifact_key || '').trim();
         const shell = document.createElement('div');
         shell.className = 'kit-stage-editor';
+        shell.dataset.key = `protocol-artifact-editor:${artifactKey}`;
 
         const kindOptions = _manifestArtifactKindOptions().map((value) => ({
             value,

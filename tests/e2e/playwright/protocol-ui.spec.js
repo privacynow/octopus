@@ -114,13 +114,16 @@ async function waitForLatestRehearsalRunId(page, protocolId) {
   return String(runs.find((item) => item.is_rehearsal && String(item.protocol_id || '') === expectedProtocolId)?.protocol_run_id || '');
 }
 
-async function firstConnectedAgentSlug(page) {
+async function firstConnectedAgent(page) {
   return page.evaluate(async () => {
     const response = await fetch('/v1/agents?state=connected&limit=100', { credentials: 'same-origin' });
     const payload = await response.json();
     const agents = Array.isArray(payload.agents) ? payload.agents : [];
     const first = agents.find((agent) => String(agent.connectivity_state || '').toLowerCase() === 'connected');
-    return String(first?.slug || '');
+    return {
+      agentId: String(first?.agent_id || ''),
+      slug: String(first?.slug || ''),
+    };
   });
 }
 
@@ -133,12 +136,26 @@ async function openProtocolSettings(page) {
 
 async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
   const catalog = page.locator('.kit-protocol-inline-card').filter({ has: page.getByRole('heading', { name: 'Artifacts', exact: true }) }).first();
+  const beforeCount = await page.locator('[data-testid^="workflow-artifact-"]').count();
+  const artifactKey = `artifact_${beforeCount + 1}`;
   await catalog.getByRole('button', { name: 'Add artifact', exact: true }).click();
-  const editor = page.locator('.kit-stage-editor').last();
-  await expect(editor.getByLabel('Artifact name')).toBeVisible();
-  await editor.getByLabel('Artifact name').fill(name);
-  await editor.getByLabel('Artifact type').selectOption(kind);
+  const artifactNode = page.getByTestId(`workflow-artifact-${artifactKey}`);
+  await expect(artifactNode).toBeVisible();
+  await artifactNode.click();
+  let editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
+  await expect(editor.getByRole('heading', { name: 'Artifact basics', exact: true })).toBeVisible();
+  await editor.getByLabel('Name').fill(name);
+  await editor.getByLabel('Name').blur();
+  await page.waitForTimeout(600);
+  await waitForSaved(page);
+  editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
+  await editor.getByLabel('Kind').selectOption(kind);
+  await page.waitForTimeout(600);
+  await waitForSaved(page);
+  editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
   await editor.getByLabel('Workspace path').fill(path);
+  await editor.getByLabel('Workspace path').blur();
+  await page.waitForTimeout(600);
   await waitForSaved(page);
 }
 
@@ -443,8 +460,9 @@ test.describe('protocol authoring live', () => {
 
     await login(page);
     await openBlankDraft(page);
-    const connectedAgent = await firstConnectedAgentSlug(page);
-    expect(connectedAgent).toBeTruthy();
+    const connectedAgent = await firstConnectedAgent(page);
+    expect(connectedAgent.agentId).toBeTruthy();
+    expect(connectedAgent.slug).toBeTruthy();
 
     await openProtocolSettings(page);
     for (const artifact of [
@@ -463,7 +481,12 @@ test.describe('protocol authoring live', () => {
       roleName: 'Data loader',
       roleKey: 'data-loader',
       selectorKind: 'agent',
-      selectorValue: connectedAgent,
+      selectorValue: connectedAgent.slug,
+      instructions: [
+        'Create workspace/source-data.csv in the workspace.',
+        'Write a small CSV with columns department,region,amount and at least four rows.',
+        'Use realistic sample values so the next step can filter them.',
+      ].join(' '),
     });
     const filterKey = await createStep(page, {
       name: 'Filter rows',
@@ -471,7 +494,12 @@ test.describe('protocol authoring live', () => {
       roleName: 'Data filter',
       roleKey: 'data-filter',
       selectorKind: 'agent',
-      selectorValue: connectedAgent,
+      selectorValue: connectedAgent.slug,
+      instructions: [
+        'Read workspace/source-data.csv and create workspace/filtered-data.csv.',
+        'Keep only rows where region is west.',
+        'Preserve the CSV header and write the filtered result for the next stage.',
+      ].join(' '),
     });
     const analyzeKey = await createStep(page, {
       name: 'Run analytics',
@@ -479,7 +507,11 @@ test.describe('protocol authoring live', () => {
       roleName: 'Data analyst',
       roleKey: 'data-analyst',
       selectorKind: 'agent',
-      selectorValue: connectedAgent,
+      selectorValue: connectedAgent.slug,
+      instructions: [
+        'Read workspace/filtered-data.csv and create workspace/analytics-summary.json.',
+        'Include row_count, total_amount, and average_amount in valid JSON.',
+      ].join(' '),
     });
     const renderKey = await createStep(page, {
       name: 'Render report',
@@ -487,7 +519,12 @@ test.describe('protocol authoring live', () => {
       roleName: 'Report renderer',
       roleKey: 'report-renderer',
       selectorKind: 'agent',
-      selectorValue: connectedAgent,
+      selectorValue: connectedAgent.slug,
+      instructions: [
+        'Read workspace/analytics-summary.json and create workspace/report.pdf.',
+        'It may be plain text content saved at that path.',
+        'Summarize the analytics in a concise report body.',
+      ].join(' '),
     });
     const publishKey = await createStep(page, {
       name: 'Publish report',
@@ -495,7 +532,11 @@ test.describe('protocol authoring live', () => {
       roleName: 'Report publisher',
       roleKey: 'report-publisher',
       selectorKind: 'agent',
-      selectorValue: connectedAgent,
+      selectorValue: connectedAgent.slug,
+      instructions: [
+        'Read workspace/report.pdf and create workspace/published-report.json.',
+        'Store a small JSON object with status, published_at, and report_path.',
+      ].join(' '),
     });
 
     await connectStep(page, loadKey, filterKey);
@@ -596,8 +637,10 @@ test.describe('protocol authoring live', () => {
 
       const created = await createProtocolRun(page, {
         protocol_id: protocolId,
-        entry_agent_id: connectedAgent,
+        entry_agent_id: connectedAgent.agentId,
         entry_authority_ref: 'protocol-ui-spec',
+        workspace_ref: 'default',
+        problem_statement: 'Process sample CSV data, compute basic west-region analytics, render a report, and publish the result.',
       });
       const runId = String(created.run?.protocol_run_id || '');
       expect(runId).toBeTruthy();

@@ -173,6 +173,7 @@ def draft_protocol_document_data(value: object) -> dict[str, object]:
             str(decision or "").strip(): str(target or "").strip()
             for decision, target in _coerce_mapping(raw.get("transitions")).items()
         }
+        outputs = _coerce_string_list(raw.get("outputs"))
         stages.append({
             "stage_key": str(raw.get("stage_key", "") or "").strip(),
             "display_name": str(raw.get("display_name", "") or "").strip(),
@@ -181,9 +182,9 @@ def draft_protocol_document_data(value: object) -> dict[str, object]:
             "stage_kind": str(raw.get("stage_kind", "") or "work").strip() or "work",
             "instructions": str(raw.get("instructions", "") or ""),
             "inputs": _coerce_string_list(raw.get("inputs")),
-            "outputs": _coerce_string_list(raw.get("outputs")),
+            "outputs": outputs,
             "transitions": transitions,
-            "write_capable": _coerce_bool(raw.get("write_capable"), default=False),
+            "write_capable": _coerce_bool(raw.get("write_capable"), default=bool(outputs)),
             "max_rounds": _coerce_int(raw.get("max_rounds"), default=0, minimum=0),
             "strict_completion": _coerce_bool(raw.get("strict_completion"), default=False),
             "require_output_verification": None if raw.get("require_output_verification", None) is None else _coerce_bool(raw.get("require_output_verification"), default=False),

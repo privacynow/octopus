@@ -3705,7 +3705,14 @@ function renderProtocolWorkspace(container) {
         }));
         const onCommit = context.readOnly
             ? null
-            : (_target, key, value) => _commitNodeField('artifact', artifactKey, key, value);
+            : (_target, key, value) => {
+                const activeArtifactKey = String(
+                    selection.sectionKey === 'artifacts'
+                        ? selection.nodeKey || artifactKey
+                        : artifactKey,
+                ).trim();
+                _commitNodeField('artifact', activeArtifactKey, key, value);
+            };
 
         const basics = Kit.detailsPanel({
             target: artifact,

@@ -142,6 +142,7 @@ async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
   const artifactNode = page.getByTestId(`workflow-artifact-${artifactKey}`);
   await expect(artifactNode).toBeVisible();
   await artifactNode.click();
+  await expect(artifactNode).toHaveClass(/is-selected/);
   let editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
   await expect(editor.getByRole('heading', { name: 'Artifact basics', exact: true })).toBeVisible();
   await editor.getByLabel('Name').fill(name);

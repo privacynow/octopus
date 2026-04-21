@@ -163,6 +163,9 @@ async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
 
 async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] } = {}) {
   await selectStep(page, stageKey);
+  const artifactLabelPattern = (label) => new RegExp(
+    String(label || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  );
   async function artifactRows() {
     const editor = page.locator('.kit-stage-editor').last();
     const artifactsSection = editor.locator('.kit-stage-editor-section').filter({
@@ -173,22 +176,24 @@ async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] 
       const expanded = await summary.evaluate((node) => node.closest('details')?.open === true);
       if (!expanded) {
         await summary.click();
+        await expect.poll(async () => summary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
       }
     }
-    return {
-      readsRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first(),
-      writesRow: artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first(),
-    };
+    const readsRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
+    const writesRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
+    await expect(readsRow).toBeVisible();
+    await expect(writesRow).toBeVisible();
+    return { readsRow, writesRow };
   }
   for (const label of reads) {
     const { readsRow } = await artifactRows();
-    await readsRow.getByLabel(new RegExp(`^${label}\\b`)).check();
+    await readsRow.getByLabel(artifactLabelPattern(label)).check();
     await page.waitForTimeout(600);
     await waitForSaved(page);
   }
   for (const label of writes) {
     const { writesRow } = await artifactRows();
-    await writesRow.getByLabel(new RegExp(`^${label}\\b`)).check();
+    await writesRow.getByLabel(artifactLabelPattern(label)).check();
     await page.waitForTimeout(600);
     await waitForSaved(page);
   }

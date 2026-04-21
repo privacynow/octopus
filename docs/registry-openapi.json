@@ -10020,6 +10020,22 @@
         "parameters": [
           {
             "in": "header",
+            "name": "X-Protocol-Authoring-Surface",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Protocol-Authoring-Surface"
+            }
+          },
+          {
+            "in": "header",
             "name": "authorization",
             "required": false,
             "schema": {
@@ -10469,6 +10485,22 @@
                 }
               ],
               "title": "If-Match"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Protocol-Authoring-Surface",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Protocol-Authoring-Surface"
             }
           },
           {

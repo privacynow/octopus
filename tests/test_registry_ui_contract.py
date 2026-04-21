@@ -177,6 +177,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_documentSelectorValues(" in workspace
     assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
     assert "_selectorEditor(" in workspace
+    assert "_currentAuthoringSurface()" in workspace
+    assert "operator_surface_available" in workspace
     assert "Available now:" in workspace
     assert "Matching agents" in workspace
     assert "quickstart-chip" in workspace
@@ -204,8 +206,6 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_confirmParticipantInsert(" not in workspace
     assert "'Create new role…'" in workspace
     assert "Assignment" in workspace
-    assert "Runtime role tag" in workspace
-    assert "Custom runtime selector" in workspace
     assert "Workflow stages" in workspace
     assert "Edit participant assignment" not in workspace
     assert "+ Add participant" not in workspace

@@ -248,14 +248,20 @@ const API = (() => {
             request('POST', '/v1/protocols/parse', { body }),
         createProtocolDraft: (body = {}) =>
             request('POST', '/v1/protocol-drafts', { body }),
-        createProtocol: (body = {}) =>
-            request('POST', '/v1/protocols', { body }),
+        createProtocol: (body = {}, opts = {}) =>
+            request('POST', '/v1/protocols', {
+                body,
+                headers: opts.authoringSurface ? { 'X-Protocol-Authoring-Surface': String(opts.authoringSurface) } : undefined,
+            }),
         deleteProtocol: (id) =>
             request('DELETE', `/v1/protocols/${encodeURIComponent(id)}`),
         saveProtocolDraft: (id, body = {}, opts = {}) =>
             request('PUT', `/v1/protocols/${encodeURIComponent(id)}/draft`, {
                 body,
-                headers: Number.isFinite(opts.ifMatch) ? { 'If-Match': String(opts.ifMatch) } : undefined,
+                headers: {
+                    ...(Number.isFinite(opts.ifMatch) ? { 'If-Match': String(opts.ifMatch) } : {}),
+                    ...(opts.authoringSurface ? { 'X-Protocol-Authoring-Surface': String(opts.authoringSurface) } : {}),
+                },
             }),
         validateProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),

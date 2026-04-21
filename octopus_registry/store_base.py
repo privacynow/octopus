@@ -729,6 +729,7 @@ class AbstractRegistryStore(Protocol):
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
+        authoring_surface: str = "",
         expected_revision: int | None = None,
     ) -> ProtocolMutationRecord:
         """Create or update one protocol draft."""

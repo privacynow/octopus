@@ -13,6 +13,7 @@ from typing import Literal
 from octopus_sdk.protocols import (
     PROTOCOL_ARTIFACT_KIND_OPTIONS,
     PROTOCOL_AUTHORING_SECTION_OPTIONS,
+    PROTOCOL_AUTHORING_SURFACE_OPTIONS,
     PROTOCOL_DEFAULT_OPERATOR_REF,
     PROTOCOL_DEFAULT_RETENTION_DAYS,
     PROTOCOL_DEFAULT_RUN_ORG_ID,
@@ -133,6 +134,68 @@ class ProtocolPostgresAdapter:
             if access is not None and access.has_role(role):
                 return role
         return "service"
+
+    @classmethod
+    def _access_can_edit_protocol_internals(cls, access: ProtocolAccessContextRecord | None) -> bool:
+        return any(cls._access_has_role(access, role) for role in ("publisher", "admin"))
+
+    @classmethod
+    def _normalize_authoring_surface(
+        cls,
+        value: object,
+        *,
+        access: ProtocolAccessContextRecord | None,
+    ) -> str:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return "operator" if cls._access_can_edit_protocol_internals(access) else "standard"
+        if normalized not in PROTOCOL_AUTHORING_SURFACE_OPTIONS:
+            return "standard"
+        if normalized == "operator" and not cls._access_can_edit_protocol_internals(access):
+            raise PermissionError("Operator authoring surface requires protocol-internal edit access.")
+        return normalized
+
+    @classmethod
+    def _validate_standard_surface_document(
+        cls,
+        definition: Mapping[str, object],
+        *,
+        existing_definition: Mapping[str, object] | None = None,
+    ) -> str | None:
+        existing_stage_map = {
+            str(item.get("stage_key", "") or ""): item
+            for item in (existing_definition or {}).get("stages", [])
+            if isinstance(item, Mapping) and str(item.get("stage_key", "") or "").strip()
+        }
+        for raw_stage in definition.get("stages", []) or []:
+            if not isinstance(raw_stage, Mapping):
+                continue
+            stage_key = str(raw_stage.get("stage_key", "") or "").strip()
+            existing_stage = existing_stage_map.get(stage_key, {})
+            selector = raw_stage.get("selector")
+            selector_kind = str(selector.get("kind", "") or "").strip().lower() if isinstance(selector, Mapping) else ""
+            existing_selector = existing_stage.get("selector")
+            existing_selector_kind = (
+                str(existing_selector.get("kind", "") or "").strip().lower()
+                if isinstance(existing_selector, Mapping)
+                else ""
+            )
+            if selector_kind and selector_kind not in {"agent", "skill"}:
+                if not existing_stage or selector != existing_selector:
+                    return (
+                        f"Standard authoring cannot set runtime selector kind {selector_kind!r} "
+                        f"for stage {stage_key or 'step'}."
+                    )
+            elif existing_selector_kind and existing_selector_kind not in {"agent", "skill"} and selector != existing_selector:
+                return f"Standard authoring cannot modify the operator-managed assignment on stage {stage_key or 'step'}."
+            for field_name in ("max_rounds", "timeout_seconds"):
+                incoming = int(raw_stage.get(field_name, 0) or 0)
+                existing = int(existing_stage.get(field_name, 0) or 0) if isinstance(existing_stage, Mapping) else 0
+                if incoming != existing:
+                    if not existing_stage and incoming == 0:
+                        continue
+                    return f"Standard authoring cannot edit {field_name} on stage {stage_key or 'step'}."
+        return None
 
     @staticmethod
     def _protocol_record_from_row(row: Mapping[str, object]) -> ProtocolDefinitionRecord:
@@ -1417,6 +1480,8 @@ class ProtocolPostgresAdapter:
             stage_kind_options=list(PROTOCOL_STAGE_KIND_OPTIONS),
             artifact_kind_options=list(PROTOCOL_ARTIFACT_KIND_OPTIONS),
             selector_kind_options=list(PROTOCOL_SELECTOR_KIND_OPTIONS),
+            default_surface="standard",
+            operator_surface_available=self._access_can_edit_protocol_internals(access),
         )
 
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
@@ -1566,10 +1631,15 @@ class ProtocolPostgresAdapter:
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
+        authoring_surface: str = "",
         expected_revision: int | None = None,
     ) -> ProtocolMutationRecord:
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
+        try:
+            normalized_surface = self._normalize_authoring_surface(authoring_surface, access=access)
+        except PermissionError as exc:
+            return ProtocolMutationRecord(ok=False, status="forbidden", message=str(exc))
         protocol_key = str(protocol_id or uuid.uuid4().hex).strip()
         raw_definition = draft_protocol_document_data(definition_json.as_dict())
         now = utcnow_iso()
@@ -1615,6 +1685,13 @@ class ProtocolPostgresAdapter:
                 description=description,
             )
             raw_definition = draft_protocol_document_data(raw_definition)
+            if normalized_surface == "standard":
+                restriction = self._validate_standard_surface_document(
+                    raw_definition,
+                    existing_definition=(existing_row.get("draft_definition_json") or {}) if existing_row is not None else None,
+                )
+                if restriction:
+                    return ProtocolMutationRecord(ok=False, status="forbidden", message=restriction)
             validation = validate_protocol_document(raw_definition, mode="draft")
             strict_document = self._strict_protocol_document(raw_definition)
             raw_hash = protocol_definition_content_hash(strict_document) if strict_document is not None else hashlib.sha256(

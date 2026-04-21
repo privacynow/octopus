@@ -951,8 +951,87 @@ def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres
     assert any(item.slug == "software-engineering" for item in manifest.templates)
     assert any(item.slug == "document-approval" for item in manifest.templates)
     assert "design" in manifest.sections
-    assert "advanced" in manifest.sections
+    assert "advanced" not in manifest.sections
     assert "review" in manifest.stage_kind_options
+    assert manifest.default_surface == "standard"
+    assert manifest.operator_surface_available is True
+
+
+def test_registry_store_standard_surface_rejects_new_operator_only_selector(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    author_access = ProtocolAccessContextRecord(
+        actor_ref="author-session",
+        org_id="local",
+        roles=["author"],
+    )
+    document = protocol_document()
+    document["stages"][0]["selector"] = {"kind": "role", "value": "platform-review"}
+
+    saved = store.save_protocol_draft(
+        access=author_access,
+        protocol_id="",
+        slug="standard-surface-rejects-role-selector",
+        display_name="Standard Surface Rejects Role Selector",
+        description="Reject advanced selector kinds on the standard surface.",
+        definition_json=RegistryJsonRecord.model_validate(document),
+        authoring_surface="standard",
+    )
+
+    assert saved.ok is False
+    assert saved.status == "forbidden"
+    assert "runtime selector kind" in (saved.message or "")
+
+
+def test_registry_store_standard_surface_preserves_existing_operator_only_fields_when_unchanged(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    base = protocol_document()
+    base["stages"][0]["selector"] = {"kind": "role", "value": "platform-review"}
+    base["stages"][0]["timeout_seconds"] = 300
+
+    created = store.save_protocol_draft(
+        access=operator_access(),
+        protocol_id="",
+        slug="operator-managed-selector",
+        display_name="Operator Managed Selector",
+        description="Created through the operator surface.",
+        definition_json=RegistryJsonRecord.model_validate(base),
+        authoring_surface="operator",
+    )
+    assert created.ok is True
+    assert created.protocol is not None
+
+    author_access = ProtocolAccessContextRecord(
+        actor_ref="author-session",
+        org_id="local",
+        roles=["author"],
+    )
+    updated = {
+        **base,
+        "metadata": {
+            **base["metadata"],
+            "description": "Normal authors can still edit surrounding protocol metadata.",
+        },
+    }
+    saved = store.save_protocol_draft(
+        access=author_access,
+        protocol_id=created.protocol.protocol_id,
+        slug="operator-managed-selector",
+        display_name="Operator Managed Selector",
+        description="Normal authors can still edit surrounding protocol metadata.",
+        definition_json=RegistryJsonRecord.model_validate(updated),
+        authoring_surface="standard",
+        expected_revision=created.protocol.draft_revision,
+    )
+
+    assert saved.ok is True
+    assert saved.protocol is not None
+    assert saved.protocol.draft_revision > created.protocol.draft_revision
+    assert saved.draft_definition_json["stages"][0]["selector"]["kind"] == "role"
+    assert saved.draft_definition_json["stages"][0]["timeout_seconds"] == 300
 
 
 def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_starter(postgres_registry_truncated: str) -> None:

@@ -77,6 +77,20 @@ async function apiSaveProtocolDraft(api, protocolId, body, revision) {
   return { status: resp.status(), payload };
 }
 
+async function assertStandardAuthoringSurface(stageEditor, { expectDelete = true } = {}) {
+  await expect(stageEditor.locator('summary').filter({ hasText: 'Custom runtime selector' })).toHaveCount(0);
+  await expect(stageEditor.getByRole('heading', { name: 'Advanced', exact: true })).toHaveCount(0);
+  await expect(stageEditor.getByLabel('Custom selector type')).toHaveCount(0);
+  await expect(stageEditor.getByLabel('Stage key')).toHaveCount(0);
+  await expect(stageEditor.getByLabel('Max rounds')).toHaveCount(0);
+  await expect(stageEditor.getByLabel('Timeout seconds')).toHaveCount(0);
+  if (expectDelete) {
+    await expect(stageEditor.getByRole('button', { name: 'Delete step', exact: true })).toBeVisible();
+  } else {
+    await expect(stageEditor.getByRole('button', { name: 'Delete step', exact: true })).toHaveCount(0);
+  }
+}
+
 async function waitForSaved(page) {
   await expect(page.locator('.kit-draft-chip[data-state="saved"]')).toBeVisible({ timeout: 15000 });
 }
@@ -266,6 +280,7 @@ async function discardDraft(page) {
 module.exports = {
   apiGetProtocol,
   apiSaveProtocolDraft,
+  assertStandardAuthoringSurface,
   attachErrorCapture,
   connectStep,
   createStep,

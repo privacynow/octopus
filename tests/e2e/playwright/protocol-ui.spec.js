@@ -1,5 +1,6 @@
 const { test, expect } = require('./playwright-runtime');
 const {
+  assertStandardAuthoringSurface,
   attachErrorCapture,
   connectStep,
   createStep,
@@ -113,6 +114,57 @@ async function waitForLatestRehearsalRunId(page, protocolId) {
   return String(runs.find((item) => item.is_rehearsal && String(item.protocol_id || '') === expectedProtocolId)?.protocol_run_id || '');
 }
 
+async function firstConnectedAgentSlug(page) {
+  return page.evaluate(async () => {
+    const response = await fetch('/v1/agents?state=connected&limit=100', { credentials: 'same-origin' });
+    const payload = await response.json();
+    const agents = Array.isArray(payload.agents) ? payload.agents : [];
+    const first = agents.find((agent) => String(agent.connectivity_state || '').toLowerCase() === 'connected');
+    return String(first?.slug || '');
+  });
+}
+
+async function openProtocolSettings(page) {
+  const lifecycle = page.locator('.kit-lifecycle-header');
+  await lifecycle.getByRole('button', { name: 'Protocol' }).click();
+  await lifecycle.getByRole('button', { name: 'Protocol settings' }).click();
+  await expect(page.locator('.kit-protocol-inline-card').getByLabel('Description')).toBeVisible();
+}
+
+async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
+  const catalog = page.locator('.kit-protocol-inline-card').filter({ has: page.getByRole('heading', { name: 'Artifacts', exact: true }) }).first();
+  await catalog.getByRole('button', { name: 'Add artifact', exact: true }).click();
+  const editor = page.locator('.kit-stage-editor').last();
+  await expect(editor.getByLabel('Artifact name')).toBeVisible();
+  await editor.getByLabel('Artifact name').fill(name);
+  await editor.getByLabel('Artifact type').selectOption(kind);
+  await editor.getByLabel('Workspace path').fill(path);
+  await waitForSaved(page);
+}
+
+async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] } = {}) {
+  await selectStep(page, stageKey);
+  const editor = page.locator('.kit-stage-editor').last();
+  const artifactsSection = editor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Artifacts', exact: true }) }).first();
+  const summary = artifactsSection.locator('summary').first();
+  if (await summary.count()) {
+    await summary.click();
+  }
+  for (const label of reads) {
+    await artifactsSection.getByLabel(label, { exact: true }).check();
+  }
+  for (const label of writes) {
+    await artifactsSection.getByLabel(label, { exact: true }).check();
+  }
+  await waitForSaved(page);
+}
+
+async function createProtocolRun(page, payload) {
+  const response = await apiJson(page, 'POST', '/v1/protocol-runs', payload);
+  expect(response.ok).toBe(true);
+  return response.payload;
+}
+
 test.describe('protocol authoring live', () => {
   test('blank draft uses step-first authoring with inline role creation', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
@@ -137,14 +189,7 @@ test.describe('protocol authoring live', () => {
     await expect(stageEditor.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
     await expect(stageEditor.getByLabel('Required skill', { exact: true })).toBeVisible();
     await expect(stageEditor.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
-    await expect(stageEditor.locator('.kit-selector-preview-input')).toHaveCount(0);
-    await expect(stageEditor.locator('.kit-selector-preview-suggestions')).toHaveCount(0);
-    await expect(stageEditor.getByText('Rehearsal')).toHaveCount(0);
-    const advancedAssignment = stageEditor.locator('summary').filter({ hasText: 'Custom runtime selector' });
-    if (await advancedAssignment.count()) {
-      await advancedAssignment.click();
-      await expect(stageEditor.getByLabel('Custom selector type')).toContainText('Runtime role tag');
-    }
+    await assertStandardAuthoringSurface(stageEditor, { expectDelete: false });
     await page.getByRole('button', { name: 'Cancel' }).click();
 
     await expect(page.getByText(/^participant_[0-9]+$/i)).toHaveCount(0);
@@ -335,9 +380,9 @@ test.describe('protocol authoring live', () => {
     expect(architectureIndex).toBeGreaterThan(insertedIndex);
 
     await selectStep(page, 'secondary-approval');
-    const advancedSection = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Advanced', exact: true }) }).first();
-    await advancedSection.locator('summary').click();
-    await advancedSection.getByRole('button', { name: 'Delete step', exact: true }).click();
+    const secondaryEditor = page.locator('.kit-stage-editor').last();
+    await assertStandardAuthoringSurface(secondaryEditor);
+    await secondaryEditor.getByRole('button', { name: 'Delete step', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
     await waitForSaved(page);
 
@@ -384,8 +429,189 @@ test.describe('protocol authoring live', () => {
     await expect(details.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
     await expect(details.getByLabel('Required skill', { exact: true })).toBeVisible();
     await expect(details.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
-    await expect(details.getByText('Rehearsal')).toHaveCount(0);
+    await assertStandardAuthoringSurface(details);
     await expect(details).toContainText('Current assignment:');
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('data analysis workflow can be authored, rehearsed, and executed through the standard UI', async ({ page }) => {
+    test.setTimeout(240_000);
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openBlankDraft(page);
+    const connectedAgent = await firstConnectedAgentSlug(page);
+    expect(connectedAgent).toBeTruthy();
+
+    await openProtocolSettings(page);
+    for (const artifact of [
+      { name: 'Source data', path: 'workspace/source-data.csv' },
+      { name: 'Filtered data', path: 'workspace/filtered-data.csv' },
+      { name: 'Analytics summary', path: 'workspace/analytics-summary.json' },
+      { name: 'PDF report', path: 'workspace/report.pdf' },
+      { name: 'Published report', path: 'workspace/published-report.json' },
+    ]) {
+      await addArtifact(page, artifact);
+    }
+
+    const loadKey = await createStep(page, {
+      name: 'Load data',
+      key: 'load-data',
+      roleName: 'Data loader',
+      roleKey: 'data-loader',
+      selectorKind: 'agent',
+      selectorValue: connectedAgent,
+    });
+    const filterKey = await createStep(page, {
+      name: 'Filter rows',
+      key: 'filter-rows',
+      roleName: 'Data filter',
+      roleKey: 'data-filter',
+      selectorKind: 'agent',
+      selectorValue: connectedAgent,
+    });
+    const analyzeKey = await createStep(page, {
+      name: 'Run analytics',
+      key: 'run-analytics',
+      roleName: 'Data analyst',
+      roleKey: 'data-analyst',
+      selectorKind: 'agent',
+      selectorValue: connectedAgent,
+    });
+    const renderKey = await createStep(page, {
+      name: 'Render report',
+      key: 'render-report',
+      roleName: 'Report renderer',
+      roleKey: 'report-renderer',
+      selectorKind: 'agent',
+      selectorValue: connectedAgent,
+    });
+    const publishKey = await createStep(page, {
+      name: 'Publish report',
+      key: 'publish-report',
+      roleName: 'Report publisher',
+      roleKey: 'report-publisher',
+      selectorKind: 'agent',
+      selectorValue: connectedAgent,
+    });
+
+    await connectStep(page, loadKey, filterKey);
+    await connectStep(page, filterKey, analyzeKey);
+    await connectStep(page, analyzeKey, renderKey);
+    await connectStep(page, renderKey, publishKey);
+    await connectStep(page, publishKey, '__complete__');
+
+    await configureStepArtifacts(page, loadKey, { writes: ['Source data'] });
+    await configureStepArtifacts(page, filterKey, { reads: ['Source data'], writes: ['Filtered data'] });
+    await configureStepArtifacts(page, analyzeKey, { reads: ['Filtered data'], writes: ['Analytics summary'] });
+    await configureStepArtifacts(page, renderKey, { reads: ['Analytics summary'], writes: ['PDF report'] });
+    await configureStepArtifacts(page, publishKey, { reads: ['PDF report'], writes: ['Published report'] });
+
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await lifecycle.getByLabel('Name').fill(`Data Analysis ${Date.now()}`);
+    await lifecycle.getByLabel('Name').blur();
+    await waitForSaved(page);
+    await page.getByRole('button', { name: 'Validate' }).click();
+    await page.getByRole('button', { name: 'Publish' }).click();
+    await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
+    const protocolId = protocolIdFromUrl(page.url());
+
+    const scenarioIds = [];
+    for (const payload of [
+      {
+        protocol_id: protocolId,
+        stage_key: loadKey,
+        participant_key: 'data-loader',
+        display_name: 'Load data complete',
+        decision: 'completed',
+        decision_summary: 'Source data loaded.',
+        response_text: 'Loaded the source CSV into the workspace for downstream processing.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: filterKey,
+        participant_key: 'data-filter',
+        display_name: 'Filter rows complete',
+        decision: 'completed',
+        decision_summary: 'Rows filtered.',
+        response_text: 'Filtered the dataset by the requested parameters and produced the filtered CSV.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: analyzeKey,
+        participant_key: 'data-analyst',
+        display_name: 'Analytics complete',
+        decision: 'completed',
+        decision_summary: 'Analytics computed.',
+        response_text: 'Computed the requested analytics and stored a structured summary.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: renderKey,
+        participant_key: 'report-renderer',
+        display_name: 'Render report complete',
+        decision: 'completed',
+        decision_summary: 'PDF rendered.',
+        response_text: 'Rendered the analytics summary into the templated PDF report.',
+      },
+      {
+        protocol_id: protocolId,
+        stage_key: publishKey,
+        participant_key: 'report-publisher',
+        display_name: 'Publish report complete',
+        decision: 'completed',
+        decision_summary: 'Report published.',
+        response_text: 'Published the final report and recorded the publication result.',
+      },
+    ]) {
+      const scenario = await createProtocolScenario(page, payload);
+      scenarioIds.push(String(scenario.protocol_scenario_id || ''));
+    }
+
+    try {
+      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
+      const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId);
+      const rehearsalSequence = [
+        [loadKey, 'Load data complete', filterKey],
+        [filterKey, 'Filter rows complete', analyzeKey],
+        [analyzeKey, 'Analytics complete', renderKey],
+        [renderKey, 'Render report complete', publishKey],
+        [publishKey, 'Publish report complete', 'completed'],
+      ];
+      for (const [stageKey, scenarioName, nextState] of rehearsalSequence) {
+        await waitForRunStage(page, rehearsalRunId, stageKey);
+        const session = page.locator('.kit-rehearsal-session').first();
+        await expect(session).toContainText(stageKey);
+        await applyScenarioAndSubmit(session, scenarioName);
+        if (nextState === 'completed') {
+          await waitForRunStatus(page, rehearsalRunId, 'completed');
+        } else {
+          await waitForRunStage(page, rehearsalRunId, nextState);
+        }
+      }
+
+      const created = await createProtocolRun(page, {
+        protocol_id: protocolId,
+        entry_agent_id: connectedAgent,
+        entry_authority_ref: 'protocol-ui-spec',
+      });
+      const runId = String(created.run?.protocol_run_id || '');
+      expect(runId).toBeTruthy();
+      await waitForRunStatus(page, runId, 'completed');
+      const finalDetail = await getRunDetail(page, runId);
+      expect(String(finalDetail.run?.status || '')).toBe('completed');
+      expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === publishKey)).toBe(true);
+    } finally {
+      for (const scenarioId of scenarioIds.reverse()) {
+        if (scenarioId) {
+          await deleteProtocolScenario(page, scenarioId);
+        }
+      }
+    }
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

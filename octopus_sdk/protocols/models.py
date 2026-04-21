@@ -29,6 +29,7 @@ ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "e
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
 ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
 ProtocolValidationMode = Literal["strict", "draft"]
+ProtocolAuthoringSurface = Literal["standard", "operator"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
@@ -61,8 +62,8 @@ PROTOCOL_SELECTOR_KIND_OPTIONS: tuple[str, ...] = ("agent", "skill", "role")
 PROTOCOL_AUTHORING_SECTION_OPTIONS: tuple[str, ...] = (
     "design",
     "review",
-    "advanced",
 )
+PROTOCOL_AUTHORING_SURFACE_OPTIONS: tuple[ProtocolAuthoringSurface, ...] = ("standard", "operator")
 
 _TERMINAL_STAGE_TARGETS = frozenset({"__complete__", "__failed__", "__cancelled__"})
 _DECISION_RE = re.compile(r"(?im)^\s*PROTOCOL_DECISION:\s*([a-z0-9_-]+)\s*$")
@@ -393,6 +394,8 @@ class ProtocolAuthoringManifestRecord(RegistryRecordModel):
     stage_kind_options: list[ProtocolStageKind] = Field(default_factory=lambda: list(PROTOCOL_STAGE_KIND_OPTIONS))
     artifact_kind_options: list[ProtocolArtifactKind] = Field(default_factory=lambda: list(PROTOCOL_ARTIFACT_KIND_OPTIONS))
     selector_kind_options: list[str] = Field(default_factory=lambda: list(PROTOCOL_SELECTOR_KIND_OPTIONS))
+    default_surface: ProtocolAuthoringSurface = "standard"
+    operator_surface_available: bool = False
 
 
 class ProtocolDraftCreateRecord(RegistryRecordModel):
@@ -795,6 +798,7 @@ __all__ = [
         "PROTOCOL_ARTIFACT_KIND_OPTIONS",
         "PROTOCOL_SELECTOR_KIND_OPTIONS",
         "PROTOCOL_AUTHORING_SECTION_OPTIONS",
+        "PROTOCOL_AUTHORING_SURFACE_OPTIONS",
         "RegistryJsonRecord",
         "RegistryRecordModel",
         "RoutedTaskRequest",

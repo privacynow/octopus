@@ -213,6 +213,19 @@ function renderProtocolWorkspace(container) {
     let workflowMapMode = 'auto';
     let stageAssignmentEditor = { stageKey: '', mode: '' };
 
+    function _operatorSurfaceAvailable() {
+        return Boolean(authoringManifest?.operator_surface_available);
+    }
+
+    function _currentAuthoringSurface() {
+        const requested = String(UI.readQueryParam('authoring_surface', '') || '').trim().toLowerCase();
+        if (requested === 'operator' && _operatorSurfaceAvailable()) return 'operator';
+        return String(authoringManifest?.default_surface || 'standard').trim().toLowerCase() === 'operator'
+            && _operatorSurfaceAvailable()
+            ? 'operator'
+            : 'standard';
+    }
+
     // Single coherent draft snapshot. No mirrored raw-text; no parse_error.
     let draft = {
         slug: '',
@@ -1061,7 +1074,10 @@ function renderProtocolWorkspace(container) {
                 display_name: draft.display_name,
                 description: draft.description,
                 definition_json: _docFromDraft(),
-            }, { ifMatch: draftRevision });
+            }, {
+                ifMatch: draftRevision,
+                authoringSurface: _currentAuthoringSurface(),
+            });
             _applyServerDetail(result, { preserveTransient: true });
             saveState = { state: 'saved', lastSavedAt: result?.protocol?.updated_at || new Date().toISOString(), error: '' };
             _syncLifecycleChip();
@@ -2033,7 +2049,7 @@ function renderProtocolWorkspace(container) {
         return normalized || 'value';
     }
 
-    function _selectorAvailableKinds() {
+    function _selectorManifestKinds() {
         const manifestKinds = Array.isArray(authoringManifest?.selector_kind_options) && authoringManifest.selector_kind_options.length
             ? authoringManifest.selector_kind_options
             : ['agent', 'skill', 'role'];
@@ -2046,6 +2062,15 @@ function renderProtocolWorkspace(container) {
             ordered.push(normalized);
         });
         return ordered;
+    }
+
+    function _selectorAvailableKinds() {
+        const available = _selectorManifestKinds();
+        if (_currentAuthoringSurface() === 'operator') {
+            return available;
+        }
+        const primary = available.filter((value) => PRIMARY_SELECTOR_KINDS.includes(value));
+        return primary.length ? primary : available;
     }
 
     function _selectorPrimaryKinds() {
@@ -2593,6 +2618,7 @@ function renderProtocolWorkspace(container) {
     } = {}) {
         const wrap = document.createElement('section');
         wrap.className = 'kit-selector-editor';
+        const operatorSurface = _currentAuthoringSurface() === 'operator';
         const emit = (key, value) => {
             if (typeof onChange === 'function') onChange(null, key, value);
         };
@@ -2647,6 +2673,7 @@ function renderProtocolWorkspace(container) {
         const activeAgent = _selectorAgentRecord(pinnedAgent);
         const activeAgentId = String(activeAgent?.agent_id || '').trim();
         const activeAgentLabel = String(activeAgent?.display_name || activeAgent?.slug || pinnedAgent || '').trim();
+        const operatorManagedSelector = !operatorSurface && Boolean(advancedKind && advancedValue);
         const requiredSkillMatches = _agentsAdvertisingSkill(requiredSkill).map((candidate) => ({
             value: String(candidate?.slug || '').trim(),
             label: String(candidate?.display_name || candidate?.slug || '').trim(),
@@ -2675,6 +2702,20 @@ function renderProtocolWorkspace(container) {
                 String(selector?.preferred_agent_id || ''),
             );
         };
+        if (operatorManagedSelector) {
+            const note = document.createElement('p');
+            note.className = 'kit-selector-editor-note';
+            note.textContent = 'This step uses an operator-managed assignment. Normal authoring keeps it intact but does not expose the internal selector controls.';
+            wrap.appendChild(note);
+            const summary = document.createElement('p');
+            summary.className = 'kit-selector-editor-note';
+            summary.textContent = `Current assignment: ${_selectorSummary(
+                { kind: advancedKind, value: advancedValue },
+                { empty: 'Operator-managed runtime selector' },
+            )}.`;
+            wrap.appendChild(summary);
+            return wrap;
+        }
         const modeControl = UI.createSegmentedControl([
             { value: 'skill', label: 'By skill' },
             { value: 'agent', label: 'Specific agent' },
@@ -2837,24 +2878,24 @@ function renderProtocolWorkspace(container) {
             if (skillsSection) wrap.appendChild(skillsSection);
         }
 
-        const advanced = document.createElement('details');
-        advanced.className = 'kit-selector-editor-override';
-        advanced.open = Boolean(advancedKind && advancedValue);
-        const advancedSummary = document.createElement('summary');
-        advancedSummary.className = 'kit-stage-editor-summary';
-        const advancedTitle = document.createElement('h4');
-        advancedTitle.className = 'kit-stage-editor-title';
-        advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Custom runtime selector');
-        advancedSummary.appendChild(advancedTitle);
-        advanced.appendChild(advancedSummary);
-        const advancedBody = document.createElement('div');
-        advancedBody.className = 'kit-selector-editor-override-body';
-        const advancedNote = document.createElement('p');
-        advancedNote.className = 'kit-selector-editor-note';
-        advancedNote.textContent = 'Use this only for a runtime role tag or another selector value that the normal skill and agent modes cannot express.';
-        advancedBody.appendChild(advancedNote);
+        if (operatorSurface && advancedKinds.length) {
+            const advanced = document.createElement('details');
+            advanced.className = 'kit-selector-editor-override';
+            advanced.open = Boolean(advancedKind && advancedValue);
+            const advancedSummary = document.createElement('summary');
+            advancedSummary.className = 'kit-stage-editor-summary';
+            const advancedTitle = document.createElement('h4');
+            advancedTitle.className = 'kit-stage-editor-title';
+            advancedTitle.textContent = Kit.dict.label('protocol.participant.selector_advanced.label', 'Custom runtime selector');
+            advancedSummary.appendChild(advancedTitle);
+            advanced.appendChild(advancedSummary);
+            const advancedBody = document.createElement('div');
+            advancedBody.className = 'kit-selector-editor-override-body';
+            const advancedNote = document.createElement('p');
+            advancedNote.className = 'kit-selector-editor-note';
+            advancedNote.textContent = 'Use this only for a runtime role tag or another selector value that the normal skill and agent modes cannot express.';
+            advancedBody.appendChild(advancedNote);
 
-        if (advancedKinds.length) {
             const advancedKindRow = document.createElement('div');
             advancedKindRow.className = 'kit-details-row';
             const advancedKindLabel = document.createElement('label');
@@ -2896,41 +2937,41 @@ function renderProtocolWorkspace(container) {
             }
             advancedKindRow.appendChild(advancedKindControl);
             advancedBody.appendChild(advancedKindRow);
-        }
 
-        if (advancedKind) {
-            const { element, catalog } = _buildSelectorValueField({
-                selectorKind: advancedKind,
-                selectorValue: advancedValue,
-                readOnly,
-                onChange,
-                onSelectorChange: (nextKind, nextValue) => emitAssignment({
-                    nextSkill: '',
-                    nextAgent: '',
-                    nextAdvancedKind: nextKind,
-                    nextAdvancedValue: nextValue,
-                }),
-                label: `Choose ${_selectorValueLabel(advancedKind)}`,
-            });
-            advancedBody.appendChild(element);
-            if (catalog.length) {
-                advancedBody.appendChild(_buildSelectorManualOverrideField({
+            if (advancedKind) {
+                const { element, catalog } = _buildSelectorValueField({
+                    selectorKind: advancedKind,
                     selectorValue: advancedValue,
                     readOnly,
-                    onChange: typeof onSelectorChange === 'function'
-                        ? (_target, _key, nextValue) => emitAssignment({
-                            nextSkill: '',
-                            nextAgent: '',
-                            nextAdvancedKind: advancedKind,
-                            nextAdvancedValue: nextValue,
-                        })
-                        : onChange,
-                    label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
-                }));
+                    onChange,
+                    onSelectorChange: (nextKind, nextValue) => emitAssignment({
+                        nextSkill: '',
+                        nextAgent: '',
+                        nextAdvancedKind: nextKind,
+                        nextAdvancedValue: nextValue,
+                    }),
+                    label: `Choose ${_selectorValueLabel(advancedKind)}`,
+                });
+                advancedBody.appendChild(element);
+                if (catalog.length) {
+                    advancedBody.appendChild(_buildSelectorManualOverrideField({
+                        selectorValue: advancedValue,
+                        readOnly,
+                        onChange: typeof onSelectorChange === 'function'
+                            ? (_target, _key, nextValue) => emitAssignment({
+                                nextSkill: '',
+                                nextAgent: '',
+                                nextAdvancedKind: advancedKind,
+                                nextAdvancedValue: nextValue,
+                            })
+                            : onChange,
+                        label: Kit.dict.label('protocol.participant.selector_override.label', 'Custom value'),
+                    }));
+                }
             }
+            advanced.appendChild(advancedBody);
+            wrap.appendChild(advanced);
         }
-        advanced.appendChild(advancedBody);
-        wrap.appendChild(advanced);
 
         return wrap;
     }
@@ -3623,6 +3664,159 @@ function renderProtocolWorkspace(container) {
         });
     }
 
+    function _selectionArtifact(doc = draft.document) {
+        if (selection.sectionKey !== 'artifacts') return null;
+        return (doc.artifacts || []).find((item) => String(item.artifact_key || '') === String(selection.nodeKey || '')) || null;
+    }
+
+    function _deleteArtifact(artifactKey) {
+        const normalizedArtifactKey = String(artifactKey || '').trim();
+        if (!normalizedArtifactKey) return;
+        const doc = _cloneDoc(draft.document);
+        doc.artifacts = (doc.artifacts || []).filter((item) => String(item.artifact_key || '') !== normalizedArtifactKey);
+        doc.stages = (doc.stages || []).map((stage) => ({
+            ...stage,
+            inputs: (stage.inputs || []).filter((item) => String(item || '') !== normalizedArtifactKey),
+            outputs: (stage.outputs || []).filter((item) => String(item || '') !== normalizedArtifactKey),
+        }));
+        _commitDocument(doc, { nextSelection: { sectionKey: 'protocol', nodeKey: '' } });
+    }
+
+    function _confirmArtifactDelete(artifactKey) {
+        const artifact = (draft.document.artifacts || []).find((item) => String(item.artifact_key || '') === String(artifactKey || ''));
+        if (!artifact) return;
+        const artifactLabel = String(artifact.display_name || artifact.artifact_key || 'this artifact');
+        UI.showConfirm(
+            'Delete artifact',
+            `Delete ${artifactLabel}? Any step inputs or outputs referencing it will be cleared.`,
+            async () => { _deleteArtifact(artifactKey); },
+        );
+    }
+
+    function _artifactEditorEl(artifact, context) {
+        const artifactKey = String(artifact?.artifact_key || '').trim();
+        const shell = document.createElement('div');
+        shell.className = 'kit-stage-editor';
+
+        const kindOptions = _manifestArtifactKindOptions().map((value) => ({
+            value,
+            label: Kit.dict.label(`protocol.artifact.kind.${value}`, value),
+        }));
+        const onCommit = context.readOnly
+            ? null
+            : (_target, key, value) => _commitNodeField('artifact', artifactKey, key, value);
+
+        const basics = Kit.detailsPanel({
+            target: artifact,
+            surfaceKey: 'protocol.artifact',
+            onCommit,
+            schema: context.applyReadOnly([
+                { key: 'display_name', kind: 'text', label: 'Artifact name', required: true },
+                { key: 'kind', kind: 'select', label: 'Artifact type', options: kindOptions },
+                { key: 'path', kind: 'text', label: 'Workspace path', help: 'Relative to the workspace root.' },
+            ]),
+            actions: context.readOnly
+                ? []
+                : [{ label: 'Delete artifact', tone: 'btn-danger', onClick: () => _confirmArtifactDelete(artifactKey) }],
+        });
+        shell.appendChild(_stageEditorSection('Artifact basics', basics));
+
+        const details = Kit.detailsPanel({
+            target: artifact,
+            surfaceKey: 'protocol.artifact',
+            onCommit,
+            schema: context.applyReadOnly([
+                { key: 'description', kind: 'textarea', rows: 4 },
+                {
+                    key: 'verify',
+                    kind: 'checkbox',
+                    label: 'Require verification',
+                    help: 'Keep this enabled when a stage should not complete until the artifact is observed or verified.',
+                },
+            ]),
+        });
+        shell.appendChild(_stageEditorSection('Details', details, {
+            wide: true,
+            collapsible: true,
+            open: Boolean(String(artifact?.description || '').trim()),
+        }));
+        return shell;
+    }
+
+    function _artifactCatalogEl(context) {
+        const panel = document.createElement('section');
+        panel.className = 'kit-protocol-inline-card';
+        const title = document.createElement('h3');
+        title.className = 'kit-stage-editor-hero-title';
+        title.textContent = 'Artifacts';
+        panel.appendChild(title);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'kit-stage-editor-hero-note';
+        subtitle.textContent = 'Define the files or text outputs the workflow consumes and produces, then connect them to steps below.';
+        panel.appendChild(subtitle);
+
+        const actions = document.createElement('div');
+        actions.className = 'kit-protocol-segment-step-actions';
+        if (!context.readOnly) {
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'btn btn-small';
+            add.textContent = 'Add artifact';
+            add.addEventListener('click', _addArtifact);
+            actions.appendChild(add);
+        }
+        if (actions.childElementCount) panel.appendChild(actions);
+
+        const list = document.createElement('div');
+        list.className = 'kit-protocol-stage-stack';
+        const selectedArtifactKey = String(selection.sectionKey === 'artifacts' ? selection.nodeKey || '' : '');
+        (context.doc.artifacts || []).forEach((artifact) => {
+            const artifactKey = String(artifact.artifact_key || '');
+            const entry = document.createElement('div');
+            entry.className = 'kit-protocol-segment-entry';
+
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = `kit-protocol-segment-step${selectedArtifactKey === artifactKey ? ' is-selected' : ''}`;
+            row.dataset.testid = `workflow-artifact-${artifactKey}`;
+            row.addEventListener('click', () => {
+                selection = { sectionKey: 'artifacts', nodeKey: artifactKey };
+                render();
+            });
+
+            const titleRow = document.createElement('div');
+            titleRow.className = 'kit-protocol-segment-step-head';
+            const label = document.createElement('strong');
+            label.className = 'kit-protocol-segment-step-title';
+            label.textContent = String(artifact.display_name || artifact.artifact_key || 'Untitled artifact');
+            titleRow.appendChild(label);
+            row.appendChild(titleRow);
+
+            const summary = document.createElement('div');
+            summary.className = 'kit-protocol-segment-step-meta';
+            summary.textContent = [
+                Kit.dict.label(`protocol.artifact.kind.${String(artifact.kind || 'workspace_file')}`, String(artifact.kind || 'workspace_file')),
+                _protocolArtifactLabel(artifact),
+            ].filter(Boolean).join(' · ');
+            row.appendChild(summary);
+            entry.appendChild(row);
+
+            if (selectedArtifactKey === artifactKey) {
+                const inline = document.createElement('div');
+                inline.className = 'kit-protocol-inline-editor';
+                inline.appendChild(_artifactEditorEl(artifact, context));
+                entry.appendChild(inline);
+            }
+
+            list.appendChild(entry);
+        });
+        if (!list.childElementCount) {
+            list.appendChild(UI.renderEmptyState('No artifacts yet. Add one here, then attach it to a step.', true));
+        }
+        panel.appendChild(list);
+        return panel;
+    }
+
     function _stageEditorTarget(stage) {
         return {
             ...stage,
@@ -3761,9 +3955,10 @@ function renderProtocolWorkspace(container) {
         card.appendChild(title);
         const subtitle = document.createElement('p');
         subtitle.className = 'kit-stage-editor-hero-note';
-        subtitle.textContent = 'Adjust protocol-wide description and policy settings here. Stage editing stays inline below.';
+        subtitle.textContent = 'Adjust protocol-wide description, policies, and shared artifacts here. Stage editing stays inline below.';
         card.appendChild(subtitle);
         card.appendChild(_protocolSettingsPanelEl(context));
+        card.appendChild(_artifactCatalogEl(context));
         return card;
     }
 
@@ -3894,7 +4089,7 @@ function renderProtocolWorkspace(container) {
             toolbarActions: workflow.toolbarActions,
         }));
 
-        if (selection.sectionKey === 'protocol') {
+        if (selection.sectionKey === 'protocol' || selection.sectionKey === 'artifacts') {
             root.appendChild(_protocolSettingsSectionEl(context));
         }
 
@@ -4065,6 +4260,7 @@ function renderProtocolWorkspace(container) {
                 disabled: field.kind === 'checkbox' || field.kind === 'select' ? true : field.disabled,
                 readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
             })));
+        const operatorSurface = _currentAuthoringSurface() === 'operator';
         const shell = document.createElement('div');
         shell.className = 'kit-stage-editor';
         if (createAction && createHint) {
@@ -4080,6 +4276,9 @@ function renderProtocolWorkspace(container) {
         const summaryActions = [];
         if (createAction) {
             summaryActions.push({ label: 'Create step', tone: 'btn-primary', onClick: createAction });
+        }
+        if (deleteAction && !createAction) {
+            summaryActions.push({ label: 'Delete step', tone: 'btn-danger', onClick: deleteAction });
         }
         if (cancelAction) {
             summaryActions.push({ label: 'Cancel', onClick: cancelAction });
@@ -4163,25 +4362,21 @@ function renderProtocolWorkspace(container) {
             open: Boolean(createAction),
         }));
 
-        const advancedActions = [];
-        if (deleteAction) {
-            advancedActions.push({ label: 'Delete step', tone: 'btn-danger', onClick: deleteAction });
+        if (operatorSurface) {
+            const advancedActions = cancelAction ? [{ label: 'Cancel', onClick: cancelAction }] : [];
+            const advancedPanel = Kit.detailsPanel({
+                target,
+                surfaceKey: 'protocol.stage',
+                onCommit,
+                schema: applyReadOnly([
+                    { key: 'stage_key', kind: 'text' },
+                    { key: 'max_rounds', kind: 'text' },
+                    { key: 'timeout_seconds', kind: 'text' },
+                ]),
+                actions: advancedActions,
+            });
+            grid.appendChild(_stageEditorSection('Advanced', advancedPanel, { collapsible: true, open: false }));
         }
-        if (cancelAction) {
-            advancedActions.push({ label: 'Cancel', onClick: cancelAction });
-        }
-        const advancedPanel = Kit.detailsPanel({
-            target,
-            surfaceKey: 'protocol.stage',
-            onCommit,
-            schema: applyReadOnly([
-                { key: 'stage_key', kind: 'text' },
-                { key: 'max_rounds', kind: 'text' },
-                { key: 'timeout_seconds', kind: 'text' },
-            ]),
-            actions: advancedActions,
-        });
-        grid.appendChild(_stageEditorSection('Advanced', advancedPanel, { collapsible: true, open: false }));
         shell.appendChild(grid);
         return shell;
     }

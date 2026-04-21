@@ -253,6 +253,7 @@ def build_protocol_router(
     @router.post("/v1/protocols")
     async def resource_create_protocol(
         request: Request,
+        authoring_surface: str | None = Header(default=None, alias="X-Protocol-Authoring-Surface"),
         auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
@@ -266,6 +267,7 @@ def build_protocol_router(
             display_name=str(payload.get("display_name", "") or ""),
             description=str(payload.get("description", "") or ""),
             definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
+            authoring_surface=str(authoring_surface or ""),
         )
         if not result.ok:
             raise _protocol_result_http_error(result)
@@ -307,6 +309,7 @@ def build_protocol_router(
         protocol_id: str,
         request: Request,
         if_match: str | None = Header(default=None, alias="If-Match"),
+        authoring_surface: str | None = Header(default=None, alias="X-Protocol-Authoring-Surface"),
         auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
@@ -321,6 +324,7 @@ def build_protocol_router(
             display_name=str(payload.get("display_name", "") or ""),
             description=str(payload.get("description", "") or ""),
             definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
+            authoring_surface=str(authoring_surface or ""),
             expected_revision=expected_revision,
         )
         if not result.ok:

@@ -1429,10 +1429,12 @@ def test_protocol_authoring_manifest_route_returns_templates_and_section_metadat
                         "stage_kind_sequence": ["work", "review", "acceptance"],
                     }
                 ],
-                "sections": ["design", "review", "advanced"],
+                "sections": ["design", "review"],
                 "stage_kind_options": ["work", "review", "acceptance"],
                 "artifact_kind_options": ["workspace_file", "control_plane_text"],
                 "selector_kind_options": ["agent", "skill", "role"],
+                "default_surface": "standard",
+                "operator_surface_available": True,
             }
 
     app.dependency_overrides[registry_server.get_store] = lambda: _Store()
@@ -1450,8 +1452,10 @@ def test_protocol_authoring_manifest_route_returns_templates_and_section_metadat
     assert response.status_code == 200
     payload = response.json()
     assert payload["templates"][0]["slug"] == "demo-template"
-    assert "advanced" in payload["sections"]
+    assert "advanced" not in payload["sections"]
     assert "review" in payload["stage_kind_options"]
+    assert payload["default_surface"] == "standard"
+    assert payload["operator_surface_available"] is True
 
 
 def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path: Path):
@@ -1524,9 +1528,21 @@ def test_protocol_draft_save_route_returns_conflict_for_revision_mismatch(monkey
     client = TestClient(app)
 
     class _Store:
-        def save_protocol_draft(self, *, access, protocol_id, slug, display_name, description, definition_json, expected_revision=None):
+        def save_protocol_draft(
+            self,
+            *,
+            access,
+            protocol_id,
+            slug,
+            display_name,
+            description,
+            definition_json,
+            authoring_surface="standard",
+            expected_revision=None,
+        ):
             assert protocol_id == "protocol-1"
             assert expected_revision == 3
+            assert authoring_surface == "operator"
             return ProtocolMutationRecord(
                 ok=False,
                 status="conflict",
@@ -1573,7 +1589,10 @@ def test_protocol_draft_save_route_returns_conflict_for_revision_mismatch(monkey
     try:
         response = client.put(
             "/v1/protocols/protocol-1/draft",
-            headers={"If-Match": "3"},
+            headers={
+                "If-Match": "3",
+                "X-Protocol-Authoring-Surface": "operator",
+            },
             json={
                 "slug": "protocol-1",
                 "display_name": "Conflict Protocol",

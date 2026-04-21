@@ -3775,11 +3775,13 @@ function renderProtocolWorkspace(container) {
             const artifactKey = String(artifact.artifact_key || '');
             const entry = document.createElement('div');
             entry.className = 'kit-protocol-segment-entry';
+            entry.dataset.key = `protocol-artifact-entry:${artifactKey}`;
 
             const row = document.createElement('button');
             row.type = 'button';
             row.className = `kit-protocol-segment-step${selectedArtifactKey === artifactKey ? ' is-selected' : ''}`;
             row.dataset.testid = `workflow-artifact-${artifactKey}`;
+            row.dataset.key = `protocol-artifact-row:${artifactKey}`;
             row.addEventListener('click', () => {
                 selection = { sectionKey: 'artifacts', nodeKey: artifactKey };
                 render();
@@ -3805,6 +3807,7 @@ function renderProtocolWorkspace(container) {
             if (selectedArtifactKey === artifactKey) {
                 const inline = document.createElement('div');
                 inline.className = 'kit-protocol-inline-editor';
+                inline.dataset.key = `protocol-artifact-inline:${artifactKey}`;
                 inline.appendChild(_artifactEditorEl(artifact, context));
                 entry.appendChild(inline);
             }

@@ -551,6 +551,14 @@ function renderSkillCatalog(container) {
         return draftDirty && Boolean(draftBuffer && draftBuffer.name);
     }
 
+    function _isActiveSkillsWorkspace() {
+        try {
+            return String(window.location.pathname || '') === '/ui/skills';
+        } catch {
+            return false;
+        }
+    }
+
     function _runWithDraftGuard(action) {
         if (!_hasUnsavedDraft()) {
             void action();
@@ -1673,6 +1681,9 @@ function renderSkillCatalog(container) {
                 draftStatus = 'error';
                 draftStatusMessage = 'Action failed';
                 refreshChrome();
+                if (!_isActiveSkillsWorkspace()) {
+                    return;
+                }
                 UI.reportError(`Failed to ${successLabel.toLowerCase()}`, err, { context: `Skill studio ${successLabel.toLowerCase()} failed` });
             }
         };

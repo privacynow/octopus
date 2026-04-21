@@ -665,6 +665,8 @@ window.Kit = (() => {
                 (field.options || []).forEach((opt) => {
                     const itemLabel = document.createElement('label');
                     itemLabel.className = 'kit-details-checklist-item';
+                    itemLabel.addEventListener('mousedown', (event) => event.stopPropagation());
+                    itemLabel.addEventListener('mouseup', (event) => event.stopPropagation());
                     itemLabel.addEventListener('click', (event) => event.stopPropagation());
                     const checkbox = document.createElement('input');
                     checkbox.type = 'checkbox';
@@ -673,13 +675,14 @@ window.Kit = (() => {
                     if (field.disabled || field.readOnly) checkbox.disabled = true;
                     checkbox.addEventListener('click', (event) => event.stopPropagation());
                     checkbox.addEventListener('mousedown', (event) => event.stopPropagation());
+                    checkbox.addEventListener('mouseup', (event) => event.stopPropagation());
                     if (typeof onCommit === 'function') {
                         checkbox.addEventListener('change', () => {
                             const values = Array.from(control.querySelectorAll('input[type="checkbox"]:checked'))
                                 .map((el) => String(el.value || ''));
-                            requestAnimationFrame(() => {
+                            window.setTimeout(() => {
                                 onCommit(target, field.key, values);
-                            });
+                            }, 0);
                         });
                     }
                     const text = document.createElement('span');

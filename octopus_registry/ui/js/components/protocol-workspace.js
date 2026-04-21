@@ -4152,6 +4152,12 @@ function renderProtocolWorkspace(container) {
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
         UI.reconcileChildren(contentEl, [headerEl, workspace]);
+        if (editorMode.kind === 'insert-stage') {
+            const activeInsertEditor = contentEl.querySelector('.kit-stage-editor[data-key^="protocol-inline-insert:"]');
+            if (activeInsertEditor instanceof Element) {
+                _bindPendingStageEditorControls(activeInsertEditor);
+            }
+        }
         const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
         if (activeCanvasRoot && typeof activeCanvasRoot.__workflowCanvasSync === 'function') {
             activeCanvasRoot.__workflowCanvasSync({

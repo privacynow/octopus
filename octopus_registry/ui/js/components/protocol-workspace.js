@@ -1611,7 +1611,8 @@ function renderProtocolWorkspace(container) {
             UI.notify('Give this step a name before adding it to the workflow.', 'warning');
             return;
         }
-        const creatingRole = String(pendingStage.participant_key || '') === '__new__';
+        const creatingRole = String(pendingStage.participant_key || '') === '__new__'
+            || Boolean(String(pendingStage.role_display_name || '').trim());
         if (!creatingRole && !String(pendingStage.participant_key || '').trim()) {
             UI.notify('Choose the owner role for this step before creating it.', 'warning');
             return;
@@ -3932,13 +3933,13 @@ function renderProtocolWorkspace(container) {
             actions: summaryActions,
         });
         grid.appendChild(_stageEditorSection('Step basics', summaryPanel));
-        if (createAction && String(target?.participant_key || '') === '__new__') {
+        if (createAction || String(target?.participant_key || '') === '__new__') {
             const rolePanel = Kit.detailsPanel({
                 target,
                 surfaceKey: 'protocol.participant',
                 onCommit,
                 schema: applyReadOnly([
-                    { key: 'role_display_name', kind: 'text', required: true, label: 'Role name', help: 'Name the reusable role this step belongs to.', commitOnInput: true },
+                    { key: 'role_display_name', kind: 'text', label: 'Role name', help: 'Fill this in when this step should create a new reusable role instead of reusing the selected owner role.', commitOnInput: true },
                     { key: 'role_participant_key', kind: 'text', label: 'Role key', help: 'Internal reference for this role. It is generated from the role name.', commitOnInput: true },
                     { key: 'role_instructions', kind: 'textarea', rows: 3, label: 'Shared instructions', help: 'Optional guidance shared by every step that uses this role.', commitOnInput: true },
                 ]),

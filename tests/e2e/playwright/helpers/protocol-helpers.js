@@ -139,7 +139,6 @@ async function createStep(page, {
   if (ownerRole) {
     await ownerRoleSelect.selectOption(ownerRole);
   } else {
-    await ownerRoleSelect.selectOption('__new__');
     const roleSection = stageEditorShell
       .locator('.kit-stage-editor-section')
       .filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) })

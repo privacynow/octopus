@@ -3422,17 +3422,17 @@ function renderProtocolWorkspace(container) {
     }
 
     function _activeStageKey() {
-        if (selection.sectionKey === 'stages' && selection.nodeKey) {
-            return String(selection.nodeKey || '');
-        }
-        if (selection.sectionKey === 'transitions' && selection.nodeKey) {
-            return String(selection.nodeKey || '').split('::')[0] || '';
-        }
         if (editorMode.kind === 'create-route') {
             return String(pendingRoute.source_stage_key || '');
         }
         if (editorMode.kind === 'insert-stage') {
             return String(editorMode.sourceStageKey || '');
+        }
+        if (selection.sectionKey === 'stages' && selection.nodeKey) {
+            return String(selection.nodeKey || '');
+        }
+        if (selection.sectionKey === 'transitions' && selection.nodeKey) {
+            return String(selection.nodeKey || '').split('::')[0] || '';
         }
         return '';
     }

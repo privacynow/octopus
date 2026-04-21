@@ -4820,6 +4820,9 @@ function renderProtocolWorkspace(container) {
             );
             availableRoutingSkills = (Array.isArray(skillData?.routing_skills) ? skillData.routing_skills : (Array.isArray(skillData) ? skillData : []))
                 .filter((item) => _isAuthoringRoutingSkill(item));
+            if (currentProtocol && !protocolDetailLoading) {
+                render();
+            }
         } catch (err) {
             availableAgents = [];
             connectedAgents = [];

@@ -2732,7 +2732,7 @@ function renderProtocolWorkspace(container) {
                 const option = document.createElement('option');
                 option.value = String(item.value || '');
                 option.textContent = String(item.label || item.value || '');
-                if (String(normalizedKind || '') === String(item.value || '')) option.selected = true;
+                if (String(advancedKind || '') === String(item.value || '')) option.selected = true;
                 advancedKindControl.appendChild(option);
             });
             advancedKindControl.disabled = Boolean(readOnly);

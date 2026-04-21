@@ -136,7 +136,8 @@ test.describe('protocol authoring live', () => {
     await page.reload({ waitUntil: 'networkidle' });
     await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
     await expect(page.locator('.kit-workflow-outline')).toBeVisible();
-    await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();
+    await expect(page.locator('.kit-workflow-cy-host')).not.toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
     await expect(page.getByTestId('workflow-outline-segment:planning')).toBeVisible({ timeout: 15000 });

@@ -26,7 +26,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await lifecycle.getByLabel('Name').blur();
   await waitForSaved(page);
 
-  await page.getByRole('button', { name: /\+ Add step/i }).first().click();
+  await page.getByRole('button', { name: /Add first step/i }).first().click();
   const participantEditor = page.locator('.kit-stage-editor').first();
   const stepBasics = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
   const newRole = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
@@ -61,23 +61,23 @@ test('capture protocol authoring states', async ({ page }) => {
   await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
 
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-page.png', fullPage: true });
-  await page.locator('.kit-authoring-details-column').screenshot({
+  await page.locator('.kit-authoring-primary-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-focus.png',
   });
 
   await discardDraft(page);
 
   await openTemplateDraft(page, 'Software Engineering');
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-page.png', fullPage: true });
-  await page.locator('.kit-workflow-shell-scene').screenshot({
+  await page.locator('.kit-authoring-primary-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-focus.png',
   });
 
-  await page.getByTestId('workflow-outline-segment:planning').click();
+  await page.getByTestId('workflow-stage-planning').click();
   await expect(page.locator('.kit-stage-editor')).toContainText('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-page.png', fullPage: true });
-  await page.locator('.kit-authoring-details-column').screenshot({
+  await page.locator('.kit-authoring-primary-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-detail.png',
   });
 
@@ -89,19 +89,19 @@ test('capture protocol authoring states', async ({ page }) => {
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
   await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png' });
-  await page.getByTestId('workflow-outline-segment:planning').click();
+  await page.getByTestId('workflow-stage-planning').click();
   await expect(page.locator('.kit-stage-editor')).toContainText('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png' });
 
   await discardDraft(page);
 
   await openTemplateDraft(page, 'Document Approval');
-  await expect(page.getByTestId('workflow-outline-segment:draft_document')).toBeVisible();
+  await expect(page.getByTestId('workflow-stage-draft_document')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-page.png', fullPage: true });
-  await page.getByTestId('workflow-outline-segment:draft_document').click();
+  await page.getByTestId('workflow-stage-draft_document').click();
   await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
   await selectStep(page, 'draft_document');
   await expect(page.locator('.kit-stage-editor').first().getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();

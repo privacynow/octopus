@@ -144,14 +144,13 @@ function _titleCaseWords(value) {
 }
 
 /*
- * Protocol authoring workspace — one semantic workflow canvas, one inspector,
- * and one synced outline. The old overview/detail/topology split is gone.
+ * Protocol authoring workspace — one progressive workflow stage stack and one
+ * optional map. The old overview/detail/topology split is gone.
  *
- * The canvas carries workflow comprehension. The inspector edits the selected
- * entity. The outline mirrors the same scene and selection model for keyboard
- * and accessibility paths. Roles own steps; assignment rules resolve steps to
- * runtime agents. No raw JSON tab, no viewport-specific editor fork, and no
- * second authoring pipeline.
+ * The primary surface is the stage stack; the selected stage expands inline.
+ * The map is a secondary reference surface that can be shown on demand.
+ * Roles own steps; assignment rules resolve steps to runtime agents. No raw
+ * JSON tab, no viewport-specific editor fork, and no second authoring pipeline.
  */
 function renderProtocolWorkspace(container) {
     const cleanups = UI.beginCleanupScope();
@@ -436,6 +435,15 @@ function renderProtocolWorkspace(container) {
         return {
             sourceStageKey: String(stage?.stage_key || ''),
             decision: String(anchor.decision || ''),
+        };
+    }
+
+    function _insertAnchorForStage(stage, projection) {
+        const anchor = _defaultStageInsertAnchor(stage, projection);
+        if (anchor) return anchor;
+        return {
+            sourceStageKey: String(stage?.stage_key || ''),
+            decision: _defaultDecisionForStageKind(stage?.stage_kind || 'work'),
         };
     }
 
@@ -3005,12 +3013,12 @@ function renderProtocolWorkspace(container) {
                 ) || selectedStage;
                 insertLabel = `Insert after ${String(activeSegment.label || 'section')}`;
             }
-            selectedStageAnchor = _defaultStageInsertAnchor(anchorStage, projection);
+            selectedStageAnchor = _insertAnchorForStage(anchorStage, projection);
         } else if (selection.sectionKey === 'segments' && activeSegment?.endStageKey) {
             const anchorStage = (draft.document.stages || []).find((item) =>
                 String(item.stage_key || '') === String(activeSegment.endStageKey || ''),
             ) || null;
-            selectedStageAnchor = anchorStage ? _defaultStageInsertAnchor(anchorStage, projection) : null;
+            selectedStageAnchor = anchorStage ? _insertAnchorForStage(anchorStage, projection) : null;
             insertLabel = `Insert after ${String(activeSegment.label || 'section')}`;
         }
         const insertAnchor = selectedTransition
@@ -3020,25 +3028,21 @@ function renderProtocolWorkspace(container) {
             }
             : selectedStageAnchor;
         const mapVisible = _workflowMapVisible();
-        return [
-            ...(selection.sectionKey !== 'overview' ? [{
-                label: 'Show full workflow',
+        const actions = [
+            {
+                label: selection.sectionKey === 'protocol' ? 'Back to stages' : 'Protocol settings',
                 tone: 'btn-small',
                 onClick: () => {
-                    selection = { sectionKey: 'overview', nodeKey: '' };
+                    selection = selection.sectionKey === 'protocol'
+                        ? { sectionKey: 'overview', nodeKey: '' }
+                        : { sectionKey: 'protocol', nodeKey: '' };
                     render();
                 },
-            }] : []),
+            },
             {
                 label: mapVisible ? 'Hide workflow map' : 'Show workflow map',
                 tone: 'btn-small',
                 onClick: () => _setWorkflowMapMode(mapVisible ? 'hidden' : 'visible'),
-            },
-            {
-                label: insertAnchor ? insertLabel : Kit.dict.label('protocol.stages.add'),
-                tone: 'btn-small',
-                onClick: () => _startStageInsert(insertAnchor || {}),
-                disabled: !canMutate,
             },
             ...(rehearsal.runId ? [{
                 label: editorMode.kind === 'rehearse' ? 'Back to authoring' : 'View rehearsal',
@@ -3046,6 +3050,15 @@ function renderProtocolWorkspace(container) {
                 onClick: () => _setEditorMode({ kind: editorMode.kind === 'rehearse' ? 'idle' : 'rehearse' }),
             }] : []),
         ];
+        if (!selectedStage && !selectedTransition && !activeSegmentId) {
+            actions.splice(2, 0, {
+                label: progress.stageCount ? Kit.dict.label('protocol.stages.add') : 'Add first step',
+                tone: 'btn-small',
+                onClick: () => _startStageInsert(insertAnchor || {}),
+                disabled: !canMutate,
+            });
+        }
+        return actions;
     }
 
     function _sceneOutline(projection, nodeStates, activeSegmentId = '') {
@@ -3086,8 +3099,8 @@ function renderProtocolWorkspace(container) {
             primary: true,
         }));
         return {
-            title: 'Workflow canvas',
-            subtitle: 'Read the workflow here. Select a section or step to inspect local routes and edit in the inspector.',
+            title: 'Workflow stages',
+            subtitle: 'Build the workflow from the stage stack. Open the map only when you want spatial context.',
             hint: editorMode.kind === 'rehearse' ? 'Rehearsal is active. Workflow state is annotated on the same canvas while authoring is paused.' : '',
             outlineTitle: 'Workflow outline',
             direction: 'DOWN',
@@ -3216,8 +3229,8 @@ function renderProtocolWorkspace(container) {
         });
 
         return {
-            title: 'Workflow canvas',
-            subtitle: `Focused on ${String(activeSegment?.label || 'section')}. Inspect local routes here and edit the selected item in the inspector.`,
+            title: 'Workflow stages',
+            subtitle: `Focused on ${String(activeSegment?.label || 'section')}. Edit the selected step inline and open the map only when you need route context.`,
             hint: editorMode.kind === 'rehearse' ? 'Rehearsal is active. Workflow state is annotated on the same canvas while authoring is paused.' : '',
             outlineTitle: 'Workflow outline',
             direction: compact ? 'DOWN' : 'RIGHT',
@@ -3284,47 +3297,51 @@ function renderProtocolWorkspace(container) {
         return states;
     }
 
-    function _surfaceCanvasEl(workflow) {
+    function _surfaceSelection() {
+        return {
+            kind: selection.sectionKey === 'segments'
+                ? 'segment'
+                : selection.sectionKey === 'transitions'
+                    ? 'transition'
+                    : selection.sectionKey === 'participants'
+                        ? 'participant'
+                        : selection.sectionKey === 'artifacts'
+                            ? 'artifact'
+                            : selection.sectionKey === 'stages'
+                                ? 'stage'
+                                : 'overview',
+            id: selection.nodeKey,
+        };
+    }
+
+    function _surfaceSelect(workflow, kind, id) {
+        if (kind === 'segment') {
+            selection = _normalizeSelectionForProjection({ sectionKey: 'segments', nodeKey: id }, workflow.projection);
+        } else if (kind === 'transition') {
+            selection = { sectionKey: 'transitions', nodeKey: id };
+        } else if (kind === 'stage') {
+            selection = { sectionKey: 'stages', nodeKey: id };
+        } else if (kind === 'participant') {
+            selection = { sectionKey: 'participants', nodeKey: id };
+        } else if (kind === 'artifact') {
+            selection = { sectionKey: 'artifacts', nodeKey: id };
+        } else {
+            selection = { sectionKey: 'overview', nodeKey: '' };
+        }
+        render();
+    }
+
+    function _workflowMapEl(workflow) {
         return Kit.workflowCanvas({
             scene: workflow.scene,
-            toolbarActions: workflow.toolbarActions,
-            firstRun: workflow.firstRun,
             mode: 'graph',
             editorMode,
-            viewState: workflow.viewState,
             viewportState: { zoom: _canvasZoomValue() },
-            mapVisible: _workflowMapVisible(),
+            mapVisible: true,
+            showOutline: false,
             onViewportChange: (zoom) => _setCanvasViewport(zoom),
-            selection: {
-                kind: selection.sectionKey === 'segments'
-                    ? 'segment'
-                    : selection.sectionKey === 'transitions'
-                        ? 'transition'
-                        : selection.sectionKey === 'participants'
-                            ? 'participant'
-                            : selection.sectionKey === 'artifacts'
-                                ? 'artifact'
-                                : selection.sectionKey === 'stages'
-                                    ? 'stage'
-                                    : 'overview',
-                id: selection.nodeKey,
-            },
-            onSelect: ({ kind, id }) => {
-                if (kind === 'segment') {
-                    selection = _normalizeSelectionForProjection({ sectionKey: 'segments', nodeKey: id }, workflow.projection);
-                } else if (kind === 'transition') {
-                    selection = { sectionKey: 'transitions', nodeKey: id };
-                } else if (kind === 'stage') {
-                    selection = { sectionKey: 'stages', nodeKey: id };
-                } else if (kind === 'participant') {
-                    selection = { sectionKey: 'participants', nodeKey: id };
-                } else if (kind === 'artifact') {
-                    selection = { sectionKey: 'artifacts', nodeKey: id };
-                } else {
-                    selection = { sectionKey: 'overview', nodeKey: '' };
-                }
-                render();
-            },
+            selection: _surfaceSelection(),
+            onSelect: ({ kind, id }) => _surfaceSelect(workflow, kind, id),
             onMutate: ({ type }) => {
                 if (type === 'undo') {
                     _restoreHistory('undo');
@@ -3335,6 +3352,359 @@ function renderProtocolWorkspace(container) {
                 }
             },
         });
+    }
+
+    function _editorContext(workflow = null) {
+        const doc = draft.document;
+        const projection = workflow?.projection || _buildWorkflowProjection(doc);
+        const readOnly = editorMode.kind === 'rehearse';
+        const applyReadOnly = (schema) => (!readOnly
+            ? schema
+            : schema.map((field) => ({
+                ...field,
+                disabled: field.kind === 'checkbox' || field.kind === 'select' ? true : field.disabled,
+                readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
+            })));
+        const participantOptions = [
+            { value: '', label: '(choose an owner role)' },
+            ...((doc.participants || []).map((p) => ({
+                value: String(p.participant_key || ''),
+                label: String(p.display_name || p.participant_key || ''),
+            }))),
+        ];
+        const stageParticipantOptions = [...participantOptions, { value: '__new__', label: 'Create new role…' }];
+        const kindOptions = _manifestStageKindOptions().map((value) => ({
+            value,
+            label: Kit.dict.label(`protocol.stage.kind.${value}`, value),
+        }));
+        const artifactOptions = (doc.artifacts || []).map((item) => ({
+            value: String(item.artifact_key || ''),
+            label: String(item.display_name || item.artifact_key || ''),
+        }));
+        return {
+            doc,
+            projection,
+            readOnly,
+            applyReadOnly,
+            participantOptions,
+            stageParticipantOptions,
+            kindOptions,
+            artifactOptions,
+        };
+    }
+
+    function _protocolSettingsPanelEl(context) {
+        return Kit.detailsPanel({
+            target: {
+                description: draft.description,
+                single_active_writer: Boolean(draft.document.policies?.single_active_writer ?? true),
+                max_review_rounds: Number(draft.document.policies?.max_review_rounds || 5) || 5,
+            },
+            surfaceKey: 'protocol',
+            onCommit: context.readOnly ? null : _commitOverview,
+            schema: context.applyReadOnly([
+                { key: 'description', kind: 'textarea', rows: 4 },
+                ...((draft.document.stages || []).length ? [
+                    { key: 'single_active_writer', kind: 'checkbox', labelKey: 'protocol.policy.single_active_writer.label', helpKey: 'protocol.policy.single_active_writer.help' },
+                    { key: 'max_review_rounds', kind: 'text', labelKey: 'protocol.policy.max_review_rounds.label', helpKey: 'protocol.policy.max_review_rounds.help' },
+                ] : []),
+            ]),
+        });
+    }
+
+    function _stageEditorTarget(stage) {
+        return {
+            ...stage,
+            selector_kind: String(stage?.selector?.kind || ''),
+            selector_value: String(stage?.selector?.value || ''),
+            selector_preferred_agent_id: String(stage?.selector?.preferred_agent_id || ''),
+        };
+    }
+
+    function _activeStageKey() {
+        if (selection.sectionKey === 'stages' && selection.nodeKey) {
+            return String(selection.nodeKey || '');
+        }
+        if (selection.sectionKey === 'transitions' && selection.nodeKey) {
+            return String(selection.nodeKey || '').split('::')[0] || '';
+        }
+        if (editorMode.kind === 'create-route') {
+            return String(pendingRoute.source_stage_key || '');
+        }
+        if (editorMode.kind === 'insert-stage') {
+            return String(editorMode.sourceStageKey || '');
+        }
+        return '';
+    }
+
+    function _toggleStageSelection(stageKey) {
+        const nextKey = String(stageKey || '');
+        if (!nextKey) return;
+        if (selection.sectionKey === 'stages' && String(selection.nodeKey || '') === nextKey && editorMode.kind === 'idle') {
+            selection = { sectionKey: 'overview', nodeKey: '' };
+        } else {
+            selection = { sectionKey: 'stages', nodeKey: nextKey };
+        }
+        render();
+    }
+
+    function _stageInsertMatchesDefaultAnchor(stage, projection) {
+        if (editorMode.kind !== 'insert-stage') return false;
+        const anchor = _insertAnchorForStage(stage, projection);
+        return Boolean(anchor
+            && String(anchor.sourceStageKey || '') === String(editorMode.sourceStageKey || '')
+            && String(anchor.decision || '') === String(editorMode.decision || ''));
+    }
+
+    function _inlineStageInsertEl(context) {
+        return _stageEditorShell({
+            target: pendingStage,
+            participantOptions: context.stageParticipantOptions,
+            kindOptions: context.kindOptions,
+            artifactOptions: context.artifactOptions,
+            onCommit: _commitPendingStageField,
+            createAction: _confirmStageInsert,
+            cancelAction: _cancelStageInsert,
+            createHint: _workflowInsertHint(),
+        });
+    }
+
+    function _inlineRouteEditorEl(stageKey, context) {
+        const stage = (context.doc.stages || []).find((item) => String(item.stage_key || '') === String(stageKey || ''));
+        if (!stage) return null;
+        if (editorMode.kind === 'create-route' && String(pendingRoute.source_stage_key || '') === String(stageKey || '')) {
+            return _routeEditorPanel({
+                target: {
+                    source_stage: String(stage.display_name || stage.stage_key || ''),
+                    decision: String(pendingRoute.decision || ''),
+                    target_key: String(pendingRoute.target_key || ''),
+                },
+                sourceStage: stage,
+                projection: context.projection,
+                onCommit: _commitPendingRouteField,
+                createAction: _confirmRouteInsert,
+                cancelAction: _cancelRouteInsert,
+            });
+        }
+        if (selection.sectionKey !== 'transitions') return null;
+        const target = _transitionEntries(context.doc).find((item) => String(item.id || '') === String(selection.nodeKey || ''));
+        if (!target || String(target.from_stage_key || '') !== String(stageKey || '')) return null;
+        return _routeEditorPanel({
+            target: {
+                source_stage: String(stage.display_name || stage.stage_key || target.from_stage_key || ''),
+                decision: String(target.decision || ''),
+                target_key: String(target.target_key || ''),
+            },
+            sourceStage: stage,
+            projection: context.projection,
+            readOnly: context.readOnly,
+            onCommit: context.readOnly ? null : (_t, key, value) => _commitTransitionField(selection.nodeKey, key, value),
+            insertAction: context.readOnly ? null : () => _startStageInsert({
+                sourceStageKey: target.from_stage_key,
+                decision: target.decision,
+            }),
+            deleteAction: context.readOnly ? null : () => UI.showConfirm(
+                'Remove transition',
+                'Remove this transition from the workflow?',
+                async () => { _deleteTransition(selection.nodeKey); },
+            ),
+        });
+    }
+
+    function _stageEditorEl(stage, context) {
+        return _stageEditorShell({
+            target: _stageEditorTarget(stage),
+            readOnly: context.readOnly,
+            participantOptions: context.participantOptions,
+            kindOptions: context.kindOptions,
+            artifactOptions: context.artifactOptions,
+            onCommit: context.readOnly
+                ? null
+                : (_t, key, value) => _commitNodeField('stage', String(stage.stage_key || ''), key, value),
+            connectAction: context.readOnly ? null : () => _startRouteInsert(String(stage.stage_key || '')),
+            deleteAction: context.readOnly ? null : () => _confirmStageDelete(String(stage.stage_key || '')),
+        });
+    }
+
+    function _protocolSettingsSectionEl(context) {
+        const card = document.createElement('section');
+        card.className = 'kit-protocol-inline-card';
+        const title = document.createElement('h3');
+        title.className = 'kit-stage-editor-hero-title';
+        title.textContent = 'Protocol settings';
+        card.appendChild(title);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'kit-stage-editor-hero-note';
+        subtitle.textContent = 'Adjust protocol-wide description and policy settings here. Stage editing stays inline below.';
+        card.appendChild(subtitle);
+        card.appendChild(_protocolSettingsPanelEl(context));
+        return card;
+    }
+
+    function _segmentPanelEl(segment, workflow, context) {
+        const panel = document.createElement('section');
+        panel.className = 'kit-protocol-segment-panel';
+        panel.dataset.key = `protocol-segment-panel:${String(segment.id || '')}`;
+
+        const head = document.createElement('div');
+        head.className = 'kit-protocol-segment-head';
+        const title = document.createElement('h3');
+        title.className = 'kit-stage-editor-hero-title';
+        title.textContent = String(segment?.label || 'Section');
+        head.appendChild(title);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'kit-stage-editor-hero-note';
+        subtitle.textContent = `${Array.isArray(segment?.stages) ? segment.stages.length : 0} step${segment?.stages?.length === 1 ? '' : 's'} in this section.`;
+        head.appendChild(subtitle);
+        if (!context.readOnly && segment?.endStageKey) {
+            const headActions = document.createElement('div');
+            headActions.className = 'kit-protocol-segment-head-actions';
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'btn btn-small';
+            add.textContent = `Add below ${String(segment.label || 'section')}`;
+            add.addEventListener('click', () => {
+                const anchorStage = (context.doc.stages || []).find((item) =>
+                    String(item.stage_key || '') === String(segment.endStageKey || ''),
+                ) || null;
+                const anchor = anchorStage ? _insertAnchorForStage(anchorStage, context.projection) : null;
+                _startStageInsert(anchor || {});
+            });
+            headActions.appendChild(add);
+            head.appendChild(headActions);
+        }
+        panel.appendChild(head);
+
+        const activeStageKey = _activeStageKey();
+        const selectedTransition = selection.sectionKey === 'transitions'
+            ? _selectionTransition(context.doc)
+            : null;
+        const list = document.createElement('div');
+        list.className = 'kit-protocol-segment-steps';
+
+        (Array.isArray(segment?.stages) ? segment.stages : []).forEach((stage) => {
+            const stageKey = String(stage.stage_key || '');
+            const entry = document.createElement('div');
+            entry.className = 'kit-protocol-segment-entry';
+            entry.dataset.key = `protocol-segment-entry:${stageKey}`;
+
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = `kit-protocol-segment-step${activeStageKey === stageKey ? ' is-selected' : ''}`;
+            row.dataset.testid = `workflow-stage-${stageKey}`;
+            row.addEventListener('click', () => _toggleStageSelection(stageKey));
+
+            const titleRow = document.createElement('div');
+            titleRow.className = 'kit-protocol-segment-step-head';
+            const label = document.createElement('strong');
+            label.className = 'kit-protocol-segment-step-title';
+            label.textContent = String(stage.display_name || stage.stage_key || 'Untitled step');
+            titleRow.appendChild(label);
+            const state = String(workflow?.nodeStates?.[stageKey] || '');
+            if (state) {
+                const badge = document.createElement('span');
+                badge.className = 'kit-workflow-node-state';
+                badge.textContent = state;
+                titleRow.appendChild(badge);
+            }
+            row.appendChild(titleRow);
+
+            const summary = document.createElement('div');
+            summary.className = 'kit-protocol-segment-step-meta';
+            summary.textContent = [
+                _participantDisplayName(stage.participant_key, context.doc) || 'Unassigned',
+                _stageAssignmentSummary(stage, { empty: 'Unassigned' }),
+            ].filter(Boolean).join(' · ');
+            row.appendChild(summary);
+            entry.appendChild(row);
+
+            if (!context.readOnly) {
+                const actions = document.createElement('div');
+                actions.className = 'kit-protocol-segment-step-actions';
+                const add = document.createElement('button');
+                add.type = 'button';
+                add.className = 'btn btn-small';
+                add.textContent = 'Add below';
+                add.addEventListener('click', () => {
+                    const anchor = _insertAnchorForStage(stage, context.projection);
+                    _startStageInsert(anchor || {});
+                });
+                actions.appendChild(add);
+                entry.appendChild(actions);
+            }
+
+            if (activeStageKey === stageKey) {
+                const inline = document.createElement('div');
+                inline.className = 'kit-protocol-inline-editor';
+                inline.appendChild(_stageEditorEl(stage, context));
+                const routeEditor = _inlineRouteEditorEl(stageKey, context);
+                if (routeEditor) {
+                    inline.appendChild(routeEditor);
+                }
+                const showPendingInsert = editorMode.kind === 'insert-stage'
+                    && String(editorMode.sourceStageKey || '') === stageKey
+                    && (
+                        (selectedTransition
+                            && String(selectedTransition.from_stage_key || '') === stageKey
+                            && String(selectedTransition.decision || '') === String(editorMode.decision || ''))
+                        || _stageInsertMatchesDefaultAnchor(stage, context.projection)
+                    );
+                if (showPendingInsert) {
+                    inline.appendChild(_inlineStageInsertEl(context));
+                }
+                entry.appendChild(inline);
+            }
+
+            list.appendChild(entry);
+        });
+
+        if (!list.childElementCount && editorMode.kind === 'insert-stage') {
+            list.appendChild(_inlineStageInsertEl(context));
+        }
+        panel.appendChild(list);
+        return panel;
+    }
+
+    function _progressiveWorkflowEl(workflow) {
+        const context = _editorContext(workflow);
+        const root = document.createElement('div');
+        root.className = 'kit-authoring-primary-column';
+        root.dataset.key = 'protocol-authoring-primary-column';
+        root.appendChild(Kit.workflowHeaderBar({
+            firstRun: workflow.firstRun,
+            editorMode,
+            viewState: workflow.viewState,
+            toolbarActions: workflow.toolbarActions,
+        }));
+
+        if (selection.sectionKey === 'protocol') {
+            root.appendChild(_protocolSettingsSectionEl(context));
+        }
+
+        const stack = document.createElement('div');
+        stack.className = 'kit-protocol-stage-stack';
+        stack.dataset.selection = String(selection.sectionKey || 'overview');
+        workflow.projection.segments.forEach((segment) => {
+            stack.appendChild(_segmentPanelEl(segment, workflow, context));
+        });
+        if (!workflow.projection.segments.length && editorMode.kind === 'insert-stage') {
+            stack.appendChild(_inlineStageInsertEl(context));
+        }
+        root.appendChild(stack);
+
+        const validation = editorMode.kind === 'rehearse' ? null : _validationEl();
+        if (validation) {
+            root.appendChild(validation);
+        }
+        if (editorMode.kind === 'rehearse' || rehearsal.runId) {
+            root.appendChild(Kit.rehearsalPanel({
+                runId: rehearsal.runId,
+                sessions: rehearsal.sessions,
+                scenarios: rehearsal.scenarios,
+                onRespond: (payload) => { void _respondRehearsal(payload); },
+            }));
+        }
+        return root;
     }
 
     function _stageEditorSection(title, panel, { wide = false, collapsible = false, open = true } = {}) {
@@ -3395,88 +3765,6 @@ function renderProtocolWorkspace(container) {
         hero.appendChild(note);
 
         return hero;
-    }
-
-    function _segmentInspectorEl(segment, projection, nodeStates = {}) {
-        const visibleStages = _segmentStageList(segment);
-        const panel = document.createElement('section');
-        panel.className = 'kit-protocol-segment-panel';
-
-        const head = document.createElement('div');
-        head.className = 'kit-protocol-segment-head';
-        const title = document.createElement('h3');
-        title.className = 'kit-stage-editor-hero-title';
-        title.textContent = String(segment?.label || 'Section');
-        head.appendChild(title);
-        const subtitle = document.createElement('p');
-        subtitle.className = 'kit-stage-editor-hero-note';
-        subtitle.textContent = visibleStages.length
-            ? 'Select a supporting step below to edit it or inspect its routes.'
-            : 'This section currently resolves through its primary step.';
-        head.appendChild(subtitle);
-        panel.appendChild(head);
-
-        const meta = document.createElement('div');
-        meta.className = 'kit-stage-editor-hero-meta';
-        [
-            ...(segment?.incomingSegments || []).map((segmentId) => {
-                const source = projection.segmentsById.get(String(segmentId || ''));
-                return source ? `From ${source.label}` : '';
-            }),
-            ...Array.from(new Set((segment?.outgoingEdges || [])
-                .filter((edge) => edge.targetKind === 'segment')
-                .map((edge) => String(projection.segmentsById.get(edge.targetKey)?.label || ''))
-                .filter(Boolean)))
-                .map((label) => `Next ${label}`),
-            ..._segmentFinishLabels(segment),
-        ].filter(Boolean).forEach((label) => {
-            const chip = document.createElement('span');
-            chip.className = 'kit-stage-editor-hero-chip';
-            chip.textContent = String(label || '');
-            meta.appendChild(chip);
-        });
-        if (meta.childElementCount) {
-            panel.appendChild(meta);
-        }
-
-        const list = document.createElement('div');
-        list.className = 'kit-protocol-segment-steps';
-        visibleStages.forEach((stage) => {
-            const row = document.createElement('button');
-            row.type = 'button';
-            row.className = `kit-protocol-segment-step${selection.sectionKey === 'stages' && selection.nodeKey === String(stage.stage_key || '') ? ' is-selected' : ''}`;
-            row.dataset.testid = `workflow-segment-step-${String(stage.stage_key || '')}`;
-            row.addEventListener('click', () => {
-                selection = { sectionKey: 'stages', nodeKey: String(stage.stage_key || '') };
-                render();
-            });
-
-            const titleRow = document.createElement('div');
-            titleRow.className = 'kit-protocol-segment-step-head';
-            const label = document.createElement('strong');
-            label.className = 'kit-protocol-segment-step-title';
-            label.textContent = _segmentStageDisplayLabel(segment, stage);
-            titleRow.appendChild(label);
-            const state = String(nodeStates?.[String(stage.stage_key || '')] || '');
-            if (state) {
-                const badge = document.createElement('span');
-                badge.className = 'kit-workflow-node-state';
-                badge.textContent = state;
-                titleRow.appendChild(badge);
-            }
-            row.appendChild(titleRow);
-
-            const summary = document.createElement('div');
-            summary.className = 'kit-protocol-segment-step-meta';
-            summary.textContent = _participantDisplayName(stage.participant_key, draft.document) || 'Unassigned';
-            row.appendChild(summary);
-
-            list.appendChild(row);
-        });
-        if (list.childElementCount) {
-            panel.appendChild(list);
-        }
-        return panel;
     }
 
     function _stageRoutingPanel(stage, { readOnly = false, connectAction = null } = {}) {
@@ -3722,204 +4010,6 @@ function renderProtocolWorkspace(container) {
         return shell;
     }
 
-    function _detailsEl(workflow = null) {
-        const doc = draft.document;
-        const projection = workflow?.projection || _buildWorkflowProjection(doc);
-        const participantCount = Array.isArray(doc.participants) ? doc.participants.length : 0;
-        const stageCount = Array.isArray(doc.stages) ? doc.stages.length : 0;
-        const readOnly = editorMode.kind === 'rehearse';
-        const applyReadOnly = (schema) => (!readOnly
-            ? schema
-            : schema.map((field) => ({
-                ...field,
-                disabled: field.kind === 'checkbox' || field.kind === 'select' ? true : field.disabled,
-                readOnly: field.kind !== 'checkbox' && field.kind !== 'select' ? true : field.readOnly,
-            })));
-        const participantOptions = [
-            { value: '', label: '(choose an owner role)' },
-            ...((doc.participants || []).map((p) => ({
-                value: String(p.participant_key || ''),
-                label: String(p.display_name || p.participant_key || ''),
-            }))),
-        ];
-        const stageParticipantOptions = editorMode.kind === 'insert-stage'
-            ? [...participantOptions, { value: '__new__', label: 'Create new role…' }]
-            : participantOptions;
-        const kindOptions = _manifestStageKindOptions().map((value) => ({
-            value,
-            label: Kit.dict.label(`protocol.stage.kind.${value}`, value),
-        }));
-        const artifactOptions = (doc.artifacts || []).map((item) => ({
-            value: String(item.artifact_key || ''),
-            label: String(item.display_name || item.artifact_key || ''),
-        }));
-
-        const protocolSettingsPanel = () => Kit.detailsPanel({
-            target: {
-                description: draft.description,
-                single_active_writer: Boolean(doc.policies?.single_active_writer ?? true),
-                max_review_rounds: Number(doc.policies?.max_review_rounds || 5) || 5,
-            },
-            surfaceKey: 'protocol',
-            onCommit: readOnly ? null : _commitOverview,
-            schema: applyReadOnly([
-                { key: 'description', kind: 'textarea', rows: 4 },
-                ...((doc.stages || []).length ? [
-                    { key: 'single_active_writer', kind: 'checkbox', labelKey: 'protocol.policy.single_active_writer.label', helpKey: 'protocol.policy.single_active_writer.help' },
-                    { key: 'max_review_rounds', kind: 'text', labelKey: 'protocol.policy.max_review_rounds.label', helpKey: 'protocol.policy.max_review_rounds.help' },
-                ] : []),
-            ]),
-        });
-
-        if (editorMode.kind === 'insert-stage') {
-            return _stageEditorShell({
-                target: pendingStage,
-                participantOptions: stageParticipantOptions,
-                kindOptions,
-                artifactOptions,
-                onCommit: _commitPendingStageField,
-                createAction: _confirmStageInsert,
-                cancelAction: _cancelStageInsert,
-                createHint: _workflowInsertHint(),
-            });
-        }
-
-        if (editorMode.kind === 'create-route') {
-            const sourceStage = (doc.stages || []).find((item) => String(item.stage_key || '') === String(pendingRoute.source_stage_key || ''));
-            return _routeEditorPanel({
-                target: {
-                    source_stage: String(sourceStage?.display_name || sourceStage?.stage_key || ''),
-                    decision: String(pendingRoute.decision || ''),
-                    target_key: String(pendingRoute.target_key || ''),
-                },
-                sourceStage,
-                projection,
-                onCommit: _commitPendingRouteField,
-                createAction: _confirmRouteInsert,
-                cancelAction: _cancelRouteInsert,
-            });
-        }
-
-        if (selection.sectionKey === 'protocol') {
-            return protocolSettingsPanel();
-        }
-
-        if (selection.sectionKey === 'overview' || !selection.nodeKey) {
-            return null;
-        }
-        if (selection.sectionKey === 'segments') {
-            const segment = projection.segmentsById.get(String(selection.nodeKey || ''));
-            if (!segment) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            if (segment.stages?.length === 1) {
-                const primaryStageKey = _segmentPrimaryStageKey(segment);
-                const target = (doc.stages || []).find((item) => String(item.stage_key) === primaryStageKey);
-                if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-                return _stageEditorShell({
-                    target: {
-                        ...target,
-                        selector_kind: String(target.selector?.kind || ''),
-                        selector_value: String(target.selector?.value || ''),
-                        selector_preferred_agent_id: String(target.selector?.preferred_agent_id || ''),
-                    },
-                    readOnly,
-                    participantOptions,
-                    kindOptions,
-                    artifactOptions,
-                    onCommit: readOnly
-                        ? null
-                        : (_t, key, value) => _commitNodeField('stage', primaryStageKey, key, value),
-                    connectAction: readOnly ? null : () => _startRouteInsert(primaryStageKey),
-                    deleteAction: readOnly ? null : () => _confirmStageDelete(primaryStageKey),
-                });
-            }
-            return _segmentInspectorEl(segment, projection, workflow?.nodeStates || {});
-        }
-        if (selection.sectionKey === 'participants') {
-            const target = (doc.participants || []).find((item) => String(item.participant_key) === selection.nodeKey);
-            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            return _participantEditorShell({
-                target,
-                readOnly,
-                onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('participant', selection.nodeKey, key, value),
-            });
-        }
-        if (selection.sectionKey === 'stages') {
-            const target = (doc.stages || []).find((item) => String(item.stage_key) === selection.nodeKey);
-            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            return _stageEditorShell({
-                target: {
-                    ...target,
-                    selector_kind: String(target.selector?.kind || ''),
-                    selector_value: String(target.selector?.value || ''),
-                    selector_preferred_agent_id: String(target.selector?.preferred_agent_id || ''),
-                },
-                readOnly,
-                participantOptions,
-                kindOptions,
-                artifactOptions,
-                onCommit: readOnly
-                    ? null
-                    : (_t, key, value) => _commitNodeField('stage', selection.nodeKey, key, value),
-                connectAction: readOnly ? null : () => _startRouteInsert(selection.nodeKey),
-                deleteAction: readOnly ? null : () => _confirmStageDelete(selection.nodeKey),
-            });
-        }
-        if (selection.sectionKey === 'transitions') {
-            const target = _transitionEntries(doc).find((item) => String(item.id || '') === selection.nodeKey);
-            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol', emptyHint: Kit.dict.label('protocol.details.transition.empty') });
-            const sourceStage = (doc.stages || []).find((stage) => String(stage.stage_key || '') === String(target.from_stage_key || ''));
-            return _routeEditorPanel({
-                target: {
-                    source_stage: String(sourceStage?.display_name || sourceStage?.stage_key || target.from_stage_key || ''),
-                    decision: String(target.decision || ''),
-                    target_key: String(target.target_key || ''),
-                },
-                sourceStage,
-                projection,
-                readOnly,
-                onCommit: readOnly ? null : (_t, key, value) => _commitTransitionField(selection.nodeKey, key, value),
-                insertAction: readOnly ? null : () => _startStageInsert({
-                    sourceStageKey: target.from_stage_key,
-                    decision: target.decision,
-                }),
-                deleteAction: readOnly ? null : () => UI.showConfirm(
-                    'Remove transition',
-                    'Remove this transition from the workflow?',
-                    async () => { _deleteTransition(selection.nodeKey); },
-                ),
-            });
-        }
-        if (selection.sectionKey === 'artifacts') {
-            const target = (doc.artifacts || []).find((item) => String(item.artifact_key) === selection.nodeKey);
-            if (!target) return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-            const kindOptions = _manifestArtifactKindOptions().map((value) => ({ value, label: String(value) }));
-            return Kit.detailsPanel({
-                target,
-                surfaceKey: 'protocol.artifact',
-                onCommit: readOnly ? null : (_t, key, value) => _commitNodeField('artifact', selection.nodeKey, key, value),
-                schema: applyReadOnly([
-                    { key: 'display_name', kind: 'text', required: true },
-                    { key: 'artifact_key', kind: 'text' },
-                    { key: 'kind', kind: 'select', options: kindOptions },
-                    { key: 'path', kind: 'text', labelKey: 'protocol.artifact.path.label', helpKey: 'protocol.artifact.path.help', placeholderKey: 'protocol.artifact.path.placeholder' },
-                    { key: 'description', kind: 'textarea', rows: 3 },
-                    { key: 'verify', kind: 'checkbox', labelKey: 'protocol.artifact.verify.label', helpKey: 'protocol.artifact.verify.help' },
-                ]),
-            });
-        }
-        return Kit.detailsPanel({ target: null, surfaceKey: 'protocol' });
-    }
-
-    function _detailsKey() {
-        if (editorMode.kind === 'insert-stage') {
-            return `protocol-details:new-stage:${String(editorMode.sourceStageKey || '')}:${String(editorMode.decision || '')}:${String(editorMode.sessionKey || '')}`;
-        }
-        if (editorMode.kind === 'create-route') {
-            return `protocol-details:new-route:${String(pendingRoute.source_stage_key || '')}:${String(pendingRoute.decision || '')}:${String(editorMode.sessionKey || '')}`;
-        }
-        return `protocol-details:${String(selection.sectionKey || 'overview')}:${String(selection.nodeKey || '')}`;
-    }
-
     function _validationEl() {
         const normalized = [];
         if (saveState.state === 'conflict' && draftConflict?.serverDetail?.protocol) {
@@ -4040,74 +4130,25 @@ function renderProtocolWorkspace(container) {
         workspace.dataset.selection = String(selection.sectionKey || 'overview');
         workspace.dataset.editorMode = String(editorMode.kind || 'idle');
         workspace.dataset.mapVisible = _workflowMapVisible() ? 'true' : 'false';
-
-        const canvasColumn = document.createElement('div');
-        canvasColumn.className = 'kit-authoring-canvas-column';
-        canvasColumn.dataset.key = 'protocol-authoring-canvas-column';
-        const canvasRoot = _surfaceCanvasEl(workflow);
-        canvasColumn.appendChild(canvasRoot);
-        workspace.appendChild(canvasColumn);
-
-        const detailsColumn = document.createElement('div');
-        detailsColumn.className = 'kit-authoring-details-column';
-        detailsColumn.dataset.key = 'protocol-authoring-details-column';
-        const details = editorMode.kind === 'rehearse' ? null : _detailsEl(workflow);
-        if (details) {
-            const detailsKey = _detailsKey();
-            details.dataset.key = detailsKey;
-            detailsColumn.dataset.key = `protocol-authoring-details-column:${detailsKey}`;
-            detailsColumn.appendChild(details);
-            workspace.dataset.hasInspector = 'true';
-        }
-        const validation = editorMode.kind === 'rehearse' ? null : _validationEl();
-        if (validation) detailsColumn.appendChild(validation);
-        if (editorMode.kind === 'rehearse' || rehearsal.runId) {
-            detailsColumn.appendChild(Kit.rehearsalPanel({
-                runId: rehearsal.runId,
-                sessions: rehearsal.sessions,
-                scenarios: rehearsal.scenarios,
-                onRespond: (payload) => { void _respondRehearsal(payload); },
-            }));
-        }
-        if (detailsColumn.childElementCount) {
-            workspace.dataset.hasInspector = 'true';
+        workspace.appendChild(_progressiveWorkflowEl(workflow));
+        if (_workflowMapVisible()) {
+            const mapColumn = document.createElement('div');
+            mapColumn.className = 'kit-authoring-map-column';
+            mapColumn.dataset.key = 'protocol-authoring-map-column';
+            const mapRoot = _workflowMapEl(workflow);
+            mapColumn.appendChild(mapRoot);
+            workspace.appendChild(mapColumn);
         }
 
         const previousCanvasRoot = contentEl.__workflowCanvasRoot || null;
         UI.reconcileChildren(contentEl, [headerEl, workspace]);
-        const activeWorkspace = contentEl.querySelector('.kit-authoring-workspace');
-        if (activeWorkspace instanceof Element) {
-            const activeDetailsColumn = activeWorkspace.querySelector('.kit-authoring-details-column');
-            if (activeDetailsColumn instanceof Element) {
-                activeDetailsColumn.remove();
-            }
-            if (detailsColumn.childElementCount) {
-                activeWorkspace.appendChild(detailsColumn);
-                if (editorMode.kind === 'insert-stage') {
-                    _bindPendingStageEditorControls(detailsColumn);
-                }
-            }
-        }
         const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
         if (activeCanvasRoot && typeof activeCanvasRoot.__workflowCanvasSync === 'function') {
             activeCanvasRoot.__workflowCanvasSync({
                 scene: workflow.scene,
-                selection: {
-                    kind: selection.sectionKey === 'segments'
-                        ? 'segment'
-                        : selection.sectionKey === 'transitions'
-                            ? 'transition'
-                            : selection.sectionKey === 'participants'
-                                ? 'participant'
-                                : selection.sectionKey === 'artifacts'
-                                    ? 'artifact'
-                                    : selection.sectionKey === 'stages'
-                                        ? 'stage'
-                                        : 'overview',
-                    id: selection.nodeKey,
-                },
+                selection: _surfaceSelection(),
                 viewportState: { zoom: _canvasZoomValue() },
-                mapVisible: _workflowMapVisible(),
+                mapVisible: true,
             });
         }
         if (previousCanvasRoot && previousCanvasRoot !== activeCanvasRoot && typeof previousCanvasRoot.__workflowCanvasCleanup === 'function') {

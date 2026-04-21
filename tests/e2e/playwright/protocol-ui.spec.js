@@ -125,25 +125,24 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('software engineering template opens into one workflow canvas with inspector', async ({ page }) => {
+  test('software engineering template opens into one progressive workflow editor', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
     await openTemplateDraft(page, 'Software Engineering');
     const protocolId = protocolIdFromUrl(page.url());
     await page.reload({ waitUntil: 'networkidle' });
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
-    await expect(page.locator('.kit-workflow-outline')).toBeVisible();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
+    await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).not.toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
-    await expect(page.getByTestId('workflow-outline-segment:planning')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId('workflow-outline-plan_review')).toHaveCount(0);
+    await expect(page.getByTestId('workflow-stage-planning')).toBeVisible({ timeout: 15000 });
 
-    await page.getByTestId('workflow-outline-segment:planning').click();
+    await page.getByTestId('workflow-stage-planning').click();
     await expect(page.locator('.kit-stage-editor').first()).toContainText('Planning');
-    await expect(page.getByTestId('workflow-outline-plan_review')).toBeVisible();
+    await expect(page.getByTestId('workflow-stage-plan_review')).toBeVisible();
 
     await selectStep(page, 'planning');
     await expect(page.locator('.kit-details-panel').first().getByLabel('Name')).toHaveValue('Planning');
@@ -164,7 +163,6 @@ test.describe('protocol authoring live', () => {
     await assignment.locator('.quickstart-chip').filter({ hasText: 'M1' }).first().click();
     await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
     await expect(assignment.getByLabel('Pinned agent', { exact: true })).toHaveValue('lift-and-shift-m1-bot');
-    await expect(assignment).toContainText('Preferred agent: M1.');
     await assignment.getByLabel('Pinned agent', { exact: true }).selectOption('lift-and-shift-m2-bot');
     await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
     await expect(assignment).toContainText('Available here:');
@@ -173,13 +171,10 @@ test.describe('protocol authoring live', () => {
     await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
     await expect(assignment.getByLabel('Pinned agent', { exact: true })).toHaveValue('lift-and-shift-m2-bot');
     await expect(assignment.getByText('Agents with this skill')).toBeVisible();
-    await expect(assignment).toContainText('Preferred agent: M2.');
     await expect(assignment.getByText('Skills advertised by this agent')).toBeVisible();
-    await expect(assignment).toContainText('Pinned to M2 and limited to Architecture.');
     expect(await assignment.locator('.quickstart-chip').count()).toBeGreaterThan(0);
-    const toolbarInsert = page.locator('.kit-workflow-toolbar-actions').getByRole('button', { name: 'Insert after Planning', exact: true });
-    await expect(toolbarInsert).toBeVisible();
-    await toolbarInsert.click();
+    const planningEntry = page.locator('.kit-protocol-segment-entry').filter({ has: page.getByTestId('workflow-stage-plan_review') }).first();
+    await planningEntry.getByRole('button', { name: 'Add below', exact: true }).click();
     await createStep(page, {
       name: 'Secondary Approval',
       key: 'secondary-approval',
@@ -245,13 +240,13 @@ test.describe('protocol authoring live', () => {
     await login(page);
     await openTemplateDraft(page, 'Document Approval');
 
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
-    await expect(page.getByTestId('workflow-outline-segment:draft_document')).toBeVisible();
+    await expect(page.getByTestId('workflow-stage-draft_document')).toBeVisible();
     await expect(page.getByText('Planner role')).toHaveCount(0);
     await expect(page.getByText('Reviewer role')).toHaveCount(0);
 
-    await page.getByTestId('workflow-outline-segment:draft_document').click();
+    await page.getByTestId('workflow-stage-draft_document').click();
     await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
     await selectStep(page, 'draft_document');
     const details = page.locator('.kit-stage-editor').first();
@@ -274,8 +269,8 @@ test.describe('protocol authoring live', () => {
 
     await login(page);
     await openTemplateDraft(page, 'Software Engineering');
-    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow canvas');
-    await expect(page.locator('.kit-workflow-outline')).toBeVisible();
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
+    await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).not.toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
@@ -286,7 +281,7 @@ test.describe('protocol authoring live', () => {
     }));
     expect(canvasOverflow.scrollWidth).toBeLessThanOrEqual(canvasOverflow.clientWidth + 2);
 
-    await page.getByTestId('workflow-outline-segment:planning').click();
+    await page.getByTestId('workflow-stage-planning').click();
     await expect(page.locator('.kit-stage-editor').first()).toContainText('Planning');
     await selectStep(page, 'planning');
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();

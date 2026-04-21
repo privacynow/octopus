@@ -1106,60 +1106,47 @@ window.Kit = (() => {
         return root;
     }
 
-    function workflowCanvas({
-        scene = null,
-        lanes = [],
-        nodes = [],
-        edges = [],
-        selection = null,
-        onSelect = null,
-        onMutate = null,
+    function workflowFirstRunCard(firstRun = null) {
+        if (!firstRun?.active) return null;
+        const card = document.createElement('div');
+        card.className = 'kit-workflow-first-run';
+
+        const title = document.createElement('h3');
+        title.className = 'kit-workflow-first-run-title';
+        title.textContent = String(firstRun.title || dictValue('protocol.canvas.empty.title', 'Design your workflow'));
+        card.appendChild(title);
+
+        const body = document.createElement('p');
+        body.className = 'kit-workflow-first-run-body';
+        body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Add the first step in the workflow and create its owner role inline if needed.'));
+        card.appendChild(body);
+
+        const actions = document.createElement('div');
+        actions.className = 'kit-workflow-first-run-actions';
+        (Array.isArray(firstRun.actions) ? firstRun.actions : []).forEach((action) => {
+            if (!action || typeof action.onClick !== 'function') return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = ['btn', action.tone || 'btn-primary'].filter(Boolean).join(' ');
+            btn.textContent = String(action.label || 'Continue');
+            btn.dataset.key = `workflow-first-run-action:${String(action.label || 'continue').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
+            btn.addEventListener('click', action.onClick);
+            actions.appendChild(btn);
+        });
+        card.appendChild(actions);
+        return card;
+    }
+
+    function workflowHeaderBar({
         firstRun = null,
-        mode = 'graph',
         editorMode = null,
-        accessorySections = [],
-        toolbarActions = [],
-        nodeStates = {},
-        laneLabels = {},
-        outcomes = null,
         viewState = null,
-        viewportState = {},
-        onViewportChange = null,
-        mapVisible = true,
+        toolbarActions = [],
     } = {}) {
-        const root = document.createElement('section');
-        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
-        root.dataset.key = `workflow-canvas:${mode}`;
-        root.tabIndex = 0;
-
-        if (firstRun && firstRun.active) {
-            const card = document.createElement('div');
-            card.className = 'kit-workflow-first-run';
-
-            const title = document.createElement('h3');
-            title.className = 'kit-workflow-first-run-title';
-            title.textContent = String(firstRun.title || dictValue('protocol.canvas.empty.title', 'Design your workflow'));
-            card.appendChild(title);
-
-            const body = document.createElement('p');
-            body.className = 'kit-workflow-first-run-body';
-            body.textContent = String(firstRun.body || dictValue('protocol.canvas.empty.body', 'Add the first step in the workflow and create its owner role inline if needed.'));
-            card.appendChild(body);
-
-            const actions = document.createElement('div');
-            actions.className = 'kit-workflow-first-run-actions';
-            (Array.isArray(firstRun.actions) ? firstRun.actions : []).forEach((action) => {
-                if (!action || typeof action.onClick !== 'function') return;
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = ['btn', action.tone || 'btn-primary'].filter(Boolean).join(' ');
-                btn.textContent = String(action.label || 'Continue');
-                btn.dataset.key = `workflow-first-run-action:${String(action.label || 'continue').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
-                btn.addEventListener('click', action.onClick);
-                actions.appendChild(btn);
-            });
-            card.appendChild(actions);
-            root.appendChild(card);
+        const fragment = document.createDocumentFragment();
+        const intro = workflowFirstRunCard(firstRun);
+        if (intro) {
+            fragment.appendChild(intro);
         }
 
         const actions = Array.isArray(toolbarActions) ? toolbarActions.filter(Boolean) : [];
@@ -1177,9 +1164,9 @@ window.Kit = (() => {
                 subtitle.textContent = String(viewState.subtitle || '');
                 viewBar.appendChild(subtitle);
             }
-            root.appendChild(viewBar);
+            fragment.appendChild(viewBar);
         }
-        if (!firstRun?.active || String(editorMode?.kind || '') === 'rehearse') {
+        if ((!firstRun?.active || String(editorMode?.kind || '') === 'rehearse') && (toolbarHint || actions.length)) {
             const toolbar = document.createElement('div');
             toolbar.className = 'kit-workflow-toolbar';
             if (toolbarHint) {
@@ -1204,8 +1191,39 @@ window.Kit = (() => {
                 });
                 toolbar.appendChild(actionBar);
             }
-            root.appendChild(toolbar);
+            fragment.appendChild(toolbar);
         }
+        return fragment;
+    }
+
+    function workflowCanvas({
+        scene = null,
+        lanes = [],
+        nodes = [],
+        edges = [],
+        selection = null,
+        onSelect = null,
+        onMutate = null,
+        firstRun = null,
+        mode = 'graph',
+        editorMode = null,
+        accessorySections = [],
+        toolbarActions = [],
+        nodeStates = {},
+        laneLabels = {},
+        outcomes = null,
+        viewState = null,
+        viewportState = {},
+        onViewportChange = null,
+        mapVisible = true,
+        showOutline = true,
+    } = {}) {
+        const root = document.createElement('section');
+        root.className = `kit-workflow-canvas kit-workflow-canvas-${mode}`;
+        root.dataset.key = `workflow-canvas:${mode}`;
+        root.tabIndex = 0;
+
+        root.appendChild(workflowHeaderBar({ firstRun, editorMode, viewState, toolbarActions }));
 
         let graphScene = scene || {
             graph: {
@@ -1336,67 +1354,70 @@ window.Kit = (() => {
         shell.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
         root.dataset.mapVisible = currentMapVisible ? 'true' : 'false';
 
-        const outline = document.createElement('aside');
-        outline.className = 'kit-workflow-outline';
-        const outlineTitle = document.createElement('div');
-        outlineTitle.className = 'kit-workflow-outline-title';
-        outlineTitle.textContent = String(graphScene.outlineTitle || 'Workflow outline');
-        outline.appendChild(outlineTitle);
-        const outlineList = document.createElement('div');
-        outlineList.className = 'kit-workflow-outline-list';
-        (Array.isArray(graphScene.outline) ? graphScene.outline : []).forEach((section) => {
-            const group = document.createElement('div');
-            group.className = 'kit-workflow-outline-group';
-            group.dataset.key = `workflow-outline-group:${String(section.id || '')}`;
-            const head = document.createElement('button');
-            head.type = 'button';
-            head.className = `kit-workflow-outline-item${selection?.kind === section.kind && selection?.id === section.id ? ' is-selected' : ''}`;
-            head.dataset.key = `workflow-outline-item:${String(section.id || '')}`;
-            head.dataset.testid = `workflow-outline-${String(section.id || '')}`;
-            head.textContent = String(section.label || '');
-            if (typeof onSelect === 'function') {
-                head.addEventListener('click', () => onSelect({ kind: section.kind, id: section.id }));
+        let outline = null;
+        if (showOutline) {
+            outline = document.createElement('aside');
+            outline.className = 'kit-workflow-outline';
+            const outlineTitle = document.createElement('div');
+            outlineTitle.className = 'kit-workflow-outline-title';
+            outlineTitle.textContent = String(graphScene.outlineTitle || 'Workflow outline');
+            outline.appendChild(outlineTitle);
+            const outlineList = document.createElement('div');
+            outlineList.className = 'kit-workflow-outline-list';
+            (Array.isArray(graphScene.outline) ? graphScene.outline : []).forEach((section) => {
+                const group = document.createElement('div');
+                group.className = 'kit-workflow-outline-group';
+                group.dataset.key = `workflow-outline-group:${String(section.id || '')}`;
+                const head = document.createElement('button');
+                head.type = 'button';
+                head.className = `kit-workflow-outline-item${selection?.kind === section.kind && selection?.id === section.id ? ' is-selected' : ''}`;
+                head.dataset.key = `workflow-outline-item:${String(section.id || '')}`;
+                head.dataset.testid = `workflow-outline-${String(section.id || '')}`;
+                head.textContent = String(section.label || '');
+                if (typeof onSelect === 'function') {
+                    head.addEventListener('click', () => onSelect({ kind: section.kind, id: section.id }));
+                }
+                group.appendChild(head);
+                if (section.meta) {
+                    const meta = document.createElement('div');
+                    meta.className = 'kit-workflow-outline-meta';
+                    meta.dataset.key = `workflow-outline-item-meta:${String(section.id || '')}`;
+                    meta.textContent = String(section.meta || '');
+                    group.appendChild(meta);
+                }
+                const items = Array.isArray(section.items) ? section.items : [];
+                if (items.length && section.expanded) {
+                    const list = document.createElement('div');
+                    list.className = 'kit-workflow-outline-children';
+                    list.dataset.key = `workflow-outline-children:${String(section.id || '')}`;
+                    items.forEach((item) => {
+                        const child = document.createElement('button');
+                        child.type = 'button';
+                        child.className = `kit-workflow-outline-child${selection?.kind === item.kind && selection?.id === item.id ? ' is-selected' : ''}`;
+                        child.dataset.key = `workflow-outline-child:${String(item.id || '')}`;
+                        child.dataset.testid = `workflow-outline-${String(item.id || '')}`;
+                        child.textContent = String(item.label || '');
+                        if (typeof onSelect === 'function') {
+                            child.addEventListener('click', () => onSelect({ kind: item.kind, id: item.id }));
+                        }
+                        list.appendChild(child);
+                        if (item.meta) {
+                            const meta = document.createElement('div');
+                            meta.className = 'kit-workflow-outline-child-meta';
+                            meta.dataset.key = `workflow-outline-child-meta:${String(item.id || '')}`;
+                            meta.textContent = String(item.meta || '');
+                            list.appendChild(meta);
+                        }
+                    });
+                    group.appendChild(list);
+                }
+                outlineList.appendChild(group);
+            });
+            if (!outlineList.childElementCount) {
+                outlineList.appendChild(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first step to start shaping the workflow.')));
             }
-            group.appendChild(head);
-            if (section.meta) {
-                const meta = document.createElement('div');
-                meta.className = 'kit-workflow-outline-meta';
-                meta.dataset.key = `workflow-outline-item-meta:${String(section.id || '')}`;
-                meta.textContent = String(section.meta || '');
-                group.appendChild(meta);
-            }
-            const items = Array.isArray(section.items) ? section.items : [];
-            if (items.length && section.expanded) {
-                const list = document.createElement('div');
-                list.className = 'kit-workflow-outline-children';
-                list.dataset.key = `workflow-outline-children:${String(section.id || '')}`;
-                items.forEach((item) => {
-                    const child = document.createElement('button');
-                    child.type = 'button';
-                    child.className = `kit-workflow-outline-child${selection?.kind === item.kind && selection?.id === item.id ? ' is-selected' : ''}`;
-                    child.dataset.key = `workflow-outline-child:${String(item.id || '')}`;
-                    child.dataset.testid = `workflow-outline-${String(item.id || '')}`;
-                    child.textContent = String(item.label || '');
-                    if (typeof onSelect === 'function') {
-                        child.addEventListener('click', () => onSelect({ kind: item.kind, id: item.id }));
-                    }
-                    list.appendChild(child);
-                    if (item.meta) {
-                        const meta = document.createElement('div');
-                        meta.className = 'kit-workflow-outline-child-meta';
-                        meta.dataset.key = `workflow-outline-child-meta:${String(item.id || '')}`;
-                        meta.textContent = String(item.meta || '');
-                        list.appendChild(meta);
-                    }
-                });
-                group.appendChild(list);
-            }
-            outlineList.appendChild(group);
-        });
-        if (!outlineList.childElementCount) {
-            outlineList.appendChild(UI.renderEmptyState(String(graphScene.emptyHint || 'Add the first step to start shaping the workflow.')));
+            outline.appendChild(outlineList);
         }
-        outline.appendChild(outlineList);
 
         const canvasColumn = document.createElement('div');
         canvasColumn.className = 'kit-workflow-canvas-column';
@@ -1455,7 +1476,9 @@ window.Kit = (() => {
 
         canvasColumn.appendChild(controls);
         canvasColumn.appendChild(viewport);
-        shell.appendChild(outline);
+        if (outline) {
+            shell.appendChild(outline);
+        }
         shell.appendChild(canvasColumn);
         root.appendChild(shell);
 
@@ -2475,6 +2498,8 @@ window.Kit = (() => {
         detailsPanel,
         authoredCatalog,
         sectionListCanvas,
+        workflowFirstRunCard,
+        workflowHeaderBar,
         workflowCanvas,
         rehearsalPanel,
         runsList,

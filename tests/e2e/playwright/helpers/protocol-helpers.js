@@ -85,7 +85,7 @@ async function openBlankDraft(page) {
   await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'New protocol' }).click();
   await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
-  await expect(page.locator('.kit-workflow-canvas')).toBeVisible();
+  await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
 }
 
 async function openTemplateDraft(page, templateName) {
@@ -108,7 +108,7 @@ async function createStep(page, {
   openEditor = true,
 } = {}) {
   if (openEditor) {
-    await page.getByRole('button', { name: /\+ Add step/i }).first().click();
+    await page.getByRole('button', { name: /Add (first )?step/i }).first().click();
   }
   const stageEditor = page.locator('.kit-stage-editor-grid').last();
   await expect(stageEditor).toBeVisible();
@@ -165,6 +165,10 @@ async function createStep(page, {
 }
 
 async function outlineStepNode(page, stageKey) {
+  const inlineNode = page.getByTestId(`workflow-stage-${stageKey}`);
+  if (await inlineNode.count()) {
+    return inlineNode.first();
+  }
   const stageNode = page.getByTestId(`workflow-outline-${stageKey}`);
   if (await stageNode.count()) {
     return stageNode.first();

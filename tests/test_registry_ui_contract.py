@@ -192,8 +192,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_buildWorkflowProjection(" in workspace
     assert "_workflowStoryScene(" in workspace
     assert "_focusedWorkflowScene(" in workspace
-    assert "_surfaceCanvasEl(" in workspace
-    assert "_segmentInspectorEl(" in workspace
+    assert "_workflowMapEl(" in workspace
+    assert "_progressiveWorkflowEl(" in workspace
+    assert "_segmentPanelEl(" in workspace
     assert "_participantEditorShell(" in workspace
     assert "_routeEditorPanel(" in workspace
     assert "_stageEditorHero(" in workspace
@@ -205,8 +206,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Assignment" in workspace
     assert "Runtime role tag" in workspace
     assert "Runtime role tag or custom selector" in workspace
-    assert "Workflow canvas" in workspace
-    assert "Workflow outline" in workspace
+    assert "Workflow stages" in workspace
     assert "Edit participant assignment" not in workspace
     assert "+ Add participant" not in workspace
     assert "Visual map" not in workspace

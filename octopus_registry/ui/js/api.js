@@ -41,7 +41,7 @@ const API = (() => {
         }
     }
 
-    async function request(method, path, { body, params, raw, headers } = {}) {
+    async function request(method, path, { body, params, raw, headers, timeoutMs } = {}) {
         const url = new URL(path, window.location.origin);
         if (params) {
             for (const [k, v] of Object.entries(params)) {
@@ -52,7 +52,7 @@ const API = (() => {
             method,
             headers: { 'Content-Type': 'application/json', ...(headers || {}) },
             credentials: 'same-origin',
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+            signal: AbortSignal.timeout(Number.isFinite(timeoutMs) ? timeoutMs : REQUEST_TIMEOUT),
         };
         if (body !== undefined) opts.body = JSON.stringify(body);
         if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
@@ -343,7 +343,10 @@ const API = (() => {
         rejectSkillDraft: (agentId, name, body = {}) =>
             request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/reject`, { body }),
         publishSkillDraft: (agentId, name, body = {}) =>
-            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/publish`, { body }),
+            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/publish`, {
+                body,
+                timeoutMs: 90000,
+            }),
         archiveSkillDraft: (agentId, name, body = {}) =>
             request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/archive`, { body }),
         installSkill: (agentId, name) =>

@@ -3557,6 +3557,7 @@ function renderProtocolWorkspace(container) {
         const panel = document.createElement('section');
         panel.className = 'kit-protocol-segment-panel';
         panel.dataset.key = `protocol-segment-panel:${String(segment.id || '')}`;
+        panel.dataset.testid = `workflow-segment-${String(segment.id || '')}`;
 
         const head = document.createElement('div');
         head.className = 'kit-protocol-segment-head';

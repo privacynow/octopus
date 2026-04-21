@@ -268,6 +268,7 @@ function renderProtocolWorkspace(container) {
     let workflowMapMode = 'auto';
     let stageAssignmentEditor = { stageKey: '', mode: '' };
     let collapsibleSectionState = {};
+    let pendingAutosaveSelection = null;
 
     function _operatorSurfaceAvailable() {
         return Boolean(authoringManifest?.operator_surface_available);
@@ -983,11 +984,11 @@ function renderProtocolWorkspace(container) {
         };
     }
 
-    function _applyServerDetail(detail, { preserveTransient = false } = {}) {
+    function _applyServerDetail(detail, { preserveTransient = false, selectionOverride = null } = {}) {
         const previousProtocolId = String(currentProtocol?.protocol?.protocol_id || '');
         const nextProtocolId = String(detail?.protocol?.protocol_id || '');
         const preserveLocalState = preserveTransient && previousProtocolId && previousProtocolId === nextProtocolId;
-        const previousSelection = selection;
+        const previousSelection = selectionOverride || selection;
         const previousEditorMode = editorMode;
         const previousCanvasViewport = canvasViewport;
         const previousWorkflowMapMode = workflowMapMode;
@@ -1160,6 +1161,7 @@ function renderProtocolWorkspace(container) {
         saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
         _syncLifecycleChip();
         try {
+            const selectionOverride = pendingAutosaveSelection;
             const result = await API.saveProtocolDraft(currentProtocolId, {
                 slug: draft.slug,
                 display_name: draft.display_name,
@@ -1169,13 +1171,15 @@ function renderProtocolWorkspace(container) {
                 ifMatch: draftRevision,
                 authoringSurface: _currentAuthoringSurface(),
             });
-            _applyServerDetail(result, { preserveTransient: true });
+            _applyServerDetail(result, { preserveTransient: true, selectionOverride });
+            pendingAutosaveSelection = null;
             saveState = { state: 'saved', lastSavedAt: result?.protocol?.updated_at || new Date().toISOString(), error: '' };
             _syncLifecycleChip();
             await loadProtocols({ quiet: true });
             render();
             return true;
         } catch (err) {
+            pendingAutosaveSelection = null;
             if (err?.status === 409 && err?.errorCode === 'PROTOCOL_DRAFT_CONFLICT') {
                 draftConflict = {
                     serverDetail: {
@@ -1615,6 +1619,9 @@ function renderProtocolWorkspace(container) {
         }
         items[idx] = next;
         doc[plural] = items;
+        if (kind === 'stage' && ['inputs', 'outputs'].includes(String(key || ''))) {
+            pendingAutosaveSelection = { sectionKey: 'stages', nodeKey: String(nextNodeKey || '') };
+        }
         _commitDocument(doc, {
             nextSelection: { sectionKey: plural, nodeKey: String(nextNodeKey || '') },
         });

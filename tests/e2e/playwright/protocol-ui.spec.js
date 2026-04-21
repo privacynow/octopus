@@ -50,10 +50,8 @@ test.describe('protocol authoring live', () => {
 
     await page.getByRole('button', { name: /\+ Add step/i }).first().click();
     const draftStageEditor = page.locator('.kit-stage-editor').last();
-    const availableSkillControl = draftStageEditor.getByLabel('Required skill', { exact: true }).first();
-    await availableSkillControl.scrollIntoViewIfNeeded();
-    await expect(availableSkillControl).toBeVisible();
-    const availableSkillValues = await availableSkillControl.locator('option').evaluateAll((options) =>
+    await expect(draftStageEditor.getByLabel('Required skill', { exact: true }).first()).toBeVisible();
+    const availableSkillValues = await draftStageEditor.getByLabel('Required skill', { exact: true }).first().locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
     if (!availableSkillValues.length) {

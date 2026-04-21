@@ -2258,8 +2258,8 @@ function renderProtocolWorkspace(container) {
         help.className = 'quiet-note';
         help.dataset.key = `${section.dataset.key}:note`;
         help.textContent = readOnly
-            ? 'These connected agents currently advertise the selected skill.'
-            : 'These connected agents currently advertise the selected skill. Leave the step on skill assignment to keep it dynamic, or choose one below from the list or pills to prefer a specific agent without dropping the skill requirement.';
+            ? 'Connected agents that currently advertise this skill.'
+            : 'Leave the agent blank to keep this step dynamic, or choose a chip below to pin one matching agent.';
         help.textContent += matchLabels.length
             ? ` Available now: ${matchLabels.join(', ')}.`
             : ' No connected agents currently advertise this skill.';
@@ -2274,9 +2274,7 @@ function renderProtocolWorkspace(container) {
         const resultTitle = document.createElement('div');
         resultTitle.className = 'detail-label';
         resultTitle.dataset.key = `${section.dataset.key}:results-title`;
-        resultTitle.textContent = typeof onSuggestionSelect === 'function'
-            ? 'Available agents — choose one to pin this step'
-            : 'Available agents';
+        resultTitle.textContent = 'Available agents';
         results.appendChild(resultTitle);
         if (!matches.length) {
             results.appendChild(UI.renderEmptyState('No connected agents currently advertise this skill.', true));
@@ -2328,11 +2326,11 @@ function renderProtocolWorkspace(container) {
         const skills = _selectorAgentSkills(agent);
         const selectedSkillLabel = String(selectedSkill || '').trim() ? _titleCaseWords(selectedSkill) : '';
         if (agentLabel && selectedSkillLabel) {
-            note.textContent = `This step currently requires ${selectedSkillLabel} and prefers ${agentLabel}. Choose another advertised skill below to keep ${agentLabel} as the preferred agent.`;
+            note.textContent = `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}. Choose another chip below to keep ${agentLabel} pinned with a different skill.`;
         } else if (agentLabel) {
-            note.textContent = `This step is pinned to ${agentLabel}. Choose one of this agent’s advertised skills below to keep the step dynamic while still preferring ${agentLabel}.`;
+            note.textContent = `Pinned to ${agentLabel}. Choose a chip below to keep ${agentLabel} pinned and add a skill requirement.`;
         } else {
-            note.textContent = 'This step is pinned to one agent. These are the routing skills this agent currently advertises.';
+            note.textContent = 'Advertised routing skills for this pinned agent.';
         }
         note.textContent += skills.length
             ? ` Available here: ${skills.map((skillName) => _titleCaseWords(skillName)).join(', ')}.`

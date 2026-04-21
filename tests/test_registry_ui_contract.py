@@ -178,9 +178,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
     assert "_selectorEditor(" in workspace
     assert "Available now:" in workspace
-    assert "Available agents — choose one to pin this step" in workspace
+    assert "Available agents" in workspace
     assert "quickstart-chip" in workspace
-    assert "Choose another advertised skill below to keep" in workspace
+    assert "Pinned to " in workspace
     assert "Required skill" in workspace
     assert "Pinned agent" in workspace
     assert "Show workflow map" in workspace

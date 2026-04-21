@@ -2281,48 +2281,6 @@ function renderProtocolWorkspace(container) {
         if (!matches.length) {
             results.appendChild(UI.renderEmptyState('No connected agents currently advertise this skill.', true));
         } else {
-            if (typeof onSuggestionSelect === 'function') {
-                const pickerRow = document.createElement('div');
-                pickerRow.className = 'kit-details-row';
-                pickerRow.dataset.key = `${section.dataset.key}:picker-row`;
-                const pickerLabel = document.createElement('label');
-                pickerLabel.className = 'kit-details-label';
-                pickerLabel.dataset.key = `${section.dataset.key}:picker-label`;
-                pickerLabel.textContent = 'Pin to matching agent';
-                pickerRow.appendChild(pickerLabel);
-                const picker = document.createElement('select');
-                picker.className = 'kit-details-control';
-                picker.dataset.key = `${section.dataset.key}:picker`;
-                picker.id = `selector-skill-match-${String(selectorValue || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
-                pickerLabel.htmlFor = picker.id;
-                picker.setAttribute('aria-label', pickerLabel.textContent);
-                const placeholder = document.createElement('option');
-                placeholder.value = '';
-                placeholder.textContent = '(leave this step dynamic)';
-                placeholder.dataset.key = `${section.dataset.key}:picker-option:none`;
-                picker.appendChild(placeholder);
-                matches.forEach((candidate) => {
-                    const option = document.createElement('option');
-                    option.value = String(candidate?.agent_id || '');
-                    const parts = [
-                        String(candidate?.display_name || candidate?.slug || '').trim(),
-                        String(candidate?.role || '').trim(),
-                    ].filter(Boolean);
-                    option.textContent = parts.join(' · ');
-                    if (String(candidate?.agent_id || '') === String(preferredAgentId || '')) {
-                        option.selected = true;
-                    }
-                    option.dataset.key = `${section.dataset.key}:picker-option:${String(candidate?.slug || '').trim().toLowerCase()}`;
-                    picker.appendChild(option);
-                });
-                picker.addEventListener('change', () => {
-                    const selected = matches.find((candidate) => String(candidate?.agent_id || '') === String(picker.value || ''));
-                    onSuggestionSelect(selected || null);
-                });
-                pickerRow.appendChild(picker);
-                results.appendChild(pickerRow);
-            }
-
             const chips = document.createElement('div');
             chips.className = 'chip-row';
             chips.dataset.key = `${section.dataset.key}:chips`;
@@ -2383,42 +2341,6 @@ function renderProtocolWorkspace(container) {
         if (!skills.length) {
             section.appendChild(UI.renderEmptyState('No advertised routing skills are currently available for this agent.', true));
             return section;
-        }
-        if (typeof onSuggestionSelect === 'function' && !readOnly) {
-            const pickerRow = document.createElement('div');
-            pickerRow.className = 'kit-details-row';
-            pickerRow.dataset.key = `${section.dataset.key}:picker-row`;
-            const pickerLabel = document.createElement('label');
-            pickerLabel.className = 'kit-details-label';
-            pickerLabel.dataset.key = `${section.dataset.key}:picker-label`;
-            pickerLabel.textContent = 'Require one of this agent’s skills';
-            pickerRow.appendChild(pickerLabel);
-            const picker = document.createElement('select');
-            picker.className = 'kit-details-control';
-            picker.dataset.key = `${section.dataset.key}:picker`;
-            picker.id = `selector-agent-skills-${String(selectorValue || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
-            pickerLabel.htmlFor = picker.id;
-            picker.setAttribute('aria-label', pickerLabel.textContent);
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = '(keep this step pinned to the agent only)';
-            picker.appendChild(placeholder);
-            skills.forEach((skillName) => {
-                const option = document.createElement('option');
-                option.value = String(skillName || '');
-                option.textContent = _titleCaseWords(skillName);
-                if (String(skillName || '').trim().toLowerCase() === String(selectedSkill || '').trim().toLowerCase()) {
-                    option.selected = true;
-                }
-                option.dataset.key = `${section.dataset.key}:picker-option:${String(skillName || '').trim().toLowerCase()}`;
-                picker.appendChild(option);
-            });
-            picker.addEventListener('change', () => {
-                const selected = String(picker.value || '').trim();
-                if (selected) onSuggestionSelect(selected);
-            });
-            pickerRow.appendChild(picker);
-            section.appendChild(pickerRow);
         }
         const chips = document.createElement('div');
         chips.className = 'chip-row';
@@ -3743,7 +3665,11 @@ function renderProtocolWorkspace(container) {
         }), { wide: true }));
 
         if (!createAction) {
-            grid.appendChild(_stageEditorSection('Routing', _stageRoutingPanel(target, { readOnly, connectAction }), { wide: true }));
+            grid.appendChild(_stageEditorSection('Routing', _stageRoutingPanel(target, { readOnly, connectAction }), {
+                wide: true,
+                collapsible: _isCompactViewport(),
+                open: !_isCompactViewport(),
+            }));
         }
 
         const instructionsPanel = Kit.detailsPanel({
@@ -3757,7 +3683,7 @@ function renderProtocolWorkspace(container) {
         grid.appendChild(_stageEditorSection('Instructions', instructionsPanel, {
             wide: true,
             collapsible: !createAction,
-            open: createAction || Boolean(String(target?.instructions || '').trim()),
+            open: createAction || (!_isCompactViewport() && Boolean(String(target?.instructions || '').trim())),
         }));
 
         const artifactsPanel = Kit.detailsPanel({
@@ -3772,7 +3698,7 @@ function renderProtocolWorkspace(container) {
         grid.appendChild(_stageEditorSection('Artifacts', artifactsPanel, {
             wide: true,
             collapsible: !createAction,
-            open: createAction || Boolean((target?.inputs || []).length || (target?.outputs || []).length),
+            open: createAction || (!_isCompactViewport() && Boolean((target?.inputs || []).length || (target?.outputs || []).length)),
         }));
 
         const advancedActions = [];

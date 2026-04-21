@@ -108,17 +108,17 @@ async function createStep(page, {
   openEditor = true,
 } = {}) {
   if (openEditor) {
-    const addStep = page.getByRole('button', { name: /(\+ )?Add (first )?step/i }).first();
-    if (await addStep.count() && await addStep.isVisible().catch(() => false)) {
-      await addStep.click();
+    const inlineAdd = page
+      .locator('.kit-protocol-segment-entry')
+      .filter({ has: page.locator('.kit-protocol-segment-step.is-selected') })
+      .getByRole('button', { name: 'Add below', exact: true })
+      .first();
+    if (await inlineAdd.count() && await inlineAdd.isVisible().catch(() => false)) {
+      await inlineAdd.click();
     } else {
-      const inlineAdd = page
-        .locator('.kit-protocol-segment-entry')
-        .filter({ has: page.locator('.kit-protocol-segment-step.is-selected') })
-        .getByRole('button', { name: 'Add below', exact: true })
-        .first();
-      if (await inlineAdd.count()) {
-        await inlineAdd.click();
+      const addStep = page.getByRole('button', { name: /(\+ )?Add (first )?step/i }).first();
+      if (await addStep.count() && await addStep.isVisible().catch(() => false)) {
+        await addStep.click();
       } else {
         await page.getByRole('button', { name: 'Add below', exact: true }).first().click();
       }

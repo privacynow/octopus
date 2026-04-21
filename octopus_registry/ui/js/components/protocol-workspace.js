@@ -7,6 +7,10 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'expired_timeout', label: 'Expired timeouts' },
 ];
 
+function _isCompactViewport() {
+    return window.innerWidth <= 960;
+}
+
 function _downloadProtocolText(filename, text, contentType) {
     const blob = new Blob([text], { type: contentType });
     const url = URL.createObjectURL(blob);
@@ -226,10 +230,6 @@ function renderProtocolWorkspace(container) {
         return canvasViewport.zoom === 'fit'
             ? 'fit'
             : Math.max(0.35, Math.min(2.25, Number(canvasViewport.zoom || 1) || 1));
-    }
-
-    function _isCompactViewport() {
-        return window.innerWidth <= 960;
     }
 
     function _defaultWorkflowMapVisible(current = selection) {

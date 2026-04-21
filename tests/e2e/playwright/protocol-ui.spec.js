@@ -141,7 +141,7 @@ test.describe('protocol authoring live', () => {
 
     await page.getByTestId('workflow-stage-planning').click();
     const planningEditor = page.locator('.kit-stage-editor').last();
-    await expect(planningEditor).toContainText('Planning');
+    await expect(planningEditor.getByLabel('Name').first()).toHaveValue('Planning');
     await expect(page.getByTestId('workflow-stage-plan_review')).toBeVisible();
 
     await selectStep(page, 'planning');
@@ -283,7 +283,7 @@ test.describe('protocol authoring live', () => {
     expect(canvasOverflow.scrollWidth).toBeLessThanOrEqual(canvasOverflow.clientWidth + 2);
 
     await page.getByTestId('workflow-stage-planning').click();
-    await expect(page.locator('.kit-stage-editor').last()).toContainText('Planning');
+    await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Planning');
     await selectStep(page, 'planning');
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();

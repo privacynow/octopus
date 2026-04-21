@@ -75,7 +75,7 @@ test('capture protocol authoring states', async ({ page }) => {
   });
 
   await page.getByTestId('workflow-stage-planning').click();
-  await expect(page.locator('.kit-stage-editor')).toContainText('Planning');
+  await expect(page.locator('.kit-stage-editor').getByLabel('Name').first()).toHaveValue('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-page.png', fullPage: true });
   await page.locator('.kit-authoring-primary-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-detail.png',
@@ -95,7 +95,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png' });
   await selectStep(page, 'planning');
-  await expect(page.locator('.kit-stage-editor')).toContainText('Planning');
+  await expect(page.locator('.kit-stage-editor').getByLabel('Name').first()).toHaveValue('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png' });
 
   await discardDraft(page);

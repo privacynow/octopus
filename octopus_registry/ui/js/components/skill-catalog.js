@@ -1681,6 +1681,20 @@ function renderSkillCatalog(container) {
                 draftStatus = 'error';
                 draftStatusMessage = 'Action failed';
                 refreshChrome();
+                if (successLabel === 'Publishing') {
+                    try {
+                        await loadSelectionData({ soft: true });
+                        const recoveredState = RegistrySkillHub.lifecycleState(selectedLifecycle || selectedLocalDetail || detail);
+                        if (recoveredState.isPublished || Boolean((selectedLifecycle || selectedLocalDetail || detail)?.runtime_available)) {
+                            draftStatus = 'idle';
+                            draftStatusMessage = 'Published';
+                            refreshChrome();
+                            return;
+                        }
+                    } catch {
+                        // Fall through to the normal error path when the recovery refresh also fails.
+                    }
+                }
                 if (!_isActiveSkillsWorkspace()) {
                     return;
                 }

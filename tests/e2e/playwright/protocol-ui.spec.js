@@ -223,6 +223,7 @@ async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
   await editor.getByLabel('Name', { exact: true }).blur();
   await page.waitForTimeout(600);
   await waitForSaved(page);
+  await expect(artifactNode).toContainText(name);
   editor = page.locator('.kit-protocol-inline-editor .kit-stage-editor').first();
   await editor.getByLabel('What it represents', { exact: true }).selectOption(kind);
   await page.waitForTimeout(600);
@@ -232,6 +233,7 @@ async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
   await editor.getByLabel('Workspace path', { exact: true }).blur();
   await page.waitForTimeout(600);
   await waitForSaved(page);
+  await expect(artifactNode).toContainText(path);
 }
 
 async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] } = {}) {
@@ -464,10 +466,10 @@ test.describe('protocol authoring live', () => {
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
     await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
-    await expect(assignment.getByText('Available now', { exact: true })).toBeVisible();
     const pinAgentPillGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]');
     const pinAgentSelect = assignment.locator('select[aria-label="Pin matching agent (optional)"]');
     if (await pinAgentPillGroup.count()) {
+      await expect(assignment.getByText('Available now', { exact: true })).toHaveCount(0);
       await expect(pinAgentSelect).toHaveCount(0);
       const pinAgentPills = pinAgentPillGroup.locator('.quickstart-chip');
       const pillLabels = (await pinAgentPills.allTextContents()).map((label) => String(label || '').trim()).filter(Boolean);
@@ -489,8 +491,6 @@ test.describe('protocol authoring live', () => {
     const agentControl = assignment.getByLabel('Agent', { exact: true });
     const initialPinnedAgentValue = await agentControl.inputValue();
     expect(initialPinnedAgentValue).toBeTruthy();
-    await expect(assignment.getByText('Available skills', { exact: true })).toBeVisible();
-    await expect(assignment).toContainText('(leave agent-only)');
     const availableAgentValues = await agentControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
@@ -513,14 +513,15 @@ test.describe('protocol authoring live', () => {
       const nextPinAgentPillGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]');
       const nextPinAgentSelect = assignment.locator('select[aria-label="Pin matching agent (optional)"]');
       if (await nextPinAgentPillGroup.count()) {
+        await expect(assignment.getByText('Available now', { exact: true })).toHaveCount(0);
         await expect(nextPinAgentSelect).toHaveCount(0);
         await expect(nextPinAgentPillGroup.locator('.quickstart-chip[aria-pressed="true"]')).toHaveCount(1);
       } else {
+        await expect(assignment.getByText('Available now', { exact: true })).toBeVisible();
         await expect(nextPinAgentSelect).toHaveValue(alternateAgent || initialPinnedAgentValue);
       }
-      await expect(assignment.getByText('Available now', { exact: true })).toBeVisible();
     } else {
-      await expect(assignment.getByText('Available skills', { exact: true })).toBeVisible();
+      await expect(assignment.getByText('Available skills', { exact: true })).toHaveCount(0);
     }
     const connectedAgent = await firstConnectedAgent(page);
     expect(connectedAgent.slug).toBeTruthy();
@@ -1016,6 +1017,7 @@ test.describe('protocol authoring live', () => {
     await lifecycle.getByLabel('Name').fill(`Meta Protocol Assistant ${Date.now()}`);
     await lifecycle.getByLabel('Name').blur();
     await waitForSaved(page);
+    await expect(lifecycle).toContainText('protocol/meta-protocol-assistant-', { timeout: 15000 });
     await lifecycle.getByRole('button', { name: 'Validate', exact: true }).click();
     await lifecycle.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });

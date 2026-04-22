@@ -205,6 +205,7 @@ class ToolExecutionRecord:
 @dataclass
 class RunResult:
     text: str
+    working_dir: str = ""
     returncode: int = 0
     timed_out: bool = False
     resume_failed: bool = False  # True only when --resume target is dead/invalid

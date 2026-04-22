@@ -3899,9 +3899,16 @@ function renderProtocolWorkspace(container) {
             });
         });
 
+        const selectedStage = _selectionStage(draft.document)
+            || (draft.document.stages || []).find((item) => String(item.stage_key || '') === String(_activeStageKey() || ''))
+            || null;
+        const focusLabel = selectedStage
+            ? _segmentStageDisplayLabel(activeSegment, selectedStage)
+            : String(activeSegment?.label || 'section');
+
         return {
             title: 'Workflow stages',
-            subtitle: `Focused on ${String(activeSegment?.label || 'section')}. Edit the selected step inline and open the map only when you need route context.`,
+            subtitle: `Focused on ${focusLabel}. Edit the selected step inline and open the map only when you need route context.`,
             hint: editorMode.kind === 'rehearse' ? 'Rehearsal is active. Workflow state is annotated on the same canvas while authoring is paused.' : '',
             outlineTitle: 'Workflow outline',
             direction: compact ? 'DOWN' : 'RIGHT',

@@ -688,6 +688,7 @@ test.describe('protocol authoring live', () => {
     expect(Math.abs(stageGaps.architectureToReview - stageGaps.reviewToImplementation)).toBeLessThanOrEqual(4);
 
     await selectStep(page, 'architecture_review');
+    await expect(page.locator('.kit-workflow-viewbar')).toContainText('Focused on Architecture Review.');
     const selectedEntry = page.locator('.kit-protocol-segment-entry').filter({
       has: page.locator('[data-testid="workflow-stage-architecture_review"].is-selected'),
     }).first();

@@ -179,6 +179,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorEditor(" in workspace
     assert "_currentAuthoringSurface()" in workspace
     assert "operator_surface_available" in workspace
+    assert "_normalizeStageWriteCapability(" in workspace
+    assert "write_capable: Boolean(stage?.write_capable || outputs.length)" in workspace
     assert "Available now" in workspace
     assert "Preferred agent:" in workspace
     assert "quickstart-chip" in workspace

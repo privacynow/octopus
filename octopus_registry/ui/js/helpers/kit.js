@@ -137,7 +137,7 @@ window.Kit = (() => {
         'protocol.artifact.description.label': 'Description',
         'protocol.artifact.description.placeholder': 'What the artifact contains…',
         'protocol.artifact.path.label': 'Workspace path',
-        'protocol.artifact.path.help': 'Relative path inside the workspace for file-based artifacts.',
+        'protocol.artifact.path.help': 'Relative to the workspace root for file-based artifacts. Use source-data.csv, not workspace/source-data.csv.',
         'protocol.artifact.path.placeholder': 'docs/review-notes.md',
         'protocol.artifact.verify.label': 'Verify outputs',
         'protocol.artifact.verify.help': 'Keep verification on unless this artifact is intentionally advisory only.',

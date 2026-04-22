@@ -144,9 +144,12 @@ async function firstConnectedAgent(page) {
     const payload = await response.json();
     const agents = Array.isArray(payload.agents) ? payload.agents : [];
     const first = agents.find((agent) => String(agent.connectivity_state || '').toLowerCase() === 'connected');
+    const tags = Array.isArray(first?.tags) ? first.tags : [];
+    const workspaceTag = tags.find((tag) => String(tag || '').startsWith('workspace:'));
     return {
       agentId: String(first?.agent_id || ''),
       slug: String(first?.slug || ''),
+      workspaceRef: workspaceTag ? String(workspaceTag).split(':').slice(1).join(':').trim() : '',
     };
   });
 }
@@ -790,11 +793,11 @@ test.describe('protocol authoring live', () => {
 
     await openProtocolSettings(page);
     for (const artifact of [
-      { name: 'Source data', path: 'workspace/source-data.csv' },
-      { name: 'Filtered data', path: 'workspace/filtered-data.csv' },
-      { name: 'Analytics summary', path: 'workspace/analytics-summary.json' },
-      { name: 'PDF report', path: 'workspace/report.pdf' },
-      { name: 'Published report', path: 'workspace/published-report.json' },
+      { name: 'Source data', path: 'source-data.csv' },
+      { name: 'Filtered data', path: 'filtered-data.csv' },
+      { name: 'Analytics summary', path: 'analytics-summary.json' },
+      { name: 'PDF report', path: 'report.pdf' },
+      { name: 'Published report', path: 'published-report.json' },
     ]) {
       await addArtifact(page, artifact);
     }
@@ -808,7 +811,7 @@ test.describe('protocol authoring live', () => {
       selectorKind: 'agent',
       selectorValue: connectedAgent.slug,
       instructions: [
-        'Create workspace/source-data.csv in the workspace.',
+        'Create source-data.csv in the workspace root.',
         'Write a small CSV with columns department,region,amount and at least four rows.',
         'Use realistic sample values so the next step can filter them.',
       ].join(' '),
@@ -821,7 +824,7 @@ test.describe('protocol authoring live', () => {
       selectorKind: 'agent',
       selectorValue: connectedAgent.slug,
       instructions: [
-        'Read workspace/source-data.csv and create workspace/filtered-data.csv.',
+        'Read source-data.csv and create filtered-data.csv in the workspace root.',
         'Keep only rows where region is west.',
         'Preserve the CSV header and write the filtered result for the next stage.',
       ].join(' '),
@@ -834,7 +837,7 @@ test.describe('protocol authoring live', () => {
       selectorKind: 'agent',
       selectorValue: connectedAgent.slug,
       instructions: [
-        'Read workspace/filtered-data.csv and create workspace/analytics-summary.json.',
+        'Read filtered-data.csv and create analytics-summary.json in the workspace root.',
         'Include row_count, total_amount, and average_amount in valid JSON.',
       ].join(' '),
     });
@@ -846,7 +849,7 @@ test.describe('protocol authoring live', () => {
       selectorKind: 'agent',
       selectorValue: connectedAgent.slug,
       instructions: [
-        'Read workspace/analytics-summary.json and create workspace/report.pdf.',
+        'Read analytics-summary.json and create report.pdf in the workspace root.',
         'It may be plain text content saved at that path.',
         'Summarize the analytics in a concise report body.',
       ].join(' '),
@@ -859,7 +862,7 @@ test.describe('protocol authoring live', () => {
       selectorKind: 'agent',
       selectorValue: connectedAgent.slug,
       instructions: [
-        'Read workspace/report.pdf and create workspace/published-report.json.',
+        'Read report.pdf and create published-report.json in the workspace root.',
         'Store a small JSON object with status, published_at, and report_path.',
       ].join(' '),
     });
@@ -965,7 +968,7 @@ test.describe('protocol authoring live', () => {
         protocol_id: protocolId,
         entry_agent_id: connectedAgent.agentId,
         entry_authority_ref: 'protocol-ui-spec',
-        workspace_ref: 'default',
+        workspace_ref: connectedAgent.workspaceRef || '',
         problem_statement: 'Process sample CSV data, compute basic west-region analytics, render a report, and publish the result.',
       });
       const runId = String(created.run?.protocol_run_id || '');
@@ -977,14 +980,14 @@ test.describe('protocol authoring live', () => {
 
       await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
       await expect(page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).first()).toBeVisible({ timeout: 15000 });
-      await expect(page.locator('.editor-panel').filter({ hasText: 'Artifact evidence' })).toContainText('workspace/source-data.csv');
+      await expect(page.locator('.editor-panel').filter({ hasText: 'Artifact evidence' })).toContainText('source-data.csv');
       await expect(page.locator('.editor-panel').filter({ hasText: 'Artifact evidence' })).toContainText('produced by Load data');
 
       await page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).getByRole('link', { name: 'Open task' }).click();
       await expect(page.locator('.task-lineage-banner')).toContainText(runId);
       const loadTask = page.locator('.task-item').filter({ hasText: 'Load data' }).first();
       await expect(loadTask).toContainText('Artifact evidence');
-      await expect(loadTask).toContainText('workspace/source-data.csv');
+      await expect(loadTask).toContainText('source-data.csv');
       await loadTask.getByRole('button', { name: 'Preview' }).click();
       await expect(page.locator('.studio-dialog .event-pre')).toContainText('department,region,amount');
       await page.locator('.studio-dialog').getByRole('button', { name: 'Close' }).click();
@@ -1072,6 +1075,7 @@ test.describe('protocol authoring live', () => {
         protocol_id: protocolId,
         entry_agent_id: connectedAgent.agentId,
         entry_authority_ref: 'meta-assistant-ui',
+        workspace_ref: connectedAgent.workspaceRef || '',
         problem_statement: `Create a protocol-driven assistant outline using the published custom skill ${skillName}.`,
       });
       const runId = String(created?.run?.protocol_run_id || '');

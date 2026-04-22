@@ -732,6 +732,14 @@ function renderProtocolWorkspace(container) {
         return JSON.parse(JSON.stringify(doc || _blankDocument()));
     }
 
+    function _normalizeStageWriteCapability(stage) {
+        const outputs = Array.isArray(stage?.outputs) ? stage.outputs.filter(Boolean) : [];
+        return {
+            ...stage,
+            write_capable: Boolean(stage?.write_capable || outputs.length),
+        };
+    }
+
     function _docFromDraft() {
         const doc = _cloneDoc(draft.document);
         doc.schema_version = Number(doc.schema_version || 1) || 1;
@@ -742,7 +750,7 @@ function renderProtocolWorkspace(container) {
         });
         doc.participants = Array.isArray(doc.participants) ? doc.participants : [];
         doc.artifacts = Array.isArray(doc.artifacts) ? doc.artifacts : [];
-        doc.stages = Array.isArray(doc.stages) ? doc.stages : [];
+        doc.stages = Array.isArray(doc.stages) ? doc.stages.map((stage) => _normalizeStageWriteCapability(stage)) : [];
         return doc;
     }
 
@@ -1868,6 +1876,9 @@ function renderProtocolWorkspace(container) {
             next.selector = _selectorFromFields(next.selector?.kind || '', next.selector?.value || '', value);
         } else if (key === 'inputs' || key === 'outputs') {
             next[key] = Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : [];
+            if (kind === 'stage') {
+                Object.assign(next, _normalizeStageWriteCapability(next));
+            }
         } else if (key === 'max_rounds' || key === 'timeout_seconds') {
             next[key] = Number.parseInt(String(value || '0'), 10) || 0;
         } else if (key === 'verify') {
@@ -2138,7 +2149,7 @@ function renderProtocolWorkspace(container) {
             'stage_key',
             String(pendingStage.stage_key || displayName || 'step'),
         );
-        const nextStage = {
+        const nextStage = _normalizeStageWriteCapability({
             stage_key: stageKey,
             display_name: displayName,
             participant_key: participantKey,
@@ -2154,7 +2165,7 @@ function renderProtocolWorkspace(container) {
             transitions: {},
             max_rounds: Number.parseInt(String(pendingStage.max_rounds || '0'), 10) || 0,
             timeout_seconds: Number.parseInt(String(pendingStage.timeout_seconds || '0'), 10) || 0,
-        };
+        });
         const items = [...(doc.stages || [])];
         const sourceStageKey = String(editorMode.sourceStageKey || '').trim();
         const decision = String(editorMode.decision || '').trim().toLowerCase();
@@ -4277,7 +4288,7 @@ function renderProtocolWorkspace(container) {
                 { key: 'kind', kind: 'select', label: 'What it represents', options: kindOptions, help: 'Most datasets, code files, documents, and reports should stay as workspace files.' },
                 ...(String(artifact?.kind || 'workspace_file').trim().toLowerCase() === 'control_plane_text'
                     ? []
-                    : [{ key: 'path', kind: 'text', label: 'Workspace path', help: 'Relative to the workspace root. Examples: data/source.csv, src/analyze.py, reports/final.pdf.' }]),
+                    : [{ key: 'path', kind: 'text', label: 'Workspace path', help: Kit.dict.label('protocol.artifact.path.help'), placeholder: Kit.dict.label('protocol.artifact.path.placeholder') }]),
             ]),
             actions: context.readOnly
                 ? []

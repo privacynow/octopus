@@ -3052,16 +3052,6 @@ function renderProtocolWorkspace(container) {
             emit('selector_preferred_agent_id', preferredAgentId);
         };
 
-        const heading = document.createElement('div');
-        heading.className = 'kit-selector-editor-head';
-        const copy = document.createElement('p');
-        copy.className = 'kit-stage-routing-copy';
-        copy.textContent = density?.compactCopy
-            ? 'Pick a skill or a specific agent. The second control, when shown, is optional refinement.'
-            : 'Choose how this step resolves at runtime. The second control, when shown, is optional refinement rather than a second required field.';
-        heading.appendChild(copy);
-        wrap.appendChild(heading);
-
         const {
             mode,
             requiredSkill,
@@ -4568,7 +4558,7 @@ function renderProtocolWorkspace(container) {
         });
     }
 
-    function _stageEditorEl(stage, context, { routeEditor = null } = {}) {
+    function _stageEditorEl(stage, context, { routeEditor = null, embedded = false } = {}) {
         const shell = _stageEditorShell({
             target: _stageEditorTarget(stage),
             stageKey: String(stage.stage_key || ''),
@@ -4582,11 +4572,12 @@ function renderProtocolWorkspace(container) {
                 : (_t, key, value) => _commitNodeField('stage', String(stage.stage_key || ''), key, value),
             connectAction: context.readOnly ? null : () => _startRouteInsert(String(stage.stage_key || '')),
             deleteAction: context.readOnly ? null : () => _confirmStageDelete(String(stage.stage_key || '')),
-            closeAction: () => {
+            closeAction: embedded ? null : () => {
                 selection = { sectionKey: 'overview', nodeKey: '' };
                 render();
             },
             routeEditor,
+            embedded,
         });
         shell.dataset.key = `protocol-stage-editor:${String(stage.stage_key || '')}`;
         return shell;
@@ -4711,7 +4702,39 @@ function renderProtocolWorkspace(container) {
                 summary.textContent = stageSummary;
                 row.appendChild(summary);
             }
-            entry.appendChild(row);
+            if (activeStageKey === stageKey) {
+                const focusHead = document.createElement('div');
+                focusHead.className = 'kit-protocol-stage-focus-head';
+                focusHead.dataset.stageWorkspaceAnchor = stageKey;
+                focusHead.appendChild(row);
+                const actionRow = document.createElement('div');
+                actionRow.className = 'kit-protocol-segment-step-actions';
+                const done = document.createElement('button');
+                done.type = 'button';
+                done.className = 'btn btn-small';
+                done.textContent = 'Done';
+                done.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    selection = { sectionKey: 'overview', nodeKey: '' };
+                    render();
+                });
+                actionRow.appendChild(done);
+                if (!context.readOnly) {
+                    const remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.className = 'btn btn-small btn-danger';
+                    remove.textContent = 'Delete step';
+                    remove.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        _confirmStageDelete(stageKey);
+                    });
+                    actionRow.appendChild(remove);
+                }
+                focusHead.appendChild(actionRow);
+                entry.appendChild(focusHead);
+            } else {
+                entry.appendChild(row);
+            }
 
             if (activeStageKey === stageKey) {
                 const inline = document.createElement('div');
@@ -4726,7 +4749,10 @@ function renderProtocolWorkspace(container) {
                         || _stageInsertMatchesDefaultAnchor(stage, context.projection)
                     );
                 if (!showPendingInsert) {
-                    inline.appendChild(_stageEditorEl(stage, context, { routeEditor }));
+                    inline.appendChild(_stageEditorEl(stage, context, {
+                        routeEditor,
+                        embedded: true,
+                    }));
                 }
                 if (showPendingInsert) {
                     inline.appendChild(_inlineStageInsertEl(context));
@@ -4823,7 +4849,7 @@ function renderProtocolWorkspace(container) {
         return root;
     }
 
-    function _stageEditorSection(title, panel, { wide = false, collapsible = false, open = true, stateKey = '' } = {}) {
+    function _stageEditorSection(title, panel, { wide = false, collapsible = false, open = true, stateKey = '', showTitle = true } = {}) {
         const section = document.createElement(collapsible ? 'details' : 'section');
         section.className = `kit-stage-editor-section${wide ? ' is-wide' : ''}${collapsible ? ' is-collapsible' : ''}`;
         if (collapsible) {
@@ -4832,18 +4858,22 @@ function renderProtocolWorkspace(container) {
             if (String(stateKey || '').trim()) {
                 section.addEventListener('toggle', () => _setSectionStateValue(stateKey, section.open));
             }
-            const summary = document.createElement('summary');
-            summary.className = 'kit-stage-editor-summary';
-            const heading = document.createElement('h4');
-            heading.className = 'kit-stage-editor-title';
-            heading.textContent = String(title || '');
-            summary.appendChild(heading);
-            section.appendChild(summary);
+            if (showTitle) {
+                const summary = document.createElement('summary');
+                summary.className = 'kit-stage-editor-summary';
+                const heading = document.createElement('h4');
+                heading.className = 'kit-stage-editor-title';
+                heading.textContent = String(title || '');
+                summary.appendChild(heading);
+                section.appendChild(summary);
+            }
         } else {
-            const heading = document.createElement('h4');
-            heading.className = 'kit-stage-editor-title';
-            heading.textContent = String(title || '');
-            section.appendChild(heading);
+            if (showTitle) {
+                const heading = document.createElement('h4');
+                heading.className = 'kit-stage-editor-title';
+                heading.textContent = String(title || '');
+                section.appendChild(heading);
+            }
         }
         section.appendChild(panel);
         return section;
@@ -4878,13 +4908,6 @@ function renderProtocolWorkspace(container) {
             ? `stage-artifacts:${normalizedStageKey}:local:${String(selection.nodeKey || '').trim()}`
             : `stage-artifacts:${normalizedStageKey}:attachments`;
 
-        const note = document.createElement('p');
-        note.className = 'kit-stage-editor-hero-note';
-        note.textContent = context?.density?.compactCopy
-            ? 'Attach the shared files or text this step reads and writes.'
-            : 'Attach the shared files or text this step needs and produces. Define or refine them here, then connect them to this step.';
-        shell.appendChild(note);
-
         if (localArtifactManagerVisible && context) {
             const actions = document.createElement('div');
             actions.className = 'kit-stage-routing-actions';
@@ -4909,6 +4932,10 @@ function renderProtocolWorkspace(container) {
         }
 
         if (!artifactOptions.length) {
+            const note = document.createElement('p');
+            note.className = 'kit-stage-editor-hero-note';
+            note.textContent = 'Define the shared files or outputs this step should read or write, then attach them here.';
+            shell.appendChild(note);
             shell.appendChild(UI.renderEmptyState('No workflow files or outputs are defined yet.', true));
             if (!readOnly) {
                 const actions = document.createElement('div');
@@ -4939,7 +4966,7 @@ function renderProtocolWorkspace(container) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'btn btn-small';
-            button.textContent = 'Edit workflow files and outputs';
+            button.textContent = 'Manage workflow files';
             button.addEventListener('click', () => {
                 _openArtifactCatalog('', { stageKey: normalizedStageKey, surfaceKey: 'local' });
             });
@@ -5080,6 +5107,7 @@ function renderProtocolWorkspace(container) {
         closeAction = null,
         createHint = '',
         routeEditor = null,
+        embedded = false,
     } = {}) {
         const applyReadOnly = (schema) => (!readOnly
             ? schema
@@ -5111,23 +5139,25 @@ function renderProtocolWorkspace(container) {
             includeAdvanced,
         });
         const shell = document.createElement('div');
-        shell.className = 'kit-stage-editor';
+        shell.className = `kit-stage-editor${embedded ? ' is-embedded' : ''}`;
         shell.dataset.density = String(density?.band || 'comfortable');
         shell.dataset.activePanel = String(activePanelKey || 'basics');
         const stageLabel = String(target?.display_name || target?.stage_key || '').trim() || (createAction ? 'New step' : 'Step');
         const stageSummaryNote = createAction
             ? String(createHint || '')
             : _stageRowSummary(target, editorContext?.doc || draft.document, density, { selected: true });
-        shell.appendChild(_surfaceHeaderEl({
-            title: createAction ? 'New step' : stageLabel,
-            note: stageSummaryNote,
-            actions: [
-                ...(createAction ? [{ label: 'Create step', tone: 'btn-primary', onClick: createAction }] : []),
-                ...(closeAction ? [{ label: 'Done', onClick: closeAction }] : []),
-                ...(cancelAction ? [{ label: createAction ? 'Cancel' : 'Back', onClick: cancelAction }] : []),
-                ...(deleteAction ? [{ label: 'Delete step', tone: 'btn-danger', onClick: deleteAction }] : []),
-            ],
-        }));
+        if (!embedded || createAction) {
+            shell.appendChild(_surfaceHeaderEl({
+                title: createAction ? 'New step' : stageLabel,
+                note: stageSummaryNote,
+                actions: [
+                    ...(createAction ? [{ label: 'Create step', tone: 'btn-primary', onClick: createAction }] : []),
+                    ...(closeAction ? [{ label: 'Done', onClick: closeAction }] : []),
+                    ...(cancelAction ? [{ label: createAction ? 'Cancel' : 'Back', onClick: cancelAction }] : []),
+                    ...(deleteAction ? [{ label: 'Delete step', tone: 'btn-danger', onClick: deleteAction }] : []),
+                ],
+            }));
+        }
         if (createAction && createHint && !stageSummaryNote) {
             const note = document.createElement('p');
             note.className = 'kit-stage-editor-hero-note';
@@ -5217,7 +5247,14 @@ function renderProtocolWorkspace(container) {
         panelControl.element.dataset.includeRouting = includeRouting ? 'true' : 'false';
         panelControl.element.dataset.includeAdvanced = includeAdvanced ? 'true' : 'false';
         panelControl.element.dataset.anchorStageKey = normalizedStageKey || String(editorMode.sourceStageKey || '');
-        shell.appendChild(panelControl.element);
+        if (embedded && !createAction) {
+            const workspaceToolbar = document.createElement('div');
+            workspaceToolbar.className = 'kit-stage-workspace-toolbar';
+            workspaceToolbar.appendChild(panelControl.element);
+            shell.appendChild(workspaceToolbar);
+        } else {
+            shell.appendChild(panelControl.element);
+        }
 
         const workspace = document.createElement('div');
         workspace.className = 'kit-stage-editor-grid kit-stage-workspace-panel';
@@ -5227,7 +5264,10 @@ function renderProtocolWorkspace(container) {
         }
 
         const appendPanelSection = (title, panel, { wide = true } = {}) => {
-            workspace.appendChild(_stageEditorSection(title, panel, { wide }));
+            workspace.appendChild(_stageEditorSection(title, panel, {
+                wide,
+                showTitle: createAction || !embedded,
+            }));
         };
 
         if (activePanelKey === 'basics') {

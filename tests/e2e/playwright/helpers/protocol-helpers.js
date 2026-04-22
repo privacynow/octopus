@@ -84,8 +84,13 @@ async function assertStandardAuthoringSurface(stageEditor, { expectDelete = true
   await expect(stageEditor.getByLabel('Stage key')).toHaveCount(0);
   await expect(stageEditor.getByLabel('Max rounds')).toHaveCount(0);
   await expect(stageEditor.getByLabel('Timeout seconds')).toHaveCount(0);
+  const stageSurface = stageEditor.locator('xpath=ancestor-or-self::*[contains(concat(" ", normalize-space(@class), " "), " kit-protocol-segment-entry ")][1]');
   if (expectDelete) {
-    await expect(stageEditor.getByRole('button', { name: 'Delete step', exact: true })).toBeVisible();
+    if (await stageSurface.count()) {
+      await expect(stageSurface.getByRole('button', { name: 'Delete step', exact: true })).toBeVisible();
+    } else {
+      await expect(stageEditor.getByRole('button', { name: 'Delete step', exact: true })).toBeVisible();
+    }
   } else {
     await expect(stageEditor.getByRole('button', { name: 'Delete step', exact: true })).toHaveCount(0);
   }

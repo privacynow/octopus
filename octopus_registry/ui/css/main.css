@@ -3354,7 +3354,7 @@ select {
 
 .kit-protocol-stage-stack {
     display: grid;
-    gap: 1.125rem;
+    gap: 1.25rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] {
@@ -3371,7 +3371,21 @@ select {
 }
 
 .kit-protocol-segment-entry.is-active {
-    gap: var(--space-2-5);
+    gap: var(--space-3);
+}
+
+.kit-protocol-stage-focus-head {
+    position: sticky;
+    top: var(--space-3);
+    z-index: 3;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-lg);
+    background: linear-gradient(180deg, rgba(247, 244, 238, 0.96) 0%, rgba(247, 244, 238, 0.92) 100%);
+    backdrop-filter: blur(8px);
 }
 
 .kit-protocol-segment-step-actions,
@@ -3382,7 +3396,6 @@ select {
     gap: var(--space-2);
 }
 
-.kit-protocol-inline-editor,
 .kit-protocol-inline-card {
     display: grid;
     gap: var(--space-3);
@@ -3392,6 +3405,12 @@ select {
     background:
         linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0)),
         var(--bg);
+}
+
+.kit-protocol-inline-editor {
+    display: grid;
+    gap: var(--space-3);
+    padding: 0;
 }
 
 .kit-authoring-map-panel,
@@ -3500,12 +3519,16 @@ select {
     gap: var(--space-3);
 }
 
-.kit-stage-editor > .kit-authoring-surface-head {
+.kit-stage-editor:not(.is-embedded) > .kit-authoring-surface-head {
     position: sticky;
     top: var(--space-2);
     z-index: 2;
     padding-bottom: var(--space-2);
     background: linear-gradient(180deg, var(--bg) 0%, var(--bg) 82%, transparent 100%);
+}
+
+.kit-stage-editor.is-embedded {
+    gap: var(--space-2);
 }
 
 .kit-stage-editor-hero-title {
@@ -3552,34 +3575,44 @@ select {
     width: 100%;
     display: grid;
     gap: var(--space-1);
-    padding: 0.95rem 1rem;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 1rem 1.05rem;
+    border: 1px solid rgba(17, 24, 39, 0.08);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.015);
+    background: rgba(255, 255, 255, 0.62);
     color: var(--text);
     text-align: left;
     font: inherit;
     cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-step {
-    gap: 0.35rem;
-    padding: 0.85rem 0.95rem;
+    gap: 0.4rem;
+    padding: 0.92rem 1rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-step {
-    gap: 0.25rem;
-    padding: 0.72rem 0.85rem;
+    gap: 0.3rem;
+    padding: 0.82rem 0.92rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step,
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step {
-    background: rgba(255, 255, 255, 0.01);
+    background: rgba(255, 255, 255, 0.35);
+    border-color: rgba(17, 24, 39, 0.05);
+}
+
+.kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:hover,
+.kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:focus-visible {
+    background: rgba(255, 255, 255, 0.74);
+    border-color: rgba(149, 76, 47, 0.16);
+    box-shadow: 0 8px 18px rgba(17, 24, 39, 0.05);
 }
 
 .kit-protocol-segment-step.is-selected {
     border-color: var(--accent);
-    box-shadow: var(--focus-ring);
+    box-shadow: 0 18px 28px rgba(17, 24, 39, 0.08);
+    background: rgba(255, 255, 255, 0.92);
 }
 
 .kit-protocol-segment-step-head {
@@ -3671,9 +3704,25 @@ select {
     align-content: start;
 }
 
+.kit-stage-workspace-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
 .kit-stage-workspace-nav {
     align-self: flex-start;
     max-width: 100%;
+}
+
+.kit-stage-workspace-panel {
+    padding: var(--space-4);
+    border: 1px solid rgba(17, 24, 39, 0.08);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.76);
+    box-shadow: 0 16px 30px rgba(17, 24, 39, 0.04);
 }
 
 .kit-stage-workspace-body {
@@ -3702,6 +3751,10 @@ select {
     display: grid;
     gap: var(--space-2);
     align-content: start;
+}
+
+.kit-stage-editor.is-embedded .kit-stage-editor-section {
+    gap: var(--space-1-5);
 }
 
 .kit-stage-editor-section.is-collapsible {
@@ -3751,6 +3804,14 @@ select {
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.06em;
+}
+
+.kit-protocol-stage-focus-head .kit-protocol-segment-step {
+    min-width: 0;
+}
+
+.kit-protocol-stage-focus-head .kit-protocol-segment-step.is-selected {
+    box-shadow: none;
 }
 
 .kit-stage-routing {

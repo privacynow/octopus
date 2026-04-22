@@ -4284,7 +4284,7 @@ function renderProtocolWorkspace(container) {
             surfaceKey: 'protocol.artifact',
             onCommit,
             schema: context.applyReadOnly([
-                { key: 'display_name', kind: 'text', label: 'Name', required: true },
+                { key: 'display_name', kind: 'text', label: 'Name', required: true, commitOnInput: true },
                 { key: 'kind', kind: 'select', label: 'What it represents', options: kindOptions, help: 'Most datasets, code files, documents, and reports should stay as workspace files.' },
                 ...(String(artifact?.kind || 'workspace_file').trim().toLowerCase() === 'control_plane_text'
                     ? []

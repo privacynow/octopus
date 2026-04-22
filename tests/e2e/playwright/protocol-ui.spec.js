@@ -968,7 +968,6 @@ test.describe('protocol authoring live', () => {
         protocol_id: protocolId,
         entry_agent_id: connectedAgent.agentId,
         entry_authority_ref: 'protocol-ui-spec',
-        workspace_ref: connectedAgent.workspaceRef || '',
         problem_statement: 'Process sample CSV data, compute basic west-region analytics, render a report, and publish the result.',
       });
       const runId = String(created.run?.protocol_run_id || '');
@@ -1075,7 +1074,6 @@ test.describe('protocol authoring live', () => {
         protocol_id: protocolId,
         entry_agent_id: connectedAgent.agentId,
         entry_authority_ref: 'meta-assistant-ui',
-        workspace_ref: connectedAgent.workspaceRef || '',
         problem_statement: `Create a protocol-driven assistant outline using the published custom skill ${skillName}.`,
       });
       const runId = String(created?.run?.protocol_run_id || '');

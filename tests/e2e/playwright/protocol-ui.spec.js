@@ -342,7 +342,11 @@ test.describe('protocol authoring live', () => {
     await expect(planEditor.getByRole('tab', { name: 'Basics', exact: true })).toBeVisible();
     await expect(planEditor.getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
-    await expect(page.locator('.kit-stage-editor')).toContainText('Current assignment:');
+    const planAssignment = await openStagePanel(page, planEditor, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
+    await expect(planAssignment).toContainText('Current assignment:');
     const routingSection = await openStagePanel(page, planEditor, {
       tab: 'Routing',
       heading: 'Routing',

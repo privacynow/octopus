@@ -4874,6 +4874,9 @@ function renderProtocolWorkspace(container) {
         const localArtifactManagerVisible = selection.sectionKey === 'artifacts'
             && String(selection?.surfaceKey || 'secondary') === 'local'
             && String(_selectionSourceStageKey() || '') === normalizedStageKey;
+        shell.dataset.key = localArtifactManagerVisible
+            ? `stage-artifacts:${normalizedStageKey}:local:${String(selection.nodeKey || '').trim()}`
+            : `stage-artifacts:${normalizedStageKey}:attachments`;
 
         const note = document.createElement('p');
         note.className = 'kit-stage-editor-hero-note';

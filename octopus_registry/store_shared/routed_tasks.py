@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 from octopus_sdk.registry.models import EventRecord, TaskRecord
@@ -14,6 +15,8 @@ from octopus_registry.store_base import (
 from octopus_registry.store_dialect import StoreDialect
 from octopus_registry.store_shared.common import record
 from octopus_registry.store_shared.conversations import touch_conversation
+
+log = logging.getLogger(__name__)
 
 
 def _write_task_events(
@@ -324,6 +327,14 @@ def update_routed_task_result(
             raise ValueError("routed_task_id must match the requested task")
         payload_data = {"routed_task_id": routed_task_id, **payload_data}
     validated_payload = validated_routed_task_result_payload(payload_data)
+    log.warning(
+        "store.update_routed_task_result routed_task_id=%s status=%s provider=%s working_dir=%r artifact_count=%d",
+        routed_task_id,
+        validated_payload.status,
+        validated_payload.provider,
+        validated_payload.working_dir,
+        len(validated_payload.artifacts),
+    )
 
     row = token_row(conn, agent_token)
     if row is None:

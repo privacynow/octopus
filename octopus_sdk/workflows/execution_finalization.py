@@ -262,6 +262,14 @@ async def finalize_execution(
         if not working_dir and context.working_dir_resolver is not None:
             working_dir = str(context.working_dir_resolver(context.runtime_chat) or "").strip()
         artifact_payloads = await _protocol_artifact_payloads(context, working_dir=working_dir)
+        log.warning(
+            "protocol.finalize_execution.result routed_task_id=%s status=%s provider=%s working_dir=%r artifact_count=%d",
+            context.routed_task_id,
+            result_status,
+            context.config.provider_name,
+            working_dir,
+            len(artifact_payloads),
+        )
         try:
             report = await context.task_routing.report_routed_task_result(
                 routed_task_id=context.routed_task_id,

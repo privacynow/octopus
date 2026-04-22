@@ -111,10 +111,21 @@ async function waitForRunStatus(page, runId, status, timeout = 60000) {
   }, { timeout }).toBe(status);
 }
 
-async function applyScenarioAndSubmit(session, scenarioName) {
+async function applyScenarioAndSubmit(page, session, scenarioName) {
+  const routedTaskId = String(await session.getAttribute('data-routed-task-id') || '');
   await session.getByRole('button', { name: scenarioName, exact: true }).click();
   await expect(session.getByRole('textbox')).not.toHaveValue('');
-  await session.getByRole('button', { name: 'Submit response', exact: true }).click();
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.request().method() === 'POST'
+        && response.url().includes('/rehearsal/respond')
+        && response.ok(),
+    ),
+    session.getByRole('button', { name: 'Submit response', exact: true }).click(),
+  ]);
+  if (routedTaskId) {
+    await expect(page.locator(`.kit-rehearsal-session[data-routed-task-id="${routedTaskId}"]`)).toHaveCount(0, { timeout: 15000 });
+  }
 }
 
 async function waitForLatestRehearsalRunId(page, protocolId, previousRunIds = []) {
@@ -942,7 +953,7 @@ test.describe('protocol authoring live', () => {
         await waitForRunStage(page, rehearsalRunId, stageKey);
         const session = page.locator('.kit-rehearsal-session').first();
         await expect(session).toContainText(stageKey);
-        await applyScenarioAndSubmit(session, scenarioName);
+        await applyScenarioAndSubmit(page, session, scenarioName);
         if (nextState === 'completed') {
           await waitForRunStatus(page, rehearsalRunId, 'completed');
         } else {
@@ -1040,7 +1051,7 @@ test.describe('protocol authoring live', () => {
       const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
       const session = page.locator(`.kit-rehearsal-session[data-stage-key="${composeKey}"]`).first();
       await expect(session).toBeVisible({ timeout: 20000 });
-      await applyScenarioAndSubmit(session, 'Compose assistant complete');
+      await applyScenarioAndSubmit(page, session, 'Compose assistant complete');
       await waitForRunStatus(page, rehearsalRunId, 'completed');
 
       const created = await createProtocolRun(page, {
@@ -1203,13 +1214,13 @@ test.describe('protocol authoring live', () => {
       for (const [stageKey, scenarioName, nextStage] of sequence) {
         const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
         await expect(session).toBeVisible({ timeout: 20000 });
-        await applyScenarioAndSubmit(session, scenarioName);
+        await applyScenarioAndSubmit(page, session, scenarioName);
         await waitForRunStage(page, runId, nextStage);
       }
 
       const acceptance = page.locator('.kit-rehearsal-session[data-stage-key="acceptance"]').first();
       await expect(acceptance).toBeVisible({ timeout: 20000 });
-      await applyScenarioAndSubmit(acceptance, 'Acceptance pass');
+      await applyScenarioAndSubmit(page, acceptance, 'Acceptance pass');
       await waitForRunStatus(page, runId, 'completed', 180000);
 
       const finalDetail = await getRunDetail(page, runId);
@@ -1302,13 +1313,13 @@ test.describe('protocol authoring live', () => {
       for (const [stageKey, scenarioName, nextStage] of sequence) {
         const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
         await expect(session).toBeVisible({ timeout: 20000 });
-        await applyScenarioAndSubmit(session, scenarioName);
+        await applyScenarioAndSubmit(page, session, scenarioName);
         await waitForRunStage(page, runId, nextStage);
       }
 
       const approval = page.locator('.kit-rehearsal-session[data-stage-key="approve_document"]').first();
       await expect(approval).toBeVisible({ timeout: 20000 });
-      await applyScenarioAndSubmit(approval, 'Approve accept');
+      await applyScenarioAndSubmit(page, approval, 'Approve accept');
       await waitForRunStatus(page, runId, 'completed');
 
       const finalDetail = await getRunDetail(page, runId);

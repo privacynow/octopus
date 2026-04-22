@@ -508,6 +508,41 @@ function renderSkillCatalog(container) {
         draftSnapshotKey = '';
     }
 
+    function _mergeSkillDetailIntoRecords(records, detail) {
+        const normalizedName = String(detail?.name || '').trim();
+        if (!normalizedName) return Array.isArray(records) ? [...records] : [];
+        const currentRecords = Array.isArray(records) ? records : [];
+        const current = currentRecords.find((item) => String(item?.name || '').trim() === normalizedName) || null;
+        const nextLifecycle = RegistrySkillHub.lifecycleState(detail);
+        const merged = {
+            ...(current || {}),
+            ...detail,
+            lifecycle_status: nextLifecycle.effectiveStatus || detail.lifecycle_status || current?.lifecycle_status || '',
+            runtime_available: Boolean(detail?.runtime_available ?? current?.runtime_available),
+            has_unpublished_changes: Boolean(detail?.published_revision_id)
+                && String(detail?.published_revision_id || '') !== String(detail?.active_revision_id || ''),
+        };
+        const nextRecords = currentRecords.filter((item) => String(item?.name || '').trim() !== normalizedName);
+        nextRecords.push(merged);
+        return nextRecords;
+    }
+
+    function _preserveSelectedCustomDraft(records) {
+        const normalizedSelectedName = String(selectedSkillName || '').trim();
+        if (selectedSkillOrigin !== 'local' || !normalizedSelectedName) {
+            return Array.isArray(records) ? records : [];
+        }
+        const candidate = (selectedLocalDetail && String(selectedLocalDetail.name || '').trim() === normalizedSelectedName)
+            ? selectedLocalDetail
+            : (draftBuffer && String(draftBuffer.name || '').trim() === normalizedSelectedName
+                ? draftBuffer
+                : null);
+        if (!candidate || !RegistrySkillHub.isCustomSkill(candidate)) {
+            return Array.isArray(records) ? records : [];
+        }
+        return _mergeSkillDetailIntoRecords(records, candidate);
+    }
+
     function _applyStudioMutationDetail(detail) {
         if (!detail || !detail.name) {
             return false;
@@ -517,24 +552,12 @@ function renderSkillCatalog(container) {
             return false;
         }
         if (selected.origin === 'local') {
-            const nextLifecycle = RegistrySkillHub.lifecycleState(detail);
             selectedLocalDetail = {
                 ...(selectedLocalDetail && selectedLocalDetail.name === detail.name ? selectedLocalDetail : selected.skill || {}),
                 ...detail,
             };
             selectedLifecycle = detail;
-            allSkills = (allSkills || []).map((item) => (
-                String(item?.name || '') === String(detail.name || '')
-                    ? {
-                        ...item,
-                        ...detail,
-                        lifecycle_status: nextLifecycle.effectiveStatus || detail.lifecycle_status || item.lifecycle_status || '',
-                        runtime_available: Boolean(detail.runtime_available),
-                        has_unpublished_changes: Boolean(detail.published_revision_id)
-                            && String(detail.published_revision_id || '') !== String(detail.active_revision_id || ''),
-                    }
-                    : item
-            ));
+            allSkills = _mergeSkillDetailIntoRecords(allSkills, selectedLocalDetail);
             selectionLoading = false;
             if (_isSelectedCustom(selected.skill, selectedLocalDetail || detail)) {
                 _resetDraftState(selectedLocalDetail || detail, detail);
@@ -1412,16 +1435,25 @@ function renderSkillCatalog(container) {
             }
             createBtn.disabled = true;
             try {
-                await API.saveSkillDraft(currentAgentId, skillName, {
+                const result = await API.saveSkillDraft(currentAgentId, skillName, {
                     body: 'Add your instructions here.',
                     display_name: skillName.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
                     description: String(descriptionInput.value || '').trim(),
                     changelog: 'Initial draft',
                 });
+                selectedLocalDetail = result?.detail || {
+                    name: skillName,
+                    display_name: skillName.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+                    description: String(descriptionInput.value || '').trim(),
+                    lifecycle_status: 'draft',
+                    skill_kind: 'custom',
+                    runtime_available: false,
+                };
+                allSkills = _mergeSkillDetailIntoRecords(allSkills, selectedLocalDetail);
                 _invalidateSkillCaches(currentAgentId, skillName);
                 view.close();
-                await loadSkills({ soft: true, forceCatalog: true });
                 await _selectSkill(skillName, 'local');
+                void loadSkills({ soft: true, forceCatalog: true });
             } catch (err) {
                 UI.reportError('Failed to create the custom draft', err, { context: 'Custom skill draft create failed' });
             }
@@ -2270,7 +2302,7 @@ function renderSkillCatalog(container) {
             const cachedCatalog = UI.peekCachedData(RegistrySkillHub.listCacheKey(currentAgentId));
             if (cachedCatalog) {
                 const data = Array.isArray(cachedCatalog) ? cachedCatalog : (cachedCatalog.skills || []);
-                allSkills = Array.isArray(data) ? data : [];
+                allSkills = _preserveSelectedCustomDraft(Array.isArray(data) ? data : []);
                 hasCachedView = true;
             }
         }
@@ -2303,7 +2335,7 @@ function renderSkillCatalog(container) {
                         forceRefresh: hasCachedView || forceCatalog,
                     },
                 );
-                allSkills = Array.isArray(data) ? data : (data.skills || []);
+                allSkills = _preserveSelectedCustomDraft(Array.isArray(data) ? data : (data.skills || []));
             }
             if (RegistrySkillHub.canSearchStore(_currentAgent()) && queryText.length >= 2) {
                 const search = await UI.loadCachedData(

@@ -333,8 +333,12 @@ test.describe('protocol authoring live', () => {
       selectorKind: defaultAssignmentKind,
       selectorValue: '__first__',
     });
-    await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Plan');
     const planEditor = page.locator('.kit-stage-editor').last();
+    const planBasics = await openStagePanel(page, planEditor, {
+      tab: 'Basics',
+      heading: 'Step basics',
+    });
+    await expect(planBasics.getByLabel('Name').first()).toHaveValue('Plan');
     await expect(planEditor.getByRole('tab', { name: 'Basics', exact: true })).toBeVisible();
     await expect(planEditor.getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
@@ -364,7 +368,11 @@ test.describe('protocol authoring live', () => {
     await selectStep(page, reviewKey);
     await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
     await selectStep(page, 'review');
-    await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Review');
+    const reviewBasics = await openStagePanel(page, page.locator('.kit-stage-editor').last(), {
+      tab: 'Basics',
+      heading: 'Step basics',
+    });
+    await expect(reviewBasics.getByLabel('Name').first()).toHaveValue('Review');
 
     await lifecycle.getByLabel('Name').fill(`Live Authoring ${Date.now()}`);
     await lifecycle.getByLabel('Name').blur();
@@ -408,14 +416,22 @@ test.describe('protocol authoring live', () => {
 
     await page.getByTestId('workflow-stage-planning').click();
     const planningEditor = page.locator('.kit-stage-editor').last();
-    await expect(planningEditor.getByLabel('Name').first()).toHaveValue('Planning');
+    const planningBasics = await openStagePanel(page, planningEditor, {
+      tab: 'Basics',
+      heading: 'Step basics',
+    });
+    await expect(planningBasics.getByLabel('Name').first()).toHaveValue('Planning');
     await expect(planningEditor.getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.getByTestId('workflow-stage-plan_review')).toBeVisible();
     await page.getByRole('button', { name: 'Done', exact: true }).first().click();
     await expect(page.locator('.kit-protocol-inline-editor > .kit-stage-editor')).toHaveCount(0);
 
     await selectStep(page, 'planning');
-    await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Planning');
+    const selectedPlanningBasics = await openStagePanel(page, page.locator('.kit-stage-editor').last(), {
+      tab: 'Basics',
+      heading: 'Step basics',
+    });
+    await expect(selectedPlanningBasics.getByLabel('Name').first()).toHaveValue('Planning');
     await expect(page.getByRole('button', { name: 'Show workflow map', exact: true })).toBeVisible();
     await expect(page.locator('.kit-workflow-cy-host')).not.toBeVisible();
     await page.getByRole('button', { name: 'Show workflow map', exact: true }).click();
@@ -1248,7 +1264,11 @@ test.describe('protocol authoring live', () => {
     await backToWorkflow(page);
 
     await page.getByTestId('workflow-stage-planning').click();
-    await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Planning');
+    const mobilePlanningBasics = await openStagePanel(page, page.locator('.kit-stage-editor').last(), {
+      tab: 'Basics',
+      heading: 'Step basics',
+    });
+    await expect(mobilePlanningBasics.getByLabel('Name').first()).toHaveValue('Planning');
     await selectStep(page, 'planning');
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
     await expect(page.locator('.kit-stage-editor').last().getByRole('tab', { name: 'Routing', exact: true })).toBeVisible();

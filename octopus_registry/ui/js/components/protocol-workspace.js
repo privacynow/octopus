@@ -2018,6 +2018,32 @@ function renderProtocolWorkspace(container) {
         bindAssignmentControl('[aria-label="Custom value"]', 'change');
     }
 
+    function _bindStageWorkspacePanelControls(root) {
+        if (!(root instanceof Element)) return;
+        root.querySelectorAll('.kit-stage-workspace-nav[data-stage-workspace-nav="true"]').forEach((group) => {
+            if (!(group instanceof Element) || group.__stageWorkspaceBound === true) return;
+            group.__stageWorkspaceBound = true;
+            group.addEventListener('click', (event) => {
+                const button = event.target instanceof Element
+                    ? event.target.closest('.segmented-control-btn')
+                    : null;
+                if (!(button instanceof HTMLButtonElement) || !group.contains(button)) return;
+                const workspaceKey = String(group.dataset.workspaceKey || '').trim();
+                const panelKey = String(button.dataset.value || '').trim();
+                if (!workspaceKey || !panelKey) return;
+                const includeRouting = String(group.dataset.includeRouting || 'true') !== 'false';
+                const includeAdvanced = String(group.dataset.includeAdvanced || 'false') === 'true';
+                _setStageWorkspacePanelValue(workspaceKey, panelKey, {
+                    includeRouting,
+                    includeAdvanced,
+                });
+                const anchorStageKey = String(group.dataset.anchorStageKey || '').trim();
+                _queueStageViewportAnchor(anchorStageKey, { panelKey });
+                render();
+            });
+        });
+    }
+
     function _commitStageSelector(nodeKey, selectorKind, selectorValue, selectorPreferredAgentId = '') {
         const doc = _cloneDoc(draft.document);
         const items = [...(doc.stages || [])];
@@ -5061,8 +5087,10 @@ function renderProtocolWorkspace(container) {
             })));
         const operatorSurface = _currentAuthoringSurface() === 'operator';
         const normalizedStageKey = String(stageKey || target?.stage_key || '').trim();
-        const stageSectionKeyBase = normalizedStageKey
-            || (createAction ? `pending:${String(editorMode.sessionKey || 'new')}` : '');
+        const stageSectionKeyBase = createAction
+            ? `pending:${String(editorMode.sessionKey || 'new')}`
+            : normalizedStageKey;
+        const stageWorkspaceAnchorKey = normalizedStageKey || stageSectionKeyBase;
         const density = editorContext?.density || _workflowDensityProfile(editorContext?.projection);
         const includeRouting = !createAction;
         const includeAdvanced = operatorSurface;
@@ -5174,29 +5202,25 @@ function renderProtocolWorkspace(container) {
 
         const panelControl = UI.createSegmentedControl(
             panelOptions,
-            (value) => {
-                _setStageWorkspacePanelValue(stageSectionKeyBase, value, {
-                    includeRouting,
-                    includeAdvanced,
-                });
-                _queueStageViewportAnchor(normalizedStageKey || String(editorMode.sourceStageKey || ''), { panelKey: value });
-                render();
-            },
+            null,
             {
                 label: 'Stage work area',
                 value: activePanelKey,
             },
         );
         panelControl.element.classList.add('kit-stage-workspace-nav');
+        panelControl.element.dataset.stageWorkspaceNav = 'true';
+        panelControl.element.dataset.workspaceKey = stageSectionKeyBase;
+        panelControl.element.dataset.includeRouting = includeRouting ? 'true' : 'false';
+        panelControl.element.dataset.includeAdvanced = includeAdvanced ? 'true' : 'false';
+        panelControl.element.dataset.anchorStageKey = normalizedStageKey || String(editorMode.sourceStageKey || '');
         shell.appendChild(panelControl.element);
 
         const workspace = document.createElement('div');
         workspace.className = 'kit-stage-editor-grid kit-stage-workspace-panel';
         workspace.dataset.panel = String(activePanelKey || 'basics');
-        if (normalizedStageKey) {
-            workspace.dataset.stageWorkspaceAnchor = normalizedStageKey;
-        } else if (stageSectionKeyBase) {
-            workspace.dataset.stageWorkspaceAnchor = stageSectionKeyBase;
+        if (stageWorkspaceAnchorKey) {
+            workspace.dataset.stageWorkspaceAnchor = stageWorkspaceAnchorKey;
         }
 
         const appendPanelSection = (title, panel, { wide = true } = {}) => {
@@ -5370,6 +5394,7 @@ function renderProtocolWorkspace(container) {
                 _bindPendingStageEditorControls(activeInsertEditor);
             }
         }
+        _bindStageWorkspacePanelControls(contentEl);
         const activeCanvasRoot = contentEl.querySelector('.kit-workflow-canvas');
         if (activeCanvasRoot && typeof activeCanvasRoot.__workflowCanvasSync === 'function') {
             activeCanvasRoot.__workflowCanvasSync({

@@ -54,4 +54,11 @@ class ReportTaskResultPayload(BaseModel):
     full_text: str = ""
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     follow_up_questions: list[str] = Field(default_factory=list)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    cached_prompt_tokens: int | None = Field(default=None, ge=0)
+    cached_completion_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    provider: str = ""
+    working_dir: str = ""
     completed_at: str = Field(..., min_length=1)

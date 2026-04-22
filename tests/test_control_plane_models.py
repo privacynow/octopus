@@ -90,6 +90,11 @@ def test_control_plane_request_models_validate_domain_payloads() -> None:
         full_text="all done",
         artifacts=[{"path": "/tmp/out.txt"}],
         follow_up_questions=["Need anything else?"],
+        prompt_tokens=12,
+        completion_tokens=34,
+        cost_usd=0.25,
+        provider="codex",
+        working_dir="/tmp/project",
         completed_at="2026-03-20T00:02:00+00:00",
     )
     search = SearchAgentsRequest(
@@ -106,5 +111,7 @@ def test_control_plane_request_models_validate_domain_payloads() -> None:
     assert task.constraints == {"readonly": True}
     assert update.timeline_events[0].event_id == "evt-1"
     assert result.artifacts == [{"path": "/tmp/out.txt"}]
+    assert result.prompt_tokens == 12
+    assert result.working_dir == "/tmp/project"
     assert search.exclude_agent_ids == ["agent-1"]
     assert resolve.target_agent_id == "agent-2"

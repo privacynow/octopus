@@ -6,6 +6,7 @@ const {
   login,
   outlineStepNode,
   openBlankDraft,
+  openStagePanel,
   openTemplateDraft,
   selectStep,
   waitForSaved,
@@ -44,10 +45,12 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await page.getByRole('button', { name: /Add( first)? step/i }).first().click();
   const participantEditor = page.locator('.kit-stage-editor').first();
-  const stepBasics = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) }).first();
-  const newRole = participantEditor.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) }).first();
+  const stepBasics = await openStagePanel(page, participantEditor, {
+    tab: 'Basics',
+    heading: 'Step basics',
+  });
   await stepBasics.getByLabel('Name').fill('Plan');
-  await newRole.getByLabel('Role name').fill('Planner');
+  await stepBasics.getByLabel('Role name').fill('Planner');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-step-create-page.png', fullPage: true });
   await page.getByRole('button', { name: 'Cancel' }).click();
 
@@ -122,7 +125,7 @@ test('capture protocol authoring states', async ({ page }) => {
   await page.getByTestId('workflow-stage-draft_document').click();
   await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
   await selectStep(page, 'draft_document');
-  await expect(page.locator('.kit-stage-editor').first().getByRole('heading', { name: 'Assignment' }).first()).toBeVisible();
+  await expect(page.locator('.kit-stage-editor').first().getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-participant-page.png', fullPage: true });
 
   await discardDraft(page);

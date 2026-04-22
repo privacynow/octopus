@@ -6,11 +6,11 @@ const {
   connectStep,
   createStep,
   discardDraft,
-  ensureDetailsOpen,
   expectSelectedStep,
   login,
   outlineStepNode,
   openBlankDraft,
+  openStagePanel,
   openProtocolSettings,
   openTemplateDraft,
   protocolIdFromUrl,
@@ -241,17 +241,10 @@ async function configureStepArtifacts(page, stageKey, { reads = [], writes = [] 
   );
   async function artifactRows() {
     const editor = page.locator('.kit-stage-editor').last();
-    const artifactsSection = editor.locator('.kit-stage-editor-section').filter({
-      has: page.getByRole('heading', { name: 'Inputs and outputs', exact: true }),
-    }).first();
-    const summary = artifactsSection.locator('summary').first();
-    if (await summary.count()) {
-      const expanded = await summary.evaluate((node) => node.closest('details')?.open === true);
-      if (!expanded) {
-        await summary.click();
-        await expect.poll(async () => summary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
-      }
-    }
+    const artifactsSection = await openStagePanel(page, editor, {
+      tab: 'Files & outputs',
+      heading: 'Inputs and outputs',
+    });
     const readsRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
     const writesRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
     await expect(readsRow).toBeVisible();
@@ -297,15 +290,18 @@ test.describe('protocol authoring live', () => {
 
     await page.getByRole('button', { name: /(\+ )?Add (first )?step/i }).first().click();
     const stageEditor = page.locator('.kit-stage-editor').last();
+    await expect(stageEditor.getByRole('tab', { name: 'Basics', exact: true })).toBeVisible();
+    await expect(stageEditor.getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(stageEditor.getByRole('heading', { name: 'Step basics' })).toBeVisible();
-    await expect(stageEditor.getByRole('heading', { name: 'New owner role' })).toBeVisible();
-    const assignmentHeading = stageEditor.getByRole('heading', { name: 'Assignment' }).first();
-    await assignmentHeading.scrollIntoViewIfNeeded();
-    await expect(assignmentHeading).toBeVisible();
+    await expect(stageEditor.getByText('New owner role', { exact: true })).toBeVisible();
+    const assignmentSection = await openStagePanel(page, stageEditor, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
     await expect(stageEditor.getByRole('tab', { name: 'By skill', exact: true })).toBeVisible();
     await expect(stageEditor.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
-    await expect(stageEditor.getByLabel('Required skill', { exact: true })).toBeVisible();
-    await expect(stageEditor.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
+    await expect(assignmentSection.getByLabel('Required skill', { exact: true })).toBeVisible();
+    await expect(assignmentSection.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
     await assertStandardAuthoringSurface(stageEditor, { expectDelete: false });
     await page.getByRole('button', { name: 'Cancel' }).click();
 
@@ -314,12 +310,16 @@ test.describe('protocol authoring live', () => {
 
     await page.getByRole('button', { name: /(\+ )?Add (first )?step/i }).first().click();
     const draftStageEditor = page.locator('.kit-stage-editor').last();
-    await expect(draftStageEditor.getByLabel('Required skill', { exact: true }).first()).toBeVisible();
-    const availableSkillValues = await draftStageEditor.getByLabel('Required skill', { exact: true }).first().locator('option').evaluateAll((options) =>
+    const draftAssignment = await openStagePanel(page, draftStageEditor, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
+    await expect(draftAssignment.getByLabel('Required skill', { exact: true }).first()).toBeVisible();
+    const availableSkillValues = await draftAssignment.getByLabel('Required skill', { exact: true }).first().locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
     if (!availableSkillValues.length) {
-      await expect(draftStageEditor).toContainText('No available routing skills were loaded from the registry.');
+      await expect(draftAssignment).toContainText('No available routing skills were loaded from the registry.');
     }
     await page.getByRole('button', { name: 'Cancel' }).click();
 
@@ -333,18 +333,17 @@ test.describe('protocol authoring live', () => {
       selectorKind: defaultAssignmentKind,
       selectorValue: '__first__',
     });
-    const planEditor = page.locator('.kit-stage-editor-grid');
     await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Plan');
-    await expect(page.getByRole('heading', { name: 'Step basics' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Assignment', exact: true })).toBeVisible();
+    const planEditor = page.locator('.kit-stage-editor').last();
+    await expect(planEditor.getByRole('tab', { name: 'Basics', exact: true })).toBeVisible();
+    await expect(planEditor.getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
     await expect(page.locator('.kit-stage-editor')).toContainText('Current assignment:');
-    const routingSection = page.locator('.kit-stage-editor-section').filter({
-      has: page.getByRole('heading', { name: 'Routing', exact: true }),
-    }).first();
-    await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
-    await ensureDetailsOpen(routingSection);
+    const routingSection = await openStagePanel(page, planEditor, {
+      tab: 'Routing',
+      heading: 'Routing',
+    });
+    await expect(planEditor.getByRole('tab', { name: 'Instructions', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add branch or finish' }).first()).toBeVisible();
 
     const reviewKey = await createStep(page, {
@@ -410,6 +409,7 @@ test.describe('protocol authoring live', () => {
     await page.getByTestId('workflow-stage-planning').click();
     const planningEditor = page.locator('.kit-stage-editor').last();
     await expect(planningEditor.getByLabel('Name').first()).toHaveValue('Planning');
+    await expect(planningEditor.getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.getByTestId('workflow-stage-plan_review')).toBeVisible();
     await page.getByRole('button', { name: 'Done', exact: true }).first().click();
     await expect(page.locator('.kit-protocol-inline-editor > .kit-stage-editor')).toHaveCount(0);
@@ -436,7 +436,10 @@ test.describe('protocol authoring live', () => {
     await backToWorkflow(page);
     await expectSelectedStep(page, 'planning');
 
-    const assignment = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
+    const assignment = await openStagePanel(page, page.locator('.kit-stage-editor').last(), {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
     await expect.poll(async () => assignment.getByLabel('Required skill', { exact: true }).locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
@@ -587,23 +590,21 @@ test.describe('protocol authoring live', () => {
       has: page.locator('[data-testid="workflow-stage-architecture"].is-selected'),
     }).first();
     const stageEditor = selectedEntry.locator('.kit-stage-editor').first();
-    const artifactsSection = stageEditor.locator('.kit-stage-editor-section').filter({
-      has: page.getByRole('heading', { name: 'Inputs and outputs', exact: true }),
-    }).first();
-    await ensureDetailsOpen(artifactsSection);
+    const artifactsSection = await openStagePanel(page, stageEditor, {
+      tab: 'Files & outputs',
+      heading: 'Inputs and outputs',
+    });
 
     const readsRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
     const writesRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
     await artifactsSection.getByRole('button', { name: 'Edit workflow files and outputs', exact: true }).click();
     await expectSelectedStep(page, 'architecture');
-    const localArtifactCatalog = artifactsSection.locator('.kit-protocol-inline-card').filter({
-      has: page.getByRole('heading', { name: 'Workflow files and outputs', exact: true }),
-    }).first();
+    const localArtifactCatalog = artifactsSection.locator('.kit-protocol-inline-card').first();
     await expect(localArtifactCatalog).toBeVisible();
     await expect(page.locator('.kit-authoring-secondary-surface')).toHaveCount(0);
     await localArtifactCatalog.getByRole('button', { name: /Architecture notes/ }).click();
     await expect(localArtifactCatalog.getByLabel('Workspace path', { exact: true })).toHaveValue('docs/architecture-notes.md');
-    await localArtifactCatalog.getByRole('button', { name: 'Back to step', exact: true }).click();
+    await artifactsSection.getByRole('button', { name: 'Back to attachments', exact: true }).click();
     await expect(localArtifactCatalog).toHaveCount(0);
     await expectSelectedStep(page, 'architecture');
 
@@ -624,17 +625,10 @@ test.describe('protocol authoring live', () => {
       has: page.locator('[data-testid="workflow-stage-architecture"].is-selected'),
     }).first();
     const reloadedStageEditor = reloadedEntry.locator('.kit-stage-editor').first();
-    const reloadedArtifactsSection = reloadedStageEditor.locator('.kit-stage-editor-section').filter({
-      has: page.getByRole('heading', { name: 'Inputs and outputs', exact: true }),
-    }).first();
-    const reloadedSummary = reloadedArtifactsSection.locator('summary').first();
-    if (await reloadedSummary.count()) {
-      const expanded = await reloadedSummary.evaluate((node) => node.closest('details')?.open === true);
-      if (!expanded) {
-        await reloadedSummary.click();
-        await expect.poll(async () => reloadedSummary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
-      }
-    }
+    const reloadedArtifactsSection = await openStagePanel(page, reloadedStageEditor, {
+      tab: 'Files & outputs',
+      heading: 'Inputs and outputs',
+    });
     const reloadedReadsRow = reloadedArtifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
     const reloadedWritesRow = reloadedArtifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
     await expect(reloadedReadsRow.getByLabel(/Architecture review notes/)).toBeChecked();
@@ -661,13 +655,14 @@ test.describe('protocol authoring live', () => {
     await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
     await selectStep(page, 'draft_document');
     const details = page.locator('.kit-stage-editor').last();
-    const documentAssignmentHeading = details.getByRole('heading', { name: 'Assignment' }).first();
-    await documentAssignmentHeading.scrollIntoViewIfNeeded();
-    await expect(documentAssignmentHeading).toBeVisible();
+    const documentAssignment = await openStagePanel(page, details, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
     await expect(details.getByRole('tab', { name: 'By skill', exact: true })).toBeVisible();
     await expect(details.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
-    await expect(details.getByLabel('Required skill', { exact: true })).toBeVisible();
-    await expect(details.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
+    await expect(documentAssignment.getByLabel('Required skill', { exact: true })).toBeVisible();
+    await expect(documentAssignment.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
     await assertStandardAuthoringSurface(details);
     await expect(details).toContainText('Current assignment:');
 
@@ -1256,7 +1251,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Planning');
     await selectStep(page, 'planning');
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
+    await expect(page.locator('.kit-stage-editor').last().getByRole('tab', { name: 'Routing', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
     await expect(page.locator('.kit-workflow-cy-host')).toHaveCount(0);
 

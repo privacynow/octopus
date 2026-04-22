@@ -1,185 +1,612 @@
-**Protocol UX Verified State**
+**Protocol UX Product Plan**
 
 ## Status
 
-The current standard protocol-authoring surface is verified live on Octopus.
+This file is the active implementation plan.
 
-This file is no longer the active implementation plan for the density pass.
-It is the execution record and regression bar for the current live state.
+The current protocol editor is functionally far better than the earlier broken
+state, but it is still not product-complete. The remaining issues are not
+primarily correctness bugs. They are interaction-model, hierarchy, density, and
+workflow-usability problems.
 
-## What Shipped
+This plan replaces the previous "verified green state" framing. The standard is
+now product-shaped:
 
-### 1. Density and hierarchy pass
+- a human author can build and evolve real workflows through the UI
+- the editing flow stays anchored and easy to follow
+- the working area stays in view
+- deeper editing does not sprawl downward into a long document
+- map, settings, and artifact definition stay available without dominating the
+  main workflow surface
+- the tests prove those workflows end to end
 
-The stage stack now scales more cleanly with workflow size.
+## Core Problem Statement
 
-- non-selected rows are quieter
-- row summaries compress as workflows grow
-- the selected stage stays visually primary
-- the editor uses the same authoring pipeline; there is no parallel compact
-  renderer
+The current editor still behaves too much like an expanded configuration
+document and not enough like a progressive workflow builder.
 
-### 2. Lighter insertion affordance
+The main live problems are:
 
-The old repeated `Add below` command button is no longer the normal stage-stack
-control.
+1. Opening a stage expands a large editor below the row and pushes the working
+   area downward. The user loses the visual anchor they just clicked.
+2. Too many things are visible at once inside an open stage:
+   - basics
+   - assignment
+   - routing
+   - instructions
+   - inputs and outputs
+   - actions
+3. Secondary surfaces still interrupt the primary authoring flow:
+   - workflow map is available, but its presentation still needs to behave like
+     a focused workspace when opened
+   - protocol settings can still feel like a separate slab
+   - artifact editing can still break continuity if it behaves like a detached
+     catalog instead of a local stage-owned action
+4. The UI got more compact, but not lighter. Spacing was reduced faster than
+   chrome, borders, sections, and repeated labels were removed. That increased
+   perceived density.
+5. The interface still exposes too much of each stage at one time, which scales
+   poorly when workflows have many stages or richer artifact flows.
 
-- insertion is now exposed through a lighter inline `+ Add step` affordance
-- insertion semantics are unchanged
-- accessible labeling still uses `Add step below …`
+The result is a product that works, but still asks the user to manage the UI
+instead of progressing naturally through the workflow they are building.
 
-### 3. Progressive editor polish
+## Product Standard
 
-The selected stage editor is less verbose.
+A feature in this area is only complete when at least one scenario spec for
+each target workflow passes end to end through the UI:
 
-- assignment copy is shorter
-- routing copy is shorter
-- artifact copy is shorter
-- dense layouts compress gaps and card spacing without changing the data model
-
-### 4. Custom skill draft persistence
-
-The skills surface now keeps a newly created custom draft selected immediately.
-
-- creating a custom draft no longer loses selection during catalog refresh
-- the meta assistant scenario now works through the UI/API path again
-- the fix extends the existing skill list/selection pipeline instead of adding
-  a second path
-
-### 5. Audit harness alignment
-
-The exhaustive live audit now uses the current insertion affordance instead of
-the deleted `Add below` button contract.
-
-## Verified Standard Surface
-
-### Authoring
-
-Verified on the live Octopus deployment:
-
-- create blank draft
-- add first step
-- create new role inline
-- assign by skill
-- assign by specific agent
-- pin a matching agent
-- add step after current step
-- insert between existing stages
-- delete step
-- edit artifacts on a non-first stage without losing selection
-- publish
+- author
 - rehearse
-- archive
+- execute
 
-### Templates
+Isolated controls, green APIs, or passing smoke tests are not enough.
 
-Verified live:
+The target workflows are:
 
-- Software Engineering
-- Document Approval
-- Data Analysis / Reporting
-- Meta Protocol Assistant
+1. Software Engineering
+2. Document Approval
+3. Data Analysis / Reporting
+4. Meta Protocol Assistant
 
-### Focused surfaces
+## Product Principles
 
-Verified live:
+### 1. One anchor, one active work area
 
-- workflow map opens on demand
-- protocol settings remain a focused secondary surface
-- artifact editing remains in workflow context
-- `Done` closes the selected stage editor locally
+When a stage is selected, that stage stays visually anchored. The active work
+surface for that stage remains immediately adjacent to the anchor, not below a
+long stack of open content.
 
-### Standard-path restrictions
+### 2. One meaningful task at a time
 
-Verified on the standard authoring path:
+Inside a stage, the UI should guide the user through one active subpanel at a
+time. The editor should feel progressive, not document-like.
 
-- no `Custom runtime selector`
-- no standard-path `Advanced` editor
-- no standard-path editing of `stage_key`
-- no standard-path editing of `max_rounds`
-- no standard-path editing of `timeout_seconds`
+### 3. Secondary surfaces are focused, not stacked
 
-## Scenarios That Must Stay Green
+Workflow map, protocol settings, and artifact definition remain available, but
+they must open as focused secondary workspaces, not as additional slabs in the
+main scroll.
+
+### 4. Space is part of the product
+
+Brightness, rhythm, and breathing room are not decorative. They are part of
+comprehension. Reducing cognitive load requires removing simultaneous structure,
+not only tightening spacing.
+
+### 5. No duplicate pipelines
+
+There is one authoring pipeline. All improvements must extend the existing
+selection, projection, and editor model in place.
+
+### 6. UI manifests change through API-backed actions
+
+The product must support creating and evolving workflows, skills, and protocol
+compositions through the UI/API path. No database-first shortcuts.
+
+## Decisions
+
+### A. Selected stage becomes a focused working thread
+
+The selected stage row remains the local anchor.
+
+It shows:
+
+- stage name
+- compact summary
+- explicit `Done`
+- destructive action only where appropriate
+- local insertion affordance nearby, not as a repeated heavy command
+
+### B. The stage editor becomes progressive
+
+The selected stage owns one active subpanel at a time:
+
+- Step basics
+- Assignment
+- Routing
+- Instructions
+- Inputs and outputs
+
+Moving deeper into the stage swaps or focuses the local work area instead of
+expanding the page downward indefinitely.
+
+### C. `Done` stays explicit
+
+Do not replace `Done` with an icon-only affordance. The exit from stage editing
+should remain unmistakable.
+
+### D. Insertion becomes structural, not command-heavy
+
+The inline insertion affordance should feel like "insert here", not "invoke a
+builder command".
+
+Likely direction:
+
+- lightweight `+` insertion bar or slot between stages
+- visible label only when useful
+- no return to repeated large `Add below` buttons
+
+### E. Inactive rows recede by omission, not just compression
+
+Non-selected rows should show only the structural information needed to scan
+the workflow:
+
+- title
+- one short status/assignment line where useful
+- insertion affordance nearby
+
+They should not carry excessive summary or helper text.
+
+### F. Artifact editing is stage-contextual first
+
+Artifact attachment and artifact definition belong in the stage flow first.
+
+The user should be able to:
+
+- attach artifacts to a stage inline
+- create a new artifact from that stage
+- edit the selected artifact definition in local context
+- return directly to the same stage artifact panel
+
+The protocol-wide artifact catalog remains available as a management surface,
+not as the default editing destination from a stage.
+
+### G. Map and settings are focused secondary workspaces
+
+When opened intentionally:
+
+- workflow map must be properly sized and fully interactive
+- protocol settings must open as a focused secondary workspace
+- both must preserve context and return the user to the same stage/list state
+
+They should not extend the main page into a longer stacked document.
+
+### H. Density responds to workflow size, but never by compression alone
+
+More complex workflows should compress inactive structure more aggressively, but
+selected work should still retain breathing room. Do not answer complexity only
+by shrinking paddings and gaps.
+
+## Target UX
+
+### Default workflow view
+
+The default view is a quiet, scan-friendly stage stack.
+
+What is visible:
+
+- workflow header
+- lightweight top actions
+- stage stack
+- insertion slots
+
+What is not visible by default:
+
+- full map
+- full settings slab
+- full artifact catalog
+- full long-form stage editor
+
+### Selected stage view
+
+Selecting a stage should:
+
+- keep the selected row in place as the anchor
+- open a local focused work area directly beneath or attached to that row
+- keep the work header visible
+- expose one active subpanel by default
+
+The user should not need to scroll just to reach the thing they just opened.
+
+### Progressive subpanel flow
+
+Inside a selected stage:
+
+- opening Assignment focuses Assignment
+- opening Inputs and outputs focuses Inputs and outputs
+- deeper actions use local `Back` or `Done`
+- previously open panels do not remain equally expanded underneath
+
+### Artifact flow
+
+From a stage, the author should be able to say:
+
+- this step reads these artifacts
+- this step writes these artifacts
+- add a new workflow file/output right here
+- edit this artifact definition right here
+
+This is especially important for:
+
+- code files
+- documents
+- datasets
+- generated reports
+- published outputs
+
+### Map flow
+
+`Show workflow map` should mean:
+
+- open the map properly
+- keep it interactive
+- use it intentionally
+- return cleanly to the stage flow
+
+It should not mean:
+
+- reveal another dense block in the main scroll
+
+## Scenario Assertion Contract
+
+Every major scenario must prove these categories through the standard UI path.
+
+### Structure
+
+- stage order remains readable
+- selected stage remains anchored
+- no reliance on the map for primary authoring
+- opening a stage does not push the active work area below the fold without
+  need
+
+### Progressive focus
+
+- one active subpanel is primary at a time
+- local `Done` and local back/close behavior are clear
+- settings, map, and artifact definition can open and close without breaking
+  stage context
+
+### Routing
+
+- transitions or outcomes are visible and correct
+- revise/approve or branch semantics remain understandable
+
+### Assignment
+
+- assignment uses the standard path only
+- skill/agent choices stay understandable
+- no internal selector escape hatches appear in the standard path
+
+### Artifacts
+
+- stage reads/writes are visible and editable inline
+- artifact definitions can be created and edited from the stage flow
+- data/file/report chains remain understandable and correct
+
+### Rehearsal
+
+- ordered stage progression is visible
+- the workflow behaves as expected under revise/accept and other scenario
+  outcomes
+
+### Execution
+
+- terminal state is correct
+- artifact/outcome state is correct where the product defines it
+
+## Target Workflow Specs
 
 ### 1. Software Engineering
 
-The UI must continue to prove:
+The user can:
 
-- progressive stage editing
-- lighter insertion
-- artifact editing on `Architecture` stays on `Architecture`
-- revise/accept rehearsal loops
-- real execution through the live registry
+- scan a multi-stage workflow without overload
+- open `Planning`, `Architecture`, or `Implementation` and stay anchored there
+- edit assignment, routing, and artifacts progressively
+- rehearse revise loops and acceptance flow
+- execute the workflow through the live registry
+
+Specific interaction bar:
+
+- editing `Architecture` artifacts must stay on `Architecture`
+- opening a stage must keep the selected work area in view
+- non-selected stages must remain quiet enough to scan
 
 ### 2. Document Approval
 
-The UI must continue to prove:
+The user can:
 
-- step-owned assignment
-- revise/approve routing
-- rehearsal progression
-- real execution through the live registry
+- scan the draft-review-approval flow quickly
+- edit one step at a time without page sprawl
+- rehearse revise and approve outcomes
+- execute the workflow through the live registry
 
 ### 3. Data Analysis / Reporting
 
-The UI must continue to prove:
+The user can:
 
-- artifact definition through workflow files and outputs
-- step-to-step artifact attachment
-- standard-path assignment
-- rehearsal and execution through the live registry
+- create or edit a flow like:
+  - load data
+  - filter rows
+  - analyze
+  - render report
+  - publish
+- define artifacts as real workflow files/outputs
+- attach them to each step in context
+- understand the artifact chain visually
+- rehearse and execute the workflow through the live registry
 
 ### 4. Meta Protocol Assistant
 
-The UI must continue to prove:
+The user can:
 
-- create a custom skill draft
-- keep that new skill selected in the skills workspace
-- publish the custom skill
-- author a protocol that uses it
-- rehearse and execute through UI/API flows rather than database shortcuts
+- create a custom skill draft through the UI/API path
+- keep it selected while editing
+- publish it
+- create a protocol that uses it
+- compose a protocol-driven assistant that helps create further protocols or
+  skills
+- prove this through rehearsal and execution, not database shortcuts
+
+## Implementation Plan
+
+### Phase 0. Re-baseline with live findings
+
+Before implementation starts:
+
+- replace stale "green/complete" framing in tests and docs
+- codify the current regressions as named scenario expectations
+- capture representative before-state screenshots for:
+  - desktop overview
+  - selected stage
+  - artifact editing
+  - map open
+  - mobile selected stage
+
+### Phase 1. Stage anchor model
+
+Objective:
+
+- keep the selected stage header anchored
+- prevent the active work area from drifting out of view immediately after open
+
+Implementation direction:
+
+- reuse the existing selection model
+- restructure the selected row/editor composition so the working header and the
+  active panel live in one local shell
+- preserve scroll position intentionally instead of letting the page grow first
+  and relying on the user to chase the editor
+
+Acceptance:
+
+- opening a stage keeps the active work surface visible without manual
+  corrective scrolling
+- clicking `Done` closes the local work surface cleanly
+
+### Phase 2. Progressive subpanel model
+
+Objective:
+
+- convert the open stage from a long document into a progressive work flow
+
+Implementation direction:
+
+- reuse the existing sections:
+  - basics
+  - assignment
+  - routing
+  - instructions
+  - inputs/outputs
+- add one active-subpanel state inside the existing editor pipeline
+- make opening one major subpanel demote the others
+- keep summary affordances for collapsed sections minimal
+
+Acceptance:
+
+- only one major subpanel reads as the active working area
+- opening a new subpanel does not keep the old one equally expanded below it
+
+### Phase 3. Local artifact editing
+
+Objective:
+
+- keep artifact definition inside stage context for normal authoring
+
+Implementation direction:
+
+- reuse the existing artifact editor implementation
+- move or host it as a local stage-owned subpanel or nested local workspace
+  rather than forcing a jump to the protocol-wide artifact surface
+- preserve the protocol-wide artifact catalog as a separate management view
+
+Acceptance:
+
+- from `Inputs and outputs`, the user can add/edit an artifact and return
+  directly to the same stage
+- no context-breaking jump is required for ordinary artifact work
+
+### Phase 4. Focused secondary workspaces
+
+Objective:
+
+- make map and settings helpful without disrupting the main authoring flow
+
+Implementation direction:
+
+- workflow map opens in a properly sized focused surface
+- protocol settings open in a focused secondary surface
+- both preserve the prior stage selection and viewport context
+- both close cleanly back to the same workflow state
+
+Acceptance:
+
+- map is fully interactive and usable when opened
+- map/settings do not lengthen the main editor into another stacked slab
+
+### Phase 5. Density and hierarchy correction
+
+Objective:
+
+- restore breathing room and visual lightness without reintroducing sprawl
+
+Implementation direction:
+
+- reduce simultaneous visible structure
+- reduce borders and repeated card framing where possible
+- keep more whitespace around the active panel
+- make inactive rows quieter through omission, not just smaller paddings
+- keep `Done` explicit
+- evolve insertion toward a cleaner structural affordance
+
+Acceptance:
+
+- the interface feels lighter, not merely smaller
+- larger workflows remain easier to scan than the current live build
+
+### Phase 6. Workflow-size responsiveness
+
+Objective:
+
+- make the same UI scale across small and large workflows
+
+Implementation direction:
+
+- for small workflows, allow slightly richer row summaries
+- for medium workflows, compress inactive rows more aggressively
+- for larger workflows or branched workflows, lean harder on quiet structure and
+  focused editing
+
+Acceptance:
+
+- Software Engineering remains scannable
+- Document Approval remains simple
+- Data Analysis remains readable despite richer artifact structure
+
+### Phase 7. Scenario tests first-class
+
+Objective:
+
+- prove workflow usability, not only mechanics
+
+Implementation direction:
+
+- update Playwright scenario specs so they assert:
+  - anchored stage selection
+  - active work panel visibility
+  - local `Done` / local return behavior
+  - stage-contextual artifact editing
+  - focused map/settings behavior
+- keep backend/runtime tests unchanged except where new UI/API flows require
+  additional proof
+
+Acceptance:
+
+- each target workflow has at least one primary owning scenario spec
+- scenario specs become the release bar
+
+### Phase 8. Exhaustive live audit
+
+Objective:
+
+- validate breadth after the focused scenario specs are green
+
+Implementation direction:
+
+- rerun the live exhaustive audit on the deployed build
+- include desktop, tablet, and mobile
+- include add stage, remove stage, select skill, select agent, artifact edits,
+  map open/close, settings open/close, rehearsal, and execution
+- retain the 500+ screenshot breadth bar, but treat it as breadth validation,
+  not the primary correctness bar
+
+Acceptance:
+
+- live audit confirms no new interaction regressions
+- screenshots show the anchored, progressive model across surfaces
+
+### Phase 9. Cleanup
+
+Objective:
+
+- remove dead assumptions and duplicate coverage
+
+Implementation direction:
+
+- remove or rewrite stale tests tied to the old sprawling layout contract
+- remove dead helper copy and duplicated summaries
+- remove any obsolete UI branches kept only for earlier transition states
+
+Acceptance:
+
+- one coherent authoring pipeline remains
+- no stale interaction models are left behind in code or tests
+
+## Standard-Path Restrictions That Must Remain
+
+These remain required:
+
+- no custom runtime selector in the standard path
+- no standard-path `Advanced` section
+- no standard-path editing of:
+  - `stage_key`
+  - `max_rounds`
+  - `timeout_seconds`
+
+If an operator surface exists, it must remain clearly separate and not pollute
+the standard authoring path.
 
 ## Verification Matrix
 
-Latest verified commands and results:
+The final verification bar for this plan is:
 
-- `./.venv/bin/python -m pytest tests/test_protocols.py tests/test_protocol_rehearsal.py tests/test_protocol_engine.py tests/test_db_postgres.py tests/test_registry_ui_contract.py tests/test_registry_service.py tests/test_registry_ui_kit_contract.py -q`
-  - `224 passed`
-- `./.tmp/playwright/node_modules/.bin/playwright test tests/e2e/playwright/protocol-ui.spec.js --config=tests/e2e/playwright.config.js`
-  - `10 passed`
-- `./.tmp/playwright/node_modules/.bin/playwright test .tmp/playwright/live-execution-smoke.spec.js --config=.tmp/playwright/playwright.live.config.js`
-  - `1 passed`
-- `./.tmp/playwright/node_modules/.bin/playwright test .tmp/playwright/live-exhaustive-audit.spec.js --config=.tmp/playwright/playwright.live.config.js`
-  - `9 passed`
-- `./.tmp/playwright/node_modules/.bin/playwright test .tmp/playwright/live-runs-filter-matrix.spec.js --config=.tmp/playwright/playwright.live.config.js`
-  - `1 passed`
-- `find .tmp/playwright/live-audit -type f | wc -l`
-  - `961`
-- `curl -sS http://127.0.0.1:8787/healthz`
-  - `{"ok":true}`
-- `./octopus status` from `/Users/tinker/octopus`
-  - registry healthy
-  - `M1`, `M2`, `M3` connected
-  - no execution faults
+- backend/runtime contract tests
+- primary scenario Playwright suite
+- negative standard-path invariants
+- live rehearsal and execution smoke
+- exhaustive live audit
 
-## Current Verified State
+The live audit remains a breadth requirement. The scenario specs are the depth
+and release requirement.
 
-No verified blocking defects remain from this pass on the standard authoring
-and runs surfaces.
+## Definition of Done
 
-That statement is limited to the verified live surface and the commands above.
-It does not mean no future bug can exist. It means there are no open verified
-items left from this implementation and audit cycle.
+This plan is complete only when all of the following are true on the deployed
+Octopus build:
 
-## Regression Rules
-
-Future work in this area must preserve these rules:
-
-1. No duplicate authoring pipeline.
-2. No return to command-heavy repeated insertion buttons.
-3. No second compact authoring renderer.
-4. No standard-path internal selector or stage-internals escape hatches.
-5. Artifact editing stays stage-contextual for normal authoring.
-6. Custom skill draft creation must keep the new draft selected immediately.
-7. Scenario suites are the release bar; the exhaustive audit is breadth
-   validation.
+1. Opening a stage keeps the working area anchored and in view.
+2. The selected stage uses a progressive subpanel model instead of a sprawling
+   long-form expansion.
+3. Artifact definition/editing is stage-contextual for ordinary authoring.
+4. Workflow map and protocol settings behave as focused secondary workspaces.
+5. The UI feels lighter and easier to scan than the current dense build,
+   especially on Software Engineering.
+6. Software Engineering passes end to end through the UI:
+   - author
+   - rehearse
+   - execute
+7. Document Approval passes end to end through the UI:
+   - author
+   - rehearse
+   - execute
+8. Data Analysis / Reporting passes end to end through the UI:
+   - author
+   - rehearse
+   - execute
+9. Meta Protocol Assistant passes end to end through the UI/API path:
+   - create skill
+   - create protocol
+   - rehearse
+   - execute
+10. No duplicate authoring pipeline was introduced.

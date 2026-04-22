@@ -95,6 +95,25 @@ async function waitForSaved(page) {
   await expect(page.locator('.kit-draft-chip[data-state="saved"]')).toBeVisible({ timeout: 15000 });
 }
 
+async function openStagePanel(page, stageEditorShell, {
+  tab,
+  heading = tab,
+} = {}) {
+  const panelTab = stageEditorShell.getByRole('tab', { name: tab, exact: true });
+  if (await panelTab.count()) {
+    await expect(panelTab).toBeVisible();
+    const isActive = await panelTab.evaluate((element) => element.classList.contains('active'));
+    if (!isActive) {
+      await panelTab.click();
+    }
+  }
+  const section = stageEditorShell.locator('.kit-stage-editor-section').filter({
+    has: page.getByRole('heading', { name: heading, exact: true }),
+  }).first();
+  await expect(section).toBeVisible();
+  return section;
+}
+
 async function setSelectValue(control, value) {
   const targetValue = String(value || '');
   await expect(control).toBeVisible();
@@ -182,11 +201,10 @@ async function createStep(page, {
     .filter({ has: page.getByRole('button', { name: 'Create step', exact: true }) })
     .last();
   await expect(stageEditorShell).toBeVisible();
-  const stageEditor = stageEditorShell.locator('.kit-stage-editor-grid');
-  const stepBasics = stageEditorShell
-    .locator('.kit-stage-editor-section')
-    .filter({ has: page.getByRole('heading', { name: 'Step basics', exact: true }) })
-    .first();
+  const stepBasics = await openStagePanel(page, stageEditorShell, {
+    tab: 'Basics',
+    heading: 'Step basics',
+  });
   const stepNameControl = stepBasics.locator('input, textarea').first();
   await expect(stepNameControl).toBeVisible();
   await stepNameControl.fill(name);
@@ -194,15 +212,11 @@ async function createStep(page, {
   if (ownerRole) {
     await setSelectValue(ownerRoleSelect, ownerRole);
   } else {
-    const roleSection = stageEditorShell
-      .locator('.kit-stage-editor-section')
-      .filter({ has: page.getByRole('heading', { name: 'New owner role', exact: true }) })
-      .first();
-    const roleNameControl = roleSection.getByLabel('Role name').first();
+    const roleNameControl = stepBasics.getByLabel('Role name').first();
     await expect(roleNameControl).toBeVisible();
     await roleNameControl.fill(roleName || `${name} role`);
     if (roleKey) {
-      await roleSection.getByLabel('Role key').first().fill(roleKey);
+      await stepBasics.getByLabel('Role key').first().fill(roleKey);
     }
   }
   if (stageKind) {
@@ -211,10 +225,10 @@ async function createStep(page, {
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);
   }
-  const assignmentSection = stageEditorShell
-    .locator('.kit-stage-editor-section')
-    .filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) })
-    .first();
+  const assignmentSection = await openStagePanel(page, stageEditorShell, {
+    tab: 'Assignment',
+    heading: 'Assignment',
+  });
   const valueLabel = selectorKind === 'agent'
     ? 'Agent'
     : selectorKind === 'skill'
@@ -257,10 +271,10 @@ async function createStep(page, {
   }
   await page.waitForTimeout(150);
   if (instructions) {
-    const instructionsSection = stageEditorShell
-      .locator('.kit-stage-editor-section')
-      .filter({ has: page.getByRole('heading', { name: 'Instructions', exact: true }) })
-      .first();
+    const instructionsSection = await openStagePanel(page, stageEditorShell, {
+      tab: 'Instructions',
+      heading: 'Instructions',
+    });
     await instructionsSection.getByLabel('Instructions').fill(instructions);
   }
   await stageEditorShell.getByRole('button', { name: 'Create step', exact: true }).click();
@@ -334,10 +348,11 @@ async function backToWorkflow(page) {
 async function connectStep(page, sourceStageKey, targetNodeId) {
   await selectStep(page, sourceStageKey);
   await expect(page).toHaveURL(new RegExp(`stage_key=${sourceStageKey}`));
-  const routingSection = page.locator('.kit-stage-editor-section').filter({
-    has: page.getByRole('heading', { name: 'Routing', exact: true }),
-  }).first();
-  await ensureDetailsOpen(routingSection);
+  const stageEditor = page.locator('.kit-stage-editor').last();
+  const routingSection = await openStagePanel(page, stageEditor, {
+    tab: 'Routing',
+    heading: 'Routing',
+  });
   const branchAdd = page.locator('.kit-stage-routing').getByRole('button', { name: 'Add branch or finish' }).first();
   await expect(branchAdd).toBeVisible();
   await branchAdd.click();
@@ -370,6 +385,7 @@ module.exports = {
   ensureDetailsOpen,
   login,
   openBlankDraft,
+  openStagePanel,
   openProtocolSettings,
   openTemplateDraft,
   openWorkflowMap,

@@ -3354,15 +3354,15 @@ select {
 
 .kit-protocol-stage-stack {
     display: grid;
-    gap: var(--space-4);
+    gap: 1.125rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] {
-    gap: var(--space-3);
+    gap: 1rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] {
-    gap: var(--space-2-5);
+    gap: 0.9rem;
 }
 
 .kit-protocol-segment-entry {
@@ -3386,10 +3386,12 @@ select {
 .kit-protocol-inline-card {
     display: grid;
     gap: var(--space-3);
-    padding: var(--space-3);
+    padding: var(--space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    background: var(--bg);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0)),
+        var(--bg);
 }
 
 .kit-authoring-map-panel,
@@ -3495,7 +3497,15 @@ select {
 .kit-stage-editor {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2-5);
+    gap: var(--space-3);
+}
+
+.kit-stage-editor > .kit-authoring-surface-head {
+    position: sticky;
+    top: var(--space-2);
+    z-index: 2;
+    padding-bottom: var(--space-2);
+    background: linear-gradient(180deg, var(--bg) 0%, var(--bg) 82%, transparent 100%);
 }
 
 .kit-stage-editor-hero-title {
@@ -3542,10 +3552,10 @@ select {
     width: 100%;
     display: grid;
     gap: var(--space-1);
-    padding: var(--space-3);
-    border: 1px solid var(--border);
+    padding: 0.95rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--radius-md);
-    background: var(--bg);
+    background: rgba(255, 255, 255, 0.015);
     color: var(--text);
     text-align: left;
     font: inherit;
@@ -3554,17 +3564,17 @@ select {
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-step {
     gap: 0.35rem;
-    padding: var(--space-2-5) var(--space-3);
+    padding: 0.85rem 0.95rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-step {
-    gap: 0.2rem;
-    padding: var(--space-2) var(--space-2-5);
+    gap: 0.25rem;
+    padding: 0.72rem 0.85rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step,
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step {
-    background: rgba(255, 255, 255, 0.02);
+    background: rgba(255, 255, 255, 0.01);
 }
 
 .kit-protocol-segment-step.is-selected {
@@ -3653,19 +3663,39 @@ select {
     font-weight: 600;
 }
 
-.kit-stage-editor-grid {
+.kit-stage-editor-grid,
+.kit-stage-workspace-panel {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-3);
+    align-content: start;
+}
+
+.kit-stage-workspace-nav {
+    align-self: flex-start;
+    max-width: 100%;
+}
+
+.kit-stage-workspace-body {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.kit-stage-workspace-subsection {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.kit-stage-workspace-subtitle {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
 }
 
 .kit-stage-editor[data-density="balanced"],
 .kit-stage-editor[data-density="dense"] {
-    gap: var(--space-2);
-}
-
-.kit-stage-editor[data-density="dense"] .kit-stage-editor-grid {
-    gap: var(--space-2);
+    gap: var(--space-2-5);
 }
 
 .kit-stage-editor-section {
@@ -3727,6 +3757,12 @@ select {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+}
+
+.kit-stage-routing-editor {
+    display: grid;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
 }
 
 .kit-stage-routing-head {

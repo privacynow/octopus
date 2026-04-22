@@ -95,6 +95,23 @@ async function waitForSaved(page) {
   await expect(page.locator('.kit-draft-chip[data-state="saved"]')).toBeVisible({ timeout: 15000 });
 }
 
+async function setSelectValue(control, value) {
+  const targetValue = String(value || '');
+  await expect(control).toBeVisible();
+  const options = await control.locator('option').evaluateAll((nodes) =>
+    nodes.map((node) => String(node.value || '')),
+  );
+  if (!options.includes(targetValue)) {
+    throw new Error(`Select value "${targetValue}" is not available. Options: ${options.join(', ')}`);
+  }
+  await control.evaluate((element, nextValue) => {
+    const select = /** @type {HTMLSelectElement} */ (element);
+    select.value = String(nextValue || '');
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }, targetValue);
+}
+
 async function openBlankDraft(page) {
   await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'New protocol' }).click();
@@ -169,7 +186,7 @@ async function createStep(page, {
   await stepNameControl.fill(name);
   const ownerRoleSelect = stepBasics.getByLabel('Owner role').first();
   if (ownerRole) {
-    await ownerRoleSelect.selectOption(ownerRole);
+    await setSelectValue(ownerRoleSelect, ownerRole);
   } else {
     const roleSection = stageEditorShell
       .locator('.kit-stage-editor-section')
@@ -183,7 +200,7 @@ async function createStep(page, {
     }
   }
   if (stageKind) {
-    await stepBasics.getByLabel('Stage type').first().selectOption(stageKind);
+    await setSelectValue(stepBasics.getByLabel('Stage type').first(), stageKind);
   }
   if (!selectorValue) {
     throw new Error(`selectorValue is required when creating step ${key || name}`);
@@ -227,7 +244,7 @@ async function createStep(page, {
         throw new Error(`No selectable ${selectorKind} option is available for ${key || name}`);
       }
     }
-    await valueControl.selectOption(targetValue);
+    await setSelectValue(valueControl, targetValue);
   } else {
     await valueControl.fill(selectorValue);
     await valueControl.blur();
@@ -276,9 +293,45 @@ async function expectSelectedStep(page, stageKey) {
   await expect(selectedEntry.locator('.kit-stage-editor').first()).toBeVisible();
 }
 
+async function ensureDetailsOpen(section) {
+  const summary = section.locator('summary').first();
+  if (!(await summary.count())) return;
+  const expanded = await summary.evaluate((node) => node.closest('details')?.open === true);
+  if (expanded) return;
+  await summary.click();
+  await expect.poll(async () => summary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
+}
+
+async function openProtocolSettings(page) {
+  const lifecycle = page.locator('.kit-lifecycle-header');
+  await lifecycle.getByRole('button', { name: 'Protocol' }).click();
+  await lifecycle.getByRole('button', { name: 'Protocol settings' }).click();
+  await expect(page.locator('.kit-protocol-inline-card').getByLabel('Description')).toBeVisible();
+}
+
+async function openWorkflowMap(page) {
+  const button = page.getByRole('button', { name: 'Show workflow map', exact: true });
+  await expect(button).toBeVisible();
+  await button.click();
+  await expect(page.locator('.kit-authoring-secondary-surface .kit-workflow-canvas')).toBeVisible();
+}
+
+async function backToWorkflow(page) {
+  const surface = page.locator('.kit-authoring-secondary-surface').first();
+  if (!(await surface.count())) return;
+  const button = surface.getByRole('button', { name: 'Back to workflow', exact: true }).first();
+  if (!(await button.count())) return;
+  await button.click();
+  await expect(surface).toHaveCount(0);
+}
+
 async function connectStep(page, sourceStageKey, targetNodeId) {
   await selectStep(page, sourceStageKey);
   await expect(page).toHaveURL(new RegExp(`stage_key=${sourceStageKey}`));
+  const routingSection = page.locator('.kit-stage-editor-section').filter({
+    has: page.getByRole('heading', { name: 'Routing', exact: true }),
+  }).first();
+  await ensureDetailsOpen(routingSection);
   const branchAdd = page.locator('.kit-stage-routing').getByRole('button', { name: 'Add branch or finish' }).first();
   await expect(branchAdd).toBeVisible();
   await branchAdd.click();
@@ -304,15 +357,20 @@ module.exports = {
   apiSaveProtocolDraft,
   assertStandardAuthoringSurface,
   attachErrorCapture,
+  backToWorkflow,
   connectStep,
   createStep,
   discardDraft,
+  ensureDetailsOpen,
   login,
   openBlankDraft,
+  openProtocolSettings,
   openTemplateDraft,
+  openWorkflowMap,
   outlineStepNode,
   protocolIdFromUrl,
   expectSelectedStep,
+  setSelectValue,
   selectStep,
   waitForSaved,
 };

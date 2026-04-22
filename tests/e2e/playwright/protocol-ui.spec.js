@@ -2,13 +2,16 @@ const { test, expect } = require('./playwright-runtime');
 const {
   assertStandardAuthoringSurface,
   attachErrorCapture,
+  backToWorkflow,
   connectStep,
   createStep,
   discardDraft,
+  ensureDetailsOpen,
   expectSelectedStep,
   login,
   outlineStepNode,
   openBlankDraft,
+  openProtocolSettings,
   openTemplateDraft,
   protocolIdFromUrl,
   selectStep,
@@ -83,6 +86,17 @@ async function getRunDetail(page, runId) {
   return response.payload;
 }
 
+async function listRunningRehearsalRunIds(page, protocolId) {
+  const expectedProtocolId = String(protocolId || '');
+  const response = await apiJson(page, 'GET', '/v1/protocol-runs?limit=25&status=running');
+  expect(response.ok).toBe(true);
+  const runs = Array.isArray(response.payload?.runs) ? response.payload.runs : [];
+  return runs
+    .filter((item) => item.is_rehearsal && String(item.protocol_id || '') === expectedProtocolId)
+    .map((item) => String(item.protocol_run_id || ''))
+    .filter(Boolean);
+}
+
 async function waitForRunStage(page, runId, stageKey) {
   await expect.poll(async () => {
     const detail = await getRunDetail(page, runId);
@@ -103,16 +117,14 @@ async function applyScenarioAndSubmit(session, scenarioName) {
   await session.getByRole('button', { name: 'Submit response', exact: true }).click();
 }
 
-async function waitForLatestRehearsalRunId(page, protocolId) {
-  const expectedProtocolId = String(protocolId || '');
+async function waitForLatestRehearsalRunId(page, protocolId, previousRunIds = []) {
+  const previous = new Set((previousRunIds || []).map((item) => String(item || '')).filter(Boolean));
   await expect.poll(async () => {
-    const response = await apiJson(page, 'GET', '/v1/protocol-runs?limit=10&status=running');
-    const runs = Array.isArray(response.payload?.runs) ? response.payload.runs : [];
-    return String(runs.find((item) => item.is_rehearsal && String(item.protocol_id || '') === expectedProtocolId)?.protocol_run_id || '');
+    const runIds = await listRunningRehearsalRunIds(page, protocolId);
+    return String(runIds.find((runId) => !previous.has(runId)) || '');
   }, { timeout: 15000 }).not.toBe('');
-  const response = await apiJson(page, 'GET', '/v1/protocol-runs?limit=10&status=running');
-  const runs = Array.isArray(response.payload?.runs) ? response.payload.runs : [];
-  return String(runs.find((item) => item.is_rehearsal && String(item.protocol_id || '') === expectedProtocolId)?.protocol_run_id || '');
+  const runIds = await listRunningRehearsalRunIds(page, protocolId);
+  return String(runIds.find((runId) => !previous.has(runId)) || '');
 }
 
 async function firstConnectedAgent(page) {
@@ -187,15 +199,16 @@ async function createAndPublishCustomSkill(page, {
   await expect(page.locator('.editor-panel').filter({ hasText: 'Runtime available' }).first()).toContainText('Yes', { timeout: 30000 });
 }
 
-async function openProtocolSettings(page) {
-  const lifecycle = page.locator('.kit-lifecycle-header');
-  await lifecycle.getByRole('button', { name: 'Protocol' }).click();
-  await lifecycle.getByRole('button', { name: 'Protocol settings' }).click();
-  await expect(page.locator('.kit-protocol-inline-card').getByLabel('Description')).toBeVisible();
-}
-
 async function addArtifact(page, { name, path, kind = 'workspace_file' }) {
-  const catalog = page.locator('.kit-protocol-inline-card').filter({ has: page.getByRole('heading', { name: 'Workflow files and outputs', exact: true }) }).first();
+  let catalog = page.locator('.kit-protocol-inline-card').filter({ has: page.getByRole('heading', { name: 'Workflow files and outputs', exact: true }) }).first();
+  if (!(await catalog.count())) {
+    const workflowFilesToggle = page.locator('.segmented-control-btn').filter({ hasText: 'Workflow files' }).first();
+    if (await workflowFilesToggle.count()) {
+      await workflowFilesToggle.click();
+    }
+    catalog = page.locator('.kit-protocol-inline-card').filter({ has: page.getByRole('heading', { name: 'Workflow files and outputs', exact: true }) }).first();
+  }
+  await expect(catalog).toBeVisible();
   const beforeCount = await page.locator('[data-testid^="workflow-artifact-"]').count();
   const artifactKey = `artifact_${beforeCount + 1}`;
   await catalog.getByRole('button', { name: 'Add artifact', exact: true }).click();
@@ -326,8 +339,12 @@ test.describe('protocol authoring live', () => {
     await expect(page.getByRole('heading', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(page.locator('.kit-stage-editor')).toContainText('Planner');
     await expect(page.locator('.kit-stage-editor')).toContainText('Current assignment:');
+    const routingSection = page.locator('.kit-stage-editor-section').filter({
+      has: page.getByRole('heading', { name: 'Routing', exact: true }),
+    }).first();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Instructions' })).toBeVisible();
+    await ensureDetailsOpen(routingSection);
     await expect(page.getByRole('button', { name: 'Add branch or finish' }).first()).toBeVisible();
 
     const reviewKey = await createStep(page, {
@@ -355,6 +372,7 @@ test.describe('protocol authoring live', () => {
     await waitForSaved(page);
     await page.getByRole('button', { name: 'Protocol settings', exact: true }).click();
     await expect(page.locator('.kit-protocol-inline-card').getByLabel('Description')).toBeVisible();
+    await backToWorkflow(page);
 
     await page.getByRole('button', { name: 'Validate' }).click();
     await page.getByRole('button', { name: 'Publish' }).click();
@@ -409,13 +427,13 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
     const mapWidth = await page.locator('.kit-authoring-map-panel .kit-workflow-viewport-cy').evaluate((element) => element.getBoundingClientRect().width);
     expect(mapWidth).toBeGreaterThan(700);
-    await page.getByRole('button', { name: 'Back to workflow', exact: true }).click();
+    await backToWorkflow(page);
     await expectSelectedStep(page, 'planning');
     await expect(page.locator('.kit-protocol-stage-stack')).toBeVisible();
 
     await openProtocolSettings(page);
     await expect(page.locator('.kit-protocol-stage-stack')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Back to workflow', exact: true }).click();
+    await backToWorkflow(page);
     await expectSelectedStep(page, 'planning');
 
     const assignment = page.locator('.kit-stage-editor-section').filter({ has: page.getByRole('heading', { name: 'Assignment', exact: true }) }).first();
@@ -562,6 +580,7 @@ test.describe('protocol authoring live', () => {
       path: 'docs/architecture-review.md',
       kind: 'workspace_file',
     });
+    await backToWorkflow(page);
 
     await selectStep(page, 'architecture');
     const selectedEntry = page.locator('.kit-protocol-segment-entry').filter({
@@ -571,14 +590,7 @@ test.describe('protocol authoring live', () => {
     const artifactsSection = stageEditor.locator('.kit-stage-editor-section').filter({
       has: page.getByRole('heading', { name: 'Inputs and outputs', exact: true }),
     }).first();
-    const summary = artifactsSection.locator('summary').first();
-    if (await summary.count()) {
-      const expanded = await summary.evaluate((node) => node.closest('details')?.open === true);
-      if (!expanded) {
-        await summary.click();
-        await expect.poll(async () => summary.evaluate((node) => node.closest('details')?.open === true)).toBe(true);
-      }
-    }
+    await ensureDetailsOpen(artifactsSection);
 
     const readsRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
     const writesRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
@@ -589,8 +601,8 @@ test.describe('protocol authoring live', () => {
     }).first();
     await expect(localArtifactCatalog).toBeVisible();
     await expect(page.locator('.kit-authoring-secondary-surface')).toHaveCount(0);
-    await localArtifactCatalog.getByTestId('workflow-artifact-artifact_1').click();
-    await expect(localArtifactCatalog.locator('.kit-stage-editor').first()).toContainText('Architecture notes');
+    await localArtifactCatalog.getByRole('button', { name: /Architecture notes/ }).click();
+    await expect(localArtifactCatalog.getByLabel('Workspace path', { exact: true })).toHaveValue('docs/architecture-notes.md');
     await localArtifactCatalog.getByRole('button', { name: 'Back to step', exact: true }).click();
     await expect(localArtifactCatalog).toHaveCount(0);
     await expectSelectedStep(page, 'architecture');
@@ -684,6 +696,7 @@ test.describe('protocol authoring live', () => {
     ]) {
       await addArtifact(page, artifact);
     }
+    await backToWorkflow(page);
 
     const loadKey = await createStep(page, {
       name: 'Load data',
@@ -823,9 +836,10 @@ test.describe('protocol authoring live', () => {
     }
 
     try {
+      const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
       await page.getByRole('button', { name: 'Rehearse' }).click();
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
-      const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId);
+      const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
       const rehearsalSequence = [
         [loadKey, 'Load data complete', filterKey],
         [filterKey, 'Filter rows complete', analyzeKey],
@@ -928,9 +942,10 @@ test.describe('protocol authoring live', () => {
     });
 
     try {
+      const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
       await page.getByRole('button', { name: 'Rehearse' }).click();
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
-      const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId);
+      const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
       const session = page.locator(`.kit-rehearsal-session[data-stage-key="${composeKey}"]`).first();
       await expect(session).toBeVisible({ timeout: 20000 });
       await applyScenarioAndSubmit(session, 'Compose assistant complete');
@@ -1074,9 +1089,10 @@ test.describe('protocol authoring live', () => {
     }
 
     try {
+      const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
       await page.getByRole('button', { name: 'Rehearse' }).click();
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
-      const runId = await waitForLatestRehearsalRunId(page, protocolId);
+      const runId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
 
       const sequence = [
         ['planning', 'Planning pass 1', 'plan_review'],
@@ -1179,9 +1195,10 @@ test.describe('protocol authoring live', () => {
     }
 
     try {
+      const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
       await page.getByRole('button', { name: 'Rehearse' }).click();
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
-      const runId = await waitForLatestRehearsalRunId(page, protocolId);
+      const runId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
 
       const sequence = [
         ['draft_document', 'Draft v1', 'review_document'],
@@ -1233,6 +1250,7 @@ test.describe('protocol authoring live', () => {
     }));
     expect(canvasOverflow.scrollWidth).toBeLessThanOrEqual(canvasOverflow.clientWidth + 2);
     expect(canvasOverflow.height).toBeGreaterThan(420);
+    await backToWorkflow(page);
 
     await page.getByTestId('workflow-stage-planning').click();
     await expect(page.locator('.kit-stage-editor').last().getByLabel('Name').first()).toHaveValue('Planning');
@@ -1240,7 +1258,7 @@ test.describe('protocol authoring live', () => {
     await expect(page.locator('.kit-stage-editor-grid')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Routing' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
-    await expect(page.locator('.kit-workflow-cy-host')).toBeVisible();
+    await expect(page.locator('.kit-workflow-cy-host')).toHaveCount(0);
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);

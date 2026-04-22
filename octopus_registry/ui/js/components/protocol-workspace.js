@@ -2759,31 +2759,29 @@ function renderProtocolWorkspace(container) {
         compact = false,
     } = {}) {
         if (!selectorValue) return null;
+        const matches = _agentsAdvertisingSkill(selectorValue);
+        if (compact || (!matches.length && !preferredAgentId)) return null;
         const section = document.createElement('section');
         section.className = 'kit-selector-editor-context';
         section.dataset.key = `selector-skill-match:${String(selectorValue || '').trim().toLowerCase()}`;
         const title = document.createElement('strong');
         title.className = 'kit-selector-editor-context-title';
-        title.textContent = 'Matching agents';
+        title.textContent = 'Available now';
         title.dataset.key = `${section.dataset.key}:title`;
         section.appendChild(title);
-        const matches = _agentsAdvertisingSkill(selectorValue);
         const preferredAgent = _selectorAgentRecord(preferredAgentId || '');
         const matchLabels = matches.map((candidate) => String(candidate?.display_name || candidate?.slug || '').trim()).filter(Boolean);
         const help = document.createElement('p');
         help.className = 'kit-selector-editor-note';
         help.dataset.key = `${section.dataset.key}:note`;
-        help.textContent = readOnly
-            ? 'Connected agents that currently advertise this skill.'
-            : compact
-                ? 'Leave the assignment dynamic unless you want to pin one of the matching agents shown above.'
-                : 'Leave the pinned-agent field blank to keep this step dynamic.';
-        if (!compact) {
-            help.textContent += matchLabels.length
-            ? ` Available now: ${matchLabels.join(', ')}.`
-            : ' No connected agents currently advertise this skill.';
+        if (matchLabels.length) {
+            help.textContent = matchLabels.join(', ');
+        } else {
+            help.textContent = readOnly
+                ? 'No connected agents currently advertise this skill.'
+                : 'No connected agents currently advertise this skill yet.';
         }
-        if (preferredAgent && !compact) {
+        if (preferredAgent) {
             help.textContent += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
         }
         section.appendChild(help);
@@ -2797,37 +2795,30 @@ function renderProtocolWorkspace(container) {
         compact = false,
     } = {}) {
         const agent = _selectorAgentRecord(selectorValue);
+        const skills = _selectorAgentSkills(agent);
+        if (!selectorValue || compact || (!skills.length && !selectedSkill)) return null;
         const section = document.createElement('section');
         section.className = 'kit-selector-editor-context';
         section.dataset.key = `selector-agent-skills:${String(selectorValue || '').trim().toLowerCase()}`;
         const title = document.createElement('strong');
         title.className = 'kit-selector-editor-context-title';
         title.dataset.key = `${section.dataset.key}:title`;
-        title.textContent = 'Optional skill requirement';
+        title.textContent = 'Available skills';
         section.appendChild(title);
         const note = document.createElement('p');
         note.className = 'kit-selector-editor-note';
         note.dataset.key = `${section.dataset.key}:note`;
         const agentLabel = String(agent?.display_name || agent?.slug || selectorValue || '').trim();
-        const skills = _selectorAgentSkills(agent);
         const selectedSkillLabel = String(selectedSkill || '').trim() ? _titleCaseWords(selectedSkill) : '';
-        if (agentLabel && selectedSkillLabel) {
-            note.textContent = compact
-                ? `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}.`
-                : `Pinned to ${agentLabel} and limited to ${selectedSkillLabel}.`;
-        } else if (agentLabel) {
-            note.textContent = compact
-                ? `Pinned to ${agentLabel}. Leave the skill blank to keep the assignment agent-only.`
-                : `Pinned to ${agentLabel}. Leave the skill blank to keep the assignment agent-only.`;
+        if (skills.length) {
+            note.textContent = skills.map((skillName) => _titleCaseWords(skillName)).join(', ');
         } else {
-            note.textContent = 'Advertised routing skills for this pinned agent.';
+            note.textContent = readOnly
+                ? 'No advertised routing skills are currently available for this agent.'
+                : 'No advertised routing skills are currently available for this agent right now.';
         }
-        if (!compact) {
-            note.textContent += skills.length
-            ? ` Available here: ${skills.map((skillName) => _titleCaseWords(skillName)).join(', ')}.`
-            : ' No advertised routing skills are currently available for this agent.';
-        } else if (!skills.length) {
-            note.textContent += ' No advertised routing skills are currently available for this agent.';
+        if (agentLabel && selectedSkillLabel) {
+            note.textContent += ` Selected: ${selectedSkillLabel} on ${agentLabel}.`;
         }
         section.appendChild(note);
         return section;
@@ -3177,8 +3168,8 @@ function renderProtocolWorkspace(container) {
                 label: 'Pin matching agent (optional)',
                 catalogEntries: requiredSkillMatches,
                 emptyHint: requiredSkill
-                    ? 'No connected agents currently advertise this skill. Leave the agent blank to keep the step dynamic.'
-                    : 'Choose a required skill first if you want to pin one matching agent.',
+                    ? 'No matching agents available right now.'
+                    : 'Choose a required skill first.',
                 placeholderText: requiredSkill ? '(leave dynamic)' : '(choose a skill first)',
                 disabled: !requiredSkill,
                 allowCustom: false,
@@ -3219,8 +3210,8 @@ function renderProtocolWorkspace(container) {
                 label: 'Limit to one of this agent\'s skills (optional)',
                 catalogEntries: agentSkillEntries,
                 emptyHint: pinnedAgent
-                    ? 'This agent does not currently advertise any routing skills. Leave the skill blank to keep the assignment agent-only.'
-                    : 'Choose an agent first if you want to constrain it to one of its skills.',
+                    ? 'No advertised routing skills are available for this agent right now.'
+                    : 'Choose an agent first.',
                 placeholderText: pinnedAgent ? '(leave agent-only)' : '(choose an agent first)',
                 disabled: !pinnedAgent,
                 allowCustom: false,

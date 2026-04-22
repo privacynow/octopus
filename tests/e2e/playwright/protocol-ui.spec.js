@@ -464,7 +464,7 @@ test.describe('protocol authoring live', () => {
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
     await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
-    await expect(assignment.getByText('Matching agents', { exact: true })).toBeVisible();
+    await expect(assignment.getByText('Available now', { exact: true })).toBeVisible();
     const pinAgentPillGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]');
     const pinAgentSelect = assignment.locator('select[aria-label="Pin matching agent (optional)"]');
     if (await pinAgentPillGroup.count()) {
@@ -489,7 +489,7 @@ test.describe('protocol authoring live', () => {
     const agentControl = assignment.getByLabel('Agent', { exact: true });
     const initialPinnedAgentValue = await agentControl.inputValue();
     expect(initialPinnedAgentValue).toBeTruthy();
-    await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
+    await expect(assignment.getByText('Available skills', { exact: true })).toBeVisible();
     await expect(assignment).toContainText('(leave agent-only)');
     const availableAgentValues = await agentControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
@@ -518,9 +518,9 @@ test.describe('protocol authoring live', () => {
       } else {
         await expect(nextPinAgentSelect).toHaveValue(alternateAgent || initialPinnedAgentValue);
       }
-      await expect(assignment.getByText('Matching agents', { exact: true })).toBeVisible();
+      await expect(assignment.getByText('Available now', { exact: true })).toBeVisible();
     } else {
-      await expect(assignment.getByText('Optional skill requirement')).toBeVisible();
+      await expect(assignment.getByText('Available skills', { exact: true })).toBeVisible();
     }
     const connectedAgent = await firstConnectedAgent(page);
     expect(connectedAgent.slug).toBeTruthy();

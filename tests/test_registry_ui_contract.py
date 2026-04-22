@@ -139,7 +139,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
-    assert "Optional skill requirement" in workspace
+    assert "Available skills" in workspace
     assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
@@ -179,10 +179,10 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorEditor(" in workspace
     assert "_currentAuthoringSurface()" in workspace
     assert "operator_surface_available" in workspace
-    assert "Available now:" in workspace
-    assert "Matching agents" in workspace
+    assert "Available now" in workspace
+    assert "Preferred agent:" in workspace
     assert "quickstart-chip" in workspace
-    assert "Pinned to " in workspace
+    assert "pins the step to" in workspace
     assert "Required skill" in workspace
     assert "Pin matching agent (optional)" in workspace
     assert "Specific agent" in workspace

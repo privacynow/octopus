@@ -3354,24 +3354,24 @@ select {
 
 .kit-protocol-stage-stack {
     display: grid;
-    gap: 1.45rem;
+    gap: 1.55rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] {
-    gap: 1.3rem;
+    gap: 1.35rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] {
-    gap: 1.15rem;
+    gap: 1.18rem;
 }
 
 .kit-protocol-segment-entry {
     display: grid;
-    gap: var(--space-2);
+    gap: var(--space-1-5);
 }
 
 .kit-protocol-segment-entry.is-active {
-    gap: var(--space-3);
+    gap: var(--space-2-5);
 }
 
 .kit-protocol-stage-focus-head {
@@ -3381,11 +3381,11 @@ select {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
-    gap: var(--space-2);
-    padding: var(--space-2);
+    gap: var(--space-1-5);
+    padding: 0;
     border-radius: var(--radius-lg);
-    background: linear-gradient(180deg, rgba(247, 244, 238, 0.96) 0%, rgba(247, 244, 238, 0.92) 100%);
-    backdrop-filter: blur(8px);
+    background: linear-gradient(180deg, rgba(247, 244, 238, 0.94) 0%, rgba(247, 244, 238, 0.8) 78%, rgba(247, 244, 238, 0) 100%);
+    backdrop-filter: blur(4px);
 }
 
 .kit-protocol-segment-step-actions,
@@ -3439,7 +3439,7 @@ select {
 
 .kit-selector-editor {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-4);
 }
 
 .kit-selector-editor-head {
@@ -3449,7 +3449,7 @@ select {
 
 .kit-selector-editor-field {
     display: grid;
-    gap: var(--space-2);
+    gap: var(--space-2-5);
 }
 
 .kit-selector-editor[data-show-all-primary="true"] [data-selector-kind] {
@@ -3501,11 +3501,11 @@ select {
 
 .kit-selector-editor-context {
     display: grid;
-    gap: var(--space-2);
-    padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--border);
+    gap: var(--space-1);
+    padding: var(--space-2-5) var(--space-3);
+    border: 0;
     border-radius: var(--radius-md);
-    background: var(--bg);
+    background: rgba(255, 255, 255, 0.52);
 }
 
 .kit-selector-editor-context-title {
@@ -3568,25 +3568,25 @@ select {
 
 .kit-protocol-segment-steps {
     display: grid;
-    gap: 1.45rem;
+    gap: 1.55rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-steps {
-    gap: 1.3rem;
+    gap: 1.35rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-steps {
-    gap: 1.15rem;
+    gap: 1.18rem;
 }
 
 .kit-protocol-segment-step {
     width: 100%;
     display: grid;
     gap: var(--space-1);
-    padding: 1.08rem 1.15rem;
-    border: 1px solid rgba(17, 24, 39, 0.08);
+    padding: 1rem 1.08rem;
+    border: 1px solid rgba(17, 24, 39, 0.05);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.56);
     color: var(--text);
     text-align: left;
     font: inherit;
@@ -3595,32 +3595,32 @@ select {
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-step {
-    gap: 0.45rem;
-    padding: 1rem 1.08rem;
+    gap: 0.42rem;
+    padding: 0.92rem 1rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-step {
-    gap: 0.35rem;
-    padding: 0.9rem 1rem;
+    gap: 0.32rem;
+    padding: 0.84rem 0.96rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step,
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step {
-    background: rgba(255, 255, 255, 0.35);
-    border-color: rgba(17, 24, 39, 0.05);
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(17, 24, 39, 0.035);
 }
 
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:hover,
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:focus-visible {
-    background: rgba(255, 255, 255, 0.88);
-    border-color: rgba(149, 76, 47, 0.16);
-    box-shadow: 0 8px 18px rgba(17, 24, 39, 0.05);
+    background: rgba(255, 255, 255, 0.74);
+    border-color: rgba(149, 76, 47, 0.14);
+    box-shadow: 0 8px 18px rgba(17, 24, 39, 0.035);
 }
 
 .kit-protocol-segment-step.is-selected {
-    border-color: var(--accent);
-    box-shadow: 0 18px 28px rgba(17, 24, 39, 0.08);
-    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(149, 76, 47, 0.28);
+    box-shadow: 0 12px 24px rgba(17, 24, 39, 0.055);
+    background: rgba(255, 255, 255, 0.96);
 }
 
 .kit-protocol-segment-step-head {
@@ -3726,16 +3726,47 @@ select {
 }
 
 .kit-stage-workspace-panel {
-    padding: var(--space-4-5);
-    border: 1px solid rgba(17, 24, 39, 0.08);
+    padding: var(--space-4);
+    border: 1px solid rgba(17, 24, 39, 0.05);
     border-radius: var(--radius-lg);
-    background: rgba(255, 255, 255, 0.82);
-    box-shadow: 0 16px 30px rgba(17, 24, 39, 0.04);
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 10px 22px rgba(17, 24, 39, 0.03);
 }
 
 .kit-stage-workspace-body {
     display: grid;
     gap: var(--space-3);
+}
+
+.kit-stage-workspace-panel .kit-details-panel {
+    padding: 0;
+    background: transparent;
+    border: 0;
+    gap: var(--space-3);
+}
+
+.kit-stage-workspace-panel .kit-details-row {
+    gap: var(--space-1);
+}
+
+.kit-stage-workspace-panel .kit-details-help {
+    line-height: 1.35;
+}
+
+.kit-stage-workspace-panel .kit-details-control {
+    background: rgba(255, 255, 255, 0.84);
+    border-color: rgba(17, 24, 39, 0.05);
+}
+
+.kit-stage-workspace-nav.segmented-control,
+.kit-selector-editor > .segmented-control {
+    border-color: rgba(17, 24, 39, 0.045);
+    background: rgba(255, 255, 255, 0.68);
+}
+
+.kit-stage-workspace-nav .segmented-control-btn:not(.active),
+.kit-selector-editor > .segmented-control .segmented-control-btn:not(.active) {
+    color: rgba(45, 31, 24, 0.72);
 }
 
 .kit-stage-workspace-subsection {

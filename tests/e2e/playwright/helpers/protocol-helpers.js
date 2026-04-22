@@ -104,12 +104,30 @@ async function openStagePanel(page, stageEditorShell, {
   tab,
   heading = tab,
 } = {}) {
+  const panelKeyByLabel = {
+    Basics: 'basics',
+    'Step basics': 'basics',
+    Assignment: 'assignment',
+    Routing: 'routing',
+    Instructions: 'instructions',
+    'Files & outputs': 'artifacts',
+    'Inputs and outputs': 'artifacts',
+    Advanced: 'advanced',
+  };
   const panelTab = stageEditorShell.getByRole('tab', { name: tab, exact: true });
   if (await panelTab.count()) {
     await expect(panelTab).toBeVisible();
     const isActive = await panelTab.evaluate((element) => element.classList.contains('active'));
     if (!isActive) {
       await panelTab.click();
+    }
+  }
+  const panelKey = panelKeyByLabel[String(heading || tab || '').trim()] || panelKeyByLabel[String(tab || '').trim()] || '';
+  if (panelKey) {
+    const workspace = stageEditorShell.locator(`.kit-stage-editor-grid[data-panel="${panelKey}"]`).first();
+    if (await workspace.count()) {
+      await expect(workspace).toBeVisible();
+      return workspace;
     }
   }
   const section = stageEditorShell.locator('.kit-stage-editor-section').filter({

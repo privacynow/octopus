@@ -2037,8 +2037,6 @@ function renderProtocolWorkspace(container) {
                     includeRouting,
                     includeAdvanced,
                 });
-                const anchorStageKey = String(group.dataset.anchorStageKey || '').trim();
-                _queueStageViewportAnchor(anchorStageKey, { panelKey });
                 render();
             });
         });
@@ -4651,7 +4649,9 @@ function renderProtocolWorkspace(container) {
             subtitle.textContent = `${Array.isArray(segment?.stages) ? segment.stages.length : 0} step${segment?.stages?.length === 1 ? '' : 's'} in this section.`;
             head.appendChild(subtitle);
         }
-        panel.appendChild(head);
+        if (head.childElementCount) {
+            panel.appendChild(head);
+        }
 
         const activeStageKey = _activeStageKey();
         const selectedTransition = selection.sectionKey === 'transitions'

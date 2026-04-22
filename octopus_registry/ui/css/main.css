@@ -3354,15 +3354,15 @@ select {
 
 .kit-protocol-stage-stack {
     display: grid;
-    gap: 1.25rem;
+    gap: 1.45rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] {
-    gap: 1rem;
+    gap: 1.3rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] {
-    gap: 0.9rem;
+    gap: 1.15rem;
 }
 
 .kit-protocol-segment-entry {
@@ -3546,12 +3546,12 @@ select {
 
 .kit-protocol-segment-panel {
     display: grid;
-    gap: var(--space-2);
+    gap: var(--space-3);
 }
 
 .kit-protocol-segment-panel[data-density="balanced"],
 .kit-protocol-segment-panel[data-density="dense"] {
-    gap: var(--space-1-5);
+    gap: var(--space-2-5);
 }
 
 .kit-protocol-segment-head {
@@ -3568,17 +3568,25 @@ select {
 
 .kit-protocol-segment-steps {
     display: grid;
-    gap: var(--space-2);
+    gap: 1.45rem;
+}
+
+.kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-steps {
+    gap: 1.3rem;
+}
+
+.kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-steps {
+    gap: 1.15rem;
 }
 
 .kit-protocol-segment-step {
     width: 100%;
     display: grid;
     gap: var(--space-1);
-    padding: 1rem 1.05rem;
+    padding: 1.08rem 1.15rem;
     border: 1px solid rgba(17, 24, 39, 0.08);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.62);
+    background: rgba(255, 255, 255, 0.72);
     color: var(--text);
     text-align: left;
     font: inherit;
@@ -3587,13 +3595,13 @@ select {
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-step {
-    gap: 0.4rem;
-    padding: 0.92rem 1rem;
+    gap: 0.45rem;
+    padding: 1rem 1.08rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-step {
-    gap: 0.3rem;
-    padding: 0.82rem 0.92rem;
+    gap: 0.35rem;
+    padding: 0.9rem 1rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step,
@@ -3604,7 +3612,7 @@ select {
 
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:hover,
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:focus-visible {
-    background: rgba(255, 255, 255, 0.74);
+    background: rgba(255, 255, 255, 0.88);
     border-color: rgba(149, 76, 47, 0.16);
     box-shadow: 0 8px 18px rgba(17, 24, 39, 0.05);
 }
@@ -3718,10 +3726,10 @@ select {
 }
 
 .kit-stage-workspace-panel {
-    padding: var(--space-4);
+    padding: var(--space-4-5);
     border: 1px solid rgba(17, 24, 39, 0.08);
     border-radius: var(--radius-lg);
-    background: rgba(255, 255, 255, 0.76);
+    background: rgba(255, 255, 255, 0.82);
     box-shadow: 0 16px 30px rgba(17, 24, 39, 0.04);
 }
 

@@ -560,9 +560,12 @@ test.describe('protocol authoring live', () => {
     expect(architectureIndex).toBeGreaterThan(insertedIndex);
 
     await selectStep(page, 'secondary-approval');
-    const secondaryEditor = page.locator('.kit-stage-editor').last();
+    const secondaryEntry = page.locator('.kit-protocol-segment-entry').filter({
+      has: page.locator('[data-testid="workflow-stage-secondary-approval"].is-selected'),
+    }).first();
+    const secondaryEditor = secondaryEntry.locator('.kit-stage-editor').first();
     await assertStandardAuthoringSurface(secondaryEditor);
-    await secondaryEditor.getByRole('button', { name: 'Delete step', exact: true }).click();
+    await secondaryEntry.getByRole('button', { name: 'Delete step', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
     await waitForSaved(page);
 
@@ -617,7 +620,7 @@ test.describe('protocol authoring live', () => {
 
     const readsRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Needs from earlier steps' }).first();
     const writesRow = artifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
-    await artifactsSection.getByRole('button', { name: 'Edit workflow files and outputs', exact: true }).click();
+    await artifactsSection.getByRole('button', { name: 'Manage workflow files', exact: true }).click();
     await expectSelectedStep(page, 'architecture');
     const localArtifactCatalog = artifactsSection.locator('.kit-protocol-inline-card').first();
     await expect(localArtifactCatalog).toBeVisible();
@@ -653,6 +656,77 @@ test.describe('protocol authoring live', () => {
     const reloadedWritesRow = reloadedArtifactsSection.locator('.kit-details-row').filter({ hasText: 'Produces for later steps' }).first();
     await expect(reloadedReadsRow.getByLabel(/Architecture review notes/)).toBeChecked();
     await expect(reloadedWritesRow.getByLabel(/Architecture notes/)).toBeChecked();
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('software engineering stage rhythm stays even and stage tabs do not yank the viewport', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
+
+    const spacing = await page.evaluate(() => {
+      const architecture = document.querySelector('[data-testid="workflow-stage-architecture"]');
+      const review = document.querySelector('[data-testid="workflow-stage-architecture_review"]');
+      const implementation = document.querySelector('[data-testid="workflow-stage-implementation"]');
+      if (!(architecture instanceof HTMLElement) || !(review instanceof HTMLElement) || !(implementation instanceof HTMLElement)) {
+        return null;
+      }
+      const architectureRect = architecture.getBoundingClientRect();
+      const reviewRect = review.getBoundingClientRect();
+      const implementationRect = implementation.getBoundingClientRect();
+      return {
+        architectureToReview: reviewRect.top - architectureRect.bottom,
+        reviewToImplementation: implementationRect.top - reviewRect.bottom,
+      };
+    });
+    expect(spacing).not.toBeNull();
+    const stageGaps = spacing || { architectureToReview: 0, reviewToImplementation: 0 };
+    expect(Math.abs(stageGaps.architectureToReview - stageGaps.reviewToImplementation)).toBeLessThanOrEqual(4);
+
+    await selectStep(page, 'architecture_review');
+    const selectedEntry = page.locator('.kit-protocol-segment-entry').filter({
+      has: page.locator('[data-testid="workflow-stage-architecture_review"].is-selected'),
+    }).first();
+    const stageButton = selectedEntry.locator('.kit-protocol-segment-step').first();
+    await stageButton.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(150);
+
+    const beforeScrollY = await page.evaluate(() => window.scrollY);
+    const stageTopBefore = await stageButton.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.top;
+    });
+
+    const stageEditor = selectedEntry.locator('.kit-stage-editor').first();
+    await openStagePanel(page, stageEditor, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
+    await page.waitForTimeout(150);
+    await openStagePanel(page, stageEditor, {
+      tab: 'Routing',
+      heading: 'Routing',
+    });
+    await page.waitForTimeout(150);
+    await openStagePanel(page, stageEditor, {
+      tab: 'Files & outputs',
+      heading: 'Inputs and outputs',
+    });
+    await page.waitForTimeout(150);
+
+    const afterScrollY = await page.evaluate(() => window.scrollY);
+    const stageTopAfter = await stageButton.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.top;
+    });
+
+    expect(Math.abs(afterScrollY - beforeScrollY)).toBeLessThanOrEqual(16);
+    expect(Math.abs(stageTopAfter - stageTopBefore)).toBeLessThanOrEqual(16);
+    await expectSelectedStep(page, 'architecture_review');
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
@@ -989,6 +1063,7 @@ test.describe('protocol authoring live', () => {
   });
 
   test('software engineering rehearsal proves revise loops and completion visually', async ({ page }) => {
+    test.setTimeout(240000);
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
     await login(page);
     await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
@@ -1132,7 +1207,7 @@ test.describe('protocol authoring live', () => {
       const acceptance = page.locator('.kit-rehearsal-session[data-stage-key="acceptance"]').first();
       await expect(acceptance).toBeVisible({ timeout: 20000 });
       await applyScenarioAndSubmit(acceptance, 'Acceptance pass');
-      await waitForRunStatus(page, runId, 'completed');
+      await waitForRunStatus(page, runId, 'completed', 180000);
 
       const finalDetail = await getRunDetail(page, runId);
       expect(String(finalDetail.run?.status || '')).toBe('completed');

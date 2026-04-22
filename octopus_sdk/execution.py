@@ -149,6 +149,7 @@ class RequestExecutionOutcome:
     status: str
     reply_text: str = ""
     error_text: str = ""
+    working_dir: str = ""
     denials: tuple[DenialRecord, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -558,7 +559,7 @@ async def _execute_request_locked(
         session.provider_state.update(result.provider_state_updates)
         _save(runtime, conversation_key, session)
         await progress.update(_cancel_live_completed(), force=True)
-        return RequestExecutionOutcome(status="cancelled")
+        return RequestExecutionOutcome(status="cancelled", working_dir=str(resolved.working_dir or ""))
 
     if runtime.dispatch.run_result_was_interrupted(result.returncode):
         raise runtime.interrupted_exc()
@@ -588,7 +589,7 @@ async def _execute_request_locked(
 
     if result.timed_out:
         await progress.update(_progress_request_timed_out(cfg.timeout_seconds), force=True)
-        return RequestExecutionOutcome(status="timed_out")
+        return RequestExecutionOutcome(status="timed_out", working_dir=str(resolved.working_dir or ""))
 
     if result.returncode != 0:
         raw_error_text = await runtime.dispatch.format_provider_error(result.text, result.returncode)
@@ -610,7 +611,11 @@ async def _execute_request_locked(
             error_type="provider_error",
             message=raw_error_text[:500],
         )
-        return RequestExecutionOutcome(status="failed", error_text=error_text)
+        return RequestExecutionOutcome(
+            status="failed",
+            error_text=error_text,
+            working_dir=str(resolved.working_dir or ""),
+        )
 
     if result.denials:
         await progress.update(_progress_completed_with_blocked(), force=True)
@@ -646,6 +651,7 @@ async def _execute_request_locked(
         return RequestExecutionOutcome(
             status="completed_with_denials",
             reply_text=cleaned_reply,
+            working_dir=str(resolved.working_dir or ""),
             denials=tuple(result.denials),
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -684,6 +690,7 @@ async def _execute_request_locked(
     return RequestExecutionOutcome(
         status="completed",
         reply_text=cleaned_reply,
+        working_dir=str(resolved.working_dir or ""),
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
         cached_prompt_tokens=result.cached_prompt_tokens,

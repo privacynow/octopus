@@ -175,12 +175,15 @@ def _artifact_observation_for_path(
     )
 
 
-async def _protocol_artifact_payloads(context: FinalizationContext) -> list[dict[str, object]]:
+async def _protocol_artifact_payloads(
+    context: FinalizationContext,
+    *,
+    working_dir: str = "",
+) -> list[dict[str, object]]:
     if (
         not context.routed_task_id
         or not context.authority_ref
         or context.registry_inspection is None
-        or context.working_dir_resolver is None
     ):
         return []
     try:
@@ -208,7 +211,9 @@ async def _protocol_artifact_payloads(context: FinalizationContext) -> list[dict
             exc_info=True,
         )
         return []
-    working_dir = str(context.working_dir_resolver(context.runtime_chat) or "").strip()
+    working_dir = str(working_dir or "").strip()
+    if not working_dir and context.working_dir_resolver is not None:
+        working_dir = str(context.working_dir_resolver(context.runtime_chat) or "").strip()
     if not working_dir:
         return []
     observations = [
@@ -253,12 +258,10 @@ async def finalize_execution(
     if context.routed_task_id and context.task_routing is not None and authority_ref:
         full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
         result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
-        artifact_payloads = await _protocol_artifact_payloads(context)
-        working_dir = (
-            str(context.working_dir_resolver(context.runtime_chat) or "").strip()
-            if context.working_dir_resolver is not None
-            else ""
-        )
+        working_dir = str(outcome.working_dir or "").strip()
+        if not working_dir and context.working_dir_resolver is not None:
+            working_dir = str(context.working_dir_resolver(context.runtime_chat) or "").strip()
+        artifact_payloads = await _protocol_artifact_payloads(context, working_dir=working_dir)
         try:
             report = await context.task_routing.report_routed_task_result(
                 routed_task_id=context.routed_task_id,

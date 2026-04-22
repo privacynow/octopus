@@ -1923,38 +1923,38 @@ function renderProtocolWorkspace(container) {
     function _syncPendingStageFromMountedEditor() {
         const editor = contentEl.querySelector('.kit-stage-editor-grid');
         if (!(editor instanceof Element)) return;
-        const readValue = (selector) => {
+        const readValue = (selector, fallback = '') => {
             const control = editor.querySelector(selector);
             return control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
                 ? String(control.value || '')
                 : control instanceof Element && Object.prototype.hasOwnProperty.call(control.dataset || {}, 'value')
                     ? String(control.dataset.value || '')
-                : '';
+                : String(fallback || '');
         };
-        pendingStage.display_name = readValue('#kit-details-display_name');
-        pendingStage.participant_key = readValue('#kit-details-participant_key');
-        pendingStage.stage_kind = readValue('#kit-details-stage_kind') || 'work';
-        pendingStage.role_display_name = readValue('#kit-details-role_display_name');
-        pendingStage.role_participant_key = _slugSuggestion(readValue('#kit-details-role_participant_key'));
-        pendingStage.role_instructions = readValue('#kit-details-role_instructions');
-        pendingStage.instructions = readValue('#kit-details-instructions');
-        pendingStage.max_rounds = Number.parseInt(readValue('#kit-details-max_rounds') || '0', 10) || 0;
-        pendingStage.timeout_seconds = Number.parseInt(readValue('#kit-details-timeout_seconds') || '0', 10) || 0;
+        pendingStage.display_name = readValue('#kit-details-display_name', pendingStage.display_name);
+        pendingStage.participant_key = readValue('#kit-details-participant_key', pendingStage.participant_key);
+        pendingStage.stage_kind = readValue('#kit-details-stage_kind', pendingStage.stage_kind || 'work') || 'work';
+        pendingStage.role_display_name = readValue('#kit-details-role_display_name', pendingStage.role_display_name);
+        pendingStage.role_participant_key = _slugSuggestion(readValue('#kit-details-role_participant_key', pendingStage.role_participant_key));
+        pendingStage.role_instructions = readValue('#kit-details-role_instructions', pendingStage.role_instructions);
+        pendingStage.instructions = readValue('#kit-details-instructions', pendingStage.instructions);
+        pendingStage.max_rounds = Number.parseInt(readValue('#kit-details-max_rounds', pendingStage.max_rounds || 0) || '0', 10) || 0;
+        pendingStage.timeout_seconds = Number.parseInt(readValue('#kit-details-timeout_seconds', pendingStage.timeout_seconds || 0) || '0', 10) || 0;
         const activeModeButton = editor.querySelector('.segmented-control[aria-label="Assignment mode"] .segmented-control-btn.active');
         pendingStage.selector_mode = _selectorModeFromKind(
             activeModeButton instanceof HTMLButtonElement ? activeModeButton.dataset.value || '' : pendingStage.selector_mode,
             pendingStage.selector_mode || 'skill',
         );
-        const advancedKind = readValue('select[aria-label="Custom selector type"]');
+        const advancedKind = readValue('select[aria-label="Custom selector type"]', pendingStage.selector_kind);
         const selector = _selectorFromEditorFields({
-            requiredSkill: readValue('[aria-label="Required skill"]'),
+            requiredSkill: readValue('[aria-label="Required skill"]', pendingStage.selector_kind === 'skill' ? pendingStage.selector_value : ''),
             pinnedAgent: readValue('[aria-label="Pin matching agent (optional)"]')
                 || readValue('[aria-label="Pinned agent"]')
-                || readValue('[aria-label="Agent"]'),
+                || readValue('[aria-label="Agent"]', pendingStage.selector_kind === 'agent' ? pendingStage.selector_value : pendingStage.selector_preferred_agent_id),
             advancedKind,
             advancedValue: advancedKind === 'role'
-                ? (readValue('[aria-label="Choose runtime role tag"]') || readValue('[aria-label="Custom value"]'))
-                : readValue('[aria-label="Custom value"]'),
+                ? (readValue('[aria-label="Choose runtime role tag"]', pendingStage.selector_value) || readValue('[aria-label="Custom value"]', pendingStage.selector_value))
+                : readValue('[aria-label="Custom value"]', pendingStage.selector_value),
         });
         pendingStage.selector_kind = String(selector?.kind || '');
         pendingStage.selector_value = String(selector?.value || '');

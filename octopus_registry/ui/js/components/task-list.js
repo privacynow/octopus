@@ -11,9 +11,16 @@ function renderTaskList(container) {
 
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentStatus = UI.readQueryParam('status', '');
+    let currentProtocolRunId = UI.readQueryParam('protocol_run_id', '');
+    let currentTaskId = UI.readQueryParam('task_id', '');
     let summaryLoaded = false;
     let listLoaded = false;
-    const expandedTaskIds = new Set();
+    const expandedTaskIds = new Set(currentTaskId ? [currentTaskId] : []);
+    const taskDetails = new Map();
+    const taskDetailErrors = new Map();
+    const taskDetailsLoading = new Set();
+    let currentTasks = [];
+    let currentListData = null;
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -36,6 +43,10 @@ function renderTaskList(container) {
     controls.className = 'route-controls';
     workbench.appendChild(controls);
 
+    const lineageBanner = document.createElement('div');
+    lineageBanner.className = 'task-lineage-banner';
+    workbench.appendChild(lineageBanner);
+
     const statuses = [
         { key: 'all', value: '', label: 'All' },
         { key: 'queued', value: 'queued', label: 'Queued' },
@@ -55,8 +66,16 @@ function renderTaskList(container) {
         currentStatus = value;
         paginator.reset();
         statusControl.setActive(currentStatus);
-        UI.updateQueryParams({ status: currentStatus });
+        _writeState();
         loadList();
+    }
+
+    function _writeState() {
+        UI.updateQueryParams({
+            status: currentStatus || '',
+            protocol_run_id: currentProtocolRunId || '',
+            task_id: currentTaskId || '',
+        });
     }
 
     const listShell = document.createElement('section');
@@ -107,6 +126,152 @@ function renderTaskList(container) {
         return task.result_summary || task.result_text || task.summary || task.instructions || '';
     }
 
+    function _taskRunHref(task) {
+        const runId = String(task.protocol_run_id || '').trim();
+        if (!runId) return '';
+        return `/ui/runs?run_id=${encodeURIComponent(runId)}`;
+    }
+
+    function _taskArtifactResolvedPath(task, artifact) {
+        return UI.joinDisplayPath(task?.working_dir || '', artifact?.path || '');
+    }
+
+    function _taskArtifactPreviewable(artifact) {
+        return UI.isPreviewableFilePath(artifact?.path || '');
+    }
+
+    async function _previewTaskArtifact(task, artifact) {
+        try {
+            const text = await API.getTaskArtifactText(task.routed_task_id, artifact.artifact_key);
+            UI.showTextDialog(
+                `${artifact.artifact_key} preview`,
+                String(text || ''),
+                { maxWidth: '920px' },
+            );
+        } catch (err) {
+            UI.reportError('Failed to preview the artifact', err, {
+                context: 'Task artifact preview failed',
+            });
+        }
+    }
+
+    function _taskArtifactShell(task, artifact) {
+        const resolvedPath = _taskArtifactResolvedPath(task, artifact);
+        const actionRow = document.createElement('div');
+        actionRow.className = 'list-row-actions';
+
+        if (_taskArtifactPreviewable(artifact)) {
+            const previewBtn = document.createElement('button');
+            previewBtn.type = 'button';
+            previewBtn.className = 'btn btn-sm';
+            previewBtn.textContent = 'Preview';
+            previewBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                void _previewTaskArtifact(task, artifact);
+            });
+            actionRow.appendChild(previewBtn);
+        }
+
+        const openHref = API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key);
+        const openLink = document.createElement('a');
+        openLink.href = openHref;
+        openLink.className = 'btn btn-sm';
+        openLink.target = '_blank';
+        openLink.rel = 'noreferrer noopener';
+        openLink.textContent = 'Open';
+        actionRow.appendChild(openLink);
+
+        const downloadLink = document.createElement('a');
+        downloadLink.href = API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true });
+        downloadLink.className = 'btn btn-sm';
+        downloadLink.textContent = 'Download';
+        actionRow.appendChild(downloadLink);
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'btn btn-sm';
+        copyBtn.textContent = 'Copy path';
+        copyBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+                await UI.copyText(resolvedPath || String(artifact?.path || ''), {
+                    successMessage: 'Artifact path copied.',
+                    errorMessage: 'Failed to copy the artifact path.',
+                });
+            } catch (err) {
+                void err;
+            }
+        });
+        actionRow.appendChild(copyBtn);
+
+        return {
+            artifactKey: String(artifact?.artifact_key || ''),
+            row: UI.renderListRow({
+                label: `${artifact.artifact_key || 'artifact'} · ${artifact.verification_state || (artifact.exists ? 'available' : 'missing')}`,
+                sublabel: [
+                    resolvedPath || String(artifact?.path || ''),
+                    Number.isFinite(Number(artifact?.size_bytes || 0)) && Number(artifact?.size_bytes || 0) > 0
+                        ? `${Number(artifact.size_bytes || 0).toLocaleString()} bytes`
+                        : '',
+                ].filter(Boolean).join(' · '),
+                badgeText: artifact.exists ? 'present' : 'missing',
+                badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
+                trailing: actionRow,
+            }),
+        };
+    }
+
+    function _renderProtocolLineageBanner() {
+        if (!currentProtocolRunId) {
+            UI.reconcileChildren(lineageBanner, []);
+            lineageBanner.hidden = true;
+            return;
+        }
+        lineageBanner.hidden = false;
+        const note = document.createElement('div');
+        note.className = 'task-lineage-banner-copy';
+        note.innerHTML = `<strong>Run filter active</strong><span>Showing only routed tasks for run ${UI.esc(currentProtocolRunId)}.</span>`;
+        const actions = document.createElement('div');
+        actions.className = 'task-action-row';
+        const openRun = document.createElement('a');
+        openRun.href = `/ui/runs?run_id=${encodeURIComponent(currentProtocolRunId)}`;
+        openRun.className = 'btn btn-sm';
+        openRun.textContent = 'Open run';
+        actions.appendChild(openRun);
+        const clearFilter = document.createElement('button');
+        clearFilter.type = 'button';
+        clearFilter.className = 'btn btn-sm';
+        clearFilter.textContent = 'Clear filter';
+        clearFilter.addEventListener('click', () => {
+            currentProtocolRunId = '';
+            currentTaskId = '';
+            expandedTaskIds.clear();
+            paginator.reset();
+            _writeState();
+            loadList();
+        });
+        actions.appendChild(clearFilter);
+        UI.reconcileChildren(lineageBanner, [note, actions]);
+    }
+
+    async function loadTaskDetail(taskId) {
+        if (!taskId || taskDetailsLoading.has(taskId) || taskDetails.has(taskId)) return;
+        taskDetailsLoading.add(taskId);
+        taskDetailErrors.delete(taskId);
+        try {
+            const detail = await API.getTask(taskId);
+            taskDetails.set(taskId, detail);
+        } catch (err) {
+            taskDetailErrors.set(taskId, err);
+            UI.reportError('Failed to load task detail', err, {
+                context: 'Task detail load failed',
+            });
+        } finally {
+            taskDetailsLoading.delete(taskId);
+            renderList(currentTasks, currentListData);
+        }
+    }
+
     function _taskLabel(task) {
         return task.title || (task.instructions ? String(task.instructions).trim().slice(0, 72) : '') || 'Untitled task';
     }
@@ -114,6 +279,7 @@ function renderTaskList(container) {
     function _taskListSignature(tasks, data) {
         return UI.dataSignature({
             status: currentStatus,
+            protocolRunId: currentProtocolRunId,
             cursor: paginator.cursor,
             hasMore: !!(data && data.has_more),
             nextCursor: data && data.next_cursor ? String(data.next_cursor) : '',
@@ -126,6 +292,15 @@ function renderTaskList(container) {
                 origin: String(task.origin_display_name || task.origin_agent_id || ''),
                 target: String(task.target_display_name || task.target_agent_id || ''),
                 conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
+                protocolRunId: String(task.protocol_run_id || ''),
+                stageKey: String(task.stage_key || ''),
+                detailState: taskDetailsLoading.has(String(task.routed_task_id || ''))
+                    ? 'loading'
+                    : taskDetailErrors.has(String(task.routed_task_id || ''))
+                        ? 'error'
+                        : taskDetails.has(String(task.routed_task_id || ''))
+                            ? UI.dataSignature(taskDetails.get(String(task.routed_task_id || '')))
+                            : '',
             })),
         });
     }
@@ -143,6 +318,8 @@ function renderTaskList(container) {
             origin: String(task.origin_display_name || task.origin_agent_id || ''),
             target: String(task.target_display_name || task.target_agent_id || ''),
             conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
+            protocolRunId: String(task.protocol_run_id || ''),
+            stageKey: String(task.stage_key || ''),
         });
 
         const row = document.createElement('button');
@@ -164,6 +341,8 @@ function renderTaskList(container) {
         meta.className = 'task-item-meta';
         meta.textContent = [
             UI.visibleLabel(task.target_display_name, task.target_agent_id) || 'Assigned agent',
+            task.stage_key ? `stage ${task.stage_key}` : '',
+            task.protocol_run_id ? `run ${String(task.protocol_run_id).slice(0, 8)}` : '',
             UI.visibleLabel(task.parent_conversation_title),
             UI.relativeTime(task.updated_at || task.created_at),
         ].filter(Boolean).join(' · ');
@@ -200,12 +379,76 @@ function renderTaskList(container) {
             detail.appendChild(summaryBlock);
         }
 
+        const detailTask = taskDetails.get(taskId) || task;
         const facts = UI.renderMetadataGrid([
             { label: 'Origin', value: UI.visibleLabel(task.origin_display_name, task.origin_agent_id) || '—' },
             { label: 'Target', value: UI.visibleLabel(task.target_display_name, task.target_agent_id) || '—' },
             { label: 'Conversation', value: UI.visibleLabel(task.parent_conversation_title) || 'Current thread' },
+            ...(task.protocol_run_id
+                ? [
+                    { label: 'Run', value: task.protocol_run_id },
+                    { label: 'Stage', value: task.stage_key || '—' },
+                    { label: 'Participant', value: task.participant_key || '—' },
+                    { label: 'Workspace', value: detailTask.working_dir || detailTask.project_id_override || 'Default bot workspace' },
+                ]
+                : []),
         ], { compact: true });
         detail.appendChild(facts);
+
+        if (task.protocol_run_id) {
+            const lineageSummary = document.createElement('div');
+            lineageSummary.className = 'task-item-summary';
+            lineageSummary.textContent = [
+                `Run ${task.protocol_run_id}`,
+                task.stage_key ? `stage ${task.stage_key}` : '',
+                task.participant_key ? `participant ${task.participant_key}` : '',
+            ].filter(Boolean).join(' · ');
+            detail.appendChild(lineageSummary);
+        }
+
+        if (isExpanded) {
+            if (!taskDetails.has(taskId) && !taskDetailsLoading.has(taskId)) {
+                void loadTaskDetail(taskId);
+            }
+            const detailError = taskDetailErrors.get(taskId);
+            if (detailError) {
+                detail.appendChild(UI.createErrorCard('Failed to load artifact evidence for this task.', () => {
+                    taskDetails.delete(taskId);
+                    taskDetailErrors.delete(taskId);
+                    void loadTaskDetail(taskId);
+                }));
+            } else if (taskDetailsLoading.has(taskId) && !taskDetails.has(taskId)) {
+                detail.appendChild(UI.renderEmptyState('Loading task lineage…', true));
+            } else if (taskDetails.has(taskId)) {
+                const detailPayload = taskDetails.get(taskId);
+                const resultPayload = detailPayload?.result || {};
+                const recordedArtifacts = Array.isArray(resultPayload?.artifacts) ? resultPayload.artifacts : [];
+                const contract = detailPayload?.request?.internal_context?.protocol_stage_contract || {};
+                const expectedOutputs = Array.isArray(contract?.output_artifacts) ? contract.output_artifacts : [];
+
+                if (expectedOutputs.length || recordedArtifacts.length) {
+                    const artifactLabel = document.createElement('div');
+                    artifactLabel.className = 'detail-label';
+                    artifactLabel.textContent = 'Artifact evidence';
+                    detail.appendChild(artifactLabel);
+                }
+
+                if (expectedOutputs.length) {
+                    const expected = document.createElement('div');
+                    expected.className = 'task-item-summary';
+                    expected.textContent = `Expected outputs: ${expectedOutputs.map((item) => String(item?.artifact_key || '').trim()).filter(Boolean).join(', ') || '—'}`;
+                    detail.appendChild(expected);
+                }
+
+                if (recordedArtifacts.length) {
+                    const artifactList = document.createElement('div');
+                    artifactList.className = 'task-artifact-list';
+                    const artifactNodes = recordedArtifacts.map((artifact) => _taskArtifactShell(detailPayload, artifact).row);
+                    UI.reconcileChildren(artifactList, artifactNodes);
+                    detail.appendChild(artifactList);
+                }
+            }
+        }
 
         const actions = document.createElement('div');
         actions.className = 'task-action-row';
@@ -217,6 +460,13 @@ function renderTaskList(container) {
             e.stopPropagation();
         });
         actions.appendChild(openLink);
+        if (task.protocol_run_id) {
+            const runLink = document.createElement('a');
+            runLink.href = _taskRunHref(task);
+            runLink.className = 'btn btn-sm';
+            runLink.textContent = 'Open run';
+            actions.appendChild(runLink);
+        }
         const taskActions = UI.createTaskActionButtons(
             task.routed_task_id,
             task.parent_conversation_id,
@@ -236,8 +486,17 @@ function renderTaskList(container) {
             row.setAttribute('aria-expanded', String(nextExpanded));
             if (nextExpanded) {
                 expandedTaskIds.add(taskId);
+                currentTaskId = taskId;
+                _writeState();
+                if (!taskDetails.has(taskId)) {
+                    void loadTaskDetail(taskId);
+                }
             } else {
                 expandedTaskIds.delete(taskId);
+                if (currentTaskId === taskId) {
+                    currentTaskId = '';
+                    _writeState();
+                }
             }
         });
 
@@ -245,12 +504,22 @@ function renderTaskList(container) {
     }
 
     function renderList(tasks, data) {
+        currentTasks = Array.isArray(tasks) ? tasks : [];
+        currentListData = data;
         const nextSignature = _taskListSignature(tasks, data);
+        _renderProtocolLineageBanner();
 
         if (!tasks.length) {
             expandedTaskIds.clear();
             UI.clearMemoizedRender(listEl);
-            UI.reconcileChildren(listEl, [UI.renderEmptyState(currentStatus ? 'No tasks in this state.' : 'No tasks yet.', true)]);
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(
+                currentProtocolRunId
+                    ? 'No tasks recorded for this run yet.'
+                    : currentStatus
+                        ? 'No tasks in this state.'
+                        : 'No tasks yet.',
+                true,
+            )]);
             paginator.clear();
             return;
         }
@@ -287,6 +556,7 @@ function renderTaskList(container) {
     async function loadList({ soft = false } = {}) {
         const params = { cursor: paginator.cursor, limit };
         if (currentStatus) params.status = currentStatus;
+        if (currentProtocolRunId) params.protocol_run_id = currentProtocolRunId;
         try {
             const data = await API.listTasks(params);
             renderList(data.tasks || data || [], data);

@@ -254,6 +254,11 @@ async def finalize_execution(
         full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
         result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
         artifact_payloads = await _protocol_artifact_payloads(context)
+        working_dir = (
+            str(context.working_dir_resolver(context.runtime_chat) or "").strip()
+            if context.working_dir_resolver is not None
+            else ""
+        )
         try:
             report = await context.task_routing.report_routed_task_result(
                 routed_task_id=context.routed_task_id,
@@ -272,6 +277,7 @@ async def finalize_execution(
                     cached_completion_tokens=outcome.cached_completion_tokens,
                     cost_usd=outcome.cost_usd,
                     provider=context.config.provider_name,
+                    working_dir=working_dir,
                 ),
             )
             if report.status == "reported":

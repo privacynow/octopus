@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 import yaml
 
-from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, RoutedTaskRequest, TargetSelector, utcnow_iso
+from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, RoutedTaskRequest, TargetSelector, TaskRecord, utcnow_iso
 
 ProtocolLifecycleState = Literal["draft", "published", "archived"]
 ProtocolVisibility = Literal["org_private", "org_shared", "registry_template"]
@@ -579,6 +579,7 @@ class ProtocolRunDetailRecord(RegistryRecordModel):
     version: ProtocolDefinitionVersionRecord
     participants: list[ProtocolRunParticipantRecord] = Field(default_factory=list)
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
+    tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
@@ -590,6 +591,7 @@ class ProtocolRunExportRecord(RegistryRecordModel):
     definition_document: ProtocolDefinitionDocumentRecord
     participants: list[ProtocolRunParticipantRecord] = Field(default_factory=list)
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
+    tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 

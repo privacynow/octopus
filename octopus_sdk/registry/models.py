@@ -430,12 +430,22 @@ class TaskRecord(RegistryRecordModel):
     title: str = ""
     instructions: str = ""
     parent_conversation_id: str = ""
+    parent_conversation_title: str = ""
     recipient_conversation_id: str = ""
     origin_transport_ref: str = ""
     origin_agent_id: str = ""
     origin_display_name: str = ""
     target_agent_id: str = ""
     target_display_name: str = ""
+    protocol_run_id: str = ""
+    protocol_stage_execution_id: str = ""
+    protocol_definition_version_id: str = ""
+    participant_key: str = ""
+    stage_key: str = ""
+    project_id_override: str = ""
+    file_policy_override: str = ""
+    working_dir: str = ""
+    artifact_count: int = 0
     request: RegistryJsonRecord | None = None
     result: RegistryJsonRecord | None = None
     result_summary: str = ""
@@ -958,6 +968,7 @@ class RoutedTaskResult(RegistryRecordModel):
     cached_completion_tokens: int | None = Field(default=None, ge=0)
     cost_usd: float = Field(default=0.0, ge=0.0)
     provider: str = ""
+    working_dir: str = ""
     completed_at: str = Field(default_factory=utcnow_iso, min_length=1)
 
     @field_validator("completed_at", mode="before")

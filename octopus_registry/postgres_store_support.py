@@ -23,6 +23,15 @@ class PostgresStoreDialect(StoreDialect):
     def json_text(self, json_expr: str, key: str) -> str:
         return f"{json_expr}->>'{key}'"
 
+    def json_path_text(self, json_expr: str, *path: str) -> str:
+        if not path:
+            raise ValueError("json_path_text requires at least one path component")
+        *parents, leaf = path
+        expr = json_expr
+        for key in parents:
+            expr = f"{expr}->'{key}'"
+        return f"{expr}->>'{leaf}'"
+
     def usage_token_predicate(self, metadata_expr: str) -> str:
         return f"{metadata_expr} ? 'prompt_tokens'"
 

@@ -9158,6 +9158,94 @@
         "summary": "Resource Get Protocol Run Artifacts"
       }
     },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content": {
+      "get": {
+        "operationId": "resource_get_protocol_run_artifact_content_v1_protocol_runs__run_id__artifacts__artifact_key__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Download",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Protocol Run Artifact Content"
+      }
+    },
     "/v1/protocol-runs/{run_id}/export": {
       "get": {
         "operationId": "resource_export_protocol_run_v1_protocol_runs__run_id__export_get",
@@ -11274,6 +11362,16 @@
           },
           {
             "in": "query",
+            "name": "protocol_run_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Protocol Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "completed_since_iso",
             "required": false,
             "schema": {
@@ -11413,6 +11511,94 @@
           }
         },
         "summary": "Resource Get Task"
+      }
+    },
+    "/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content": {
+      "get": {
+        "operationId": "resource_get_task_artifact_content_v1_tasks__routed_task_id__artifacts__artifact_key__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "routed_task_id",
+            "required": true,
+            "schema": {
+              "title": "Routed Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Download",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Task Artifact Content"
       }
     },
     "/v1/usage": {

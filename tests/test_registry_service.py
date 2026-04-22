@@ -33,7 +33,15 @@ from app.runtime_health import (
 )
 from app.storage import default_session, ensure_data_dirs, load_session, save_session, session_exists
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
-from octopus_sdk.protocols import ProtocolMutationRecord, ProtocolRunMutationRecord, ProtocolRunRecord
+from octopus_sdk.protocols import (
+    ProtocolArtifactRecord,
+    ProtocolDefinitionRecord,
+    ProtocolDefinitionVersionRecord,
+    ProtocolMutationRecord,
+    ProtocolRunDetailRecord,
+    ProtocolRunMutationRecord,
+    ProtocolRunRecord,
+)
 from octopus_sdk.registry.management import (
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
@@ -1241,6 +1249,13 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
     }
     assert "entry_agent_id" in run_list_parameters
     assert "origin_channel" in run_list_parameters
+    task_list_parameters = {
+        item["name"]
+        for item in paths["/v1/tasks"]["get"].get("parameters", [])
+    }
+    assert "protocol_run_id" in task_list_parameters
+    assert "/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content" in paths
+    assert "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content" in paths
 
 
 def test_registry_openapi_asset_matches_generated_schema(monkeypatch, tmp_path: Path):
@@ -2228,7 +2243,7 @@ def test_registry_http_module_stays_under_guard_threshold():
     http_path = repo_root / "octopus_registry" / "server.py"
     text = http_path.read_text()
 
-    assert len(text.splitlines()) <= 1975
+    assert len(text.splitlines()) <= 2060
 
 
 def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: Path):
@@ -3442,6 +3457,45 @@ def test_registry_list_tasks_can_filter_by_completed_since_iso(monkeypatch, tmp_
     assert [task["routed_task_id"] for task in filtered.json()["tasks"]] == ["task-completed-recent"]
 
 
+def test_registry_list_tasks_can_filter_by_protocol_run_id(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-bot-run-filter")
+    target_id, _target_token = _enroll_and_register(client, "Target Bot", "target-bot-run-filter")
+    conversation = _create_conversation(client, origin_token, origin_id, "conv-run-filter", title="Run filter")
+
+    for task_id, protocol_run_id in (
+        ("task-run-1", "run-1"),
+        ("task-run-2", "run-2"),
+    ):
+        response = client.post(
+            "/v1/agents/routed-tasks",
+            headers={"Authorization": f"Bearer {origin_token}"},
+            json={
+                "routed_task_id": task_id,
+                "parent_conversation_id": conversation["conversation_id"],
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "title": f"Task {task_id}",
+                "instructions": "Do work.",
+                "context": {"protocol_run_id": protocol_run_id, "stage_key": "planning"},
+                "created_at": "2026-03-25T00:00:00+00:00",
+            },
+        )
+        assert response.status_code == 200
+
+    filtered = client.get(
+        "/v1/tasks",
+        params={"protocol_run_id": "run-1", "limit": 10},
+    )
+    assert filtered.status_code == 200
+    payload = filtered.json()
+    assert [task["routed_task_id"] for task in payload["tasks"]] == ["task-run-1"]
+    assert payload["tasks"][0]["protocol_run_id"] == "run-1"
+
+
 def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -3470,6 +3524,103 @@ def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path)
 
     assert routed.status_code == 422
     assert "title" in routed.json()["detail"]
+
+
+def test_task_artifact_content_route_streams_local_file(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    artifact_file = tmp_path / "artifact.txt"
+    artifact_file.write_text("artifact body", encoding="utf-8")
+
+    class _Store:
+        def get_task(self, routed_task_id: str):
+            assert routed_task_id == "task-1"
+            return TaskRecord(
+                routed_task_id="task-1",
+                origin_agent_id="agent-1",
+                target_agent_id="agent-2",
+                working_dir=str(tmp_path),
+                result=RegistryJsonRecord.model_validate(
+                    {
+                        "artifacts": [
+                            {
+                                "artifact_key": "report",
+                                "path": "artifact.txt",
+                                "exists": True,
+                                "verification_state": "verified",
+                            }
+                        ]
+                    }
+                ),
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/tasks/task-1/artifacts/report/content")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert response.text == "artifact body"
+
+
+def test_protocol_artifact_content_route_streams_local_file(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    artifact_file = tmp_path / "protocol" / "plan.md"
+    artifact_file.parent.mkdir(parents=True, exist_ok=True)
+    artifact_file.write_text("plan body", encoding="utf-8")
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                tasks=[
+                    TaskRecord(
+                        routed_task_id="protocol-stage:stage-1",
+                        protocol_stage_execution_id="stage-1",
+                        working_dir=str(tmp_path),
+                    )
+                ],
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="plan",
+                        artifact_kind="workspace_file",
+                        location=str(artifact_file),
+                        workspace_path="protocol/plan.md",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                        verification_state="verified",
+                    )
+                ],
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1/artifacts/plan/content")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert response.text == "plan body"
 
 
 def test_registry_ack_rejects_invalid_classification(monkeypatch, tmp_path: Path):

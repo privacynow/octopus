@@ -13,11 +13,14 @@ This plan replaces the previous "verified green state" framing. The standard is
 now product-shaped:
 
 - a human author can build and evolve real workflows through the UI
+- a human operator can understand what happened after execution
 - the editing flow stays anchored and easy to follow
 - the working area stays in view
 - deeper editing does not sprawl downward into a long document
 - map, settings, and artifact definition stay available without dominating the
   main workflow surface
+- runs, tasks, approvals, and artifacts read as one connected lineage rather
+  than unrelated admin surfaces
 - the tests prove those workflows end to end
 
 ## Core Problem Statement
@@ -47,9 +50,27 @@ The main live problems are:
    perceived density.
 5. The interface still exposes too much of each stage at one time, which scales
    poorly when workflows have many stages or richer artifact flows.
+6. Operational surfaces still feel siloed:
+   - `Runs`
+   - `Tasks`
+   - `Approvals`
+   - artifact/file outputs
+   - stage executions
+   are rendered like neighboring resource types, not one traceable workflow
+   history.
+7. Artifact observability is too weak after execution:
+   - users cannot clearly see where artifacts live on disk
+   - users cannot reliably open/download/copy them from the operational
+     surfaces
+   - artifacts do not read as stage inputs/outputs/reviewed outputs in a way
+     that explains the workflow result
+8. UX coverage still cheats too often when setup is created outside the normal
+   product flow. That makes tests less trustworthy as product-usability proof.
 
 The result is a product that works, but still asks the user to manage the UI
 instead of progressing naturally through the workflow they are building.
+And after the workflow runs, it still asks the user to infer lineage and output
+state instead of showing it clearly.
 
 ## Product Standard
 
@@ -103,6 +124,30 @@ selection, projection, and editor model in place.
 
 The product must support creating and evolving workflows, skills, and protocol
 compositions through the UI/API path. No database-first shortcuts.
+
+### 7. Run lineage must be obvious
+
+Operational surfaces must explain the hierarchy:
+
+- Protocol
+- Run
+- Stage execution
+- Task / routed task / assignment attempt
+- Approval / decision
+- Artifacts read, written, reviewed, approved, or verified
+
+The UI should reveal this as one story, not force the user to mentally join
+independent lists.
+
+### 8. Artifact observability comes before rich preview
+
+Before rendering every possible file type inline, the product must first make it
+easy to answer:
+
+- what artifact was involved?
+- which stage/task/run did it belong to?
+- where is it on disk?
+- can I open it, download it, or copy its path?
 
 ## Decisions
 
@@ -188,6 +233,35 @@ More complex workflows should compress inactive structure more aggressively, but
 selected work should still retain breathing room. Do not answer complexity only
 by shrinking paddings and gaps.
 
+### I. Runs become the canonical operational container
+
+`Runs` should become the primary operational home for protocol execution.
+
+`Tasks`, `Approvals`, and artifact evidence should behave like focused views
+into that run lineage, not peer concepts with unclear relationship.
+
+### J. Artifact rendering is progressive, not universal
+
+Do not try to render every artifact type inline.
+
+Adopt a support ladder:
+
+- baseline: metadata + path + actions
+- lightweight preview for safe/common renderable formats
+- open/download for everything else
+
+### K. UX scenarios must create meaningful state through the product path
+
+For scenario tests that claim usability:
+
+- no database writes
+- no hidden data seeding for normal user journeys
+- no creating critical state through privileged back doors unless the scenario
+  is explicitly about an operator-only flow
+
+Public API calls are acceptable only when they are part of the intended product
+surface for that workflow.
+
 ## Target UX
 
 ### Default workflow view
@@ -258,6 +332,41 @@ It should not mean:
 
 - reveal another dense block in the main scroll
 
+### Operational flow
+
+When the user opens a run, task, or approval, the product should answer:
+
+- what workflow did this come from?
+- what stage is this part of?
+- what happened before and after?
+- what artifacts were read or produced?
+- where are those artifacts now?
+
+The user should not have to jump blindly between `Runs`, `Tasks`, and other
+screens to reconstruct a single execution.
+
+### Artifact flow after execution
+
+From a run or task detail surface, the user should be able to:
+
+- see stage-related artifact inputs and outputs
+- see whether they were declared, available, verified, reviewed, or approved
+- see the workspace-relative path
+- reveal the resolved disk path when the artifact is local
+- `Open`
+- `Download`
+- `Copy path`
+
+Preview is conditional:
+
+- text/code/json/yaml/logs: syntax-highlighted preview
+- markdown: rendered preview with raw toggle
+- csv/tsv: bounded table preview
+- pdf: native embedded preview in a focused panel
+- images: thumbnail/lightbox
+- xlsx/docx/pptx and similar: metadata + open/download first, richer preview
+  only if a reliable rendering path exists
+
 ## Scenario Assertion Contract
 
 Every major scenario must prove these categories through the standard UI path.
@@ -304,6 +413,9 @@ Every major scenario must prove these categories through the standard UI path.
 
 - terminal state is correct
 - artifact/outcome state is correct where the product defines it
+- the run/task lineage is understandable without cross-referencing unrelated
+  pages
+- artifact location and access actions are available from the operational path
 
 ## Target Workflow Specs
 
@@ -358,6 +470,29 @@ The user can:
 - compose a protocol-driven assistant that helps create further protocols or
   skills
 - prove this through rehearsal and execution, not database shortcuts
+
+## Operational Product Gap
+
+The next product gap is not primarily in authoring. It is in operational
+understanding.
+
+Today the product makes the user do too much joining across surfaces:
+
+- `Runs` looks like one concept
+- `Tasks` looks like another
+- `Approvals` looks like another
+- artifacts feel implicit or hidden
+
+That prevents the user from understanding the real hierarchy:
+
+- this run executed this workflow
+- this stage created this task
+- this decision advanced or blocked it
+- these artifacts were involved
+- these files are the concrete outputs
+
+The plan below addresses that by turning runs into the main operational
+container and making artifact evidence visible and actionable.
 
 ## Implementation Plan
 
@@ -516,7 +651,106 @@ Acceptance:
 - each target workflow has at least one primary owning scenario spec
 - scenario specs become the release bar
 
-### Phase 8. Exhaustive live audit
+### Phase 8. Operational lineage model
+
+Objective:
+
+- make the relationship between runs, tasks, approvals, stage executions, and
+  artifacts obvious
+
+Implementation direction:
+
+- treat `Runs` as the canonical operational container
+- add explicit lineage summaries to run detail:
+  - protocol
+  - current/completed stage executions
+  - decisions
+  - tasks/assignment attempts
+  - artifacts
+- make task and approval views show their parent run and stage context
+- reduce the feeling that these are unrelated modules
+
+Acceptance:
+
+- a user can open a run and understand the execution story without jumping
+  across the product
+- a user can open a task and immediately see which run and stage it belongs to
+
+### Phase 9. Artifact observability in operational views
+
+Objective:
+
+- make artifact outputs first-class evidence on runs, tasks, and stage
+  executions
+
+Implementation direction:
+
+- expose artifacts on run detail, stage execution detail, and task detail
+- show relationship type:
+  - reads
+  - writes
+  - verified output
+  - reviewed
+  - approved
+- show workspace-relative path prominently
+- support resolved local path as secondary detail when available
+- add actions:
+  - `Open`
+  - `Download`
+  - `Copy path`
+
+Acceptance:
+
+- users can locate real outputs from the operational UI without guessing
+- users can move directly from an execution record to the underlying file
+
+### Phase 10. Preview ladder
+
+Objective:
+
+- add useful preview only where it is reliable and low-friction
+
+Implementation direction:
+
+- support focused preview for:
+  - text/code/json/yaml/logs
+  - markdown
+  - csv/tsv
+  - pdf
+  - images
+- do not force preview for office binaries or complex formats without a solid
+  rendering path
+- keep preview secondary to the artifact card and access actions
+
+Acceptance:
+
+- preview enhances understanding without turning the UI into a generic file
+  browser
+- unsupported formats still have strong open/download/path handling
+
+### Phase 11. UX scenario discipline
+
+Objective:
+
+- make "this workflow is usable" a trustworthy claim
+
+Implementation direction:
+
+- divide tests clearly:
+  - contract/integration tests may use direct API setup where appropriate
+  - UX scenario tests must create meaningful workflow state through the UI and
+    intended public API surfaces
+- remove hidden setup that bypasses ordinary authoring or operational flows for
+  the scenarios that claim product usability
+- add explicit checks for run/task/artifact lineage and artifact access from
+  the UI
+
+Acceptance:
+
+- UX scenarios no longer depend on database-style shortcuts
+- green scenario coverage means a user actually exercised the product path
+
+### Phase 12. Exhaustive live audit
 
 Objective:
 
@@ -527,7 +761,8 @@ Implementation direction:
 - rerun the live exhaustive audit on the deployed build
 - include desktop, tablet, and mobile
 - include add stage, remove stage, select skill, select agent, artifact edits,
-  map open/close, settings open/close, rehearsal, and execution
+  map open/close, settings open/close, rehearsal, execution, run/task lineage,
+  and artifact access actions
 - retain the 500+ screenshot breadth bar, but treat it as breadth validation,
   not the primary correctness bar
 
@@ -536,7 +771,7 @@ Acceptance:
 - live audit confirms no new interaction regressions
 - screenshots show the anchored, progressive model across surfaces
 
-### Phase 9. Cleanup
+### Phase 13. Cleanup
 
 Objective:
 
@@ -547,6 +782,8 @@ Implementation direction:
 - remove or rewrite stale tests tied to the old sprawling layout contract
 - remove dead helper copy and duplicated summaries
 - remove any obsolete UI branches kept only for earlier transition states
+- remove stale test helpers that bypass the intended UX path for scenario
+  coverage
 
 Acceptance:
 
@@ -575,6 +812,7 @@ The final verification bar for this plan is:
 - primary scenario Playwright suite
 - negative standard-path invariants
 - live rehearsal and execution smoke
+- operational lineage and artifact access scenario coverage
 - exhaustive live audit
 
 The live audit remains a breadth requirement. The scenario specs are the depth
@@ -609,4 +847,13 @@ Octopus build:
    - create protocol
    - rehearse
    - execute
-10. No duplicate authoring pipeline was introduced.
+10. Runs, tasks, approvals, and artifacts read as one coherent operational
+    hierarchy.
+11. Artifact outputs can be located from the operational UI:
+    - path visible
+    - open/download/copy-path available
+12. Preview is available for the supported artifact types without overwhelming
+    the operational surfaces.
+13. UX scenario coverage for product-usability claims is authored through the
+    UI/intended API path, not hidden setup.
+14. No duplicate authoring or operational pipeline was introduced.

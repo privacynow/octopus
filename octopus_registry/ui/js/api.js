@@ -138,6 +138,14 @@ const API = (() => {
         return `/v1/agents/${encodeURIComponent(value)}`;
     }
 
+    function _protocolArtifactContentPath(runId, artifactKey) {
+        return `/v1/protocol-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactKey)}/content`;
+    }
+
+    function _taskArtifactContentPath(taskId, artifactKey) {
+        return `/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifactKey)}/content`;
+    }
+
     return {
         setCsrfToken,
         fetchCsrf,
@@ -230,6 +238,15 @@ const API = (() => {
             request('GET', '/v1/tasks', { params: opts }),
         getTask: (id) =>
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
+        getTaskArtifactText: (taskId, artifactKey) =>
+            request('GET', _taskArtifactContentPath(taskId, artifactKey), { raw: true }),
+        taskArtifactContentUrl: (taskId, artifactKey, opts = {}) => {
+            const url = new URL(_taskArtifactContentPath(taskId, artifactKey), window.location.origin);
+            if (opts.download) {
+                url.searchParams.set('download', '1');
+            }
+            return url.toString();
+        },
 
         // Protocols
         listProtocols: (opts = {}) =>
@@ -288,6 +305,15 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
         getProtocolRunArtifacts: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts`),
+        getProtocolRunArtifactText: (id, artifactKey) =>
+            request('GET', _protocolArtifactContentPath(id, artifactKey), { raw: true }),
+        protocolRunArtifactContentUrl: (id, artifactKey, opts = {}) => {
+            const url = new URL(_protocolArtifactContentPath(id, artifactKey), window.location.origin);
+            if (opts.download) {
+                url.searchParams.set('download', '1');
+            }
+            return url.toString();
+        },
         getProtocolRunTimeline: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/timeline`),
         exportProtocolRun: (id) =>

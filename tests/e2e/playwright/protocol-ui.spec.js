@@ -974,6 +974,20 @@ test.describe('protocol authoring live', () => {
       const finalDetail = await getRunDetail(page, runId);
       expect(String(finalDetail.run?.status || '')).toBe('completed');
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === publishKey)).toBe(true);
+
+      await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
+      await expect(page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).first()).toBeVisible({ timeout: 15000 });
+      await expect(page.locator('.editor-panel').filter({ hasText: 'Artifact evidence' })).toContainText('workspace/source-data.csv');
+      await expect(page.locator('.editor-panel').filter({ hasText: 'Artifact evidence' })).toContainText('produced by Load data');
+
+      await page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).getByRole('link', { name: 'Open task' }).click();
+      await expect(page.locator('.task-lineage-banner')).toContainText(runId);
+      const loadTask = page.locator('.task-item').filter({ hasText: 'Load data' }).first();
+      await expect(loadTask).toContainText('Artifact evidence');
+      await expect(loadTask).toContainText('workspace/source-data.csv');
+      await loadTask.getByRole('button', { name: 'Preview' }).click();
+      await expect(page.locator('.studio-dialog .event-pre')).toContainText('department,region,amount');
+      await page.locator('.studio-dialog').getByRole('button', { name: 'Close' }).click();
     } finally {
       for (const scenarioId of scenarioIds.reverse()) {
         if (scenarioId) {

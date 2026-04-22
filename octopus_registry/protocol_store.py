@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from pathlib import Path
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
@@ -73,6 +74,7 @@ from .store_base import RoutingSkillDisabledError
 from .store_shared.common import json_ready, record
 from .store_shared.agents import agent_exists as shared_agent_exists
 from .store_shared.conversations import create_conversation as shared_create_conversation
+from .store_shared.tasks import tasks_for_routed_ids
 
 log = logging.getLogger(__name__)
 
@@ -668,12 +670,22 @@ class ProtocolPostgresAdapter:
             transitions=transition_records,
             document=document,
         )
+        routed_task_ids = [
+            str(row.get("routed_task_id", "") or "").strip()
+            for row in stage_rows
+            if str(row.get("routed_task_id", "") or "").strip()
+        ]
         return ProtocolRunDetailRecord(
             run=self._protocol_run_from_row(run_row),
             definition=self._protocol_record_from_row(definition_row),
             version=self._protocol_version_from_row(version_row),
             participants=[self._protocol_run_participant_from_row(row) for row in participant_rows],
             stage_executions=[self._protocol_stage_execution_from_row(row) for row in stage_rows],
+            tasks=tasks_for_routed_ids(
+                conn,
+                dialect=POSTGRES_STORE_DIALECT,
+                routed_task_ids=routed_task_ids,
+            ),
             artifacts=[self._protocol_artifact_from_row(row) for row in artifact_rows],
             transitions=transition_records,
         )
@@ -996,8 +1008,24 @@ class ProtocolPostgresAdapter:
         current_artifacts = {
             item.artifact_key: item for item in self._protocol_artifacts_for_run(conn, str(run_row["protocol_run_id"] or ""))
         }
+        working_dir = ""
+        routed_task_id = str(stage_execution_row.get("routed_task_id", "") or "").strip()
+        if routed_task_id:
+            task_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT result_json FROM {SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            result_json = task_row.get("result_json") if isinstance(task_row, Mapping) else {}
+            if isinstance(result_json, dict):
+                working_dir = str(result_json.get("working_dir", "") or "").strip()
         for observation in observations:
             previous = current_artifacts.get(observation.artifact_key)
+            location = str(observation.path or "").strip()
+            if working_dir and location:
+                candidate = Path(location)
+                if not candidate.is_absolute():
+                    location = str((Path(working_dir) / candidate).resolve())
             with cur(conn) as db_cur:
                 db_cur.execute(
                     f"""
@@ -1013,7 +1041,7 @@ class ProtocolPostgresAdapter:
                         run_row["protocol_run_id"],
                         observation.artifact_key,
                         observation.artifact_kind,
-                        observation.path,
+                        location,
                         observation.path,
                         observation.content_hash,
                         int(observation.size_bytes or 0),
@@ -2545,6 +2573,7 @@ class ProtocolPostgresAdapter:
                 definition_document=canonical_protocol_document(detail.version.definition_json),
                 participants=detail.participants,
                 stage_executions=detail.stage_executions,
+                tasks=detail.tasks,
                 artifacts=detail.artifacts,
                 transitions=detail.transitions,
             )

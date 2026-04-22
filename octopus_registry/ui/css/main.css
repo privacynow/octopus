@@ -2013,6 +2013,76 @@ select {
     padding: 0.72rem 0.82rem;
 }
 
+.task-lineage-banner {
+    display: grid;
+    gap: var(--space-2);
+    padding: 0.88rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--bg-secondary) 86%, white);
+}
+
+.task-lineage-banner[hidden] {
+    display: none;
+}
+
+.task-lineage-banner-copy {
+    display: grid;
+    gap: 0.2rem;
+    color: var(--text-secondary);
+}
+
+.task-lineage-banner-copy strong {
+    color: var(--text-primary);
+}
+
+.task-artifact-list {
+    display: grid;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--bg);
+}
+
+.protocol-lineage-list {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.protocol-lineage-card {
+    display: grid;
+    gap: var(--space-2);
+    padding: 0.92rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--bg-secondary) 88%, white);
+    box-shadow: var(--shadow-card);
+}
+
+.protocol-lineage-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.protocol-lineage-copy {
+    display: grid;
+    gap: 0.22rem;
+    min-width: 0;
+}
+
+.protocol-lineage-title {
+    font-size: 0.98rem;
+}
+
+.protocol-lineage-subtitle,
+.protocol-lineage-note {
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+}
+
 .admin-shell {
     display: grid;
     gap: var(--space-3);

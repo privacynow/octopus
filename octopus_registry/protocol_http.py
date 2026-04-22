@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import mimetypes
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
+    ProtocolArtifactRecord,
     ProtocolDraftCreateRecord,
     ProtocolRunCreateRecord,
 )
@@ -108,6 +112,50 @@ def build_protocol_router(
                 message="If-Match must be an integer protocol draft revision.",
                 details={"if_match": value},
             ) from exc
+
+    def _local_protocol_artifact_path(detail, artifact: ProtocolArtifactRecord) -> Path | None:
+        produced_stage_id = str(artifact.produced_by_stage_execution_id or "").strip()
+        candidate_roots: list[str] = []
+        if produced_stage_id:
+            for task in detail.tasks or []:
+                if str(task.protocol_stage_execution_id or "").strip() != produced_stage_id:
+                    continue
+                candidate_roots.extend([
+                    str(task.working_dir or "").strip(),
+                    str(task.project_id_override or "").strip(),
+                ])
+                break
+        candidate_roots.extend([
+            str(detail.run.workspace_ref or "").strip(),
+            str(detail.run.repo_ref or "").strip(),
+        ])
+        candidate_paths = [
+            str(artifact.location or "").strip(),
+            str(artifact.workspace_path or "").strip(),
+        ]
+        for candidate in candidate_paths:
+            if not candidate:
+                continue
+            path = Path(candidate)
+            if path.is_absolute() and path.is_file():
+                return path
+        relative_path = str(artifact.workspace_path or artifact.location or "").strip()
+        if not relative_path or Path(relative_path).is_absolute():
+            return None
+        for root in candidate_roots:
+            if not root:
+                continue
+            root_path = Path(root)
+            if not root_path.is_absolute():
+                continue
+            try:
+                resolved = (root_path / relative_path).resolve()
+                resolved.relative_to(root_path.resolve())
+            except Exception:
+                continue
+            if resolved.is_file():
+                return resolved
+        return None
 
     @router.get("/v1/protocols")
     def resource_list_protocols(
@@ -491,6 +539,46 @@ def build_protocol_router(
         except KeyError as exc:
             raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
         return _json_payload({"artifacts": artifacts})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content")
+    def resource_get_protocol_run_artifact_content(
+        run_id: str,
+        artifact_key: str,
+        download: bool = Query(default=False),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> FileResponse:
+        try:
+            detail = store.get_protocol_run(run_id, access=protocol_access(auth))
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        artifact = next(
+            (item for item in detail.artifacts if str(item.artifact_key or "").strip() == str(artifact_key or "").strip()),
+            None,
+        )
+        if artifact is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_NOT_FOUND", message="Protocol artifact not found.")
+        resolved_path = _local_protocol_artifact_path(detail, artifact)
+        if resolved_path is None:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_PATH_UNAVAILABLE",
+                message="Artifact path is not available on this host.",
+                details={
+                    "artifact_key": artifact.artifact_key,
+                    "workspace_path": artifact.workspace_path,
+                    "location": artifact.location,
+                },
+            )
+        media_type = mimetypes.guess_type(str(resolved_path))[0] or "application/octet-stream"
+        return FileResponse(
+            path=resolved_path,
+            media_type=media_type,
+            filename=resolved_path.name,
+            content_disposition_type="attachment" if download else "inline",
+        )
 
     @router.get("/v1/protocol-runs/{run_id}/timeline")
     def resource_get_protocol_run_timeline(

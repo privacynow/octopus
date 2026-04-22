@@ -626,6 +626,7 @@ class AbstractRegistryStore(Protocol):
         *,
         for_agent_id: str | None = None,
         parent_conversation_id: str = "",
+        protocol_run_id: str = "",
         cursor: int = 0,
         limit: int = 25,
         status: str = "",

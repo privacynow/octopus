@@ -6,11 +6,13 @@ import asyncio
 from contextlib import asynccontextmanager
 import hmac
 import logging
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
 from starlette.websockets import WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from .auth import (
     AuthContext,
@@ -265,6 +267,40 @@ def _protocol_run_id_from_task_record(task: TaskRecord) -> str:
     if not isinstance(context, dict):
         return ""
     return str(context.get("protocol_run_id", "") or "").strip()
+
+
+def _local_task_artifact_path(task: TaskRecord, artifact_key: str) -> Path | None:
+    result_payload = task.result.as_dict() if task.result is not None else {}
+    artifacts = result_payload.get("artifacts", ()) if isinstance(result_payload, dict) else ()
+    if not isinstance(artifacts, list):
+        return None
+    artifact = next(
+        (
+            item for item in artifacts
+            if isinstance(item, dict) and str(item.get("artifact_key", "") or "").strip() == str(artifact_key or "").strip()
+        ),
+        None,
+    )
+    if artifact is None:
+        return None
+    relative_or_absolute = str(artifact.get("path", "") or "").strip()
+    if not relative_or_absolute:
+        return None
+    candidate = Path(relative_or_absolute)
+    if candidate.is_absolute() and candidate.is_file():
+        return candidate
+    working_dir = str(task.working_dir or result_payload.get("working_dir", "") or "").strip()
+    if not working_dir:
+        return None
+    working_dir_path = Path(working_dir)
+    if not working_dir_path.is_absolute():
+        return None
+    try:
+        resolved = (working_dir_path / candidate).resolve()
+        resolved.relative_to(working_dir_path.resolve())
+    except Exception:
+        return None
+    return resolved if resolved.is_file() else None
 
 
 async def _broadcast_task_record_events(result: TaskRecord) -> None:
@@ -1216,6 +1252,7 @@ def resource_list_tasks(
     limit: int = Query(default=25, ge=1, le=100),
     status: str = Query(default=""),
     parent_conversation_id: str = Query(default=""),
+    protocol_run_id: str = Query(default=""),
     completed_since_iso: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
@@ -1223,6 +1260,7 @@ def resource_list_tasks(
     tasks = store.list_tasks(
         for_agent_id=_scoped_agent_id(auth),
         parent_conversation_id=parent_conversation_id,
+        protocol_run_id=protocol_run_id,
         cursor=cursor,
         limit=limit,
         status=status,
@@ -1249,6 +1287,37 @@ def resource_get_task(
         }:
             raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
     return _json_payload(task)
+
+
+@app.get("/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content")
+def resource_get_task_artifact_content(
+    routed_task_id: str,
+    artifact_key: str,
+    download: bool = Query(default=False),
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> FileResponse:
+    try:
+        task = store.get_task(routed_task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
+    if auth.agent_id:
+        agent_id = auth.agent_id
+        if agent_id not in {
+            str(task.get("origin_agent_id", "")),
+            str(task.get("target_agent_id", "")),
+        }:
+            raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
+    resolved_path = _local_task_artifact_path(task, artifact_key)
+    if resolved_path is None:
+        raise HTTPException(status_code=409, detail="Artifact path is not available on this host.")
+    media_type = mimetypes.guess_type(str(resolved_path))[0] or "application/octet-stream"
+    return FileResponse(
+        path=resolved_path,
+        media_type=media_type,
+        filename=resolved_path.name,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @app.get("/v1/routing/skills")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from pathlib import Path
 import string
 import time
 import uuid
@@ -1535,3 +1536,53 @@ def test_recipient_conversation_event_carries_protocol_stage_navigation_context(
     assert isinstance(context, dict)
     assert context.get("protocol_run_id") == created.run.protocol_run_id
     assert context.get("stage_key") == "planning"
+
+
+def test_protocol_run_detail_and_task_payloads_include_lineage_and_artifact_location(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+    working_dir = "/tmp/protocol-run-artifacts"
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "lineage-1",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "working_dir": working_dir,
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "abc123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    task = store.get_task(first_stage.routed_task_id)
+    assert task.protocol_run_id == created.run.protocol_run_id
+    assert task.protocol_stage_execution_id == first_stage.protocol_stage_execution_id
+    assert task.protocol_definition_version_id == created.run.protocol_definition_version_id
+    assert task.stage_key == "planning"
+    assert task.participant_key == "worker"
+    assert task.working_dir == working_dir
+    assert task.artifact_count == 1
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert refreshed.tasks, "Run detail should include linked routed tasks for operational lineage"
+    linked = next(item for item in refreshed.tasks if item.routed_task_id == first_stage.routed_task_id)
+    assert linked.stage_key == "planning"
+    artifact = next(item for item in refreshed.artifacts if item.artifact_key == "plan")
+    assert artifact.workspace_path == "protocol/plan.md"
+    assert Path(artifact.location).resolve() == (Path(working_dir) / "protocol/plan.md").resolve()

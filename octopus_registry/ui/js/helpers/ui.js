@@ -530,6 +530,18 @@ window.UI = (() => {
         }
     }
 
+    function joinDisplayPath(root, relativeOrAbsolute) {
+        const value = String(relativeOrAbsolute || '').trim();
+        if (!value) return '';
+        if (value.startsWith('/')) return value;
+        const prefix = String(root || '').trim().replace(/\/+$/, '');
+        return prefix ? `${prefix}/${value}` : value;
+    }
+
+    function isPreviewableFilePath(path) {
+        return /\.(md|markdown|txt|log|json|jsonl|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(String(path || '').trim());
+    }
+
     function _cloneCachedValue(value) {
         if (typeof structuredClone === 'function') {
             try {
@@ -912,6 +924,27 @@ window.UI = (() => {
         });
     }
 
+    async function copyText(text, {
+        successMessage = 'Copied to clipboard.',
+        errorMessage = 'Copy failed.',
+    } = {}) {
+        const value = String(text || '');
+        if (!value) {
+            throw new Error('Nothing to copy.');
+        }
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+            throw new Error('Clipboard access unavailable.');
+        }
+        try {
+            await navigator.clipboard.writeText(value);
+            if (successMessage) notify(successMessage, 'success');
+            return true;
+        } catch (err) {
+            if (errorMessage) reportError(errorMessage, err, { context: 'Clipboard write failed' });
+            throw err;
+        }
+    }
+
     function filterProtocolRunAgents(agents) {
         return filterManagedAgents(agents);
     }
@@ -1052,6 +1085,8 @@ window.UI = (() => {
         formatTime,
         formatApprovalTime,
         safeFilename,
+        joinDisplayPath,
+        isPreviewableFilePath,
         readQueryParam,
         updateQueryParams,
         notify,
@@ -1091,5 +1126,6 @@ window.UI = (() => {
         showDialog,
         showConfirm,
         showTextDialog,
+        copyText,
     };
 })();

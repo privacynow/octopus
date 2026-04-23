@@ -1338,6 +1338,14 @@ test.describe('protocol authoring live', () => {
       const finalDetail = await getRunDetail(page, runId);
       expect(String(finalDetail.run?.status || '')).toBe('completed');
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'review_document' && String(item.decision || '') === 'revise')).toBe(true);
+      await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
+      await expect(page.locator('main')).toContainText('Outputs');
+      await expect(page.locator('main')).toContainText('document.md');
+      const artifactResponse = await page.context().request.get(
+        `/v1/protocol-runs/${encodeURIComponent(runId)}/artifacts/document/content?download=1`,
+      );
+      expect(artifactResponse.ok()).toBe(true);
+      expect(await artifactResponse.text()).toContain('executive summary');
     } finally {
       for (const scenarioId of scenarioIds.filter(Boolean)) {
         await deleteProtocolScenario(page, scenarioId);

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import mimetypes
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
@@ -19,6 +18,7 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
 
+from .artifact_paths import resolve_protocol_artifact_path
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .rehearsal import RehearsalSessionManager
@@ -112,50 +112,6 @@ def build_protocol_router(
                 message="If-Match must be an integer protocol draft revision.",
                 details={"if_match": value},
             ) from exc
-
-    def _local_protocol_artifact_path(detail, artifact: ProtocolArtifactRecord) -> Path | None:
-        produced_stage_id = str(artifact.produced_by_stage_execution_id or "").strip()
-        candidate_roots: list[str] = []
-        if produced_stage_id:
-            for task in detail.tasks or []:
-                if str(task.protocol_stage_execution_id or "").strip() != produced_stage_id:
-                    continue
-                candidate_roots.extend([
-                    str(task.working_dir or "").strip(),
-                    str(task.project_id_override or "").strip(),
-                ])
-                break
-        candidate_roots.extend([
-            str(detail.run.workspace_ref or "").strip(),
-            str(detail.run.repo_ref or "").strip(),
-        ])
-        candidate_paths = [
-            str(artifact.location or "").strip(),
-            str(artifact.workspace_path or "").strip(),
-        ]
-        for candidate in candidate_paths:
-            if not candidate:
-                continue
-            path = Path(candidate)
-            if path.is_absolute() and path.is_file():
-                return path
-        relative_path = str(artifact.workspace_path or artifact.location or "").strip()
-        if not relative_path or Path(relative_path).is_absolute():
-            return None
-        for root in candidate_roots:
-            if not root:
-                continue
-            root_path = Path(root)
-            if not root_path.is_absolute():
-                continue
-            try:
-                resolved = (root_path / relative_path).resolve()
-                resolved.relative_to(root_path.resolve())
-            except Exception:
-                continue
-            if resolved.is_file():
-                return resolved
-        return None
 
     @router.get("/v1/protocols")
     def resource_list_protocols(
@@ -560,7 +516,7 @@ def build_protocol_router(
         )
         if artifact is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_NOT_FOUND", message="Protocol artifact not found.")
-        resolved_path = _local_protocol_artifact_path(detail, artifact)
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
         if resolved_path is None:
             raise _protocol_http_error(
                 409,

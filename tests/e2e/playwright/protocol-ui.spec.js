@@ -988,8 +988,8 @@ test.describe('protocol authoring live', () => {
       await expect(loadTask).toContainText('Artifact evidence');
       await expect(loadTask).toContainText('source-data.csv');
       await loadTask.getByRole('button', { name: 'Preview' }).click();
-      await expect(page.locator('.studio-dialog .event-pre')).toContainText('department,region,amount');
-      await page.locator('.studio-dialog').getByRole('button', { name: 'Close' }).click();
+      await expect(page.locator('.confirm-dialog .event-pre')).toContainText('department,region,amount');
+      await page.locator('.confirm-dialog').getByRole('button', { name: 'Close' }).click();
     } finally {
       for (const scenarioId of scenarioIds.reverse()) {
         if (scenarioId) {

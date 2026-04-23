@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 import hmac
 import logging
 import mimetypes
-from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
@@ -33,6 +32,7 @@ from .auth import (
     ui_session_is_valid,
     validate_settings,
 )
+from .artifact_paths import resolve_protocol_artifact_path, resolve_task_artifact_path
 from .ws import WebSocketManager
 from .rehearsal import RehearsalSessionManager
 from .routing_skill_service import RoutingSkillService
@@ -267,40 +267,6 @@ def _protocol_run_id_from_task_record(task: TaskRecord) -> str:
     if not isinstance(context, dict):
         return ""
     return str(context.get("protocol_run_id", "") or "").strip()
-
-
-def _local_task_artifact_path(task: TaskRecord, artifact_key: str) -> Path | None:
-    result_payload = task.result.as_dict() if task.result is not None else {}
-    artifacts = result_payload.get("artifacts", ()) if isinstance(result_payload, dict) else ()
-    if not isinstance(artifacts, list):
-        return None
-    artifact = next(
-        (
-            item for item in artifacts
-            if isinstance(item, dict) and str(item.get("artifact_key", "") or "").strip() == str(artifact_key or "").strip()
-        ),
-        None,
-    )
-    if artifact is None:
-        return None
-    relative_or_absolute = str(artifact.get("path", "") or "").strip()
-    if not relative_or_absolute:
-        return None
-    candidate = Path(relative_or_absolute)
-    if candidate.is_absolute() and candidate.is_file():
-        return candidate
-    working_dir = str(task.working_dir or result_payload.get("working_dir", "") or "").strip()
-    if not working_dir:
-        return None
-    working_dir_path = Path(working_dir)
-    if not working_dir_path.is_absolute():
-        return None
-    try:
-        resolved = (working_dir_path / candidate).resolve()
-        resolved.relative_to(working_dir_path.resolve())
-    except Exception:
-        return None
-    return resolved if resolved.is_file() else None
 
 
 async def _broadcast_task_record_events(result: TaskRecord) -> None:
@@ -1308,7 +1274,27 @@ def resource_get_task_artifact_content(
             str(task.get("target_agent_id", "")),
         }:
             raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
-    resolved_path = _local_task_artifact_path(task, artifact_key)
+    resolved_path = resolve_task_artifact_path(task, artifact_key)
+    if resolved_path is None:
+        protocol_run_id = _protocol_run_id_from_task_record(task)
+        if protocol_run_id:
+            try:
+                detail = store.get_protocol_run(protocol_run_id, access=_protocol_access(auth))
+            except KeyError:
+                detail = None
+            if detail is not None:
+                resolved_path = resolve_task_artifact_path(task, artifact_key, run_detail=detail)
+                if resolved_path is None:
+                    stage_execution_id = str(task.protocol_stage_execution_id or "").strip()
+                    for artifact in detail.artifacts or []:
+                        if str(artifact.artifact_key or "").strip() != str(artifact_key or "").strip():
+                            continue
+                        produced_stage_id = str(artifact.produced_by_stage_execution_id or "").strip()
+                        if stage_execution_id and produced_stage_id and produced_stage_id != stage_execution_id:
+                            continue
+                        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+                        if resolved_path is not None:
+                            break
     if resolved_path is None:
         raise HTTPException(status_code=409, detail="Artifact path is not available on this host.")
     media_type = mimetypes.guess_type(str(resolved_path))[0] or "application/octet-stream"

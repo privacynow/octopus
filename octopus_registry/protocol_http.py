@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import ValidationError
 
 from octopus_sdk.protocols import (
@@ -18,7 +18,7 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
 
-from .artifact_paths import resolve_protocol_artifact_path
+from .artifact_paths import artifact_download_name, resolve_protocol_artifact_path, resolve_protocol_artifact_rehearsal_text
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .rehearsal import RehearsalSessionManager
@@ -503,7 +503,7 @@ def build_protocol_router(
         download: bool = Query(default=False),
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
-    ) -> FileResponse:
+    ) -> Response:
         try:
             detail = store.get_protocol_run(run_id, access=protocol_access(auth))
         except PermissionError as exc:
@@ -517,7 +517,20 @@ def build_protocol_router(
         if artifact is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_NOT_FOUND", message="Protocol artifact not found.")
         resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        preferred_name = artifact_download_name(
+            artifact_key=str(artifact.artifact_key or ""),
+            preferred_path=str(artifact.workspace_path or artifact.location or ""),
+        )
+        media_type = mimetypes.guess_type(preferred_name)[0] or "application/octet-stream"
         if resolved_path is None:
+            content_text = resolve_protocol_artifact_rehearsal_text(detail, artifact)
+            if content_text:
+                disposition = "attachment" if download else "inline"
+                return Response(
+                    content=content_text.encode("utf-8"),
+                    media_type=media_type,
+                    headers={"Content-Disposition": f'{disposition}; filename="{preferred_name}"'},
+                )
             raise _protocol_http_error(
                 409,
                 error_code="PROTOCOL_ARTIFACT_PATH_UNAVAILABLE",
@@ -528,11 +541,10 @@ def build_protocol_router(
                     "location": artifact.location,
                 },
             )
-        media_type = mimetypes.guess_type(str(resolved_path))[0] or "application/octet-stream"
         return FileResponse(
             path=resolved_path,
             media_type=media_type,
-            filename=resolved_path.name,
+            filename=preferred_name or resolved_path.name,
             content_disposition_type="attachment" if download else "inline",
         )
 

@@ -32,7 +32,12 @@ from .auth import (
     ui_session_is_valid,
     validate_settings,
 )
-from .artifact_paths import resolve_protocol_artifact_path, resolve_task_artifact_path
+from .artifact_paths import (
+    artifact_download_name,
+    resolve_protocol_artifact_path,
+    resolve_task_artifact_path,
+    resolve_task_artifact_rehearsal_text,
+)
 from .ws import WebSocketManager
 from .rehearsal import RehearsalSessionManager
 from .routing_skill_service import RoutingSkillService
@@ -1262,7 +1267,7 @@ def resource_get_task_artifact_content(
     download: bool = Query(default=False),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
-) -> FileResponse:
+) -> Response:
     try:
         task = store.get_task(routed_task_id)
     except KeyError as exc:
@@ -1275,6 +1280,7 @@ def resource_get_task_artifact_content(
         }:
             raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
     resolved_path = resolve_task_artifact_path(task, artifact_key)
+    detail = None
     if resolved_path is None:
         protocol_run_id = _protocol_run_id_from_task_record(task)
         if protocol_run_id:
@@ -1295,13 +1301,36 @@ def resource_get_task_artifact_content(
                         resolved_path = resolve_protocol_artifact_path(detail, artifact)
                         if resolved_path is not None:
                             break
+    preferred_path = ""
+    result_payload = task.result.as_dict() if task.result is not None else {}
+    artifacts = result_payload.get("artifacts", ()) if isinstance(result_payload, dict) else ()
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("artifact_key", "") or "").strip() != str(artifact_key or "").strip():
+                continue
+            preferred_path = str(item.get("path", "") or "").strip()
+            break
+    preferred_name = artifact_download_name(
+        artifact_key=str(artifact_key or ""),
+        preferred_path=preferred_path,
+    )
+    media_type = mimetypes.guess_type(preferred_name)[0] or "application/octet-stream"
     if resolved_path is None:
+        content_text = resolve_task_artifact_rehearsal_text(task, artifact_key, run_detail=detail)
+        if content_text:
+            disposition = "attachment" if download else "inline"
+            return Response(
+                content=content_text.encode("utf-8"),
+                media_type=media_type,
+                headers={"Content-Disposition": f'{disposition}; filename="{preferred_name}"'},
+            )
         raise HTTPException(status_code=409, detail="Artifact path is not available on this host.")
-    media_type = mimetypes.guess_type(str(resolved_path))[0] or "application/octet-stream"
     return FileResponse(
         path=resolved_path,
         media_type=media_type,
-        filename=resolved_path.name,
+        filename=preferred_name or resolved_path.name,
         content_disposition_type="attachment" if download else "inline",
     )
 

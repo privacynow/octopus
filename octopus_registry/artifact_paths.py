@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from functools import lru_cache
 from pathlib import Path
 
 from octopus_sdk.protocols import ProtocolArtifactRecord, ProtocolRunDetailRecord
@@ -39,6 +40,37 @@ def _resolve_artifact_file_path(
     return None
 
 
+@lru_cache(maxsize=1)
+def _mounted_workspace_roots() -> tuple[str, ...]:
+    workspace_parent = Path("/workspace")
+    if not workspace_parent.is_dir():
+        return ()
+    return tuple(
+        str(child)
+        for child in sorted(workspace_parent.iterdir())
+        if child.is_dir()
+    )
+
+
+def _artifact_body_from_full_text(full_text: str) -> str:
+    body_lines: list[str] = []
+    for line in str(full_text or "").splitlines():
+        marker = line.strip().upper()
+        if marker.startswith("PROTOCOL_DECISION:") or marker.startswith("PROTOCOL_SUMMARY:"):
+            continue
+        body_lines.append(line.rstrip())
+    return "\n".join(body_lines).strip()
+
+
+def artifact_download_name(*, artifact_key: str, preferred_path: str = "") -> str:
+    candidate = str(preferred_path or "").strip()
+    if candidate:
+        name = Path(candidate).name.strip()
+        if name:
+            return name
+    return str(artifact_key or "").strip() or "artifact"
+
+
 def resolve_protocol_artifact_path(detail: ProtocolRunDetailRecord, artifact: ProtocolArtifactRecord) -> Path | None:
     produced_stage_id = str(artifact.produced_by_stage_execution_id or "").strip()
     candidate_roots: list[str] = []
@@ -55,6 +87,7 @@ def resolve_protocol_artifact_path(detail: ProtocolRunDetailRecord, artifact: Pr
         str(detail.run.workspace_ref or "").strip(),
         str(detail.run.repo_ref or "").strip(),
     ])
+    candidate_roots.extend(_mounted_workspace_roots())
     return _resolve_artifact_file_path(
         candidate_paths=[
             str(artifact.location or "").strip(),
@@ -62,6 +95,27 @@ def resolve_protocol_artifact_path(detail: ProtocolRunDetailRecord, artifact: Pr
         ],
         candidate_roots=candidate_roots,
     )
+
+
+def resolve_protocol_artifact_rehearsal_text(
+    detail: ProtocolRunDetailRecord,
+    artifact: ProtocolArtifactRecord,
+) -> str:
+    if not bool(getattr(detail.run, "is_rehearsal", False)):
+        return ""
+    produced_stage_id = str(artifact.produced_by_stage_execution_id or "").strip()
+    for task in detail.tasks or ():
+        if produced_stage_id and str(task.protocol_stage_execution_id or "").strip() != produced_stage_id:
+            continue
+        if task.result is None:
+            continue
+        result_payload = task.result.as_dict()
+        if not isinstance(result_payload, dict):
+            continue
+        body = _artifact_body_from_full_text(str(result_payload.get("full_text", "") or ""))
+        if body:
+            return body
+    return ""
 
 
 def resolve_task_artifact_path(
@@ -92,7 +146,29 @@ def resolve_task_artifact_path(
             str(run_detail.run.workspace_ref or "").strip(),
             str(run_detail.run.repo_ref or "").strip(),
         ])
+    candidate_roots.extend(_mounted_workspace_roots())
     return _resolve_artifact_file_path(
         candidate_paths=[str(artifact.get("path", "") or "").strip()],
         candidate_roots=candidate_roots,
     )
+
+
+def resolve_task_artifact_rehearsal_text(
+    task: TaskRecord,
+    artifact_key: str,
+    *,
+    run_detail: ProtocolRunDetailRecord | None = None,
+) -> str:
+    if run_detail is None or not bool(getattr(run_detail.run, "is_rehearsal", False)):
+        return ""
+    result_payload = task.result.as_dict() if task.result is not None else {}
+    artifacts = result_payload.get("artifacts", ()) if isinstance(result_payload, dict) else ()
+    if not isinstance(artifacts, list):
+        return ""
+    matched = any(
+        isinstance(item, dict) and str(item.get("artifact_key", "") or "").strip() == str(artifact_key or "").strip()
+        for item in artifacts
+    )
+    if not matched:
+        return ""
+    return _artifact_body_from_full_text(str(result_payload.get("full_text", "") or ""))

@@ -58,7 +58,17 @@ def _task_base_payload(row, request, result):
 def _task_list_payload(row):
     request = decode_json_field(row["request_json"], {})
     result = decode_json_field(row["result_json"], {})
-    return _task_base_payload(row, request, result)
+    payload = _task_base_payload(row, request, result)
+    contract = _task_protocol_contract(request)
+    if contract:
+        payload["artifact_count"] = max(
+            int(payload.get("artifact_count", 0) or 0),
+            len(contract.get("output_artifacts", ()) or ()),
+        )
+    if payload.get("protocol_run_id") or payload.get("artifact_count"):
+        payload["request"] = request
+        payload["result"] = result
+    return payload
 
 
 def _task_detail_payload(row):

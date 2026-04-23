@@ -1578,6 +1578,20 @@ def test_protocol_run_detail_and_task_payloads_include_lineage_and_artifact_loca
     assert task.participant_key == "worker"
     assert task.working_dir == working_dir
     assert task.artifact_count == 1
+    assert task.request is not None
+    assert task.result is not None
+
+    listed = next(
+        item for item in store.list_tasks(protocol_run_id=created.run.protocol_run_id)
+        if item.routed_task_id == first_stage.routed_task_id
+    )
+    assert listed.protocol_run_id == created.run.protocol_run_id
+    assert listed.stage_key == "planning"
+    assert listed.participant_key == "worker"
+    assert listed.working_dir == working_dir
+    assert listed.artifact_count == 1
+    assert listed.request is not None
+    assert listed.result is not None
 
     refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert refreshed.tasks, "Run detail should include linked routed tasks for operational lineage"

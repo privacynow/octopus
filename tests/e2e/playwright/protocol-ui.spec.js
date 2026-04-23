@@ -796,7 +796,7 @@ test.describe('protocol authoring live', () => {
       { name: 'Source data', path: 'source-data.csv' },
       { name: 'Filtered data', path: 'filtered-data.csv' },
       { name: 'Analytics summary', path: 'analytics-summary.json' },
-      { name: 'PDF report', path: 'report.pdf' },
+      { name: 'Rendered report', path: 'report.md' },
       { name: 'Published report', path: 'published-report.json' },
     ]) {
       await addArtifact(page, artifact);
@@ -849,9 +849,9 @@ test.describe('protocol authoring live', () => {
       selectorKind: 'agent',
       selectorValue: connectedAgent.slug,
       instructions: [
-        'Read analytics-summary.json and create report.pdf in the workspace root.',
-        'It may be plain text content saved at that path.',
-        'Summarize the analytics in a concise report body.',
+        'Read analytics-summary.json and create report.md in the workspace root.',
+        'Write a concise Markdown report with a title and a short summary section.',
+        'Keep it simple and text-based for downstream publishing.',
       ].join(' '),
     });
     const publishKey = await createStep(page, {
@@ -862,7 +862,7 @@ test.describe('protocol authoring live', () => {
       selectorKind: 'agent',
       selectorValue: connectedAgent.slug,
       instructions: [
-        'Read report.pdf and create published-report.json in the workspace root.',
+        'Read report.md and create published-report.json in the workspace root.',
         'Store a small JSON object with status, published_at, and report_path.',
       ].join(' '),
     });
@@ -876,8 +876,8 @@ test.describe('protocol authoring live', () => {
     await configureStepArtifacts(page, loadKey, { writes: ['Source data'] });
     await configureStepArtifacts(page, filterKey, { reads: ['Source data'], writes: ['Filtered data'] });
     await configureStepArtifacts(page, analyzeKey, { reads: ['Filtered data'], writes: ['Analytics summary'] });
-    await configureStepArtifacts(page, renderKey, { reads: ['Analytics summary'], writes: ['PDF report'] });
-    await configureStepArtifacts(page, publishKey, { reads: ['PDF report'], writes: ['Published report'] });
+    await configureStepArtifacts(page, renderKey, { reads: ['Analytics summary'], writes: ['Rendered report'] });
+    await configureStepArtifacts(page, publishKey, { reads: ['Rendered report'], writes: ['Published report'] });
 
     const lifecycle = page.locator('.kit-lifecycle-header');
     await lifecycle.getByLabel('Name').fill(`Data Analysis ${Date.now()}`);
@@ -923,8 +923,8 @@ test.describe('protocol authoring live', () => {
         participant_key: 'report-renderer',
         display_name: 'Render report complete',
         decision: 'completed',
-        decision_summary: 'PDF rendered.',
-        response_text: 'Rendered the analytics summary into the templated PDF report.',
+        decision_summary: 'Report rendered.',
+        response_text: 'Rendered the analytics summary into the Markdown report.',
       },
       {
         protocol_id: protocolId,

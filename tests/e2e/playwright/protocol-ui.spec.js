@@ -7,6 +7,7 @@ const {
   createStep,
   discardDraft,
   expectSelectedStep,
+  firstExecutionReadyAgent,
   login,
   outlineStepNode,
   openBlankDraft,
@@ -136,22 +137,6 @@ async function waitForLatestRehearsalRunId(page, protocolId, previousRunIds = []
   }, { timeout: 15000 }).not.toBe('');
   const runIds = await listRunningRehearsalRunIds(page, protocolId);
   return String(runIds.find((runId) => !previous.has(runId)) || '');
-}
-
-async function firstConnectedAgent(page) {
-  return page.evaluate(async () => {
-    const response = await fetch('/v1/agents?state=connected&limit=100', { credentials: 'same-origin' });
-    const payload = await response.json();
-    const agents = Array.isArray(payload.agents) ? payload.agents : [];
-    const first = agents.find((agent) => String(agent.connectivity_state || '').toLowerCase() === 'connected');
-    const tags = Array.isArray(first?.tags) ? first.tags : [];
-    const workspaceTag = tags.find((tag) => String(tag || '').startsWith('workspace:'));
-    return {
-      agentId: String(first?.agent_id || ''),
-      slug: String(first?.slug || ''),
-      workspaceRef: workspaceTag ? String(workspaceTag).split(':').slice(1).join(':').trim() : '',
-    };
-  });
 }
 
 async function firstSkillLifecycleAgent(page) {
@@ -537,7 +522,7 @@ test.describe('protocol authoring live', () => {
     } else {
       await expect(assignment.getByText('Available skills', { exact: true })).toHaveCount(0);
     }
-    const connectedAgent = await firstConnectedAgent(page);
+    const connectedAgent = await firstExecutionReadyAgent(page);
     expect(connectedAgent.slug).toBeTruthy();
     await selectStep(page, 'plan_review');
     const reviewEntry = page.locator('.kit-protocol-segment-entry').filter({ has: page.getByTestId('workflow-stage-plan_review') }).first();
@@ -787,7 +772,7 @@ test.describe('protocol authoring live', () => {
 
     await login(page);
     await openBlankDraft(page);
-    const connectedAgent = await firstConnectedAgent(page);
+    const connectedAgent = await firstExecutionReadyAgent(page);
     expect(connectedAgent.agentId).toBeTruthy();
     expect(connectedAgent.slug).toBeTruthy();
 
@@ -1008,7 +993,7 @@ test.describe('protocol authoring live', () => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
-    const connectedAgent = await firstConnectedAgent(page);
+    const connectedAgent = await firstExecutionReadyAgent(page);
     expect(connectedAgent.agentId).toBeTruthy();
     const lifecycleAgent = await firstSkillLifecycleAgent(page);
     expect(lifecycleAgent.agentId).toBeTruthy();

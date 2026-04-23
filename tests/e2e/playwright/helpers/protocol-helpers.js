@@ -49,6 +49,37 @@ async function login(page) {
   await page.waitForURL(/\/ui\/?$/);
 }
 
+async function firstExecutionReadyAgent(page, { preferredProvider = 'codex' } = {}) {
+  return page.evaluate(async ({ preferredProviderName }) => {
+    const response = await fetch('/v1/agents?state=connected&limit=100', { credentials: 'same-origin' });
+    const payload = await response.json();
+    const agents = Array.isArray(payload.agents) ? payload.agents : [];
+    const normalized = agents.map((agent) => {
+      const tags = Array.isArray(agent?.tags) ? agent.tags : [];
+      const workspaceTag = tags.find((tag) => String(tag || '').startsWith('workspace:'));
+      return {
+        agentId: String(agent?.agent_id || ''),
+        slug: String(agent?.slug || ''),
+        provider: String(agent?.provider || '').trim().toLowerCase(),
+        connectivityState: String(agent?.connectivity_state || '').trim().toLowerCase(),
+        executionState: String(agent?.execution_state || 'healthy').trim().toLowerCase(),
+        workspaceRef: workspaceTag ? String(workspaceTag).split(':').slice(1).join(':').trim() : '',
+      };
+    }).filter((agent) => agent.agentId && agent.slug);
+    const connected = normalized.filter((agent) => agent.connectivityState === 'connected');
+    const executionReady = connected.filter((agent) => !['faulted', 'degraded'].includes(agent.executionState));
+    const preferred = executionReady.filter((agent) => agent.provider === String(preferredProviderName || '').trim().toLowerCase());
+    return preferred[0] || executionReady[0] || connected[0] || normalized[0] || {
+      agentId: '',
+      slug: '',
+      provider: '',
+      connectivityState: '',
+      executionState: '',
+      workspaceRef: '',
+    };
+  }, { preferredProviderName: preferredProvider });
+}
+
 async function apiCsrf(api) {
   const resp = await api.get('/v1/auth/csrf');
   expect(resp.ok()).toBeTruthy();
@@ -406,6 +437,7 @@ module.exports = {
   createStep,
   discardDraft,
   ensureDetailsOpen,
+  firstExecutionReadyAgent,
   login,
   openBlankDraft,
   openStagePanel,

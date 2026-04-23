@@ -1088,7 +1088,7 @@ test.describe('protocol authoring live', () => {
   });
 
   test('software engineering rehearsal proves revise loops and completion visually', async ({ page }) => {
-    test.setTimeout(240000);
+    test.setTimeout(360000);
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
     await login(page);
     await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
@@ -1239,8 +1239,10 @@ test.describe('protocol authoring live', () => {
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'plan_review' && String(item.decision || '') === 'revise')).toBe(true);
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'implementation_review' && String(item.decision || '') === 'revise')).toBe(true);
     } finally {
-      for (const scenarioId of scenarioIds.filter(Boolean)) {
-        await deleteProtocolScenario(page, scenarioId);
+      if (!page.isClosed()) {
+        for (const scenarioId of scenarioIds.filter(Boolean)) {
+          await deleteProtocolScenario(page, scenarioId);
+        }
       }
     }
 

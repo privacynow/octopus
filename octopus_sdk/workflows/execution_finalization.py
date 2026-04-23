@@ -49,6 +49,8 @@ class FinalizationContext:
     deferred_target_agent_id: str = ""
     deferred_actor_key: str = ""
     deferred_title: str = ""
+    protocol_stage_contract: dict[str, object] | None = None
+    working_dir_hint: str = ""
     registry_inspection: RegistryInspectionPort | None = None
     working_dir_resolver: Callable[[int | str], str] | None = None
 
@@ -180,28 +182,30 @@ async def _protocol_artifact_payloads(
     *,
     working_dir: str = "",
 ) -> list[dict[str, object]]:
-    if (
-        not context.routed_task_id
-        or not context.authority_ref
-        or context.registry_inspection is None
-    ):
-        return []
-    try:
-        task = await context.registry_inspection.get_task(context.authority_ref, context.routed_task_id)
-    except Exception:
-        log.warning(
-            "Failed to inspect routed task %s for protocol artifact observations",
-            context.routed_task_id,
-            exc_info=True,
-        )
-        return []
-    request_payload = task.request.as_dict() if task.request is not None else {}
-    internal_context = request_payload.get("internal_context", {})
-    if not isinstance(internal_context, dict):
-        return []
-    contract_raw = internal_context.get("protocol_stage_contract")
-    if not isinstance(contract_raw, dict):
-        return []
+    contract_raw = context.protocol_stage_contract if isinstance(context.protocol_stage_contract, dict) else None
+    if contract_raw is None:
+        if (
+            not context.routed_task_id
+            or not context.authority_ref
+            or context.registry_inspection is None
+        ):
+            return []
+        try:
+            task = await context.registry_inspection.get_task(context.authority_ref, context.routed_task_id)
+        except Exception:
+            log.warning(
+                "Failed to inspect routed task %s for protocol artifact observations",
+                context.routed_task_id,
+                exc_info=True,
+            )
+            return []
+        request_payload = task.request.as_dict() if task.request is not None else {}
+        internal_context = request_payload.get("internal_context", {})
+        if not isinstance(internal_context, dict):
+            return []
+        contract_raw = internal_context.get("protocol_stage_contract")
+        if not isinstance(contract_raw, dict):
+            return []
     try:
         contract = ProtocolStageRuntimeContractRecord.model_validate(contract_raw)
     except Exception:
@@ -211,9 +215,11 @@ async def _protocol_artifact_payloads(
             exc_info=True,
         )
         return []
-    working_dir = str(working_dir or "").strip()
+    working_dir = str(working_dir or context.working_dir_hint or "").strip()
     if not working_dir and context.working_dir_resolver is not None:
         working_dir = str(context.working_dir_resolver(context.runtime_chat) or "").strip()
+    if not working_dir:
+        working_dir = str(getattr(context.config, "working_dir", "") or "").strip()
     if not working_dir:
         return []
     observations = [
@@ -258,18 +264,12 @@ async def finalize_execution(
     if context.routed_task_id and context.task_routing is not None and authority_ref:
         full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
         result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
-        working_dir = str(outcome.working_dir or "").strip()
+        working_dir = str(outcome.working_dir or context.working_dir_hint or "").strip()
         if not working_dir and context.working_dir_resolver is not None:
             working_dir = str(context.working_dir_resolver(context.runtime_chat) or "").strip()
+        if not working_dir:
+            working_dir = str(getattr(context.config, "working_dir", "") or "").strip()
         artifact_payloads = await _protocol_artifact_payloads(context, working_dir=working_dir)
-        log.warning(
-            "protocol.finalize_execution.result routed_task_id=%s status=%s provider=%s working_dir=%r artifact_count=%d",
-            context.routed_task_id,
-            result_status,
-            context.config.provider_name,
-            working_dir,
-            len(artifact_payloads),
-        )
         try:
             report = await context.task_routing.report_routed_task_result(
                 routed_task_id=context.routed_task_id,

@@ -1695,6 +1695,8 @@ class BotRuntime:
                 deferred_target_agent_id=self._target_agent_id_for_authority(authority_ref),
                 deferred_actor_key=str(getattr(event, "authorized_actor_key", "") or ""),
                 deferred_title=title,
+                protocol_stage_contract=dict(getattr(event, "protocol_stage_contract", {}) or {}),
+                working_dir_hint=str(getattr(event, "working_dir_hint", "") or ""),
                 registry_inspection=self.control_plane.registry_inspection if self.control_plane is not None else None,
                 working_dir_resolver=self._resolved_working_dir,
             ),

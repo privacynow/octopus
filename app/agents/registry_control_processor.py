@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 from typing import Any, Protocol
 
@@ -40,9 +39,6 @@ from octopus_sdk.registry.models import (
 )
 from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
 from octopus_sdk.config import RegistryConnectionConfig
-
-log = logging.getLogger(__name__)
-
 
 class RegistryControlAccess(Protocol):
     @property
@@ -214,14 +210,6 @@ class RegistryControlProcessor(ControlProcessor):
             )
         if command.operation == "report_routed_task_result":
             payload = ReportTaskResultPayload.model_validate_json(command.payload_json)
-            log.warning(
-                "control.report_routed_task_result routed_task_id=%s status=%s provider=%s working_dir=%r artifact_count=%d",
-                payload.routed_task_id,
-                payload.status,
-                payload.provider,
-                payload.working_dir,
-                len(payload.artifacts),
-            )
             result = RoutedTaskResult.model_validate(payload.model_dump(mode="json"))
             response = await client.routed_task_result(payload.routed_task_id, result)
             return ControlReply(

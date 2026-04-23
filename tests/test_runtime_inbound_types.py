@@ -53,6 +53,8 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
             context_text="Investigate the deployment.",
             constraints_text="Read only.",
             requested_skills=("architecture",),
+            protocol_stage_contract={"stage_key": "planning", "output_artifacts": [{"artifact_key": "artifact_1"}]},
+            working_dir_hint="/workspace/protocol-run",
             authority_ref="registry:prod",
         )
     )
@@ -82,6 +84,8 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     assert message.context_text == "Investigate the deployment."
     assert message.constraints_text == "Read only."
     assert message.requested_skills == ("architecture",)
+    assert message.protocol_stage_contract["stage_key"] == "planning"
+    assert message.working_dir_hint == "/workspace/protocol-run"
     assert action.external_conversation_ref == "registry-ext-2"
     assert message.transport == "registry"
     assert action.transport == "registry"

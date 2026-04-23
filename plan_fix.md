@@ -64,6 +64,8 @@ The main live problems are:
      surfaces
    - artifacts do not read as stage inputs/outputs/reviewed outputs in a way
      that explains the workflow result
+   - the current implementation still treats artifact bytes too much like a
+     registry-local file concern instead of a shared workspace concern
 8. UX coverage still cheats too often when setup is created outside the normal
    product flow. That makes tests less trustworthy as product-usability proof.
 
@@ -148,6 +150,21 @@ easy to answer:
 - which stage/task/run did it belong to?
 - where is it on disk?
 - can I open it, download it, or copy its path?
+
+### 9. Shared workspace is the canonical substrate for workspace files
+
+For `workspace_file` artifacts, the canonical bytes live in the shared
+workspace, not inside a registry-local store and not as a bot-private concept.
+
+The product model is:
+
+- registry owns artifact metadata, lineage, and workflow state
+- bots and humans are peers operating on the same shared files
+- artifact access from the UI must resolve through that shared substrate
+
+Tracked human provenance is a follow-on capability, not a blocker for this
+phase. The current phase must leave a clean slot for it without implementing a
+full provenance system yet.
 
 ## Decisions
 
@@ -262,6 +279,26 @@ For scenario tests that claim usability:
 Public API calls are acceptable only when they are part of the intended product
 surface for that workflow.
 
+### L. Artifact access must follow artifact kind, not registry locality
+
+The system should not assume the registry is the conceptual owner of artifact
+bytes.
+
+For now:
+
+- `workspace_file` artifacts resolve through the shared workspace model
+- registry uses that shared substrate to provide preview/open/download actions
+- bots remain the primary writers for automated stage execution
+- humans must be able to participate against the same workspace files
+
+Later:
+
+- human edits, reviews, and approvals should be tracked explicitly in artifact
+  provenance and run history
+
+That future provenance model must be compatible with the current shared
+workspace approach, but it is not required to ship this phase.
+
 ## Target UX
 
 ### Default workflow view
@@ -357,6 +394,10 @@ From a run or task detail surface, the user should be able to:
 - `Download`
 - `Copy path`
 
+For `workspace_file` artifacts, these actions must work against the same shared
+workspace files that bots and humans use during execution. The UI should not
+depend on a second artifact-copy pipeline just to make preview/download work.
+
 Preview is conditional:
 
 - text/code/json/yaml/logs: syntax-highlighted preview
@@ -402,6 +443,8 @@ Every major scenario must prove these categories through the standard UI path.
 - stage reads/writes are visible and editable inline
 - artifact definitions can be created and edited from the stage flow
 - data/file/report chains remain understandable and correct
+- operational artifact actions must work against the deployed product path, not
+  only against seeded metadata
 
 ### Rehearsal
 
@@ -493,6 +536,14 @@ That prevents the user from understanding the real hierarchy:
 
 The plan below addresses that by turning runs into the main operational
 container and making artifact evidence visible and actionable.
+
+That operational gap now has an explicit architectural shape:
+
+- registry owns run/task/artifact lineage
+- shared workspace owns `workspace_file` bytes
+- bots and humans are peers against that shared substrate
+- preview/download/open must work through that model, not through registry-only
+  locality assumptions
 
 ## Implementation Plan
 
@@ -676,7 +727,32 @@ Acceptance:
   across the product
 - a user can open a task and immediately see which run and stage it belongs to
 
-### Phase 9. Artifact observability in operational views
+### Phase 9. Shared workspace artifact access model
+
+Objective:
+
+- make `workspace_file` artifact access coherent with the real product model
+
+Implementation direction:
+
+- centralize artifact path/access resolution instead of scattering local-path
+  logic across task/run handlers
+- treat the shared workspace as the canonical byte substrate for
+  `workspace_file` artifacts
+- make the deployed registry access those shared workspace files through the
+  existing Octopus workspace configuration, without introducing a second
+  artifact storage path
+- keep the model compatible with human collaborators editing the same files
+  later
+
+Acceptance:
+
+- `Open`, `Download`, and `Copy path` work for `workspace_file` artifacts from
+  the deployed UI
+- the implementation does not depend on database-side artifact byte copies
+- the implementation does not introduce a parallel artifact-serving pipeline
+
+### Phase 10. Artifact observability in operational views
 
 Objective:
 
@@ -704,7 +780,7 @@ Acceptance:
 - users can locate real outputs from the operational UI without guessing
 - users can move directly from an execution record to the underlying file
 
-### Phase 10. Preview ladder
+### Phase 11. Preview ladder
 
 Objective:
 
@@ -728,7 +804,7 @@ Acceptance:
   browser
 - unsupported formats still have strong open/download/path handling
 
-### Phase 11. UX scenario discipline
+### Phase 12. UX scenario discipline
 
 Objective:
 
@@ -750,7 +826,7 @@ Acceptance:
 - UX scenarios no longer depend on database-style shortcuts
 - green scenario coverage means a user actually exercised the product path
 
-### Phase 12. Exhaustive live audit
+### Phase 13. Exhaustive live audit
 
 Objective:
 
@@ -771,7 +847,7 @@ Acceptance:
 - live audit confirms no new interaction regressions
 - screenshots show the anchored, progressive model across surfaces
 
-### Phase 13. Cleanup
+### Phase 14. Cleanup
 
 Objective:
 
@@ -813,6 +889,7 @@ The final verification bar for this plan is:
 - negative standard-path invariants
 - live rehearsal and execution smoke
 - operational lineage and artifact access scenario coverage
+- shared-workspace artifact access coverage on the deployed build
 - exhaustive live audit
 
 The live audit remains a breadth requirement. The scenario specs are the depth
@@ -852,8 +929,14 @@ Octopus build:
 11. Artifact outputs can be located from the operational UI:
     - path visible
     - open/download/copy-path available
-12. Preview is available for the supported artifact types without overwhelming
+12. For `workspace_file` artifacts, those access actions resolve through the
+    shared workspace model used by bots and available to future human
+    collaborators.
+13. Preview is available for the supported artifact types without overwhelming
     the operational surfaces.
-13. UX scenario coverage for product-usability claims is authored through the
+14. UX scenario coverage for product-usability claims is authored through the
     UI/intended API path, not hidden setup.
-14. No duplicate authoring or operational pipeline was introduced.
+15. The current implementation leaves a clean path for tracked human artifact
+    provenance later without requiring that full provenance system to ship in
+    this phase.
+16. No duplicate authoring or operational pipeline was introduced.

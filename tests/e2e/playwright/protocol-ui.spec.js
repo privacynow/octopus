@@ -501,6 +501,13 @@ test.describe('protocol authoring live', () => {
       await expect(agentControl).toHaveValue(initialPinnedAgentValue);
     }
     const optionalSkillControl = assignment.getByLabel('Limit to one of this agent\'s skills (optional)', { exact: true });
+    const availableAgentSkillLabels = await optionalSkillControl.locator('option').evaluateAll((options) =>
+      options.map((option) => String(option.textContent || '').trim()).filter(Boolean),
+    );
+    const metaComposerLabels = availableAgentSkillLabels.filter((label) => /^Meta Protocol Composer(?:\s+\d{10,})?$/i.test(label));
+    if (metaComposerLabels.length) {
+      expect(metaComposerLabels).toEqual(['Meta Protocol Composer']);
+    }
     const availableAgentSkills = await optionalSkillControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
@@ -964,13 +971,16 @@ test.describe('protocol authoring live', () => {
 
       await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
       await expect(page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).first()).toBeVisible({ timeout: 15000 });
-      await expect(page.locator('.editor-panel').filter({ hasText: 'Artifact evidence' })).toContainText('source-data.csv');
-      await expect(page.locator('.editor-panel').filter({ hasText: 'Artifact evidence' })).toContainText('produced by Load data');
+      const runDetail = page.locator('.editor-panel').filter({ hasText: 'Run detail' }).first();
+      await expect(runDetail).toContainText('Outputs');
+      await expect(runDetail).toContainText('source-data.csv');
+      await expect(runDetail).toContainText('Produced by Load data');
+      await expect(runDetail).not.toContainText('Declared but missing');
 
       await page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).getByRole('link', { name: 'Open task' }).click();
       await expect(page.locator('.task-lineage-banner')).toContainText(runId);
       const loadTask = page.locator('.task-item').filter({ hasText: 'Load data' }).first();
-      await expect(loadTask).toContainText('Artifact evidence');
+      await expect(loadTask).toContainText('Outputs');
       await expect(loadTask).toContainText('source-data.csv');
       await loadTask.getByRole('button', { name: 'Preview' }).click();
       await expect(page.locator('.confirm-dialog .event-pre')).toContainText('department,region,amount');

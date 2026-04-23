@@ -19,6 +19,7 @@ now product-shaped:
 - deeper editing does not sprawl downward into a long document
 - map, settings, and artifact definition stay available without dominating the
   main workflow surface
+- skill selection behaves like a curated catalog, not a registry dump
 - runs, tasks, approvals, and artifacts read as one connected lineage rather
   than unrelated admin surfaces
 - the tests prove those workflows end to end
@@ -66,7 +67,13 @@ The main live problems are:
      that explains the workflow result
    - the current implementation still treats artifact bytes too much like a
      registry-local file concern instead of a shared workspace concern
-8. UX coverage still cheats too often when setup is created outside the normal
+8. The skill picker exposes raw system inventory instead of a curated catalog:
+   - generated/prototype skills leak into the standard picker
+   - timestamp-suffixed duplicates read like junk data, not intentional
+     product choices
+   - the current presentation is a flat undifferentiated list with poor scan
+     value and no meaningful grouping or source cues
+9. UX coverage still cheats too often when setup is created outside the normal
    product flow. That makes tests less trustworthy as product-usability proof.
 
 The result is a product that works, but still asks the user to manage the UI
@@ -299,6 +306,26 @@ Later:
 That future provenance model must be compatible with the current shared
 workspace approach, but it is not required to ship this phase.
 
+### M. Standard skill selection must be curated
+
+The standard skill picker should present a real catalog, not every raw skill
+object the system knows about.
+
+That means:
+
+- show only active, standard-path, user-relevant skills by default
+- hide or demote generated, archived, superseded, and operator-only entries
+- group by meaningful source/type where useful:
+  - Core
+  - Integrations
+  - Custom
+- collapse revisions/history under one canonical skill entry instead of
+  timestamp-suffixed peers
+- support search and short descriptions so the user can choose confidently
+
+The standard picker should help the user answer "which skill should I use
+here?" It should not ask them to interpret registry history or test residue.
+
 ## Target UX
 
 ### Default workflow view
@@ -338,6 +365,16 @@ Inside a selected stage:
 - opening Inputs and outputs focuses Inputs and outputs
 - deeper actions use local `Back` or `Done`
 - previously open panels do not remain equally expanded underneath
+
+### Skill selection flow
+
+From a stage, the author should be able to:
+
+- search or scan a curated set of usable skills
+- distinguish built-in skills from integrations and custom skills
+- avoid seeing generated/test residue in the standard picker
+- select one skill without guessing whether near-duplicate names are real
+  choices, history, or junk
 
 ### Artifact flow
 
@@ -386,6 +423,7 @@ screens to reconstruct a single execution.
 
 From a run or task detail surface, the user should be able to:
 
+- immediately identify the concrete outputs of the run
 - see stage-related artifact inputs and outputs
 - see whether they were declared, available, verified, reviewed, or approved
 - see the workspace-relative path
@@ -438,6 +476,14 @@ Every major scenario must prove these categories through the standard UI path.
 - skill/agent choices stay understandable
 - no internal selector escape hatches appear in the standard path
 
+### Skill catalog
+
+- the standard picker shows curated, user-relevant skills only
+- generated/archive/operator-only noise does not leak into the standard path
+- skills are grouped or labeled clearly enough that the user can tell what is
+  built-in, integration-backed, or custom
+- near-duplicate historical revisions do not appear as flat peer choices
+
 ### Artifacts
 
 - stage reads/writes are visible and editable inline
@@ -458,6 +504,7 @@ Every major scenario must prove these categories through the standard UI path.
 - artifact/outcome state is correct where the product defines it
 - the run/task lineage is understandable without cross-referencing unrelated
   pages
+- outputs are discoverable in one obvious place from run detail
 - artifact location and access actions are available from the operational path
 
 ## Target Workflow Specs
@@ -525,6 +572,8 @@ Today the product makes the user do too much joining across surfaces:
 - `Tasks` looks like another
 - `Approvals` looks like another
 - artifacts feel implicit or hidden
+- available skills read like raw registry inventory instead of a human-facing
+  catalog
 
 That prevents the user from understanding the real hierarchy:
 
@@ -533,9 +582,11 @@ That prevents the user from understanding the real hierarchy:
 - this decision advanced or blocked it
 - these artifacts were involved
 - these files are the concrete outputs
+- these are the skills I can actually choose from
 
 The plan below addresses that by turning runs into the main operational
-container and making artifact evidence visible and actionable.
+container, making artifact evidence visible and actionable, and curating the
+standard skill catalog into something a human can actually scan.
 
 That operational gap now has an explicit architectural shape:
 
@@ -702,7 +753,31 @@ Acceptance:
 - each target workflow has at least one primary owning scenario spec
 - scenario specs become the release bar
 
-### Phase 8. Operational lineage model
+### Phase 8. Skill catalog hygiene
+
+Objective:
+
+- make skill selection feel like a product catalog instead of a registry dump
+
+Implementation direction:
+
+- separate standard-path skill visibility from operator/history visibility
+- hide generated, superseded, archived, and test-residue skills from the
+  standard picker
+- collapse revision/history variants under one canonical selectable skill entry
+- group visible skills by meaningful type/source and add search/description
+  support using the existing catalog pipeline where possible
+- clean up existing polluted entries or ensure they are no longer rendered in
+  the standard path
+
+Acceptance:
+
+- timestamp-suffixed generated skill residue does not appear in the standard
+  picker
+- a user can scan the standard skill picker and understand what the real
+  choices are without interpreting system history
+
+### Phase 9. Operational lineage model
 
 Objective:
 
@@ -727,7 +802,7 @@ Acceptance:
   across the product
 - a user can open a task and immediately see which run and stage it belongs to
 
-### Phase 9. Shared workspace artifact access model
+### Phase 10. Shared workspace artifact access model
 
 Objective:
 
@@ -752,7 +827,7 @@ Acceptance:
 - the implementation does not depend on database-side artifact byte copies
 - the implementation does not introduce a parallel artifact-serving pipeline
 
-### Phase 10. Artifact observability in operational views
+### Phase 11. Artifact observability in operational views
 
 Objective:
 
@@ -761,6 +836,12 @@ Objective:
 
 Implementation direction:
 
+- move produced outputs near the top of run detail so a human can find them
+  without already knowing the product internals
+- split operational output rendering into:
+  - produced outputs
+  - declared but missing outputs
+  rather than mixing both states in one flat list
 - expose artifacts on run detail, stage execution detail, and task detail
 - show relationship type:
   - reads
@@ -774,13 +855,19 @@ Implementation direction:
   - `Open`
   - `Download`
   - `Copy path`
+- make task detail show a clear `Outputs` section when a task produced
+  artifacts, rather than burying them as incidental summary metadata
+- show stage provenance directly on each output card
 
 Acceptance:
 
 - users can locate real outputs from the operational UI without guessing
+- a human opening run detail can immediately tell which files were actually
+  produced
+- declared-but-missing items do not visually obscure produced outputs
 - users can move directly from an execution record to the underlying file
 
-### Phase 11. Preview ladder
+### Phase 12. Preview ladder
 
 Objective:
 
@@ -804,7 +891,7 @@ Acceptance:
   browser
 - unsupported formats still have strong open/download/path handling
 
-### Phase 12. UX scenario discipline
+### Phase 13. UX scenario discipline
 
 Objective:
 
@@ -820,13 +907,15 @@ Implementation direction:
   the scenarios that claim product usability
 - add explicit checks for run/task/artifact lineage and artifact access from
   the UI
+- add explicit checks that the standard skill picker does not expose generated
+  or historical skill noise
 
 Acceptance:
 
 - UX scenarios no longer depend on database-style shortcuts
 - green scenario coverage means a user actually exercised the product path
 
-### Phase 13. Exhaustive live audit
+### Phase 14. Exhaustive live audit
 
 Objective:
 
@@ -838,7 +927,7 @@ Implementation direction:
 - include desktop, tablet, and mobile
 - include add stage, remove stage, select skill, select agent, artifact edits,
   map open/close, settings open/close, rehearsal, execution, run/task lineage,
-  and artifact access actions
+  artifact access actions, and standard skill picker hygiene
 - retain the 500+ screenshot breadth bar, but treat it as breadth validation,
   not the primary correctness bar
 
@@ -847,7 +936,7 @@ Acceptance:
 - live audit confirms no new interaction regressions
 - screenshots show the anchored, progressive model across surfaces
 
-### Phase 14. Cleanup
+### Phase 15. Cleanup
 
 Objective:
 
@@ -888,6 +977,7 @@ The final verification bar for this plan is:
 - primary scenario Playwright suite
 - negative standard-path invariants
 - live rehearsal and execution smoke
+- standard skill catalog hygiene coverage
 - operational lineage and artifact access scenario coverage
 - shared-workspace artifact access coverage on the deployed build
 - exhaustive live audit
@@ -924,19 +1014,24 @@ Octopus build:
    - create protocol
    - rehearse
    - execute
-10. Runs, tasks, approvals, and artifacts read as one coherent operational
+10. The standard skill picker behaves like a curated catalog:
+    - generated/historical noise is hidden from the standard path
+    - real skill choices are understandable without interpreting timestamps or
+      residue
+11. Runs, tasks, approvals, and artifacts read as one coherent operational
     hierarchy.
-11. Artifact outputs can be located from the operational UI:
+12. Artifact outputs can be located from the operational UI:
     - path visible
     - open/download/copy-path available
-12. For `workspace_file` artifacts, those access actions resolve through the
+    - produced outputs are easy to distinguish from declared-but-missing items
+13. For `workspace_file` artifacts, those access actions resolve through the
     shared workspace model used by bots and available to future human
     collaborators.
-13. Preview is available for the supported artifact types without overwhelming
+14. Preview is available for the supported artifact types without overwhelming
     the operational surfaces.
-14. UX scenario coverage for product-usability claims is authored through the
+15. UX scenario coverage for product-usability claims is authored through the
     UI/intended API path, not hidden setup.
-15. The current implementation leaves a clean path for tracked human artifact
+16. The current implementation leaves a clean path for tracked human artifact
     provenance later without requiring that full provenance system to ship in
     this phase.
-16. No duplicate authoring or operational pipeline was introduced.
+17. No duplicate authoring or operational pipeline was introduced.

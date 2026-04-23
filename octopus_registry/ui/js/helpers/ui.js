@@ -538,6 +538,13 @@ window.UI = (() => {
         return prefix ? `${prefix}/${value}` : value;
     }
 
+    function basenameDisplayPath(path) {
+        const value = String(path || '').trim().replace(/\/+$/, '');
+        if (!value) return '';
+        const segments = value.split('/');
+        return String(segments[segments.length - 1] || '').trim();
+    }
+
     function isPreviewableFilePath(path) {
         return /\.(md|markdown|txt|log|json|jsonl|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(String(path || '').trim());
     }
@@ -1086,6 +1093,7 @@ window.UI = (() => {
         formatApprovalTime,
         safeFilename,
         joinDisplayPath,
+        basenameDisplayPath,
         isPreviewableFilePath,
         readQueryParam,
         updateQueryParams,

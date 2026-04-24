@@ -3707,6 +3707,95 @@ def test_task_artifact_content_route_falls_back_to_protocol_run_workspace(monkey
     assert response.text == "artifact body"
 
 
+def test_task_payloads_merge_protocol_run_artifacts_for_all_task_surfaces(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    task = TaskRecord(
+        routed_task_id="protocol-stage:stage-1",
+        origin_agent_id="agent-1",
+        target_agent_id="agent-2",
+        status="completed",
+        protocol_run_id="run-1",
+        protocol_stage_execution_id="stage-1",
+        stage_key="implementation",
+        working_dir="/workspace/workspace",
+        request=RegistryJsonRecord.model_validate({
+            "context": {
+                "protocol_run_id": "run-1",
+                "protocol_stage_execution_id": "stage-1",
+            },
+            "internal_context": {
+                "protocol_stage_contract": {
+                    "output_artifacts": [
+                        {"artifact_key": "report", "path": "protocol/report.md"},
+                    ],
+                },
+            },
+        }),
+        result=RegistryJsonRecord.model_validate({
+            "summary": "Created [report.md](/workspace/workspace/protocol/report.md).",
+        }),
+    )
+
+    class _Store:
+        def list_tasks(self, **kwargs):
+            return [task]
+
+        def get_task(self, routed_task_id: str):
+            assert routed_task_id == "protocol-stage:stage-1"
+            return task
+
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="ver-1",
+                    protocol_id="protocol-1",
+                ),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="report",
+                        artifact_kind="workspace_file",
+                        location="/workspace/workspace/protocol/report.md",
+                        workspace_path="protocol/report.md",
+                        exists=True,
+                        size_bytes=128,
+                        content_hash="abc123",
+                        produced_by_stage_execution_id="stage-1",
+                        verification_state="verified",
+                    )
+                ],
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        listed = client.get("/v1/tasks")
+        detail = client.get("/v1/tasks/protocol-stage%3Astage-1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert listed.status_code == 200
+    assert detail.status_code == 200
+    for payload in (listed.json()["tasks"][0], detail.json()):
+        assert payload["artifact_count"] == 1
+        artifacts = payload["result"]["artifacts"]
+        assert len(artifacts) == 1
+        assert artifacts[0]["artifact_key"] == "report"
+        assert artifacts[0]["path"] == "/workspace/workspace/protocol/report.md"
+        assert artifacts[0]["verification_state"] == "verified"
+
+
 def test_protocol_artifact_content_route_streams_local_file(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

@@ -875,9 +875,19 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     protocol_workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+    task_board = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-board.js"
+    ).read_text(encoding="utf-8")
+    event_renderers = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
+    ).read_text(encoding="utf-8")
 
     assert "function createArtifactActionRow({" in helper
     assert "function createArtifactListRow({" in helper
+    assert "function compactMarkdownReferences(text)" in helper
     assert "function _ensureArtifactPreviewDelegation()" in helper
     assert "document.addEventListener('click', async (event)" in helper
     assert "previewHref = ''" in helper
@@ -889,6 +899,9 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "event.preventDefault();" in helper
     assert "openHref: missing ? '' : API.protocolRunArtifactContentUrl" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
+    assert "UI.compactMarkdownReferences(task.result_summary || task.result_text || task.summary || task.instructions || '')" in task_list
+    assert "const displaySummary = UI.compactMarkdownReferences(summary);" in task_board
+    assert "UI.esc(UI.compactMarkdownReferences(event.content))" in event_renderers
     assert "getTaskArtifactText" not in api_js
     assert "getProtocolRunArtifactText" not in api_js
 

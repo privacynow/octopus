@@ -123,7 +123,7 @@ function renderTaskList(container) {
     }
 
     function _taskSummary(task) {
-        return task.result_summary || task.result_text || task.summary || task.instructions || '';
+        return UI.compactMarkdownReferences(task.result_summary || task.result_text || task.summary || task.instructions || '');
     }
 
     function _taskRunHref(task) {

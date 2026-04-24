@@ -22,6 +22,14 @@ window.UI = (() => {
         return esc(text).replace(/\n/g, '<br>');
     }
 
+    function compactMarkdownReferences(text) {
+        return String(text || '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, href) => {
+            const cleanLabel = String(label || '').trim();
+            const cleanHref = String(href || '').trim();
+            return cleanLabel || basenameDisplayPath(cleanHref) || cleanHref || match;
+        });
+    }
+
     function relativeTime(iso) {
         if (!iso) return '';
         try {
@@ -1374,6 +1382,7 @@ window.UI = (() => {
         taskArtifactPreviewable,
         createArtifactActionRow,
         createArtifactListRow,
+        compactMarkdownReferences,
         readQueryParam,
         updateQueryParams,
         notify,

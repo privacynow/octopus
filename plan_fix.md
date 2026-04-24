@@ -4,6 +4,15 @@
 
 This is the active implementation plan.
 
+Latest correction: artifact access must be Registry-wide, not Runs-only. Runs
+already had the clearest artifact affordance, but Tasks, conversation task
+boards, dashboard task summaries, task-thread activity, and any future surface
+using task payloads must receive the same artifact evidence from the shared
+task API. The implementation must enrich `/v1/tasks` and `/v1/tasks/{id}` from
+the owning protocol run's artifact observations, then let the existing shared
+artifact row render preview/open/download/copy everywhere without page-local
+duplication.
+
 ## Current Scope Correction: Registry-Wide Desktop UX
 
 The active defect is not isolated to Runs. Runs exposed the clearest failure,
@@ -88,7 +97,10 @@ The product rule is:
    instead of page-local one-off spacing.
 5. Add UI contract tests that fail if artifact actions are only mobile-wrapped
    or passive rows still advertise clickability.
-6. Validate in real Safari at desktop width and in a narrow/mobile viewport.
+6. Enrich task list/detail payloads with protocol-run artifact observations so
+   every task consumer, including conversations and dashboard-derived task
+   sections, can use the same artifact row contract.
+7. Validate in real Safari at desktop width and in a narrow/mobile viewport.
 
 The Registry UI is no longer blocked by one isolated protocol-editor bug. The
 current failure mode is product-level cognitive overload: internal system

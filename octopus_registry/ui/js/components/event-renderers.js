@@ -415,7 +415,7 @@ function _renderTaskStatusCard(body, event, metadata, convoId) {
     if (event.content) {
         const content = document.createElement('div');
         content.className = terminalWithOutcome ? 'event-text-block event-text-block-outcome' : 'event-text-block';
-        content.innerHTML = `<p>${UI.esc(event.content)}</p>`;
+        content.innerHTML = `<p>${UI.esc(UI.compactMarkdownReferences(event.content))}</p>`;
         body.appendChild(content);
     }
     if (

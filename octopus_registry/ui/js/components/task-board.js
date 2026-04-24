@@ -60,7 +60,8 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
     if (summary) {
         const summaryBlock = document.createElement('p');
         summaryBlock.className = 'conversation-task-card-summary';
-        summaryBlock.textContent = compact ? summary.slice(0, 180) : summary;
+        const displaySummary = UI.compactMarkdownReferences(summary);
+        summaryBlock.textContent = compact ? displaySummary.slice(0, 180) : displaySummary;
         card.appendChild(summaryBlock);
     }
 

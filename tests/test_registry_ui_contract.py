@@ -908,7 +908,7 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     ).read_text(encoding="utf-8")
     assert ".list-row.is-actionable {" in css
     assert ".list-row-with-artifact-actions {" in css
-    assert "grid-template-columns: minmax(0, 1fr) auto auto;" in css
+    assert "grid-template-columns: minmax(0, 1fr);" in css
     assert ".list-row-with-artifact-actions .artifact-action-row" in css
     assert ".dashboard-board[data-route=\"protocol-runs\"]" in css
 

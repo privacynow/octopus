@@ -45,7 +45,7 @@ test('runs use inline expansion instead of the old split detail board', async ({
   await expect(page.locator('.dashboard-board[data-route="protocol-runs"]')).toHaveCount(0);
   await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(1);
   await expect(page.getByRole('tablist', { name: 'Run evidence section' })).toHaveCount(1);
-  await expect(page.locator('.protocol-lineage-card')).toHaveCount(0);
+  await expect(page.locator('.protocol-lineage-card')).toHaveCount(1);
 
   const sectionTabs = page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab');
   await expect(sectionTabs).toHaveCount(4);

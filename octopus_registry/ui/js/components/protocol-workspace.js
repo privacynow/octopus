@@ -6161,7 +6161,7 @@ function renderProtocolRuns(container) {
             ].join(' ').toLowerCase();
             return haystack.includes(runSearch.toLowerCase());
         }).map((item) => ({
-            id: item.protocol_run_id,
+            id: item.protocol_run_id || item.id || item.run_id || '',
             status: item.status,
             title: item.current_stage_key
                 ? `${item.current_stage_key} · ${item.status}`

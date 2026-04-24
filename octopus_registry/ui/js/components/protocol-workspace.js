@@ -2450,7 +2450,10 @@ function renderProtocolWorkspace(container) {
 
     function _isAuthoringRoutingSkill(item) {
         const skillName = String(item?.skill_name || item || '').trim().toLowerCase();
-        return Boolean(skillName) && skillName !== '*' && skillName !== 'rehearsal';
+        return Boolean(skillName)
+            && skillName !== '*'
+            && skillName !== 'rehearsal'
+            && !UI.isGeneratedTimestampName(skillName);
     }
 
     function _supportsSkillCatalog(agent) {
@@ -6544,15 +6547,20 @@ function renderProtocolRuns(container) {
         } else if (activeRunDetailSection === 'stages') {
             appendSectionTitle(sectionPanel, 'Stages', 'Workflow evidence is ordered by the authored protocol, not by reverse event chronology.');
             if (stageRows.length) {
-                const stageValues = new Set(stageRows.map((item) => String(item.protocol_stage_execution_id || '')));
-                const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')) || stageRows[0];
+                const stageValueFor = (item, index = 0) => String(item?.protocol_stage_execution_id || item?.stage_key || `stage-${index}`);
+                const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
+                const currentStageIndex = Math.max(
+                    stageRows.findIndex((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')),
+                    0,
+                );
+                const currentStage = stageRows[currentStageIndex] || stageRows[0];
                 if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
-                    activeRunStageExecutionId = String(currentStage?.protocol_stage_execution_id || stageRows[0]?.protocol_stage_execution_id || '');
+                    activeRunStageExecutionId = stageValueFor(currentStage, currentStageIndex);
                 }
                 const stageOptions = stageRows.map((item, index) => {
                     const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
                     return {
-                        value: String(item.protocol_stage_execution_id || ''),
+                        value: stageValueFor(item, index),
                         label: `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'}`,
                     };
                 });
@@ -6571,7 +6579,7 @@ function renderProtocolRuns(container) {
                 sectionPanel.appendChild(stageToolbar);
 
                 const selectedStageIndex = Math.max(
-                    stageRows.findIndex((item) => String(item.protocol_stage_execution_id || '') === String(activeRunStageExecutionId || '')),
+                    stageRows.findIndex((item, index) => stageValueFor(item, index) === String(activeRunStageExecutionId || '')),
                     0,
                 );
                 const selectedStage = stageRows[selectedStageIndex] || stageRows[0];

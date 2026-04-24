@@ -26,6 +26,12 @@ Implementation progress:
   `Open conversation` labels; one data-analysis execution remained `running`
   beyond the current scenario timeout and must be inspected as a real stuck-run
   risk, not dismissed as a test artifact.
+- The next broad Playwright pass narrowed the active failures to two concrete
+  UI/product issues: run stage evidence navigation was not switching away from
+  the current stage when a stage execution id was missing or unstable, and the
+  meta-assistant scenario kept creating timestamp-named custom capabilities
+  that polluted authoring lists. Both are now treated as product regressions,
+  not only test-maintenance problems.
 - Remaining phases still require full visual audit, broader Work-surface
   alignment, deployment verification, and end-to-end scenario execution.
 
@@ -81,6 +87,21 @@ A human user should be able to:
 
 The UI must make the workflow visible through product concepts, not through
 database objects or implementation layers.
+
+## Latest Active Fixes
+
+- Run stage evidence navigation must be keyed by a stable stage identity with a
+  safe fallback to stage key, so clicking `Load data`, `Architecture`, or any
+  other stage changes the inline evidence card predictably.
+- Generated timestamp capability names must not appear in default authoring
+  lists. Capability lists may expose them through explicit search or operator
+  tooling, but normal protocol authoring should remain human-scaled.
+- E2E scenario fixtures must reuse human-named capabilities instead of creating
+  new timestamp-named skills on every run. Test data that makes the product UI
+  worse is itself a product-quality failure.
+- After every redeploy, real Safari must be hard-refreshed with
+  `Option+Command+R` before visual judgment, because a normal reload can keep
+  stale CSS and JavaScript assets.
 
 ## Core Product Rule
 

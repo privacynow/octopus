@@ -822,5 +822,17 @@ Current open findings:
   full-document vertical flow.
 - Conversations: linked runs/tasks are visible but not consistently inspectable
   inline.
+- Conversations / real Safari: clicking a different conversation row switches
+  the inline expansion correctly, but clicking the already-expanded row does
+  not collapse it even though the accessibility tree reports
+  `aria-expanded=true` and exposes a `Collapse` action. Expected behavior: the
+  conversation list must use the same click-to-expand/click-to-collapse model
+  as Runs, Tasks, and protocol stages.
+- Conversations / real Safari: linked runs inside the conversation list preview
+  and full conversation header render as navigation links/chips only. They can
+  take the user to Runs, but they cannot be inspected inline from the current
+  conversation context. Expected behavior: linked runs use the shared run
+  expansion contract or an equivalent progressive preview so users can inspect
+  state/artifacts without mentally jumping between disconnected pages.
 - Cross-surface: the same operational object uses different interaction models
   depending on route.

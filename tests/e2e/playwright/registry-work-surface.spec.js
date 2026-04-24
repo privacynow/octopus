@@ -121,6 +121,10 @@ test('conversation list exposes inline context before opening the full workspace
   await rows.first().click();
   await expect(page.locator('.conversation-inline-detail')).toHaveCount(1);
   await expect(page.getByText('Linked runs')).toBeVisible();
+  await expect(rows.first()).toHaveAttribute('aria-expanded', 'true');
+  await rows.first().click();
+  await expect(page.locator('.conversation-inline-detail')).toHaveCount(0);
+  expect(new URL(page.url()).searchParams.get('conversation_id')).toBeFalsy();
 
   const metrics = await layoutMetrics(page);
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);

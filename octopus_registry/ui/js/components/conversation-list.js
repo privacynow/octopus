@@ -418,13 +418,14 @@ function renderConversationList(container) {
                 ].filter(Boolean).join(' '),
                 signature: rowSignature,
                 onClick: () => {
-                    if (selected) {
+                    const conversationId = String(item.conversation_id || '');
+                    if (conversationId && String(currentConversationId || '') === conversationId) {
                         currentConversationId = '';
                         _writeState();
                         renderRows(currentConversations, currentListData || {});
                         return;
                     }
-                    currentConversationId = String(item.conversation_id || '');
+                    currentConversationId = conversationId;
                     _writeState();
                     renderRows(currentConversations, currentListData || {});
                     void loadConversationPreview(currentConversationId);

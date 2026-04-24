@@ -948,8 +948,7 @@ select {
     padding: var(--space-3);
     border-top: 1px solid var(--border);
     background: color-mix(in srgb, var(--bg-secondary) 86%, white);
-    max-height: min(62dvh, 46rem);
-    overflow-y: auto;
+    overflow: visible;
 }
 
 .list-row-action {
@@ -4993,7 +4992,7 @@ select {
     gap: var(--space-2);
     min-height: 0;
     overflow-y: auto;
-    padding-right: var(--space-1);
+    padding: 0 var(--space-1) var(--space-2) 0;
 }
 
 .kit-runs-list-entry {
@@ -5036,9 +5035,7 @@ select {
     border-start-start-radius: 0;
     border-start-end-radius: 0;
     box-shadow: none;
-    overflow: hidden;
-    max-height: min(72dvh, 58rem);
-    overflow-y: auto;
+    overflow: visible;
 }
 
 .kit-runs-list-row-head {

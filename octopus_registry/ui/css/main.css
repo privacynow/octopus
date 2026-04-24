@@ -2691,7 +2691,7 @@ select {
         width: calc(100% - (var(--space-3) * 2));
     }
 
-    .quickstart-chip {
+    .quickstart-chip:not(.static) {
         width: 100%;
         justify-content: flex-start;
     }

@@ -80,20 +80,7 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
             const resolvedPath = UI.taskArtifactDisplayPath(task, artifact, expectedOutput);
             const trailing = UI.createArtifactActionRow({
                 previewable: UI.taskArtifactPreviewable(artifact, expectedOutput),
-                onPreview: async () => {
-                    try {
-                        const text = await API.getTaskArtifactText(task.routed_task_id, artifact.artifact_key);
-                        UI.showTextDialog(
-                            `${String(artifact?.artifact_key || 'artifact')} preview`,
-                            String(text || ''),
-                            { maxWidth: '920px' },
-                        );
-                    } catch (err) {
-                        UI.reportError('Failed to preview the artifact', err, {
-                            context: 'Conversation task artifact preview failed',
-                        });
-                    }
-                },
+                previewTitle: `${String(artifact?.artifact_key || 'artifact')} preview`,
                 openHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key),
                 downloadHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true }),
                 copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),

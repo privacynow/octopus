@@ -3,6 +3,7 @@ window.UI = (() => {
     const EVENT_PAGE_LIMIT = 50;
     let toastRegion = null;
     let activeCleanupBag = null;
+    let artifactPreviewDelegationBound = false;
     const memoizedSignatures = new WeakMap();
     const dataCache = new Map();
 
@@ -498,6 +499,53 @@ window.UI = (() => {
         closeBtn.addEventListener('click', () => view.close());
     }
 
+    function _artifactPreviewErrorMessage(response, text) {
+        let message = text || `HTTP ${response.status}`;
+        try {
+            const parsed = JSON.parse(text);
+            const detail = parsed && typeof parsed === 'object' && parsed.detail && typeof parsed.detail === 'object'
+                ? parsed.detail
+                : parsed;
+            if (detail && typeof detail === 'object') {
+                message = detail.message || detail.error_code || message;
+            }
+        } catch (err) {
+            void err;
+        }
+        return `${response.status}: ${message}`;
+    }
+
+    function _ensureArtifactPreviewDelegation() {
+        if (artifactPreviewDelegationBound) return;
+        artifactPreviewDelegationBound = true;
+        document.addEventListener('click', async (event) => {
+            const target = event.target instanceof Element
+                ? event.target.closest('[data-artifact-preview-url]')
+                : null;
+            if (!(target instanceof HTMLElement)) return;
+            const url = String(target.dataset.artifactPreviewUrl || '').trim();
+            if (!url) return;
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                const response = await fetch(url, { credentials: 'same-origin' });
+                const text = await response.text();
+                if (!response.ok) {
+                    throw new Error(_artifactPreviewErrorMessage(response, text));
+                }
+                showTextDialog(
+                    target.dataset.artifactPreviewTitle || 'Artifact preview',
+                    text,
+                    { maxWidth: '920px' },
+                );
+            } catch (err) {
+                reportError('Failed to preview the artifact', err, {
+                    context: 'Artifact preview failed',
+                });
+            }
+        });
+    }
+
     function renderPagination(container, { hasPrev, hasNext, onPrev, onNext, info }) {
         if (!hasPrev && !hasNext && !String(info || '').trim()) {
             return;
@@ -636,6 +684,7 @@ window.UI = (() => {
         previewable = false,
         onPreview = null,
         previewHref = '',
+        previewTitle = 'Artifact preview',
         openHref = '',
         downloadHref = '',
         copyPathText = '',
@@ -652,22 +701,24 @@ window.UI = (() => {
             event.stopPropagation();
         };
 
-        if (available && previewable && typeof onPreview === 'function') {
-            const previewUrl = String(previewHref || openHref || '').trim();
+        const previewUrl = String(previewHref || openHref || '').trim();
+        if (available && previewable && (previewUrl || typeof onPreview === 'function')) {
             const previewBtn = previewUrl ? document.createElement('a') : document.createElement('button');
             if (previewUrl) {
+                _ensureArtifactPreviewDelegation();
                 previewBtn.href = previewUrl;
                 previewBtn.setAttribute('role', 'button');
+                previewBtn.dataset.artifactPreviewUrl = previewUrl;
+                previewBtn.dataset.artifactPreviewTitle = String(previewTitle || 'Artifact preview');
             } else {
                 previewBtn.type = 'button';
+                previewBtn.addEventListener('click', (event) => {
+                    stop(event);
+                    void onPreview();
+                });
             }
             previewBtn.className = 'btn btn-sm';
             previewBtn.textContent = 'Preview';
-            previewBtn.addEventListener('click', (event) => {
-                stop(event);
-                if (previewUrl) event.preventDefault();
-                void onPreview();
-            });
             actionRow.appendChild(previewBtn);
         }
 

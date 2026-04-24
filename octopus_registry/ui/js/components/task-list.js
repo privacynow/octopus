@@ -132,26 +132,11 @@ function renderTaskList(container) {
         return `/ui/runs?run_id=${encodeURIComponent(runId)}`;
     }
 
-    async function _previewTaskArtifact(task, artifact) {
-        try {
-            const text = await API.getTaskArtifactText(task.routed_task_id, artifact.artifact_key);
-            UI.showTextDialog(
-                `${artifact.artifact_key} preview`,
-                String(text || ''),
-                { maxWidth: '920px' },
-            );
-        } catch (err) {
-            UI.reportError('Failed to preview the artifact', err, {
-                context: 'Task artifact preview failed',
-            });
-        }
-    }
-
     function _taskArtifactShell(task, artifact, expectedOutput = null) {
         const resolvedPath = UI.taskArtifactDisplayPath(task, artifact, expectedOutput);
         const actionRow = UI.createArtifactActionRow({
             previewable: UI.taskArtifactPreviewable(artifact, expectedOutput),
-            onPreview: () => _previewTaskArtifact(task, artifact),
+            previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
             openHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key),
             downloadHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true }),
             copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),

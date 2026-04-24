@@ -238,8 +238,6 @@ const API = (() => {
             request('GET', '/v1/tasks', { params: opts }),
         getTask: (id) =>
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
-        getTaskArtifactText: (taskId, artifactKey) =>
-            request('GET', _taskArtifactContentPath(taskId, artifactKey), { raw: true }),
         taskArtifactContentUrl: (taskId, artifactKey, opts = {}) => {
             const url = new URL(_taskArtifactContentPath(taskId, artifactKey), window.location.origin);
             if (opts.download) {
@@ -305,8 +303,6 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
         getProtocolRunArtifacts: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts`),
-        getProtocolRunArtifactText: (id, artifactKey) =>
-            request('GET', _protocolArtifactContentPath(id, artifactKey), { raw: true }),
         protocolRunArtifactContentUrl: (id, artifactKey, opts = {}) => {
             const url = new URL(_protocolArtifactContentPath(id, artifactKey), window.location.origin);
             if (opts.download) {

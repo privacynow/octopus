@@ -869,16 +869,24 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     helper = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
     ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
     protocol_workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
 
     assert "function createArtifactActionRow({" in helper
+    assert "function _ensureArtifactPreviewDelegation()" in helper
+    assert "document.addEventListener('click', async (event)" in helper
     assert "previewHref = ''" in helper
     assert "const previewUrl = String(previewHref || openHref || '').trim();" in helper
     assert "previewBtn.setAttribute('role', 'button');" in helper
-    assert "if (previewUrl) event.preventDefault();" in helper
+    assert "previewBtn.dataset.artifactPreviewUrl = previewUrl;" in helper
+    assert "event.preventDefault();" in helper
     assert "openHref: missing ? '' : API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "getTaskArtifactText" not in api_js
+    assert "getProtocolRunArtifactText" not in api_js
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

@@ -58,22 +58,11 @@ function _protocolArtifactPreviewable(item) {
     return UI.isPreviewableFilePath(_protocolArtifactDisplayPath(item));
 }
 
-async function _previewProtocolArtifact(runId, artifact) {
-    try {
-        const text = await API.getProtocolRunArtifactText(runId, artifact.artifact_key);
-        UI.showTextDialog(`${artifact.artifact_key} preview`, String(text || ''), { maxWidth: '920px' });
-    } catch (err) {
-        UI.reportError('Failed to preview the artifact', err, {
-            context: 'Protocol artifact preview failed',
-        });
-    }
-}
-
 function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
     return UI.createArtifactActionRow({
         previewable: !missing && _protocolArtifactPreviewable(artifact),
-        onPreview: () => _previewProtocolArtifact(runId, artifact),
+        previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
         openHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key),
         downloadHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }),
         copyPathText: displayPath,

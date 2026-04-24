@@ -5023,8 +5023,8 @@ select {
 }
 
 .kit-runs-list-row.is-selected {
-    border-color: var(--color-accent, #4867ff);
-    background: var(--color-accent-subtle, #e4ebff);
+    border-color: var(--accent);
+    background: var(--surface-hover);
 }
 
 .kit-runs-list-entry.is-selected .kit-runs-list-row {

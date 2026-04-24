@@ -23,11 +23,13 @@ window.UI = (() => {
     }
 
     function compactMarkdownReferences(text) {
-        return String(text || '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, href) => {
+        const compacted = String(text || '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, href) => {
             const cleanLabel = String(label || '').trim();
             const cleanHref = String(href || '').trim();
             return cleanLabel || basenameDisplayPath(cleanHref) || cleanHref || match;
         });
+        return compacted.replace(/\[([^\]]+)\]\([^,\s)]*/g, (match, label) =>
+            String(label || '').trim() || match);
     }
 
     function relativeTime(iso) {

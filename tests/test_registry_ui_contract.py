@@ -919,6 +919,9 @@ def test_task_expansion_rerenders_clicked_rows_before_showing_artifacts() -> Non
     ).read_text(encoding="utf-8")
 
     assert "expanded: expandedTaskIds.has(String(task.routed_task_id || ''))" in task_list
+    assert "function _taskDetailStateSignature(taskId)" in task_list
+    assert "detailState: _taskDetailStateSignature(String(task.routed_task_id || ''))" in task_list
+    assert "detailState: _taskDetailStateSignature(taskId)" in task_list
     assert "if (!taskDetails.has(taskId) && !(task.request || task.result))" in task_list
     assert "void loadTaskDetail(taskId);" in task_list
     assert "renderList(currentTasks, currentListData);" in task_list

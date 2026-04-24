@@ -98,7 +98,8 @@ database objects or implementation layers.
   entering from Tasks cannot preview, open, download, or copy output paths
   without knowing to jump to Runs. Fix direction: keep the existing shared task
   artifact renderer, make expansion state part of the task-list render
-  signature, and force one re-render when a row expands or collapses.
+  signature and the keyed item signature, then force one re-render when a row
+  expands or collapses.
 - The same Safari pass confirmed the Runs and Dashboard surfaces still expose
   stale/running protocol work as normal `running` or `leased` work even when a
   stuck-lease issue exists elsewhere. This is tracked as an active usability

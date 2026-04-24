@@ -239,23 +239,26 @@ function renderTaskList(container) {
                 protocolRunId: String(task.protocol_run_id || ''),
                 stageKey: String(task.stage_key || ''),
                 expanded: expandedTaskIds.has(String(task.routed_task_id || '')),
-                detailState: taskDetailsLoading.has(String(task.routed_task_id || ''))
-                    ? 'loading'
-                    : taskDetailErrors.has(String(task.routed_task_id || ''))
-                        ? 'error'
-                        : taskDetails.has(String(task.routed_task_id || ''))
-                            ? UI.dataSignature(taskDetails.get(String(task.routed_task_id || '')))
-                            : '',
+                detailState: _taskDetailStateSignature(String(task.routed_task_id || '')),
             })),
         });
+    }
+
+    function _taskDetailStateSignature(taskId) {
+        if (taskDetailsLoading.has(taskId)) return 'loading';
+        if (taskDetailErrors.has(taskId)) return 'error';
+        if (taskDetails.has(taskId)) return UI.dataSignature(taskDetails.get(taskId));
+        return '';
     }
 
     function createTaskItem(task) {
         const item = document.createElement('article');
         item.className = 'task-item';
         item.dataset.key = task.routed_task_id;
+        const taskId = String(task.routed_task_id || '');
+        const isExpanded = expandedTaskIds.has(taskId);
         item.dataset.signature = UI.dataSignature({
-            id: String(task.routed_task_id || ''),
+            id: taskId,
             status: String(task.status || ''),
             updatedLabel: UI.relativeTime(task.updated_at || task.created_at),
             title: String(_taskLabel(task) || ''),
@@ -265,13 +268,13 @@ function renderTaskList(container) {
             conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
             protocolRunId: String(task.protocol_run_id || ''),
             stageKey: String(task.stage_key || ''),
+            expanded: isExpanded,
+            detailState: _taskDetailStateSignature(taskId),
         });
 
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'task-item-row';
-        const taskId = String(task.routed_task_id || '');
-        const isExpanded = expandedTaskIds.has(taskId);
         row.setAttribute('aria-expanded', String(isExpanded));
 
         const primary = document.createElement('div');

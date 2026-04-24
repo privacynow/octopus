@@ -1248,6 +1248,7 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
         for item in paths["/v1/protocol-runs"]["get"].get("parameters", [])
     }
     assert "entry_agent_id" in run_list_parameters
+    assert "root_conversation_id" in run_list_parameters
     assert "origin_channel" in run_list_parameters
     task_list_parameters = {
         item["name"]
@@ -1720,9 +1721,11 @@ def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(
             status="",
             protocol_id="",
             entry_agent_id="",
+            root_conversation_id="",
             origin_channel="",
         ):
             assert entry_agent_id == "agent-2"
+            assert root_conversation_id == ""
             assert origin_channel == "telegram"
             return [
                 {
@@ -1757,6 +1760,59 @@ def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(
     payload = response.json()
     assert payload["runs"][0]["entry_agent_id"] == "agent-2"
     assert payload["runs"][0]["origin_channel"] == "telegram"
+
+
+def test_protocol_run_list_route_accepts_root_conversation_filter(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_protocol_runs(
+            self,
+            *,
+            access,
+            limit=25,
+            cursor=0,
+            status="",
+            protocol_id="",
+            entry_agent_id="",
+            root_conversation_id="",
+            origin_channel="",
+        ):
+            assert root_conversation_id == "conv-9"
+            return [
+                {
+                    "protocol_run_id": "run-9",
+                    "protocol_id": "protocol-1",
+                    "protocol_definition_version_id": "version-1",
+                    "entry_agent_id": "agent-2",
+                    "root_conversation_id": "conv-9",
+                    "origin_channel": "registry",
+                    "run_org_id": "local",
+                    "status": "running",
+                    "workspace_ref": "workspace-a",
+                    "problem_statement": "Build the thing.",
+                    "constraints_json": {},
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                }
+            ]
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs?root_conversation_id=conv-9")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runs"][0]["root_conversation_id"] == "conv-9"
 
 
 def test_protocol_run_create_route_returns_invalid_for_missing_entry_agent(monkeypatch, tmp_path: Path):
@@ -3892,6 +3948,69 @@ def test_protocol_artifact_content_route_uses_rehearsal_text_when_file_unavailab
     assert 'filename="document.md"' in response.headers.get("content-disposition", "")
 
 
+def test_protocol_artifact_content_route_prefers_inline_artifact_contents_when_file_unavailable(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    monkeypatch.setattr("octopus_registry.artifact_paths._mounted_workspace_roots", lambda: ())
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", is_rehearsal=True),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                tasks=[
+                    TaskRecord(
+                        routed_task_id="protocol-stage:stage-1",
+                        protocol_stage_execution_id="stage-1",
+                        result=RegistryJsonRecord.model_validate(
+                            {
+                                "full_text": "Drafted the revised document.\nPROTOCOL_SUMMARY: Draft completed.",
+                                "artifact_contents": [
+                                    {
+                                        "artifact_key": "document",
+                                        "path": "protocol/document.md",
+                                        "content": "# Quarterly Risk Summary\n\n## Executive summary\nBelievable rehearsal body.",
+                                    }
+                                ],
+                            }
+                        ),
+                    )
+                ],
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="document",
+                        artifact_kind="workspace_file",
+                        location="protocol/document.md",
+                        workspace_path="protocol/document.md",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                        verification_state="verified",
+                    )
+                ],
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1/artifacts/document/content?download=1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert response.text == "# Quarterly Risk Summary\n\n## Executive summary\nBelievable rehearsal body."
+    assert 'filename="document.md"' in response.headers.get("content-disposition", "")
+
+
 def test_task_artifact_content_route_uses_rehearsal_text_when_file_unavailable(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -3967,6 +4086,91 @@ def test_task_artifact_content_route_uses_rehearsal_text_when_file_unavailable(m
 
     assert response.status_code == 200
     assert response.text == "Drafted the revised document."
+    assert 'filename="document.md"' in response.headers.get("content-disposition", "")
+
+
+def test_task_artifact_content_route_prefers_inline_artifact_contents_when_file_unavailable(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    monkeypatch.setattr("octopus_registry.artifact_paths._mounted_workspace_roots", lambda: ())
+
+    class _Store:
+        def get_task(self, routed_task_id: str):
+            assert routed_task_id == "protocol-stage:stage-1"
+            return TaskRecord(
+                routed_task_id="protocol-stage:stage-1",
+                origin_agent_id="agent-1",
+                target_agent_id="agent-2",
+                protocol_stage_execution_id="stage-1",
+                request=RegistryJsonRecord.model_validate({
+                    "context": {
+                        "protocol_run_id": "run-1",
+                    },
+                }),
+                result=RegistryJsonRecord.model_validate(
+                    {
+                        "full_text": "Drafted the revised document.\nPROTOCOL_SUMMARY: Draft completed.",
+                        "artifact_contents": [
+                            {
+                                "artifact_key": "document",
+                                "path": "protocol/document.md",
+                                "content": "# Quarterly Risk Summary\n\n## Executive summary\nBelievable rehearsal body.",
+                            }
+                        ],
+                        "artifacts": [
+                            {
+                                "artifact_key": "document",
+                                "path": "protocol/document.md",
+                                "exists": True,
+                                "verification_state": "verified",
+                            }
+                        ],
+                    }
+                ),
+            )
+
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", is_rehearsal=True),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                tasks=[
+                    TaskRecord(
+                        routed_task_id="protocol-stage:stage-1",
+                        protocol_stage_execution_id="stage-1",
+                    )
+                ],
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="document",
+                        artifact_kind="workspace_file",
+                        location="protocol/document.md",
+                        workspace_path="protocol/document.md",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                        verification_state="verified",
+                    )
+                ],
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/document/content?download=1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert response.text == "# Quarterly Risk Summary\n\n## Executive summary\nBelievable rehearsal body."
     assert 'filename="document.md"' in response.headers.get("content-disposition", "")
 
 

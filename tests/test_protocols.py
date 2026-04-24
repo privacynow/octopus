@@ -18,14 +18,21 @@ from octopus_sdk.protocols import (
     ProtocolStageExecutionRecord,
     ProtocolStageDefinitionRecord,
     TargetSelector,
+    build_conversation_protocol_run_request,
     canonical_protocol_document,
+    filter_launchable_protocols,
+    launch_protocol_from_conversation,
+    list_launchable_protocols,
     parse_protocol_stage_decision,
     protocol_document_to_text,
     protocol_review_edge_key,
+    resolve_launchable_protocol,
     validate_protocol_document,
 )
 from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
+from octopus_sdk.protocols.launch import ProtocolConversationLaunchRequestRecord
+from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
 from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
 from octopus_registry.protocol_runtime import evaluate_protocol_dispatch, runtime_protocol_selector
 from octopus_registry.postgres import get_connection
@@ -91,6 +98,132 @@ def _generated_linear_protocol(seed: int) -> dict[str, object]:
             "max_review_rounds": rng.randint(1, 5),
         },
     }
+
+
+def _launchable_definition(**overrides) -> ProtocolDefinitionRecord:
+    base = {
+        "protocol_id": "protocol-1",
+        "slug": "software-engineering",
+        "display_name": "Software Engineering",
+        "lifecycle_state": "published",
+        "current_version_id": "version-1",
+    }
+    base.update(overrides)
+    return ProtocolDefinitionRecord.model_validate(base)
+
+
+@pytest.mark.asyncio
+async def test_conversation_protocol_launch_helpers_filter_resolve_and_build_requests():
+    protocols = [
+        _launchable_definition(protocol_id="protocol-b", slug="b", display_name="Beta"),
+        _launchable_definition(protocol_id="protocol-a", slug="a", display_name="Alpha"),
+        _launchable_definition(
+            protocol_id="protocol-draft",
+            slug="draft",
+            display_name="Draft",
+            lifecycle_state="draft",
+        ),
+        _launchable_definition(
+            protocol_id="protocol-archived",
+            slug="archived",
+            display_name="Archived",
+            current_version_id="",
+        ),
+    ]
+
+    filtered = filter_launchable_protocols(protocols)
+    assert [item.protocol_id for item in filtered] == ["protocol-a", "protocol-b"]
+
+    class _Catalog:
+        async def list_protocols(self, **kwargs):
+            assert kwargs["lifecycle_state"] == "published"
+            return protocols
+
+    listed = await list_launchable_protocols(_Catalog())
+    assert [item.protocol_id for item in listed] == ["protocol-a", "protocol-b"]
+
+    resolved = await resolve_launchable_protocol(_Catalog(), "b")
+    assert resolved.protocol_id == "protocol-b"
+
+    request = build_conversation_protocol_run_request(
+        resolved,
+        {
+            "protocol_ref": "b",
+            "entry_agent_id": "agent-1",
+            "root_conversation_id": "conv-1",
+            "origin_channel": "registry",
+            "workspace_ref": "workspace-a",
+            "problem_statement": "Ship the thing",
+            "constraints_json": {"priority": "high"},
+        },
+    )
+    assert request.protocol_id == "protocol-b"
+    assert request.root_conversation_id == "conv-1"
+    assert request.workspace_ref == "workspace-a"
+    assert request.constraints_json == {"priority": "high"}
+
+
+@pytest.mark.asyncio
+async def test_launch_protocol_from_conversation_invokes_shared_protocol_pipeline():
+    definition = _launchable_definition()
+    captured: dict[str, object] = {}
+
+    class _Catalog:
+        async def list_protocols(self, **kwargs):
+            assert kwargs["lifecycle_state"] == "published"
+            return [definition]
+
+    class _Invoker:
+        async def invoke_protocol(self, payload, *, idempotency_key="", origin=""):
+            captured["payload"] = payload
+            captured["idempotency_key"] = idempotency_key
+            captured["origin"] = origin
+            return ProtocolRunMutationRecord.model_validate(
+                {
+                    "ok": True,
+                    "status": "created",
+                    "run": {
+                        "protocol_run_id": "run-1",
+                        "protocol_id": "protocol-1",
+                        "protocol_definition_version_id": "version-1",
+                        "entry_agent_id": "agent-1",
+                        "root_conversation_id": "conv-1",
+                        "origin_channel": "registry",
+                        "workspace_ref": "workspace-a",
+                        "run_org_id": "local",
+                        "status": "running",
+                        "problem_statement": "Build the feature",
+                        "constraints_json": {},
+                        "created_at": "2026-04-23T00:00:00+00:00",
+                        "updated_at": "2026-04-23T00:00:00+00:00",
+                    },
+                }
+            )
+
+    launch = await launch_protocol_from_conversation(
+        _Catalog(),
+        _Invoker(),
+        ProtocolConversationLaunchRequestRecord(
+            protocol_ref="software-engineering",
+            entry_agent_id="agent-1",
+            root_conversation_id="conv-1",
+            origin_channel="registry",
+            workspace_ref="workspace-a",
+            problem_statement="Build the feature",
+            constraints_json=RegistryJsonRecord(root={}),
+        ),
+        idempotency_key="abc-123",
+        origin="registry-ui",
+    )
+
+    payload = captured["payload"]
+    assert payload.protocol_id == "protocol-1"
+    assert payload.entry_agent_id == "agent-1"
+    assert payload.root_conversation_id == "conv-1"
+    assert captured["idempotency_key"] == "abc-123"
+    assert captured["origin"] == "registry-ui"
+    assert launch.definition.protocol_id == "protocol-1"
+    assert launch.mutation.run.protocol_run_id == "run-1"
 
 
 def _random_jsonish(rng: random.Random, *, depth: int) -> object:
@@ -463,6 +596,90 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert detail.run.status == "completed"
     assert detail.run.termination_summary == "Accepted."
+
+
+def test_registry_store_protocol_run_detail_projects_latest_artifact_once(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    document = {
+        **protocol_document(),
+        "stages": [
+            {
+                **protocol_document()["stages"][0],
+                "transitions": {"completed": "architecture"},
+            },
+            {
+                "stage_key": "architecture",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "architecture"},
+                "stage_kind": "work",
+                "write_capable": True,
+                "inputs": ["plan"],
+                "outputs": ["plan"],
+                "transitions": {"completed": "review"},
+                "instructions": "Refine protocol/plan.md.",
+            },
+            protocol_document()["stages"][1],
+        ],
+    }
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    token = enroll.agent_token
+
+    first_stage = detail.stage_executions[0]
+    store.update_routed_task_result(
+        token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "done-1",
+            "summary": "Plan created.",
+            "full_text": "Created protocol/plan.md.\nPROTOCOL_SUMMARY: Plan created.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "initial",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    architecture_stage = detail.stage_executions[0]
+    assert architecture_stage.stage_key == "architecture"
+    store.update_routed_task_result(
+        token,
+        architecture_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "done-2",
+            "summary": "Plan refined.",
+            "full_text": "Refined protocol/plan.md.\nPROTOCOL_SUMMARY: Plan refined.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 256,
+                    "content_hash": "refined",
+                    "modified_at": "2026-04-16T00:05:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert [artifact.artifact_key for artifact in detail.artifacts] == ["plan"]
+    assert detail.artifacts[0].content_hash == "refined"
+    assert detail.artifacts[0].size_bytes == 256
+    assert detail.artifacts[0].supersedes_protocol_artifact_id
+    assert detail.artifacts[0].produced_by_stage_execution_id == architecture_stage.protocol_stage_execution_id
 
 
 def test_registry_store_run_participants_project_stage_owned_selectors(postgres_registry_truncated: str) -> None:

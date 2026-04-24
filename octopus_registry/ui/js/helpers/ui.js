@@ -402,12 +402,17 @@ window.UI = (() => {
         heading.textContent = title;
         dialog.appendChild(heading);
 
-        if (body instanceof Node) {
-            dialog.appendChild(body);
-        } else if (String(body || '').trim()) {
-            const text = document.createElement('p');
-            text.textContent = String(body || '');
-            dialog.appendChild(text);
+        if (body instanceof Node || String(body || '').trim()) {
+            const bodyWrap = document.createElement('div');
+            bodyWrap.className = 'confirm-dialog-body';
+            if (body instanceof Node) {
+                bodyWrap.appendChild(body);
+            } else {
+                const text = document.createElement('p');
+                text.textContent = String(body || '');
+                bodyWrap.appendChild(text);
+            }
+            dialog.appendChild(bodyWrap);
         }
 
         if (actions.length) {
@@ -547,6 +552,131 @@ window.UI = (() => {
 
     function isPreviewableFilePath(path) {
         return /\.(md|markdown|txt|log|json|jsonl|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(String(path || '').trim());
+    }
+
+    function conversationHref(conversationId, {
+        view = '',
+        conversationType = '',
+        operational = false,
+    } = {}) {
+        const normalizedId = String(conversationId || '').trim();
+        if (!normalizedId) return '/ui/conversations';
+        const url = new URL(`/ui/conversations/${encodeURIComponent(normalizedId)}`, window.location.origin);
+        const normalizedView = String(view || '').trim();
+        if (normalizedView === 'tasks' || normalizedView === 'activity') {
+            url.searchParams.set('view', normalizedView);
+        } else if (operational || String(conversationType || '').trim() === 'task_thread') {
+            url.searchParams.set('view', 'tasks');
+        }
+        return `${url.pathname}${url.search}${url.hash}`;
+    }
+
+    function taskArtifactEvidence(task) {
+        if (!task || typeof task !== 'object') return null;
+        const request = task.request && typeof task.request === 'object' ? task.request : {};
+        const result = task.result && typeof task.result === 'object' ? task.result : {};
+        const internalContext = request.internal_context && typeof request.internal_context === 'object'
+            ? request.internal_context
+            : {};
+        const contract = internalContext.protocol_stage_contract && typeof internalContext.protocol_stage_contract === 'object'
+            ? internalContext.protocol_stage_contract
+            : {};
+        const expectedOutputs = Array.isArray(contract.output_artifacts) ? contract.output_artifacts : [];
+        const recordedArtifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+        if (!expectedOutputs.length && !recordedArtifacts.length) return null;
+        return { expectedOutputs, recordedArtifacts };
+    }
+
+    function taskExpectedOutput(expectedOutputs = [], artifactKey = '') {
+        const normalized = String(artifactKey || '').trim();
+        if (!normalized) return null;
+        return (expectedOutputs || []).find((item) => String(item?.artifact_key || '').trim() === normalized) || null;
+    }
+
+    function taskArtifactDisplayPath(task, artifact, expectedOutput = null) {
+        return joinDisplayPath(task?.working_dir || '', expectedOutput?.path || artifact?.path || '');
+    }
+
+    function taskArtifactLabel(artifact, expectedOutput = null) {
+        const declaredPath = String(expectedOutput?.path || artifact?.path || '').trim();
+        return basenameDisplayPath(declaredPath) || String(artifact?.artifact_key || expectedOutput?.artifact_key || 'Artifact').trim();
+    }
+
+    function taskArtifactPreviewable(artifact, expectedOutput = null) {
+        return isPreviewableFilePath(expectedOutput?.path || artifact?.path || '');
+    }
+
+    function createArtifactActionRow({
+        previewable = false,
+        onPreview = null,
+        openHref = '',
+        downloadHref = '',
+        copyPathText = '',
+        available = true,
+        stopPropagation = true,
+        copySuccessMessage = 'Artifact path copied.',
+        copyErrorMessage = 'Failed to copy the artifact path.',
+    } = {}) {
+        const actionRow = document.createElement('div');
+        actionRow.className = 'list-row-actions';
+
+        const stop = (event) => {
+            if (!stopPropagation || !event) return;
+            event.stopPropagation();
+        };
+
+        if (available && previewable && typeof onPreview === 'function') {
+            const previewBtn = document.createElement('button');
+            previewBtn.type = 'button';
+            previewBtn.className = 'btn btn-sm';
+            previewBtn.textContent = 'Preview';
+            previewBtn.addEventListener('click', (event) => {
+                stop(event);
+                void onPreview();
+            });
+            actionRow.appendChild(previewBtn);
+        }
+
+        if (available && String(openHref || '').trim()) {
+            const openLink = document.createElement('a');
+            openLink.href = String(openHref || '').trim();
+            openLink.className = 'btn btn-sm';
+            openLink.target = '_blank';
+            openLink.rel = 'noreferrer noopener';
+            openLink.textContent = 'Open';
+            openLink.addEventListener('click', stop);
+            actionRow.appendChild(openLink);
+        }
+
+        if (available && String(downloadHref || '').trim()) {
+            const downloadLink = document.createElement('a');
+            downloadLink.href = String(downloadHref || '').trim();
+            downloadLink.className = 'btn btn-sm';
+            downloadLink.textContent = 'Download';
+            downloadLink.addEventListener('click', stop);
+            actionRow.appendChild(downloadLink);
+        }
+
+        if (available && String(copyPathText || '').trim()) {
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'btn btn-sm';
+            copyBtn.textContent = 'Copy path';
+            copyBtn.addEventListener('click', async (event) => {
+                stop(event);
+                try {
+                    await copyText(String(copyPathText || ''), {
+                        successMessage: copySuccessMessage,
+                        errorMessage: copyErrorMessage,
+                    });
+                } catch (err) {
+                    void err;
+                }
+            });
+            actionRow.appendChild(copyBtn);
+        }
+
+        return actionRow;
     }
 
     function _cloneCachedValue(value) {
@@ -1095,6 +1225,13 @@ window.UI = (() => {
         joinDisplayPath,
         basenameDisplayPath,
         isPreviewableFilePath,
+        conversationHref,
+        taskArtifactEvidence,
+        taskExpectedOutput,
+        taskArtifactDisplayPath,
+        taskArtifactLabel,
+        taskArtifactPreviewable,
+        createArtifactActionRow,
         readQueryParam,
         updateQueryParams,
         notify,

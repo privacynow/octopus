@@ -1,5 +1,5 @@
 /**
- * Agent detail — compact profile with direct conversation entry.
+ * Agent detail - compact profile with direct conversation and protocol entry.
  */
 function renderAgentDetail(container, params) {
     const agentId = params.id;
@@ -57,6 +57,48 @@ function renderAgentDetail(container, params) {
         return badge;
     }
 
+    async function openAgentConversation(agent, { manage = '' } = {}) {
+        if (openConversationBusy) return false;
+        openConversationBusy = true;
+        try {
+            const conversation = await API.openConversationForAgent(agentId, {
+                title: `Conversation with ${agentDisplayName || agent.display_name || agent.slug || agentId}`,
+            });
+            const conversationId = String(conversation.conversation_id || conversation.id || '');
+            if (!conversationId) throw new Error('Conversation was created without an id.');
+            const suffix = manage ? `?manage=${encodeURIComponent(manage)}` : '';
+            Router.navigate('/ui/conversations/' + encodeURIComponent(conversationId) + suffix);
+            return true;
+        } catch (err) {
+            UI.reportError('Failed to open a conversation for this agent', err, { context: 'Agent detail open conversation failed' });
+            openConversationBusy = false;
+            return false;
+        }
+    }
+
+    function createAgentActionButton(agent, { label, manage = '', primary = false } = {}) {
+        const execution = executionSnapshot(agent);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = primary ? 'btn btn-sm btn-primary' : 'btn btn-sm';
+        const originalLabel = label || 'Start conversation';
+        button.textContent = execution.state === 'faulted' && primary ? 'Execution faulted' : originalLabel;
+        button.disabled = openConversationBusy || execution.state === 'faulted';
+        if (execution.state === 'faulted' && execution.detail) {
+            button.title = execution.detail;
+        }
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            button.textContent = 'Opening...';
+            const opened = await openAgentConversation(agent, { manage });
+            if (!opened) {
+                button.disabled = false;
+                button.textContent = originalLabel;
+            }
+        });
+        return button;
+    }
+
     function buildHeader(agent) {
         const execution = executionSnapshot(agent);
         const titleRow = document.createElement('div');
@@ -92,32 +134,8 @@ function renderAgentDetail(container, params) {
         actions.appendChild(transportStatus);
         actions.appendChild(executionBadge(execution));
 
-        const openConversationBtn = document.createElement('button');
-        openConversationBtn.type = 'button';
-        openConversationBtn.className = 'btn btn-sm btn-primary';
-        openConversationBtn.textContent = execution.state === 'faulted' ? 'Execution faulted' : 'Open conversation';
-        openConversationBtn.disabled = openConversationBusy || execution.state === 'faulted';
-        if (execution.state === 'faulted' && execution.detail) {
-            openConversationBtn.title = execution.detail;
-        }
-        openConversationBtn.addEventListener('click', async () => {
-            if (openConversationBusy) return;
-            openConversationBusy = true;
-            openConversationBtn.disabled = true;
-            openConversationBtn.textContent = 'Opening…';
-            try {
-                const conversation = await API.openConversationForAgent(agentId, {
-                    title: `Conversation with ${agentDisplayName || agentId}`,
-                });
-                Router.navigate('/ui/conversations/' + conversation.conversation_id);
-            } catch (err) {
-                UI.reportError('Failed to open a conversation for this agent', err, { context: 'Agent detail open conversation failed' });
-                openConversationBusy = false;
-                openConversationBtn.disabled = false;
-                openConversationBtn.textContent = 'Open conversation';
-            }
-        });
-        actions.appendChild(openConversationBtn);
+        actions.appendChild(createAgentActionButton(agent, { label: 'Start conversation', primary: true }));
+        actions.appendChild(createAgentActionButton(agent, { label: 'Run protocol', manage: 'protocols' }));
 
         if (execution.state === 'faulted' && execution.resettable) {
             const resetBtn = document.createElement('button');
@@ -324,7 +342,7 @@ function renderAgentDetail(container, params) {
         const capacityRow = document.createElement('div');
         capacityRow.className = 'form-row';
         const capacityLabel = document.createElement('label');
-        capacityLabel.textContent = Kit.dict.label('agents.admin.capacity.label', 'Capacity (current / max)');
+        capacityLabel.textContent = Kit.dict.label('agents.admin.capacity.label', 'Work slots (current / max)');
         capacityRow.appendChild(capacityLabel);
         const currentInput = document.createElement('input');
         currentInput.type = 'number';
@@ -487,7 +505,7 @@ function renderAgentDetail(container, params) {
 
         const intro = document.createElement('p');
         intro.className = 'quiet-note';
-        intro.textContent = 'Quick actions live here. Open the full Skills page for deep editing, lifecycle review, and package work.';
+        intro.textContent = 'Quick actions live here. Open the full Capabilities page for deep editing, lifecycle review, and package work.';
         shell.appendChild(intro);
 
         const controls = document.createElement('div');
@@ -495,7 +513,7 @@ function renderAgentDetail(container, params) {
         const search = document.createElement('input');
         search.type = 'text';
         search.className = 'search-input';
-        search.placeholder = 'Search installed or store skills';
+        search.placeholder = 'Search capabilities';
         controls.appendChild(search);
         shell.appendChild(controls);
 
@@ -509,12 +527,12 @@ function renderAgentDetail(container, params) {
         const openPageBtn = document.createElement('button');
         openPageBtn.type = 'button';
         openPageBtn.className = 'btn';
-        openPageBtn.textContent = 'Open Skills page';
+        openPageBtn.textContent = 'Open Capabilities page';
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
         closeBtn.className = 'btn btn-primary';
         closeBtn.textContent = 'Close';
-        const view = UI.showDialog('Manage skills', shell, {
+        const view = UI.showDialog('Manage capabilities', shell, {
             actions: [openPageBtn, closeBtn],
             maxWidth: '760px',
         });
@@ -553,7 +571,7 @@ function renderAgentDetail(container, params) {
                 const openBtn = document.createElement('button');
                 openBtn.type = 'button';
                 openBtn.className = 'btn btn-sm list-row-action';
-                openBtn.textContent = 'Open in Skills';
+                openBtn.textContent = 'Open in Capabilities';
                 openBtn.addEventListener('click', (event) => {
                     event.stopPropagation();
                     view.close();
@@ -571,13 +589,13 @@ function renderAgentDetail(container, params) {
                 registryError,
             }, (state) => {
                 if (state.loading && !state.sections.length) {
-                    return [UI.renderEmptyState('Loading skills…', true)];
+                    return [UI.renderEmptyState('Loading capabilities…', true)];
                 }
                 if (!state.sections.length) {
                     return [UI.renderEmptyState(
                         state.q.length >= 2
-                            ? 'No installed or store skills match this search.'
-                            : 'No skills available for this bot.',
+                            ? 'No installed or store capabilities match this search.'
+                            : 'No capabilities available for this bot.',
                         true,
                     )];
                 }
@@ -621,7 +639,7 @@ function renderAgentDetail(container, params) {
                                     invalidateSkills();
                                     view.close();
                                 } catch (err) {
-                                    UI.reportError('Failed to install the skill', err, { context: 'Agent drawer skill install failed' });
+                                    UI.reportError('Failed to install the capability', err, { context: 'Agent drawer skill install failed' });
                                     installBtn.disabled = false;
                                 }
                             });
@@ -650,7 +668,7 @@ function renderAgentDetail(container, params) {
                                 try {
                                     await useSkillInConversation(skill.name || '');
                                 } catch (err) {
-                                    UI.reportError('Failed to open a conversation for this skill', err, { context: 'Agent drawer use skill failed' });
+                                    UI.reportError('Failed to open a conversation for this capability', err, { context: 'Agent drawer use skill failed' });
                                     useBtn.disabled = false;
                                 }
                             });
@@ -736,12 +754,12 @@ function renderAgentDetail(container, params) {
                 renderDrawer(false);
             } catch (err) {
                 if (hasCached) {
-                    UI.reportError('Failed to refresh skills', err, { context: 'Agent drawer skills refresh failed' });
+                    UI.reportError('Failed to refresh capabilities', err, { context: 'Agent drawer skills refresh failed' });
                     renderDrawer(false);
                     return;
                 }
                 UI.clearMemoizedRender(list);
-                UI.reconcileChildren(list, [UI.createErrorCard('Failed to load skills: ' + err.message, loadDrawerSkills)]);
+                UI.reconcileChildren(list, [UI.createErrorCard('Failed to load capabilities: ' + err.message, loadDrawerSkills)]);
             }
         }
 
@@ -766,7 +784,7 @@ function renderAgentDetail(container, params) {
 
         const head = document.createElement('div');
         head.className = 'section-header';
-        head.innerHTML = '<strong>Skills</strong>';
+        head.innerHTML = '<strong>Capabilities</strong>';
         card.appendChild(head);
 
         const body = document.createElement('div');
@@ -774,14 +792,14 @@ function renderAgentDetail(container, params) {
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = manageEnabled
-            ? 'Manage this bot’s skills from one workspace, then activate a skill inside a conversation when you want it in context.'
-            : 'This bot does not currently advertise registry-backed skill management.';
+            ? 'Manage what this bot can do from one workspace, then activate a capability inside a conversation when you want it in context.'
+            : 'This bot does not currently advertise registry-backed capability management.';
         body.appendChild(note);
 
         if ((agent.routing_skills || []).length) {
             const label = document.createElement('div');
             label.className = 'detail-label';
-            label.textContent = 'Advertised for routing';
+            label.textContent = 'Available capabilities';
             body.appendChild(label);
             const chips = document.createElement('div');
             chips.className = 'chip-row';
@@ -805,14 +823,14 @@ function renderAgentDetail(container, params) {
         const manageBtn = document.createElement('button');
         manageBtn.type = 'button';
         manageBtn.className = 'btn btn-sm btn-primary';
-        manageBtn.textContent = 'Manage skills';
+        manageBtn.textContent = 'Manage capabilities';
         manageBtn.disabled = !manageEnabled;
         manageBtn.addEventListener('click', () => openSkillsDrawer(agent));
         actions.appendChild(manageBtn);
         const openPageBtn = document.createElement('button');
         openPageBtn.type = 'button';
         openPageBtn.className = 'btn btn-sm';
-        openPageBtn.textContent = 'Open Skills page';
+        openPageBtn.textContent = 'Open Capabilities page';
         openPageBtn.disabled = !manageEnabled;
         openPageBtn.addEventListener('click', () => Router.navigate(skillsWorkspaceHref()));
         actions.appendChild(openPageBtn);
@@ -864,14 +882,64 @@ function renderAgentDetail(container, params) {
         return card;
     }
 
-    function buildConversationsSection() {
+    function buildOperationsCard(agent, workers) {
+        const card = document.createElement('section');
+        card.className = 'card workspace-section';
+        card.dataset.key = 'operations';
+
+        const details = document.createElement('details');
+        details.className = 'kit-stage-editor-section is-collapsible agent-operations-disclosure';
+        const summary = document.createElement('summary');
+        summary.className = 'kit-stage-editor-summary';
+        summary.innerHTML = '<strong>Operations and diagnostics</strong><span class="quiet-note">Selector preview, admin controls, worker state, and technical identifiers.</span>';
+        details.appendChild(summary);
+
+        const panel = document.createElement('div');
+        panel.className = 'kit-details-panel agent-operations-panel';
+
+        const technical = document.createElement('section');
+        technical.className = 'editor-panel';
+        technical.dataset.key = 'technical';
+        const technicalTitle = document.createElement('div');
+        technicalTitle.className = 'editor-section-title';
+        technicalTitle.textContent = 'Technical details';
+        technical.appendChild(technicalTitle);
+        technical.appendChild(UI.renderMetadataGrid([
+            { label: 'Agent ID', value: String(agent.agent_id || '') },
+            { label: 'Slug', value: String(agent.slug || '') },
+            { label: 'Trust tier', value: String(agent.trust_tier || 'community') },
+            { label: 'Scope', value: String(agent.registry_scope || 'full') },
+            { label: 'Version', value: String(agent.version || '—') },
+            { label: 'Work slots', value: `${Number(agent.current_capacity || 0)} / ${Number(agent.max_capacity || 1)}` },
+        ]));
+        panel.appendChild(technical);
+
+        panel.appendChild(buildSelectorCard(agent));
+        panel.appendChild(buildAdminCard(agent));
+        if (workers.length) {
+            panel.appendChild(buildWorkersCard(workers));
+        }
+
+        details.appendChild(panel);
+        card.appendChild(details);
+        return card;
+    }
+
+    function buildConversationsSection(agent) {
         const section = document.createElement('section');
         section.className = 'workspace-section';
         section.dataset.key = 'conversations';
 
         const head = document.createElement('div');
         head.className = 'section-header';
-        head.innerHTML = '<strong>Conversations</strong>';
+        const title = document.createElement('strong');
+        title.textContent = 'Recent work';
+        head.appendChild(title);
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        actions.appendChild(createAgentActionButton(agent, { label: 'Start conversation', primary: true }));
+        actions.appendChild(createAgentActionButton(agent, { label: 'Run protocol', manage: 'protocols' }));
+        head.appendChild(actions);
         section.appendChild(head);
 
         const groups = document.createElement('div');
@@ -947,7 +1015,9 @@ function renderAgentDetail(container, params) {
                 UI.relativeTime(item.updated_at || item.created_at),
             ].filter(Boolean).join(' · ');
             const row = UI.renderListRow({
-                href: '/ui/conversations/' + item.conversation_id,
+                href: UI.conversationHref(item.conversation_id, {
+                    conversationType: item.conversation_type,
+                }),
                 label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : 'Conversation'),
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
@@ -1082,10 +1152,8 @@ function renderAgentDetail(container, params) {
             const detailRender = UI.memoizedRender(content, signature, () => [
                 buildOverviewCard(agent),
                 buildSkillsCard(agent),
-                buildSelectorCard(agent),
-                buildAdminCard(agent),
-                buildWorkersCard(workers),
-                buildConversationsSection(),
+                buildConversationsSection(agent),
+                buildOperationsCard(agent, workers),
             ], {
                 signatureFn(value) {
                     return value;

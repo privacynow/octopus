@@ -192,6 +192,15 @@ async function openBlankDraft(page) {
   await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
 }
 
+async function openConversationForAgentFromUi(page, agentId) {
+  await page.goto(`/ui/agents/${encodeURIComponent(String(agentId || '').trim())}`, { waitUntil: 'domcontentloaded' });
+  const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
+  await expect(openConversation).toBeVisible({ timeout: 15000 });
+  await openConversation.click();
+  await expect(page).toHaveURL(/\/ui\/conversations\//, { timeout: 15000 });
+  await expect(page.locator('.conversation-page')).toBeVisible({ timeout: 15000 });
+}
+
 async function openTemplateDraft(page, templateName, { expectedStageKeys = [], retry = true } = {}) {
   await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
   const templateCard = page.locator('.protocol-template-card').filter({ hasText: templateName }).first();
@@ -440,6 +449,7 @@ module.exports = {
   firstExecutionReadyAgent,
   login,
   openBlankDraft,
+  openConversationForAgentFromUi,
   openStagePanel,
   openProtocolSettings,
   openTemplateDraft,

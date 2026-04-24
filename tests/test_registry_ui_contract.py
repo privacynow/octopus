@@ -109,8 +109,8 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "await loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" not in skill_catalog
     assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
     assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
-    assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
-    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
+    assert "renderLoadingState(message = 'Loading capabilities…')" in skill_catalog
+    assert "renderLoadingState(queryText.length >= 2 ? 'Searching capabilities…' : 'Loading capabilities…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
@@ -304,6 +304,7 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
 
     # Router wiring
+    assert "Router.register('/ui/templates', renderGallery);" in app_js
     assert "Router.register('/ui/gallery', renderGallery);" in app_js
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
@@ -391,7 +392,7 @@ def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     assert "href: '/ui/protocols'" in dashboard
     assert "`/ui/runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`" in dashboard
     assert "'/ui/runs?issue_kind=all'" in dashboard
-    assert 'href="/ui/gallery"' in index_html
+    assert 'href="/ui/templates"' in index_html
     assert 'href="/ui/protocols"' in index_html
 
 
@@ -435,7 +436,7 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Manage a bot’s installed, custom, and store-backed skills here." in skill_catalog
+    assert "Manage what each bot can do." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
     assert "label: 'Studio'" not in skill_catalog
@@ -453,8 +454,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "'Custom'" in skill_catalog
     assert "'Installed on this bot'" in skill_catalog
     assert "'Store'" in skill_catalog
-    assert "'New custom skill'" in skill_catalog
-    assert "'No skills are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
+    assert "'New capability'" in skill_catalog
+    assert "'No capabilities are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
@@ -495,9 +496,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
 
 
 def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
-    """Plan §8: agents list + detail migrate to Kit primitives; detail surface
-    exposes admin actions (trust tier, capacity, token rotation, soft-delete)
-    and a selector resolution preview wired to /v1/selector/preview."""
+    """Plan §8: agents list + detail migrate to Kit primitives; operational
+    diagnostics remain available behind one disclosure instead of the default path."""
     repo_root = Path(__file__).resolve().parents[1]
     agent_list = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
@@ -518,6 +518,7 @@ def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
     # Detail surfaces
     assert "Kit.agentSummary(" in agent_detail
     assert "Kit.selectorResolutionPreview(" in agent_detail
+    assert "function buildOperationsCard(" in agent_detail
     assert "function buildAdminCard(" in agent_detail
     assert "function buildSelectorCard(" in agent_detail
     assert "API.updateAgentTrustTier(" in agent_detail
@@ -548,13 +549,14 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
 
     assert "window.RegistrySkillHub = RegistrySkillHub;" in skill_catalog
     assert "function buildSkillsCard(agent) {" in agent_detail
-    assert "Manage skills" in agent_detail
-    assert "Open Skills page" in agent_detail
-    assert "Open in Skills" in agent_detail
+    assert "Manage capabilities" in agent_detail
+    assert "Open Capabilities page" in agent_detail
+    assert "Open in Capabilities" in agent_detail
     assert "Open conversation and activate" in agent_detail
     assert "Quick actions live here." in agent_detail
-    assert "Advertised for routing" in agent_detail
+    assert "Available capabilities" in agent_detail
     assert "buildSkillsCard(agent)," in agent_detail
+    assert "buildOperationsCard(agent, workers)," in agent_detail
     assert "quickstart-chip static" in agent_detail
     assert "skills-drawer-dialog" in css
     assert "skills-drawer-overlay" in css
@@ -811,16 +813,39 @@ def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> No
     assert "function closeManagement(" in detail
     assert "function scheduleManagementIdleClose(" in detail
     assert "function scheduleManagementSuccessClose(" in detail
-    assert "skillsManageBtn.textContent = 'Skills';" in detail
+    assert "skillsManageBtn.textContent = 'Capabilities';" in detail
     assert "settingsManageBtn.textContent = 'Settings';" in detail
+    assert "protocolsManageBtn.textContent = 'Protocols';" in detail
     assert "textContent = '×';" in detail
     assert "managementPanel.hidden = !managementAgentId();" not in detail
     assert "openManagement('skills')" in detail
     assert "openManagement('settings'" in detail
+    assert "openManagement('protocols'" in detail
     assert "&& !pendingSkillSetup" in detail
     assert "clearRequestedActivationSkill();" in detail
     assert "requestConversationSkillActivation(" in detail
     assert ".conversation-management-close {" in css
+
+
+def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function renderProtocolsPanel()" in detail
+    assert "Conversation protocols" in detail
+    assert "Start a published protocol" in detail
+    assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
+    assert "API.listProtocolRuns({ root_conversation_id: convoId, limit: 25 })" in detail
+    assert "API.createProtocolRun({" in detail
+    assert "root_conversation_id: convoId" in detail
+    assert "entry_agent_id: agentId" in detail
+    assert "protocolProblemStatement = String(textarea.value || '').trim();" in detail
+    assert "requestedManagementMode === 'protocols'" in detail
+    assert "value === 'skills' || value === 'settings' || value === 'protocols'" in detail
+    assert "Started protocol run" in detail
+    assert "Open run" in detail
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

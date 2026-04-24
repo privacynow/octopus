@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from app.presentation import telegram as telegram_presenters
 from app.runtime import telegram_protocols
 from octopus_sdk.identity import telegram_conversation_key
+from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -27,7 +28,7 @@ def _protocol_item(**overrides):
         "current_version_id": "version-1",
     }
     base.update(overrides)
-    return SimpleNamespace(**base)
+    return ProtocolDefinitionRecord.model_validate(base)
 
 
 def _run_detail(*, run_id="run-1", status="running", version=2, stage_key="planning"):
@@ -81,7 +82,8 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
         setup_globals(cfg, prov)
 
         class _Client:
-            async def list_protocols(self):
+            async def list_protocols(self, **kwargs):
+                assert kwargs.get("lifecycle_state") == "published"
                 return [_protocol_item()]
 
             async def create_conversation(self, **kwargs):
@@ -89,14 +91,32 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
 
             async def invoke_protocol(self, payload, *, origin="", idempotency_key=""):
                 assert payload["protocol_id"] == "protocol-1"
-                return SimpleNamespace(
-                    run=SimpleNamespace(
-                        protocol_run_id="run-1",
-                        protocol_id="protocol-1",
-                        version=1,
-                        status="running",
-                        current_stage_key="planning",
-                    )
+                assert payload["entry_agent_id"] == "agent-1"
+                assert payload["root_conversation_id"] == "conv-1"
+                assert payload["origin_channel"] == "telegram"
+                assert payload["problem_statement"] == "Build the feature"
+                return ProtocolRunMutationRecord.model_validate(
+                    {
+                        "ok": True,
+                        "status": "created",
+                        "run": {
+                            "protocol_run_id": "run-1",
+                            "protocol_id": "protocol-1",
+                            "protocol_definition_version_id": "version-1",
+                            "entry_agent_id": "agent-1",
+                            "root_conversation_id": "conv-1",
+                            "origin_channel": "telegram",
+                            "workspace_ref": "",
+                            "run_org_id": "local",
+                            "status": "running",
+                            "problem_statement": "Build the feature",
+                            "constraints_json": {},
+                            "created_at": "2026-04-23T00:00:00+00:00",
+                            "updated_at": "2026-04-23T00:00:00+00:00",
+                            "current_stage_key": "planning",
+                            "version": 1,
+                        },
+                    }
                 )
 
         monkeypatch.setattr(

@@ -64,6 +64,56 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
         card.appendChild(summaryBlock);
     }
 
+    const artifactEvidence = UI.taskArtifactEvidence(task);
+    const expectedOutputs = artifactEvidence?.expectedOutputs || [];
+    const recordedArtifacts = artifactEvidence?.recordedArtifacts || [];
+    if (!compact && recordedArtifacts.length) {
+        const sectionLabel = document.createElement('div');
+        sectionLabel.className = 'detail-label';
+        sectionLabel.textContent = 'Outputs';
+        card.appendChild(sectionLabel);
+
+        const outputsList = document.createElement('div');
+        outputsList.className = 'task-artifact-list';
+        const outputNodes = recordedArtifacts.map((artifact) => {
+            const expectedOutput = UI.taskExpectedOutput(expectedOutputs, artifact?.artifact_key);
+            const resolvedPath = UI.taskArtifactDisplayPath(task, artifact, expectedOutput);
+            const trailing = UI.createArtifactActionRow({
+                previewable: UI.taskArtifactPreviewable(artifact, expectedOutput),
+                onPreview: async () => {
+                    try {
+                        const text = await API.getTaskArtifactText(task.routed_task_id, artifact.artifact_key);
+                        UI.showTextDialog(
+                            `${String(artifact?.artifact_key || 'artifact')} preview`,
+                            String(text || ''),
+                            { maxWidth: '920px' },
+                        );
+                    } catch (err) {
+                        UI.reportError('Failed to preview the artifact', err, {
+                            context: 'Conversation task artifact preview failed',
+                        });
+                    }
+                },
+                openHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key),
+                downloadHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true }),
+                copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),
+            });
+            return UI.renderListRow({
+                label: UI.taskArtifactLabel(artifact, expectedOutput),
+                sublabel: [
+                    'Produced output',
+                    resolvedPath || String(artifact?.path || ''),
+                    String(artifact?.artifact_key || '').trim(),
+                ].filter(Boolean).join(' · '),
+                badgeText: artifact.verification_state || (artifact.exists ? 'available' : 'missing'),
+                badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
+                trailing,
+            });
+        });
+        UI.reconcileChildren(outputsList, outputNodes);
+        card.appendChild(outputsList);
+    }
+
     const taskActions = UI.createTaskActionButtons(
         task.routed_task_id,
         convoId,
@@ -74,8 +124,25 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
             retryLabel: 'Retry task',
         },
     );
+    const actionRow = document.createElement('div');
+    actionRow.className = 'task-action-row';
+    if (task.protocol_run_id) {
+        const openRun = document.createElement('a');
+        openRun.href = `/ui/runs?run_id=${encodeURIComponent(task.protocol_run_id)}`;
+        openRun.className = 'btn btn-sm';
+        openRun.textContent = 'Open run';
+        actionRow.appendChild(openRun);
+    }
+    const openTask = document.createElement('a');
+    openTask.href = `/ui/tasks?task_id=${encodeURIComponent(task.routed_task_id)}${task.protocol_run_id ? `&protocol_run_id=${encodeURIComponent(task.protocol_run_id)}` : ''}`;
+    openTask.className = 'btn btn-sm';
+    openTask.textContent = 'Open task';
+    actionRow.appendChild(openTask);
     if (taskActions.element.childElementCount > 1) {
-        card.appendChild(taskActions.element);
+        Array.from(taskActions.element.childNodes).forEach((node) => actionRow.appendChild(node));
+    }
+    if (actionRow.childElementCount) {
+        card.appendChild(actionRow);
     }
 
     return card;

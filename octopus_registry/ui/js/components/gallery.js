@@ -1,5 +1,5 @@
 /**
- * Gallery — starter templates and examples that create authored drafts.
+ * Templates - starter protocols and examples that create authored drafts.
  */
 function renderGallery(container) {
     const cleanups = UI.beginCleanupScope();
@@ -11,7 +11,7 @@ function renderGallery(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Gallery</h2><p>Start from reusable workflow examples without mixing them into your authored protocol catalog.</p>';
+    header.innerHTML = '<h2>Templates</h2><p>Start from reusable workflow examples without mixing them into your authored protocol catalog.</p>';
     container.appendChild(header);
 
     const content = document.createElement('div');
@@ -53,7 +53,7 @@ function renderGallery(container) {
                 template_slug: template.slug,
             }).catch((err) => {
                 UI.reportError('Failed to create a template-based protocol draft', err, {
-                    context: 'Gallery protocol draft create failed',
+                    context: 'Template protocol draft create failed',
                 });
             });
         });
@@ -86,7 +86,7 @@ function renderGallery(container) {
             blankBtn.addEventListener('click', () => {
                 void _createDraft({ source_kind: 'blank' }).catch((err) => {
                     UI.reportError('Failed to create a blank protocol draft', err, {
-                        context: 'Gallery blank protocol draft create failed',
+                        context: 'Template blank protocol draft create failed',
                     });
                 });
             });
@@ -103,7 +103,7 @@ function renderGallery(container) {
             shell.appendChild(grid);
             UI.reconcileChildren(content, [shell]);
         } catch (err) {
-            UI.reconcileChildren(content, [UI.createErrorCard('Failed to load the Gallery: ' + err.message, bootstrap)]);
+            UI.reconcileChildren(content, [UI.createErrorCard('Failed to load templates: ' + err.message, bootstrap)]);
         }
     }
 

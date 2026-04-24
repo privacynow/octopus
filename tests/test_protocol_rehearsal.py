@@ -261,6 +261,64 @@ def test_rehearsal_synthesizes_required_outputs_for_write_capable_stage(
     assert str(plan.content_hash or "").strip()
 
 
+def test_rehearsal_materializes_explicit_artifact_contents(
+    postgres_registry_truncated: str,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
+    published = published_protocol(store)
+    workspace_root = tmp_path / "default"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("octopus_registry.artifact_paths._mounted_workspace_roots", lambda: (str(workspace_root),))
+
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": rehearsal_agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Draft the plan as a believable file.",
+            "constraints_json": {},
+            "is_rehearsal": True,
+        },
+        access=operator_access(),
+    )
+    assert created.ok is True
+    run_id = created.run.protocol_run_id
+
+    manager._poll_once_sync()
+    pending = manager.list_pending(protocol_run_id=run_id)
+    assert len(pending) == 1
+    first_session = pending[0]
+    accepted = manager.respond(
+        routed_task_id=first_session.routed_task_id,
+        response_text="Drafted the plan and attached the real file body.",
+        decision="completed",
+        decision_summary="Planning completed.",
+        artifact_contents=[
+            {
+                "artifact_key": "plan",
+                "content": "# Plan\n\n1. Add audit logging.\n2. Cover failure handling.\n3. Add tests.\n",
+            }
+        ],
+    )
+    assert accepted is True
+
+    plan_path = workspace_root / "protocol" / "plan.md"
+    assert plan_path.exists() is True
+    assert plan_path.read_text(encoding="utf-8") == "# Plan\n\n1. Add audit logging.\n2. Cover failure handling.\n3. Add tests.\n"
+
+    task = store.get_task(first_session.routed_task_id)
+    result_payload = task.result.as_dict() if task.result is not None else {}
+    assert isinstance(result_payload, dict)
+    inline_contents = result_payload.get("artifact_contents", ())
+    assert isinstance(inline_contents, list)
+    assert inline_contents[0]["artifact_key"] == "plan"
+    assert inline_contents[0]["content"].startswith("# Plan")
+
+
 def test_protocol_scenarios_round_trip_through_store(
     postgres_registry_truncated: str,
 ) -> None:

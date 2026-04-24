@@ -168,7 +168,7 @@ window.Kit = (() => {
         'protocol.canvas.empty.title': 'Start the workflow',
         'protocol.canvas.empty.body': 'Add the first step in the workflow and create its owner role inline if needed.',
         'protocol.catalog.empty.title': 'No protocols yet',
-        'protocol.catalog.empty.body': 'Create one from a template in the Gallery, or start from a blank draft.',
+        'protocol.catalog.empty.body': 'Create one from Templates, or start from a blank draft.',
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',
@@ -215,10 +215,10 @@ window.Kit = (() => {
         'runs.summary.workspace': 'Workspace',
         'runs.summary.conversation': 'Root conversation',
 
-        // Agents — admin + observability
+        // Agents - work entry point with operational diagnostics behind detail.
         'agents.list.title': 'Agents',
         'agents.empty': 'No agents match this view.',
-        'agents.search.placeholder': 'Search by name, slug, role, or provider…',
+        'agents.search.placeholder': 'Search by name, capability, role, or provider…',
         'agents.presence.filter.all': 'All',
         'agents.presence.connected': 'Connected',
         'agents.presence.degraded': 'Degraded',
@@ -226,7 +226,7 @@ window.Kit = (() => {
         'agents.presence.standalone': 'Standalone',
         'agents.presence.stopped': 'Stopped',
         'agents.presence.faulted': 'Execution faulted',
-        'agents.detail.firstrun': 'Select an agent to inspect presence, skills, workload, and admin actions.',
+        'agents.detail.firstrun': 'Select an agent to start work, inspect capabilities, and open recent activity.',
         'agents.summary.agent_id': 'Agent ID',
         'agents.summary.slug': 'Slug',
         'agents.summary.role': 'Role',
@@ -237,9 +237,9 @@ window.Kit = (() => {
         'agents.summary.version': 'Version',
         'agents.summary.transport': 'Transport',
         'agents.summary.execution': 'Execution',
-        'agents.summary.capacity': 'Capacity',
+        'agents.summary.capacity': 'Workload',
         'agents.summary.last_heartbeat': 'Last heartbeat',
-        'agents.summary.skills': 'Advertised skills',
+        'agents.summary.skills': 'Capabilities',
         'agents.trust_tier.community': 'Community',
         'agents.trust_tier.trusted': 'Trusted',
         'agents.trust_tier.verified': 'Verified',
@@ -249,7 +249,7 @@ window.Kit = (() => {
         'agents.admin.trust_tier.label': 'Trust tier',
         'agents.admin.trust_tier.apply': 'Update tier',
         'agents.admin.trust_tier.saved': 'Trust tier updated.',
-        'agents.admin.capacity.label': 'Capacity (current / max)',
+        'agents.admin.capacity.label': 'Work slots (current / max)',
         'agents.admin.capacity.current': 'Current',
         'agents.admin.capacity.max': 'Max',
         'agents.admin.capacity.apply': 'Apply capacity',
@@ -263,7 +263,7 @@ window.Kit = (() => {
         'agents.admin.disconnect': 'Disconnect',
         'agents.admin.soft_delete': 'Disconnect and soft-delete',
         'agents.admin.soft_delete.confirm': 'Disconnect this agent and mark it soft-deleted? It will stop receiving routed tasks.',
-        'agents.selector.title': 'Selector resolution preview',
+        'agents.selector.title': 'Selector diagnostics',
         'agents.selector.help': 'Paste or type a selector (@agent-slug, @skill:foo, @role:reviewer) to see which agents would resolve.',
         'agents.selector.placeholder': '@skill:pull-request-review',
         'agents.selector.run': 'Resolve',
@@ -274,7 +274,7 @@ window.Kit = (() => {
         'agents.selector.candidate_subtitle_template': '{role} · {slug}',
         'agents.selector.quick_picks': 'Quick picks',
 
-        // Skills / guidance — enough for stub adoption; expanded on migration
+        // Capabilities / guidance - enough for stub adoption; expanded on migration
         'skill.lifecycle.draft': 'Draft',
         'skill.lifecycle.published': 'Published',
         'skill.lifecycle.archived': 'Archived',
@@ -680,9 +680,7 @@ window.Kit = (() => {
                         checkbox.addEventListener('change', () => {
                             const values = Array.from(control.querySelectorAll('input[type="checkbox"]:checked'))
                                 .map((el) => String(el.value || ''));
-                            window.setTimeout(() => {
-                                onCommit(target, field.key, values);
-                            }, 0);
+                            onCommit(target, field.key, values);
                         });
                     }
                     const text = document.createElement('span');
@@ -777,7 +775,7 @@ window.Kit = (() => {
     //            statusChipRenderer, emptyStateRenderer, createAction }
     //
     // Every row carries an explicit lifecycle chip; default filter is "all".
-    // Authored records and template/Gallery entries never mix here.
+    // Authored records and template entries never mix here.
     // Narrow widths render a single-column card stack via CSS.
     // -----------------------------------------------------------------------
     function authoredCatalog({
@@ -1970,6 +1968,9 @@ window.Kit = (() => {
             const sessionDraft = drafts && typeof drafts === 'object' && drafts[routedTaskId]
                 ? drafts[routedTaskId]
                 : {};
+            const sessionArtifactDrafts = sessionDraft && typeof sessionDraft.artifactContents === 'object'
+                ? sessionDraft.artifactContents
+                : {};
             const stageKind = String(session.stage_kind || 'work').trim().toLowerCase() || 'work';
             const decisionOptions = stageKind === 'work'
                 ? [{ value: 'completed', label: 'Completed' }]
@@ -2044,6 +2045,17 @@ window.Kit = (() => {
                 }
             }
 
+            const outputArtifacts = Array.isArray(session.output_artifacts) ? session.output_artifacts : [];
+            const artifactEditors = new Map();
+
+            function collectArtifactDraftMap() {
+                const next = {};
+                artifactEditors.forEach((control, artifactKey) => {
+                    next[String(artifactKey)] = String(control.value || '');
+                });
+                return next;
+            }
+
             const writeDraft = ({ scenarioId = '', preserveScenario = false } = {}) => {
                 if (typeof onDraftChange === 'function') {
                     onDraftChange({
@@ -2054,6 +2066,7 @@ window.Kit = (() => {
                             : 'completed',
                         decisionSummary: String(summaryInput.value || ''),
                         scenarioId: preserveScenario ? String(sessionDraft.scenarioId || '') : String(scenarioId || ''),
+                        artifactContents: collectArtifactDraftMap(),
                     });
                 }
             };
@@ -2067,17 +2080,44 @@ window.Kit = (() => {
                 });
             }
 
-            const outputArtifacts = Array.isArray(session.output_artifacts) ? session.output_artifacts : [];
             if (outputArtifacts.length) {
+                const artifactBlock = document.createElement('div');
+                artifactBlock.className = 'kit-rehearsal-artifact-block';
                 const artifactNote = document.createElement('p');
                 artifactNote.className = 'kit-selector-editor-note';
-                const keys = outputArtifacts
-                    .map((item) => String(item?.artifact_key || '').trim())
-                    .filter(Boolean);
                 artifactNote.textContent = session.require_output_verification
-                    ? `Declared outputs will be simulated from this response for rehearsal: ${keys.join(', ')}.`
-                    : `Declared outputs for rehearsal: ${keys.join(', ')}.`;
-                form.appendChild(artifactNote);
+                    ? 'Provide believable output bodies for the declared files below so rehearsal behaves like a real run.'
+                    : 'Optional rehearsal outputs. Provide file bodies if you want previews and downloads to reflect realistic output.';
+                artifactBlock.appendChild(artifactNote);
+                outputArtifacts.forEach((artifact) => {
+                    const artifactKey = String(artifact?.artifact_key || '').trim();
+                    if (!artifactKey) return;
+                    const artifactEditor = document.createElement('div');
+                    artifactEditor.className = 'kit-stage-workspace-subsection';
+                    const artifactHeading = document.createElement('h5');
+                    artifactHeading.className = 'kit-stage-workspace-subtitle';
+                    artifactHeading.textContent = UI.basenameDisplayPath(String(artifact?.path || '').trim()) || artifactKey;
+                    artifactEditor.appendChild(artifactHeading);
+                    const artifactMeta = document.createElement('p');
+                    artifactMeta.className = 'quiet-note';
+                    artifactMeta.textContent = [
+                        String(artifact?.path || '').trim(),
+                        String(artifact?.artifact_kind || '').trim(),
+                    ].filter(Boolean).join(' · ');
+                    artifactEditor.appendChild(artifactMeta);
+                    const artifactTextarea = document.createElement('textarea');
+                    artifactTextarea.className = 'kit-rehearsal-session-response';
+                    artifactTextarea.rows = 6;
+                    artifactTextarea.placeholder = `Paste the rehearsal output for ${artifactHeading.textContent}…`;
+                    artifactTextarea.value = String(sessionArtifactDrafts[artifactKey] || '');
+                    artifactTextarea.addEventListener('input', () => {
+                        writeDraft({ preserveScenario: true });
+                    });
+                    artifactEditors.set(artifactKey, artifactTextarea);
+                    artifactEditor.appendChild(artifactTextarea);
+                    artifactBlock.appendChild(artifactEditor);
+                });
+                form.appendChild(artifactBlock);
             }
 
             const stageScenarios = [
@@ -2129,6 +2169,21 @@ window.Kit = (() => {
                             ? String(form.__decisionSelect.value || '')
                             : 'completed',
                         decisionSummary: String(summaryInput.value || ''),
+                        artifactContents: outputArtifacts
+                            .map((artifact) => {
+                                const artifactKey = String(artifact?.artifact_key || '').trim();
+                                if (!artifactKey) return null;
+                                const value = artifactEditors.get(artifactKey);
+                                const content = value ? String(value.value || '') : '';
+                                if (!content) return null;
+                                return {
+                                    artifact_key: artifactKey,
+                                    artifact_kind: String(artifact?.artifact_kind || '').trim(),
+                                    path: String(artifact?.path || '').trim(),
+                                    content,
+                                };
+                            })
+                            .filter(Boolean),
                         stageKey: session.stage_key,
                         participantKey: session.participant_key,
                     });
@@ -2325,6 +2380,35 @@ window.Kit = (() => {
         return chip;
     }
 
+    function _agentSkills(agent) {
+        const values = Array.isArray(agent?.routingSkills)
+            ? agent.routingSkills
+            : (Array.isArray(agent?.routing_skills) ? agent.routing_skills : []);
+        return [...new Set(values.map((skill) => String(skill || '').trim()).filter(Boolean))];
+    }
+
+    function _agentCapacity(agent) {
+        const current = Number.isFinite(agent?.currentCapacity)
+            ? Number(agent.currentCapacity)
+            : Number(agent?.current_capacity || 0);
+        const max = Number.isFinite(agent?.maxCapacity)
+            ? Number(agent.maxCapacity)
+            : Number(agent?.max_capacity || 1);
+        return { current, max: Math.max(1, max) };
+    }
+
+    function _agentWorkState(agent) {
+        const presence = String(agent?.presence || agent?.connectivity_state || '').trim();
+        const execution = String(agent?.executionState || agent?.execution_state || '').trim();
+        const faulted = Boolean(agent?.executionFaulted) || execution === 'faulted';
+        const { current, max } = _agentCapacity(agent);
+        if (faulted) return dictValue('agents.presence.faulted', 'Execution faulted');
+        if (presence === 'connected' && current <= 0) return 'Ready for work';
+        if (presence === 'connected') return `${current}/${max} active`;
+        if (presence === 'degraded') return 'Connected, needs attention';
+        return dictValue(`agents.presence.${presence}`, presence || 'Stopped');
+    }
+
     function agentsList({
         agents = [],
         search = '',
@@ -2333,6 +2417,7 @@ window.Kit = (() => {
         onSearch = null,
         onPresenceFilter = null,
         onSelect = null,
+        onStartConversation = null,
         emptyHint = '',
     } = {}) {
         const root = document.createElement('div');
@@ -2378,7 +2463,7 @@ window.Kit = (() => {
             ));
         } else {
             entries.forEach((agent) => {
-                const row = document.createElement('div');
+                const row = document.createElement('article');
                 row.className = 'kit-agents-list-row';
                 if (String(agent.id || '') === String(selectedId || '')) {
                     row.classList.add('is-selected');
@@ -2392,7 +2477,10 @@ window.Kit = (() => {
                 title.className = 'kit-agents-list-row-title';
                 title.textContent = String(agent.displayName || agent.slug || agent.id || '');
                 head.appendChild(title);
-                head.appendChild(_trustTierChip(agent.trustTier));
+                const workState = document.createElement('span');
+                workState.className = 'kit-agent-work-state';
+                workState.textContent = _agentWorkState(agent);
+                head.appendChild(workState);
                 row.appendChild(head);
 
                 const sub = document.createElement('div');
@@ -2401,17 +2489,50 @@ window.Kit = (() => {
                     agent.role || '',
                     agent.provider || '',
                     agent.slug ? `@${agent.slug}` : '',
-                    Number.isFinite(agent.currentCapacity) || Number.isFinite(agent.maxCapacity)
-                        ? `capacity ${Number(agent.currentCapacity || 0)}/${Number(agent.maxCapacity || 1)}`
-                        : '',
                     agent.lastHeartbeat ? UI.relativeTime(agent.lastHeartbeat) : '',
                 ].filter(Boolean);
                 sub.textContent = parts.join(' · ');
                 row.appendChild(sub);
 
-                if (typeof onSelect === 'function') {
-                    row.addEventListener('click', () => onSelect(agent));
+                const skills = _agentSkills(agent);
+                if (skills.length) {
+                    const capabilities = document.createElement('div');
+                    capabilities.className = 'kit-agents-capabilities';
+                    skills.slice(0, 5).forEach((skill) => {
+                        const chip = document.createElement('span');
+                        chip.className = 'quickstart-chip static';
+                        chip.textContent = skill;
+                        capabilities.appendChild(chip);
+                    });
+                    if (skills.length > 5) {
+                        const more = document.createElement('span');
+                        more.className = 'quiet-note';
+                        more.textContent = `+${skills.length - 5} more`;
+                        capabilities.appendChild(more);
+                    }
+                    row.appendChild(capabilities);
                 }
+
+                const actions = document.createElement('div');
+                actions.className = 'kit-agents-list-row-actions';
+                if (typeof onStartConversation === 'function') {
+                    const startBtn = document.createElement('button');
+                    startBtn.type = 'button';
+                    startBtn.className = 'btn btn-sm btn-primary';
+                    startBtn.textContent = agent.executionFaulted ? 'Execution faulted' : 'Start conversation';
+                    startBtn.disabled = Boolean(agent.executionFaulted);
+                    startBtn.addEventListener('click', () => onStartConversation(agent));
+                    actions.appendChild(startBtn);
+                }
+                if (typeof onSelect === 'function') {
+                    const detailsBtn = document.createElement('button');
+                    detailsBtn.type = 'button';
+                    detailsBtn.className = 'btn btn-sm';
+                    detailsBtn.textContent = 'Details';
+                    detailsBtn.addEventListener('click', () => onSelect(agent));
+                    actions.appendChild(detailsBtn);
+                }
+                if (actions.childElementCount) row.appendChild(actions);
                 list.appendChild(row);
             });
         }
@@ -2424,44 +2545,38 @@ window.Kit = (() => {
         root.className = 'kit-agent-summary';
         if (!agent) {
             root.appendChild(UI.renderEmptyState(
-                emptyHint || dictValue('agents.detail.firstrun', 'Select an agent to inspect presence, skills, workload, and admin actions.'),
+                emptyHint || dictValue('agents.detail.firstrun', 'Select an agent to start work, inspect capabilities, and open recent activity.'),
             ));
             return root;
         }
-        const capacity = `${Number(agent.current_capacity || 0)} / ${Number(agent.max_capacity || 1)}`;
+        const { current, max } = _agentCapacity(agent);
+        const capacity = current <= 0 ? 'Ready for work' : `${current} / ${max} active`;
         const metadata = [
-            { label: dictValue('agents.summary.agent_id', 'Agent ID'), value: String(agent.agent_id || '') },
-            { label: dictValue('agents.summary.slug', 'Slug'), value: String(agent.slug || '') },
             { label: dictValue('agents.summary.role', 'Role'), value: String(agent.role || '—') },
             { label: dictValue('agents.summary.provider', 'Provider'), value: String(agent.provider || '—') },
-            { label: dictValue('agents.summary.trust_tier', 'Trust tier'), value: dictValue(`agents.trust_tier.${String(agent.trust_tier || 'community').toLowerCase()}`, String(agent.trust_tier || 'community')) },
-            { label: dictValue('agents.summary.registry_scope', 'Scope'), value: String(agent.registry_scope || 'full') },
-            { label: dictValue('agents.summary.version', 'Version'), value: String(agent.version || '—') },
-            { label: dictValue('agents.summary.transport', 'Transport'), value: String(agent.connectivity_state || 'unknown') },
-            { label: dictValue('agents.summary.execution', 'Execution'), value: String(agent.execution_state || 'healthy') },
             { label: dictValue('agents.summary.capacity', 'Capacity'), value: capacity },
             { label: dictValue('agents.summary.last_heartbeat', 'Last heartbeat'), value: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : 'never' },
         ];
         root.appendChild(UI.renderMetadataGrid(metadata));
 
-        const skills = Array.isArray(agent.routing_skills) ? agent.routing_skills.filter(Boolean) : [];
+        const skills = _agentSkills(agent);
         if (skills.length) {
             const skillsLabel = document.createElement('div');
             skillsLabel.className = 'detail-label';
-            skillsLabel.textContent = dictValue('agents.summary.skills', 'Advertised skills');
+            skillsLabel.textContent = dictValue('agents.summary.skills', 'Capabilities');
             root.appendChild(skillsLabel);
             const chips = document.createElement('div');
             chips.className = 'chip-row';
-            skills.slice(0, 16).forEach((skill) => {
+            skills.slice(0, 8).forEach((skill) => {
                 const chip = document.createElement('span');
                 chip.className = 'quickstart-chip static';
                 chip.textContent = String(skill || '');
                 chips.appendChild(chip);
             });
-            if (skills.length > 16) {
+            if (skills.length > 8) {
                 const more = document.createElement('span');
                 more.className = 'quiet-note';
-                more.textContent = `+${skills.length - 16} more`;
+                more.textContent = `+${skills.length - 8} more`;
                 chips.appendChild(more);
             }
             root.appendChild(chips);

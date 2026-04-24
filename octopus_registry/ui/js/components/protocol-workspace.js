@@ -69,6 +69,17 @@ async function _previewProtocolArtifact(runId, artifact) {
     }
 }
 
+function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
+    const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
+    return UI.createArtifactActionRow({
+        previewable: !missing && _protocolArtifactPreviewable(artifact),
+        onPreview: () => _previewProtocolArtifact(runId, artifact),
+        openHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key),
+        downloadHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }),
+        copyPathText: displayPath,
+    });
+}
+
 function _artifactDefinitionPath(item) {
     return String(item?.path || item?.workspace_path || item?.location || '').trim();
 }
@@ -303,7 +314,6 @@ function renderProtocolWorkspace(container) {
     let collapsibleSectionState = {};
     let stageWorkspacePanelState = {};
     let pendingStageViewportAnchor = null;
-    let pendingAutosaveSelection = null;
 
     function _operatorSurfaceAvailable() {
         return Boolean(authoringManifest?.operator_surface_available);
@@ -1202,11 +1212,11 @@ function renderProtocolWorkspace(container) {
         };
     }
 
-    function _applyServerDetail(detail, { preserveTransient = false, selectionOverride = null } = {}) {
+    function _applyServerDetail(detail, { preserveTransient = false } = {}) {
         const previousProtocolId = String(currentProtocol?.protocol?.protocol_id || '');
         const nextProtocolId = String(detail?.protocol?.protocol_id || '');
         const preserveLocalState = preserveTransient && previousProtocolId && previousProtocolId === nextProtocolId;
-        const previousSelection = selectionOverride || selection;
+        const previousSelection = selection;
         const previousEditorMode = editorMode;
         const previousCanvasViewport = canvasViewport;
         const previousWorkflowMapMode = workflowMapMode;
@@ -1443,7 +1453,6 @@ function renderProtocolWorkspace(container) {
         saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
         _syncLifecycleChip();
         try {
-            const selectionOverride = pendingAutosaveSelection;
             const result = await API.saveProtocolDraft(currentProtocolId, {
                 slug: draft.slug,
                 display_name: draft.display_name,
@@ -1453,15 +1462,13 @@ function renderProtocolWorkspace(container) {
                 ifMatch: draftRevision,
                 authoringSurface: _currentAuthoringSurface(),
             });
-            _applyServerDetail(result, { preserveTransient: true, selectionOverride });
-            pendingAutosaveSelection = null;
+            _applyServerDetail(result, { preserveTransient: true });
             saveState = { state: 'saved', lastSavedAt: result?.protocol?.updated_at || new Date().toISOString(), error: '' };
             _syncLifecycleChip();
             await loadProtocols({ quiet: true });
             render();
             return true;
         } catch (err) {
-            pendingAutosaveSelection = null;
             if (err?.status === 409 && err?.errorCode === 'PROTOCOL_DRAFT_CONFLICT') {
                 draftConflict = {
                     serverDetail: {
@@ -1693,7 +1700,7 @@ function renderProtocolWorkspace(container) {
         await _refreshRehearsalSessions();
     }
 
-    function _updateRehearsalDraft({ routedTaskId, responseText, decision, decisionSummary, scenarioId } = {}) {
+    function _updateRehearsalDraft({ routedTaskId, responseText, decision, decisionSummary, scenarioId, artifactContents = {} } = {}) {
         const taskId = String(routedTaskId || '').trim();
         if (!taskId) return;
         rehearsal.drafts = {
@@ -1703,11 +1710,14 @@ function renderProtocolWorkspace(container) {
                 decision: String(decision || ''),
                 decisionSummary: String(decisionSummary || ''),
                 scenarioId: String(scenarioId || ''),
+                artifactContents: artifactContents && typeof artifactContents === 'object'
+                    ? { ...artifactContents }
+                    : {},
             },
         };
     }
 
-    async function _respondRehearsal({ routedTaskId, responseText, decision, decisionSummary, stageKey, participantKey }) {
+    async function _respondRehearsal({ routedTaskId, responseText, decision, decisionSummary, artifactContents = [], stageKey, participantKey }) {
         if (!rehearsal.runId || !routedTaskId) return;
         try {
             await API.respondRehearsalSession(rehearsal.runId, {
@@ -1715,6 +1725,7 @@ function renderProtocolWorkspace(container) {
                 response_text: String(responseText || ''),
                 decision: String(decision || ''),
                 decision_summary: String(decisionSummary || ''),
+                artifact_contents: Array.isArray(artifactContents) ? artifactContents : [],
                 stage_key: stageKey || '',
                 participant_key: participantKey || '',
             });
@@ -1904,9 +1915,6 @@ function renderProtocolWorkspace(container) {
         }
         items[idx] = next;
         doc[plural] = items;
-        if (kind === 'stage' && ['inputs', 'outputs'].includes(String(key || ''))) {
-            pendingAutosaveSelection = { sectionKey: 'stages', nodeKey: String(nextNodeKey || '') };
-        }
         _commitDocument(doc, {
             nextSelection: { sectionKey: plural, nodeKey: String(nextNodeKey || '') },
         });
@@ -2936,31 +2944,34 @@ function renderProtocolWorkspace(container) {
         if (!selectorValue) return null;
         const matches = _agentsAdvertisingSkill(selectorValue);
         if (compact || (!matches.length && !preferredAgentId)) return null;
-        const section = document.createElement('section');
-        section.className = 'kit-selector-editor-context';
-        section.dataset.key = `selector-skill-match:${String(selectorValue || '').trim().toLowerCase()}`;
-        const title = document.createElement('strong');
-        title.className = 'kit-selector-editor-context-title';
-        title.textContent = 'Available now';
-        title.dataset.key = `${section.dataset.key}:title`;
-        section.appendChild(title);
         const preferredAgent = _selectorAgentRecord(preferredAgentId || '');
         const matchLabels = matches.map((candidate) => String(candidate?.display_name || candidate?.slug || '').trim()).filter(Boolean);
-        const help = document.createElement('p');
-        help.className = 'kit-selector-editor-note';
-        help.dataset.key = `${section.dataset.key}:note`;
+        let help = '';
         if (matchLabels.length) {
-            help.textContent = matchLabels.join(', ');
+            help = `Available now: ${matchLabels.join(', ')}.`;
         } else {
-            help.textContent = readOnly
+            help = readOnly
                 ? 'No connected agents currently advertise this skill.'
                 : 'No connected agents currently advertise this skill yet.';
         }
         if (preferredAgent) {
-            help.textContent += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
+            help += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
         }
-        section.appendChild(help);
-        return section;
+        const preview = Kit.selectorResolutionPreview({
+            selector: `@skill:${String(selectorValue || '').trim()}`,
+            candidates: matches,
+            currentAgentId: String(preferredAgent?.agent_id || preferredAgentId || '').trim(),
+            message: help,
+            title: 'Matching agents',
+            help: 'This preview uses the same selector resolution presentation as the agent tooling.',
+            showForm: false,
+            showSuggestions: false,
+            emptyHint: help,
+            resultTitle: 'Available now',
+        });
+        preview.classList.add('kit-selector-editor-context');
+        preview.dataset.key = `selector-skill-match:${String(selectorValue || '').trim().toLowerCase()}`;
+        return preview;
     }
 
     function _selectorAgentSkillsSection({
@@ -6263,52 +6274,6 @@ function renderProtocolRuns(container) {
                 const producer = stageById.get(String(item.produced_by_stage_execution_id || '')) || null;
                 const producerDef = producer ? stageDefinitionByKey.get(String(producer.stage_key || '')) || {} : {};
                 const definition = artifactDefinitionByKey.get(String(item.artifact_key || '')) || null;
-                const trailing = document.createElement('div');
-                trailing.className = 'list-row-actions';
-
-                if (!missing && item.exists && _protocolArtifactPreviewable(item)) {
-                    const previewBtn = document.createElement('button');
-                    previewBtn.type = 'button';
-                    previewBtn.className = 'btn btn-sm';
-                    previewBtn.textContent = 'Preview';
-                    previewBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        void _previewProtocolArtifact(currentRun.run.protocol_run_id, item);
-                    });
-                    trailing.appendChild(previewBtn);
-                }
-                if (!missing && item.exists) {
-                    const openLink = document.createElement('a');
-                    openLink.href = API.protocolRunArtifactContentUrl(currentRun.run.protocol_run_id, item.artifact_key);
-                    openLink.className = 'btn btn-sm';
-                    openLink.target = '_blank';
-                    openLink.rel = 'noreferrer noopener';
-                    openLink.textContent = 'Open';
-                    trailing.appendChild(openLink);
-
-                    const downloadLink = document.createElement('a');
-                    downloadLink.href = API.protocolRunArtifactContentUrl(currentRun.run.protocol_run_id, item.artifact_key, { download: true });
-                    downloadLink.className = 'btn btn-sm';
-                    downloadLink.textContent = 'Download';
-                    trailing.appendChild(downloadLink);
-                }
-                const copyBtn = document.createElement('button');
-                copyBtn.type = 'button';
-                copyBtn.className = 'btn btn-sm';
-                copyBtn.textContent = 'Copy path';
-                copyBtn.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    try {
-                        await UI.copyText(_protocolArtifactDisplayPath(item) || _artifactDefinitionPath(definition || item), {
-                            successMessage: 'Artifact path copied.',
-                            errorMessage: 'Failed to copy the artifact path.',
-                        });
-                    } catch (err) {
-                        void err;
-                    }
-                });
-                trailing.appendChild(copyBtn);
-
                 const relationship = missing
                     ? 'Declared output not yet recorded'
                     : producer
@@ -6328,7 +6293,12 @@ function renderProtocolRuns(container) {
                     ].filter(Boolean).join(' · '),
                     badgeText: missing ? 'missing' : (item.verification_state || item.state || 'available'),
                     badgeClass: missing ? 'badge-blocked' : 'badge-connected',
-                    trailing,
+                    trailing: _protocolArtifactActionRow(
+                        currentRun.run.protocol_run_id,
+                        item,
+                        definition,
+                        { missing: missing || !item.exists },
+                    ),
                 });
             });
             UI.reconcileChildren(list, nodes.length ? nodes : [UI.renderEmptyState(emptyText, true)]);
@@ -6389,16 +6359,35 @@ function renderProtocolRuns(container) {
             card.appendChild(facts);
 
             if (producedArtifacts.length) {
-                const outputs = document.createElement('div');
-                outputs.className = 'protocol-lineage-note';
-                outputs.textContent = `Outputs: ${producedArtifacts
-                    .map((artifact) => _protocolArtifactDisplayLabel(
-                        artifact,
-                        artifactDefinitionByKey.get(String(artifact.artifact_key || '')) || null,
-                    ))
-                    .filter(Boolean)
-                    .join(', ')}`;
-                card.appendChild(outputs);
+                const outputsLabel = document.createElement('div');
+                outputsLabel.className = 'detail-label';
+                outputsLabel.textContent = 'Outputs';
+                card.appendChild(outputsLabel);
+
+                const outputsList = document.createElement('div');
+                outputsList.className = 'task-artifact-list';
+                const outputNodes = producedArtifacts.map((artifact) => {
+                    const definition = artifactDefinitionByKey.get(String(artifact.artifact_key || '')) || null;
+                    return UI.renderListRow({
+                        label: _protocolArtifactDisplayLabel(artifact, definition),
+                        sublabel: [
+                            'Produced by this stage',
+                            _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact),
+                            String(artifact.artifact_key || '').trim(),
+                            _protocolArtifactLabel(artifact),
+                        ].filter(Boolean).join(' · '),
+                        badgeText: artifact.verification_state || artifact.state || 'available',
+                        badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
+                        trailing: _protocolArtifactActionRow(
+                            currentRun.run.protocol_run_id,
+                            artifact,
+                            definition,
+                            { missing: !artifact.exists },
+                        ),
+                    });
+                });
+                UI.reconcileChildren(outputsList, outputNodes);
+                card.appendChild(outputsList);
             }
 
             const actions = document.createElement('div');
@@ -6412,9 +6401,9 @@ function renderProtocolRuns(container) {
             }
             if (task?.parent_conversation_id) {
                 const openConversation = document.createElement('a');
-                openConversation.href = `/ui/conversations/${encodeURIComponent(task.parent_conversation_id)}`;
+                openConversation.href = UI.conversationHref(task.parent_conversation_id, { operational: true });
                 openConversation.className = 'btn btn-sm';
-                openConversation.textContent = 'Open thread';
+                openConversation.textContent = 'Open activity';
                 actions.appendChild(openConversation);
             }
             if (actions.childElementCount) {
@@ -6520,12 +6509,6 @@ function renderProtocolRuns(container) {
     async function loadRuns() {
         const response = await API.listProtocolRuns({ limit: 50 });
         runs = response.runs || response || [];
-        if (currentRunId && !runs.some((item) => item.protocol_run_id === currentRunId)) {
-            currentRunId = '';
-            currentRun = null;
-            currentIssues = [];
-            lastRunEvent = null;
-        }
         _writeState();
         renderRunsRoute();
     }

@@ -166,7 +166,9 @@ function renderConversationList(container) {
                         const conversation = await API.openConversationForAgent(agent.agent_id, {
                             title: `Conversation with ${agent.display_name || agent.slug || agent.agent_id}`,
                         });
-                        Router.navigate('/ui/conversations/' + conversation.conversation_id);
+                        Router.navigate(UI.conversationHref(conversation.conversation_id, {
+                            conversationType: conversation.conversation_type,
+                        }));
                     } catch (err) {
                         openingConversationFor = '';
                         button.disabled = false;
@@ -257,7 +259,9 @@ function renderConversationList(container) {
             sub.textContent = parts.join(' · ');
 
             const row = UI.renderListRow({
-                href: '/ui/conversations/' + item.conversation_id,
+                href: UI.conversationHref(item.conversation_id, {
+                    conversationType: item.conversation_type,
+                }),
                 label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : targetLabel) || 'Untitled conversation',
                 sublabelNode: sub,
                 badgeText: item.status || 'open',

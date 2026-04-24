@@ -642,16 +642,6 @@ class ProtocolPostgresAdapter:
             """,
             (run_id,),
         )
-        artifact_rows = POSTGRES_STORE_DIALECT.fetchall(
-            conn,
-            f"""
-            SELECT *
-            FROM {SCHEMA}.protocol_artifacts
-            WHERE protocol_run_id = %s
-            ORDER BY created_at DESC, artifact_key ASC
-            """,
-            (run_id,),
-        )
         transition_rows = POSTGRES_STORE_DIALECT.fetchall(
             conn,
             f"""
@@ -686,7 +676,7 @@ class ProtocolPostgresAdapter:
                 dialect=POSTGRES_STORE_DIALECT,
                 routed_task_ids=routed_task_ids,
             ),
-            artifacts=[self._protocol_artifact_from_row(row) for row in artifact_rows],
+            artifacts=self._protocol_artifacts_for_run(conn, run_id),
             transitions=transition_records,
         )
 
@@ -2090,6 +2080,7 @@ class ProtocolPostgresAdapter:
         status: str = "",
         protocol_id: str = "",
         entry_agent_id: str = "",
+        root_conversation_id: str = "",
         origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
         params: list[object] = []
@@ -2103,6 +2094,9 @@ class ProtocolPostgresAdapter:
         if entry_agent_id:
             params.append(entry_agent_id)
             clauses.append("pr.entry_agent_id = %s")
+        if root_conversation_id:
+            params.append(root_conversation_id)
+            clauses.append("pr.root_conversation_id = %s")
         if origin_channel:
             params.append(origin_channel)
             clauses.append("pr.origin_channel = %s")

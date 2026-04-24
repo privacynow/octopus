@@ -379,6 +379,7 @@ def build_protocol_router(
         status: str = Query(default=""),
         protocol_id: str = Query(default=""),
         entry_agent_id: str = Query(default=""),
+        root_conversation_id: str = Query(default=""),
         origin_channel: str = Query(default=""),
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
@@ -390,6 +391,7 @@ def build_protocol_router(
             status=status,
             protocol_id=protocol_id,
             entry_agent_id=entry_agent_id,
+            root_conversation_id=root_conversation_id,
             origin_channel=origin_channel,
         )
         return _json_payload(_paginated_response("runs", runs, cursor, limit))
@@ -655,12 +657,15 @@ def build_protocol_router(
         response_text = str(payload.get("response_text", "") or "")
         decision = str(payload.get("decision", "") or "done")
         decision_summary = str(payload.get("decision_summary", "") or "")
+        raw_artifact_contents = payload.get("artifact_contents", ())
+        artifact_contents = raw_artifact_contents if isinstance(raw_artifact_contents, list) else []
         manager = get_rehearsal_manager()
         accepted = manager.respond(
             routed_task_id=routed_task_id,
             response_text=response_text,
             decision=decision,
             decision_summary=decision_summary,
+            artifact_contents=artifact_contents,
         )
         if not accepted:
             raise _protocol_http_error(

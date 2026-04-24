@@ -1,5 +1,5 @@
 /**
- * Shared skill hub helpers used by the unified Skills page and agent launchers.
+ * Shared capability hub helpers used by the unified skill pipeline and agent launchers.
  */
 const RegistrySkillHub = (() => {
     const SEARCHABLE_LOCAL_FIELDS = ['name', 'display_name', 'description', 'source_kind', 'lifecycle_status'];
@@ -212,7 +212,7 @@ const RegistrySkillHub = (() => {
 window.RegistrySkillHub = RegistrySkillHub;
 
 /**
- * Skills hub — unified bot-scoped skill management.
+ * Capabilities hub - unified bot-scoped skill management.
  */
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
@@ -248,9 +248,9 @@ function renderSkillCatalog(container) {
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
     header.innerHTML = [
-        '<h2>Skills</h2>',
+        '<h2>Capabilities</h2>',
         '<p class="quiet-note">',
-        'Manage a bot’s installed, custom, and store-backed skills here. Skills affect prompt context only when they are active in a conversation or set as defaults for new conversations.',
+        'Manage what each bot can do. Capabilities are installed skills that become active in conversations, protocol stages, and defaults for new conversations.',
         '</p>',
     ].join('');
     container.appendChild(header);
@@ -285,9 +285,9 @@ function renderSkillCatalog(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search installed or store skills';
+    searchInput.placeholder = 'Search capabilities';
     searchInput.type = 'text';
-    searchInput.setAttribute('aria-label', 'Search skills');
+    searchInput.setAttribute('aria-label', 'Search capabilities');
     controls.appendChild(searchInput);
 
     const controlsActions = document.createElement('div');
@@ -295,7 +295,7 @@ function renderSkillCatalog(container) {
     const createDraftBtn = document.createElement('button');
     createDraftBtn.type = 'button';
     createDraftBtn.className = 'btn btn-sm btn-primary';
-    createDraftBtn.textContent = 'New custom skill';
+    createDraftBtn.textContent = 'New capability';
     createDraftBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
     controlsActions.appendChild(createDraftBtn);
     const importBtn = document.createElement('button');
@@ -642,7 +642,7 @@ function renderSkillCatalog(container) {
         _writeState();
     }
 
-    function renderLoadingState(message = 'Loading skills…') {
+    function renderLoadingState(message = 'Loading capabilities…') {
         UI.clearMemoizedRender(listEl);
         UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
     }
@@ -674,8 +674,8 @@ function renderSkillCatalog(container) {
             UI.reconcileChildren(listEl, [
                 UI.renderEmptyState(
                     hasEligibleAgents
-                        ? 'Choose a bot to manage its skills.'
-                        : 'No connected bot advertises skill management.',
+                        ? 'Choose a bot to manage its capabilities.'
+                        : 'No connected bot advertises capability management.',
                     true,
                 ),
             ]);
@@ -690,8 +690,8 @@ function renderSkillCatalog(container) {
         if (!sections.length) {
             UI.clearMemoizedRender(listEl);
             const message = _queryText()
-                ? 'No installed or store skills match this search.'
-                : 'No skills are available on this bot yet. Create a custom skill or import one to get started.';
+                ? 'No installed or store capabilities match this search.'
+                : 'No capabilities are available on this bot yet. Create a custom skill or import one to get started.';
             UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
             renderDetail();
             return;
@@ -1017,9 +1017,9 @@ function renderSkillCatalog(container) {
             help.className = 'editor-panel';
             help.dataset.key = 'store-help';
             help.innerHTML = [
-                '<div class="editor-section-title">How to use this skill</div>',
+                '<div class="editor-section-title">How to use this capability</div>',
                 '<p class="quiet-note">',
-                'Install the skill on this bot first. Then open a conversation and use the conversation Skills panel to activate it in that chat.',
+                'Install this capability on the bot first. Then open a conversation and use the conversation Capabilities panel to activate it in that chat.',
                 '</p>',
             ].join('');
             nodes.push(help);
@@ -1316,8 +1316,8 @@ function renderSkillCatalog(container) {
         copy.className = 'quiet-note';
         const label = agentLabel || _currentAgentLabel();
         copy.textContent = detail.runtime_available
-            ? `This skill is available on ${label}. Open a conversation with that bot and use its Skills panel to activate it there.`
-            : `This skill is available on ${label}, but it must be published before it can be activated in a conversation.`;
+            ? `This capability is available on ${label}. Open a conversation with that bot and use its Capabilities panel to activate it there.`
+            : `This capability is available on ${label}, but it must be published before it can be activated in a conversation.`;
         panel.appendChild(copy);
         if (detail.default_for_new_conversations) {
             const defaultsNote = document.createElement('p');
@@ -1375,20 +1375,20 @@ function renderSkillCatalog(container) {
         intro.dataset.key = 'studio-home';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
-        title.textContent = 'Skills';
+        title.textContent = 'Capabilities';
         intro.appendChild(title);
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = selected && selected.origin === 'store'
-            ? `Install this skill on ${agentLabel}, or pick a custom skill to edit it here.`
-            : `Select a skill for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
+            ? `Install this capability on ${agentLabel}, or pick a custom skill to edit it here.`
+            : `Select a capability for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
         intro.appendChild(note);
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
         const createBtn = document.createElement('button');
         createBtn.type = 'button';
         createBtn.className = 'btn btn-primary';
-        createBtn.textContent = 'New custom skill';
+        createBtn.textContent = 'New capability';
         createBtn.hidden = !RegistrySkillHub.canCreateCustom(_currentAgent());
         createBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
         actions.appendChild(createBtn);
@@ -2322,7 +2322,7 @@ function renderSkillCatalog(container) {
             void loadSelectionData({ soft: true });
         }
         if (!soft && !hasCachedView && (shouldLoadCatalog || queryText.length >= 2)) {
-            renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
+            renderLoadingState(queryText.length >= 2 ? 'Searching capabilities…' : 'Loading capabilities…');
         }
         try {
             if (shouldLoadCatalog) {
@@ -2357,11 +2357,11 @@ function renderSkillCatalog(container) {
             await loadSelectionData({ soft: true });
         } catch (err) {
             if (hasCachedView || hadVisibleState) {
-                UI.reportError('Failed to refresh skills', err, { context: 'Skills refresh failed' });
+                UI.reportError('Failed to refresh capabilities', err, { context: 'Capability refresh failed' });
                 return;
             }
             UI.clearMemoizedRender(listEl);
-            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load skills: ' + err.message, loadSkills)]);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load capabilities: ' + err.message, loadSkills)]);
         }
     }
 

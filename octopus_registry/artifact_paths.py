@@ -40,6 +40,32 @@ def _resolve_artifact_file_path(
     return None
 
 
+def _resolve_artifact_target_path(
+    *,
+    candidate_path: str,
+    candidate_roots: Iterable[str],
+) -> Path | None:
+    normalized_path = str(candidate_path or "").strip()
+    if not normalized_path:
+        return None
+    direct = Path(normalized_path)
+    if direct.is_absolute():
+        parent = direct.parent
+        return direct if parent.is_dir() else None
+    relative_candidate = Path(normalized_path)
+    for root in candidate_roots:
+        root_path = Path(str(root or "").strip())
+        if not root_path.is_absolute():
+            continue
+        try:
+            resolved = (root_path / relative_candidate).resolve()
+            resolved.relative_to(root_path.resolve())
+        except Exception:
+            continue
+        return resolved
+    return None
+
+
 @lru_cache(maxsize=1)
 def _mounted_workspace_roots() -> tuple[str, ...]:
     workspace_parent = Path("/workspace")
@@ -62,6 +88,26 @@ def _artifact_body_from_full_text(full_text: str) -> str:
     return "\n".join(body_lines).strip()
 
 
+def _result_payload_artifact_content(result_payload: object, artifact_key: str) -> str:
+    if not isinstance(result_payload, dict):
+        return ""
+    target_key = str(artifact_key or "").strip()
+    if not target_key:
+        return ""
+    artifact_contents = result_payload.get("artifact_contents", ())
+    if not isinstance(artifact_contents, list):
+        return ""
+    for item in artifact_contents:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("artifact_key", "") or "").strip() != target_key:
+            continue
+        content = str(item.get("content", "") or "")
+        if content:
+            return content
+    return ""
+
+
 def artifact_download_name(*, artifact_key: str, preferred_path: str = "") -> str:
     candidate = str(preferred_path or "").strip()
     if candidate:
@@ -69,6 +115,16 @@ def artifact_download_name(*, artifact_key: str, preferred_path: str = "") -> st
         if name:
             return name
     return str(artifact_key or "").strip() or "artifact"
+
+
+def resolve_workspace_artifact_target(*, workspace_ref: str = "", artifact_path: str = "") -> Path | None:
+    return _resolve_artifact_target_path(
+        candidate_path=artifact_path,
+        candidate_roots=[
+            str(workspace_ref or "").strip(),
+            *_mounted_workspace_roots(),
+        ],
+    )
 
 
 def resolve_protocol_artifact_path(detail: ProtocolRunDetailRecord, artifact: ProtocolArtifactRecord) -> Path | None:
@@ -112,6 +168,9 @@ def resolve_protocol_artifact_rehearsal_text(
         result_payload = task.result.as_dict()
         if not isinstance(result_payload, dict):
             continue
+        content = _result_payload_artifact_content(result_payload, str(artifact.artifact_key or ""))
+        if content:
+            return content
         body = _artifact_body_from_full_text(str(result_payload.get("full_text", "") or ""))
         if body:
             return body
@@ -171,4 +230,7 @@ def resolve_task_artifact_rehearsal_text(
     )
     if not matched:
         return ""
+    content = _result_payload_artifact_content(result_payload, artifact_key)
+    if content:
+        return content
     return _artifact_body_from_full_text(str(result_payload.get("full_text", "") or ""))

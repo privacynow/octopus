@@ -4,6 +4,92 @@
 
 This is the active implementation plan.
 
+## Current Scope Correction: Registry-Wide Desktop UX
+
+The active defect is not isolated to Runs. Runs exposed the clearest failure,
+but the same design problem exists across the Registry: shared list rows,
+detail panels, action groups, metadata grids, split workspaces, and dense
+section stacks were optimized around narrow/mobile containment and then reused
+on desktop without a coherent desktop information hierarchy.
+
+This pass applies to every primary Registry surface:
+
+- Dashboard
+- Conversations and conversation detail
+- Runs and run detail
+- Tasks and task detail
+- Approvals
+- Protocols and protocol authoring
+- Templates
+- Capabilities
+- Agents and agent detail
+- Operations, routing, guidance, usage, and diagnostics
+
+The product rule is:
+
+> Desktop is not just wider mobile. Desktop gets a stable work surface,
+> readable hierarchy, visible primary actions, and container-aware wrapping.
+> Narrow/mobile keeps the progressive single-column model.
+
+### Definition of Done for This Pass
+
+- Every shared row that looks clickable either performs a primary action or no
+  longer advertises clickability through cursor, hover, role, or focus styling.
+- Every concrete artifact reference has the same preview/open/download/copy
+  affordances where the file exists, and a clear unavailable state where it
+  does not.
+- Artifact action groups wrap within their actual panel/container on desktop;
+  they must not depend only on viewport breakpoints.
+- List/detail pages use a desktop workbench pattern that keeps the selected
+  object readable without clipping actions or forcing unrelated concepts into
+  one horizontal row.
+- Dashboard, Runs, Tasks, Conversations, Agents, Capabilities, Protocols, and
+  Approvals all use the same shared density, spacing, action-row, and row
+  affordance contracts.
+- Mobile/narrow behavior remains progressive: one primary object at a time,
+  no horizontal overflow, and no hidden action groups.
+- Visual validation includes real desktop Safari plus narrow viewport checks.
+
+### Desktop UX Contracts
+
+1. **Stable work area**: desktop list/detail pages may use side-by-side layout,
+   but the detail column must be treated as a constrained container. Rows inside
+   it must wrap or stack based on available container space, not the global
+   viewport width.
+2. **Object hierarchy over piles**: runs, tasks, conversations, approvals,
+   participants, and artifacts must be grouped by their relationship to the
+   selected object. A detail panel should tell one story before exposing raw
+   resource lists.
+3. **Visible actions**: primary actions belong in stable header/action regions.
+   Secondary row actions may wrap below metadata, but must remain visible
+   without horizontal scrolling on desktop.
+4. **Artifact consistency**: any artifact reference uses one shared artifact-row
+   contract. Existing files can be previewed/opened/downloaded/copied. Missing
+   declared outputs show missing state and copy-path only.
+5. **Reduced cognitive load**: dense internals such as selector diagnostics,
+   raw capacity, worker internals, routing internals, and raw IDs remain
+   operator/technical details, not the dominant default content.
+6. **No parallel UI path**: implement these rules by extending existing shared
+   primitives and page renderers. Do not add duplicate run/detail/task/artifact
+   components.
+
+### Immediate Implementation Steps
+
+1. Update shared list-row semantics so passive rows are visually passive and
+   actionable rows are explicitly marked.
+2. Extend the existing artifact action helper and list-row integration so
+   artifact rows stack metadata, verification, and actions reliably in
+   constrained desktop panels.
+3. Apply a container-safe layout contract to shared workbench, editor-panel,
+   dashboard-board, metadata-grid, action-row, task-item, lineage, and kit list
+   widgets.
+4. Convert run detail, task detail, dashboard sections, conversations, agents,
+   capabilities, approvals, and protocols to consume those shared contracts
+   instead of page-local one-off spacing.
+5. Add UI contract tests that fail if artifact actions are only mobile-wrapped
+   or passive rows still advertise clickability.
+6. Validate in real Safari at desktop width and in a narrow/mobile viewport.
+
 The Registry UI is no longer blocked by one isolated protocol-editor bug. The
 current failure mode is product-level cognitive overload: internal system
 concepts are exposed as first-class user surfaces, related concepts are split

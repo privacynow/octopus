@@ -818,7 +818,7 @@ select {
 
 .list-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-3);
     width: 100%;
@@ -829,16 +829,21 @@ select {
     color: var(--text);
     text-decoration: none;
     text-align: left;
-    cursor: pointer;
+    cursor: default;
     appearance: none;
+}
+
+.list-row.is-actionable {
+    cursor: pointer;
 }
 
 .list-row:last-child {
     border-bottom: 0;
 }
 
-.list-row:hover,
-.list-row:focus-visible,
+.list-row.is-actionable:hover,
+.list-row.is-actionable:focus-visible,
+.list-row:focus-within,
 .list-row.is-selected,
 .task-item-row:hover,
 .task-item-row:focus-visible,
@@ -921,6 +926,34 @@ select {
 
 .artifact-action-row {
     flex-wrap: wrap;
+}
+
+.list-row-with-artifact-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: start;
+}
+
+.list-row-with-artifact-actions .list-row-main {
+    grid-column: 1 / 2;
+}
+
+.list-row-with-artifact-actions .badge {
+    grid-column: 2 / 3;
+    justify-self: start;
+    max-width: 100%;
+}
+
+.list-row-with-artifact-actions .artifact-action-row {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    width: 100%;
+    padding: var(--space-2) 0 0;
+}
+
+.list-row-with-artifact-actions .list-row-sublabel {
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .list-section-label {
@@ -1327,6 +1360,10 @@ select {
     grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
     gap: var(--space-3);
     align-items: start;
+}
+
+.dashboard-board[data-route="protocol-runs"] {
+    grid-template-columns: minmax(320px, 0.78fr) minmax(560px, 1.22fr);
 }
 
 .dashboard-board-stacked {
@@ -1955,6 +1992,7 @@ select {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-card);
+    min-width: 0;
 }
 
 .task-item + .task-item {
@@ -1964,7 +2002,7 @@ select {
 .task-item-row {
     width: 100%;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-3);
     padding: 0.92rem 1rem;
@@ -1979,6 +2017,7 @@ select {
     display: grid;
     gap: var(--space-1);
     min-width: 0;
+    flex: 1;
 }
 
 .task-item-title {
@@ -1988,6 +2027,7 @@ select {
 .task-item-meta {
     color: var(--text-secondary);
     font-size: var(--text-sm);
+    overflow-wrap: anywhere;
 }
 
 .task-item-preview {
@@ -2061,6 +2101,7 @@ select {
     border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--bg);
+    min-width: 0;
 }
 
 .protocol-lineage-list {
@@ -2076,12 +2117,14 @@ select {
     border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--bg-secondary) 88%, white);
     box-shadow: var(--shadow-card);
+    min-width: 0;
 }
 
 .protocol-lineage-head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: var(--space-3);
 }
 
@@ -2134,6 +2177,7 @@ select {
 .editor-panel {
     display: grid;
     gap: var(--space-3);
+    min-width: 0;
     padding: var(--card-padding);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -2585,11 +2629,12 @@ select {
     }
 
     .list-row-with-artifact-actions {
+        grid-template-columns: minmax(0, 1fr);
         align-items: flex-start;
-        flex-direction: column;
     }
 
     .list-row-with-artifact-actions .artifact-action-row {
+        grid-column: 1 / -1;
         width: 100%;
         padding-right: 0;
         flex-shrink: 1;
@@ -4855,6 +4900,11 @@ select {
 }
 
 .kit-runs-list-row {
+    appearance: none;
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: left;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);

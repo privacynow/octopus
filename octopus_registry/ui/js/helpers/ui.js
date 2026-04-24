@@ -199,14 +199,20 @@ window.UI = (() => {
     function renderListRow({ href, label, sublabel, sublabelNode, badgeText, badgeClass, onClick, trailing, className, signature }) {
         const isLink = !!href;
         const isAction = !href && typeof onClick === 'function';
-        const row = document.createElement(isLink ? 'a' : isAction ? 'button' : 'div');
-        row.className = ['list-row', className || ''].join(' ').trim();
+        const hasTrailing = trailing instanceof Node;
+        const usePressableContainer = isAction && hasTrailing;
+        const row = document.createElement(isLink ? 'a' : isAction && !usePressableContainer ? 'button' : 'div');
+        row.className = [
+            'list-row',
+            isLink || isAction ? 'is-actionable' : 'is-passive',
+            className || '',
+        ].join(' ').trim();
         if (signature) {
             row.dataset.signature = signature;
         }
         if (isLink) {
             row.href = href;
-        } else if (isAction) {
+        } else if (isAction && !usePressableContainer) {
             row.type = 'button';
         }
 
@@ -239,7 +245,7 @@ window.UI = (() => {
             row.appendChild(badge);
         }
 
-        if (trailing instanceof Node) {
+        if (hasTrailing) {
             if (trailing.classList && trailing.classList.contains('artifact-action-row')) {
                 row.classList.add('list-row-with-artifact-actions');
             }
@@ -247,7 +253,19 @@ window.UI = (() => {
         }
 
         if (isAction) {
-            row.addEventListener('click', onClick);
+            const activate = (event) => {
+                const target = event && event.target instanceof Element ? event.target : null;
+                if (target && target !== row) {
+                    const nestedInteractive = target.closest('a, button, input, textarea, select, summary, [role="button"], [data-artifact-preview-url]');
+                    if (nestedInteractive && nestedInteractive !== row) return;
+                }
+                onClick(event);
+            };
+            if (usePressableContainer) {
+                makePressable(row, activate);
+            } else {
+                row.addEventListener('click', activate);
+            }
         }
 
         return row;
@@ -712,6 +730,7 @@ window.UI = (() => {
                 previewBtn.dataset.artifactPreviewTitle = String(previewTitle || 'Artifact preview');
             } else {
                 previewBtn.type = 'button';
+                previewBtn.dataset.artifactPreviewAction = 'true';
                 previewBtn.addEventListener('click', (event) => {
                     stop(event);
                     void onPreview();
@@ -763,6 +782,40 @@ window.UI = (() => {
 
         return actionRow;
     }
+
+    function createArtifactListRow({
+        label,
+        sublabel = '',
+        sublabelParts = [],
+        badgeText = '',
+        badgeClass = '',
+        actionRow = null,
+        className = '',
+        signature = '',
+    } = {}) {
+        const trailing = actionRow instanceof Node ? actionRow : null;
+        const previewTarget = trailing
+            ? trailing.querySelector('[data-artifact-preview-url], [data-artifact-preview-action]')
+            : null;
+        const parts = Array.isArray(sublabelParts)
+            ? sublabelParts
+            : String(sublabelParts || '').trim()
+                ? [sublabelParts]
+                : [];
+        return renderListRow({
+            label,
+            sublabel: sublabel || parts.filter(Boolean).join(' · '),
+            badgeText,
+            badgeClass,
+            trailing,
+            className: ['artifact-list-row', className || ''].join(' ').trim(),
+            signature,
+            onClick: previewTarget
+                ? () => previewTarget.click()
+                : null,
+        });
+    }
+
 
     function _cloneCachedValue(value) {
         if (typeof structuredClone === 'function') {
@@ -1320,6 +1373,7 @@ window.UI = (() => {
         taskArtifactLabel,
         taskArtifactPreviewable,
         createArtifactActionRow,
+        createArtifactListRow,
         readQueryParam,
         updateQueryParams,
         notify,

@@ -144,19 +144,19 @@ function renderTaskList(container) {
 
         return {
             artifactKey: String(artifact?.artifact_key || ''),
-            row: UI.renderListRow({
+            row: UI.createArtifactListRow({
                 label: UI.taskArtifactLabel(artifact, expectedOutput),
-                sublabel: [
+                sublabelParts: [
                     'Produced output',
                     resolvedPath || String(artifact?.path || ''),
                     String(artifact?.artifact_key || '').trim(),
                     Number.isFinite(Number(artifact?.size_bytes || 0)) && Number(artifact?.size_bytes || 0) > 0
                         ? `${Number(artifact.size_bytes || 0).toLocaleString()} bytes`
                         : '',
-                ].filter(Boolean).join(' · '),
+                ],
                 badgeText: artifact.verification_state || (artifact.exists ? 'available' : 'missing'),
                 badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
-                trailing: actionRow,
+                actionRow,
             }),
         };
     }

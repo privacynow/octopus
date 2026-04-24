@@ -85,16 +85,16 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
                 downloadHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true }),
                 copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),
             });
-            return UI.renderListRow({
+            return UI.createArtifactListRow({
                 label: UI.taskArtifactLabel(artifact, expectedOutput),
-                sublabel: [
+                sublabelParts: [
                     'Produced output',
                     resolvedPath || String(artifact?.path || ''),
                     String(artifact?.artifact_key || '').trim(),
-                ].filter(Boolean).join(' · '),
+                ],
                 badgeText: artifact.verification_state || (artifact.exists ? 'available' : 'missing'),
                 badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
-                trailing,
+                actionRow: trailing,
             });
         });
         UI.reconcileChildren(outputsList, outputNodes);

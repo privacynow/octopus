@@ -877,16 +877,40 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     ).read_text(encoding="utf-8")
 
     assert "function createArtifactActionRow({" in helper
+    assert "function createArtifactListRow({" in helper
     assert "function _ensureArtifactPreviewDelegation()" in helper
     assert "document.addEventListener('click', async (event)" in helper
     assert "previewHref = ''" in helper
     assert "const previewUrl = String(previewHref || openHref || '').trim();" in helper
     assert "previewBtn.setAttribute('role', 'button');" in helper
     assert "previewBtn.dataset.artifactPreviewUrl = previewUrl;" in helper
+    assert "className: ['artifact-list-row', className || ''].join(' ').trim()," in helper
+    assert "onClick: previewTarget" in helper
     assert "event.preventDefault();" in helper
     assert "openHref: missing ? '' : API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "UI.createArtifactListRow({" in protocol_workspace
     assert "getTaskArtifactText" not in api_js
     assert "getProtocolRunArtifactText" not in api_js
+
+
+def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_safe() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
+
+    assert "isLink || isAction ? 'is-actionable' : 'is-passive'" in helper
+    assert "const usePressableContainer = isAction && hasTrailing;" in helper
+    assert "target.closest('a, button, input, textarea, select, summary, [role=\"button\"], [data-artifact-preview-url]')" in helper
+    assert "Busy: ${current} of ${max} work slots used" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    assert ".list-row.is-actionable {" in css
+    assert ".list-row-with-artifact-actions {" in css
+    assert "grid-template-columns: minmax(0, 1fr) auto auto;" in css
+    assert ".list-row-with-artifact-actions .artifact-action-row" in css
+    assert ".dashboard-board[data-route=\"protocol-runs\"]" in css
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

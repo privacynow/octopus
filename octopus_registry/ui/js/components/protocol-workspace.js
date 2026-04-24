@@ -6272,17 +6272,17 @@ function renderProtocolRuns(container) {
                 const identifier = definition && String(definition.display_name || '').trim()
                     ? String(item.artifact_key || '').trim()
                     : '';
-                return UI.renderListRow({
+                return UI.createArtifactListRow({
                     label: _protocolArtifactDisplayLabel(item, definition),
-                    sublabel: [
+                    sublabelParts: [
                         relationship,
                         pathLabel,
                         identifier,
                         _protocolArtifactLabel(item),
-                    ].filter(Boolean).join(' · '),
+                    ],
                     badgeText: missing ? 'missing' : (item.verification_state || item.state || 'available'),
                     badgeClass: missing ? 'badge-blocked' : 'badge-connected',
-                    trailing: _protocolArtifactActionRow(
+                    actionRow: _protocolArtifactActionRow(
                         currentRun.run.protocol_run_id,
                         item,
                         definition,
@@ -6357,17 +6357,17 @@ function renderProtocolRuns(container) {
                 outputsList.className = 'task-artifact-list';
                 const outputNodes = producedArtifacts.map((artifact) => {
                     const definition = artifactDefinitionByKey.get(String(artifact.artifact_key || '')) || null;
-                    return UI.renderListRow({
+                    return UI.createArtifactListRow({
                         label: _protocolArtifactDisplayLabel(artifact, definition),
-                        sublabel: [
+                        sublabelParts: [
                             'Produced by this stage',
                             _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact),
                             String(artifact.artifact_key || '').trim(),
                             _protocolArtifactLabel(artifact),
-                        ].filter(Boolean).join(' · '),
+                        ],
                         badgeText: artifact.verification_state || artifact.state || 'available',
                         badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
-                        trailing: _protocolArtifactActionRow(
+                        actionRow: _protocolArtifactActionRow(
                             currentRun.run.protocol_run_id,
                             artifact,
                             definition,

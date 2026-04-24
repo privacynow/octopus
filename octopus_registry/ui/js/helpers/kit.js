@@ -2272,7 +2272,8 @@ window.Kit = (() => {
             ));
         } else {
             entries.forEach((run) => {
-                const row = document.createElement('div');
+                const row = document.createElement('button');
+                row.type = 'button';
                 row.className = 'kit-runs-list-row';
                 if (String(run.id || '') === String(selectedId || '')) {
                     row.classList.add('is-selected');
@@ -2406,7 +2407,10 @@ window.Kit = (() => {
         const { current, max } = _agentCapacity(agent);
         if (faulted) return dictValue('agents.presence.faulted', 'Execution faulted');
         if (presence === 'connected' && current <= 0) return 'Ready for work';
-        if (presence === 'connected') return `${current}/${max} active`;
+        if (presence === 'connected') {
+            if (current >= max) return max === 1 ? 'Busy' : `Busy: ${current} of ${max} work slots used`;
+            return `Busy: ${current} active work slot${current === 1 ? '' : 's'}`;
+        }
         if (presence === 'degraded') return 'Connected, needs attention';
         return dictValue(`agents.presence.${presence}`, presence || 'Stopped');
     }

@@ -806,21 +806,6 @@ Current open findings:
   the Issues tab. Severity: medium-high. Verification method: load
   `/ui/runs?status=running`, expand a stuck run, and confirm the row/status
   calls out the stuck lease condition before opening Issues.
-- Tasks / real Safari: task rows allowed multiple inline details to remain open
-  at once, unlike Runs, Conversations, and protocol stages. Expected behavior:
-  one expanded task detail at a time, clicking a different task collapses the
-  prior task, and clicking the active task collapses it. Severity: medium.
-  Fix owner: current implementation pass. Verification method: automated
-  Playwright work-surface spec and real Safari `/ui/tasks` click-through.
-- Tasks / real Safari: a completed implementation task for run
-  `186e8080c07342e2943dd0fbf821c740` did not surface produced implementation
-  artifacts inline, while the corresponding run Outputs section did expose
-  artifact actions. Expected behavior: every task, conversation, dashboard, and
-  run reference to a concrete generated artifact uses the same preview/open/
-  download/copy contract. Severity: high. Fix owner: artifact lineage pass.
-  Verification method: create or reuse a protocol run with produced artifacts,
-  open the linked task from `/ui/tasks` and from the conversation task view,
-  and confirm artifact actions are present where bytes exist.
 - Conversations / real Safari: linked runs inside conversation previews and
   full conversation headers are still navigation links/chips only. They can
   route users to Runs, but they cannot be inspected progressively from the
@@ -842,6 +827,12 @@ Current open findings:
   claim the 500+ screenshot breadth gate until the harness records and indexes
   that many distinct Safari screenshots. Severity: process. Verification
   method: screenshot manifest with count, route, viewport, action, and result.
+- Deployment / real environment: M3 still fails to stay up after redeploy while
+  Registry, M1, and M2 are healthy. Expected behavior: either M3 is configured
+  and usable, or scenarios and UI copy clearly treat it as unavailable so users
+  do not route work to a dead agent. Severity: medium. Verification method:
+  redeploy from `/Users/tinker/octopus`, check container health, then validate
+  `/ui/agents` reports the same usable agent set.
 
 Resolved or verified in the latest implementation passes:
 
@@ -857,6 +848,12 @@ Resolved or verified in the latest implementation passes:
   conversation at a time, and click-to-collapse for the active row.
 - Conversations / real Safari: the full conversation page uses top-level tabs
   rather than rendering all subsections simultaneously.
+- Tasks / real Safari: tasks now use the same single inline expansion contract
+  as Runs, Conversations, and protocol stages; clicking a different task
+  collapses the previous detail and clicking the active task collapses it.
+- Tasks / real Safari: the implementation task for run
+  `186e8080c07342e2943dd0fbf821c740` exposes produced output artifacts inline
+  with Preview/Open/Download/Copy path actions after redeploy and reload.
 - Protocol stages / real Safari: stage rows expand inline, Done collapses the
   editor, Assignment hides Advanced/custom runtime internals, Files & outputs
   stays on the selected stage, and the workflow map remains interactive on

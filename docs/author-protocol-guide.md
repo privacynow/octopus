@@ -8,10 +8,10 @@ registry.
 A protocol definition contains:
 
 - metadata: `slug`, `display_name`, `description`
-- participants: reusable worker/reviewer identities with optional selectors and
-  required skills
+- participants: reusable role identities with shared instructions
 - artifacts: named workflow outputs or inputs
-- stages: ordered work, review, or acceptance steps
+- stages: ordered work, review, or acceptance steps with owner roles and
+  runtime assignment rules
 - policies: shared lifecycle rules such as single active writer and max review
   rounds
 
@@ -29,16 +29,18 @@ V1 stage kinds are:
 `review` and `acceptance` stages require explicit decisions from their declared
 transition map.
 
-## Participants And Resolution
+## Roles And Resolution
 
 Each stage references one `participant_key`.
 
 Resolution order is:
 
-1. explicit `participant.selector`, if present
-2. otherwise the first `required_skills` entry as a skill selector with the
-   run entry agent as preferred target
-3. otherwise the run entry agent directly
+1. explicit `stage.selector`
+2. runtime may prefer the run entry agent for `skill` selectors when the
+   authored selector does not already pin a `preferred_agent_id`
+
+Legacy `participants[].selector` and `required_skills` are migration inputs
+only during canonicalization. They are not canonical authored fields anymore.
 
 Ambiguity is an error. Multiple matches without a preferred agent do not fall
 through to “pick one.” Fix the selector or the registry data instead.
@@ -94,14 +96,15 @@ time through the shared lease path.
 Recommended authoring flow:
 
 1. create or import a draft in `Protocols`
-2. edit as JSON or YAML
-3. validate
-4. diff against the last published version
-5. publish
-6. archive when retiring the definition
+2. add the first step and create its owner role inline if needed
+3. configure assignment on the step itself
+4. connect routes, artifacts, and review flow
+5. validate
+6. publish
+7. archive when retiring the definition
 
-The registry UI and API share the same document parser, validator, export, and
-diff logic. Do not author a separate browser-only or script-only format.
+The registry UI and API share the same document parser and validator logic. Do
+not author a separate browser-only or script-only format.
 
 ## JSON/YAML Contract
 
@@ -119,5 +122,5 @@ Use it when you want:
 - implementation and review
 - acceptance
 
-Clone it into a draft, then specialize participants, artifacts, instructions,
+Clone it into a draft, then specialize roles, step assignments, artifacts, instructions,
 and review policies rather than inventing a parallel lifecycle.

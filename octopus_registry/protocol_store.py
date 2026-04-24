@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from pathlib import Path
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from typing import Literal
 from octopus_sdk.protocols import (
     PROTOCOL_ARTIFACT_KIND_OPTIONS,
     PROTOCOL_AUTHORING_SECTION_OPTIONS,
+    PROTOCOL_AUTHORING_SURFACE_OPTIONS,
     PROTOCOL_DEFAULT_OPERATOR_REF,
     PROTOCOL_DEFAULT_RETENTION_DAYS,
     PROTOCOL_DEFAULT_RUN_ORG_ID,
@@ -72,8 +74,27 @@ from .store_base import RoutingSkillDisabledError
 from .store_shared.common import json_ready, record
 from .store_shared.agents import agent_exists as shared_agent_exists
 from .store_shared.conversations import create_conversation as shared_create_conversation
+from .store_shared.tasks import tasks_for_routed_ids
 
 log = logging.getLogger(__name__)
+
+
+def _participant_assignment_projection(
+    document: ProtocolDefinitionDocumentRecord,
+    participant_key: str,
+) -> tuple[TargetSelector | None, list[str]]:
+    selectors = []
+    for stage in document.stages:
+        if str(stage.participant_key or "").strip() == str(participant_key or "").strip():
+            if stage.selector is not None:
+                selectors.append(stage.selector.model_dump(mode="json"))
+    if not selectors:
+        return None, []
+    first = selectors[0]
+    if any(item != first for item in selectors[1:]):
+        return None, []
+    selector = TargetSelector.model_validate(first)
+    return selector, normalized_requested_skills(selector=selector)
 
 
 class ProtocolPostgresAdapter:
@@ -115,6 +136,68 @@ class ProtocolPostgresAdapter:
             if access is not None and access.has_role(role):
                 return role
         return "service"
+
+    @classmethod
+    def _access_can_edit_protocol_internals(cls, access: ProtocolAccessContextRecord | None) -> bool:
+        return any(cls._access_has_role(access, role) for role in ("publisher", "admin"))
+
+    @classmethod
+    def _normalize_authoring_surface(
+        cls,
+        value: object,
+        *,
+        access: ProtocolAccessContextRecord | None,
+    ) -> str:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return "operator" if cls._access_can_edit_protocol_internals(access) else "standard"
+        if normalized not in PROTOCOL_AUTHORING_SURFACE_OPTIONS:
+            return "standard"
+        if normalized == "operator" and not cls._access_can_edit_protocol_internals(access):
+            raise PermissionError("Operator authoring surface requires protocol-internal edit access.")
+        return normalized
+
+    @classmethod
+    def _validate_standard_surface_document(
+        cls,
+        definition: Mapping[str, object],
+        *,
+        existing_definition: Mapping[str, object] | None = None,
+    ) -> str | None:
+        existing_stage_map = {
+            str(item.get("stage_key", "") or ""): item
+            for item in (existing_definition or {}).get("stages", [])
+            if isinstance(item, Mapping) and str(item.get("stage_key", "") or "").strip()
+        }
+        for raw_stage in definition.get("stages", []) or []:
+            if not isinstance(raw_stage, Mapping):
+                continue
+            stage_key = str(raw_stage.get("stage_key", "") or "").strip()
+            existing_stage = existing_stage_map.get(stage_key, {})
+            selector = raw_stage.get("selector")
+            selector_kind = str(selector.get("kind", "") or "").strip().lower() if isinstance(selector, Mapping) else ""
+            existing_selector = existing_stage.get("selector")
+            existing_selector_kind = (
+                str(existing_selector.get("kind", "") or "").strip().lower()
+                if isinstance(existing_selector, Mapping)
+                else ""
+            )
+            if selector_kind and selector_kind not in {"agent", "skill"}:
+                if not existing_stage or selector != existing_selector:
+                    return (
+                        f"Standard authoring cannot set runtime selector kind {selector_kind!r} "
+                        f"for stage {stage_key or 'step'}."
+                    )
+            elif existing_selector_kind and existing_selector_kind not in {"agent", "skill"} and selector != existing_selector:
+                return f"Standard authoring cannot modify the operator-managed assignment on stage {stage_key or 'step'}."
+            for field_name in ("max_rounds", "timeout_seconds"):
+                incoming = int(raw_stage.get(field_name, 0) or 0)
+                existing = int(existing_stage.get(field_name, 0) or 0) if isinstance(existing_stage, Mapping) else 0
+                if incoming != existing:
+                    if not existing_stage and incoming == 0:
+                        continue
+                    return f"Standard authoring cannot edit {field_name} on stage {stage_key or 'step'}."
+        return None
 
     @staticmethod
     def _protocol_record_from_row(row: Mapping[str, object]) -> ProtocolDefinitionRecord:
@@ -587,12 +670,22 @@ class ProtocolPostgresAdapter:
             transitions=transition_records,
             document=document,
         )
+        routed_task_ids = [
+            str(row.get("routed_task_id", "") or "").strip()
+            for row in stage_rows
+            if str(row.get("routed_task_id", "") or "").strip()
+        ]
         return ProtocolRunDetailRecord(
             run=self._protocol_run_from_row(run_row),
             definition=self._protocol_record_from_row(definition_row),
             version=self._protocol_version_from_row(version_row),
             participants=[self._protocol_run_participant_from_row(row) for row in participant_rows],
             stage_executions=[self._protocol_stage_execution_from_row(row) for row in stage_rows],
+            tasks=tasks_for_routed_ids(
+                conn,
+                dialect=POSTGRES_STORE_DIALECT,
+                routed_task_ids=routed_task_ids,
+            ),
             artifacts=[self._protocol_artifact_from_row(row) for row in artifact_rows],
             transitions=transition_records,
         )
@@ -915,8 +1008,24 @@ class ProtocolPostgresAdapter:
         current_artifacts = {
             item.artifact_key: item for item in self._protocol_artifacts_for_run(conn, str(run_row["protocol_run_id"] or ""))
         }
+        working_dir = ""
+        routed_task_id = str(stage_execution_row.get("routed_task_id", "") or "").strip()
+        if routed_task_id:
+            task_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT result_json FROM {SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            result_json = task_row.get("result_json") if isinstance(task_row, Mapping) else {}
+            if isinstance(result_json, dict):
+                working_dir = str(result_json.get("working_dir", "") or "").strip()
         for observation in observations:
             previous = current_artifacts.get(observation.artifact_key)
+            location = str(observation.path or "").strip()
+            if working_dir and location:
+                candidate = Path(location)
+                if not candidate.is_absolute():
+                    location = str((Path(working_dir) / candidate).resolve())
             with cur(conn) as db_cur:
                 db_cur.execute(
                     f"""
@@ -932,7 +1041,7 @@ class ProtocolPostgresAdapter:
                         run_row["protocol_run_id"],
                         observation.artifact_key,
                         observation.artifact_kind,
-                        observation.path,
+                        location,
                         observation.path,
                         observation.content_hash,
                         int(observation.size_bytes or 0),
@@ -1056,7 +1165,7 @@ class ProtocolPostgresAdapter:
         lease_expires_at = str(engine.lease_expires_at or "")
         with cur(conn) as db_cur:
             if str(engine.participant_key or "").strip():
-                participant_selector_snapshot = engine.participant_selector_snapshot.as_dict()
+                selector_snapshot = engine.selector_snapshot.as_dict()
                 db_cur.execute(
                     f"""
                     UPDATE {SCHEMA}.protocol_run_participants
@@ -1080,8 +1189,8 @@ class ProtocolPostgresAdapter:
                         str(engine.participant_resolution_outcome or ""),
                         str(engine.participant_resolution_reason or ""),
                         str(engine.participant_resolution_reason or ""),
-                        jsonb(participant_selector_snapshot),
-                        jsonb(participant_selector_snapshot),
+                        jsonb(selector_snapshot),
+                        jsonb(selector_snapshot),
                         now,
                         run_row["protocol_run_id"],
                         str(engine.participant_key or ""),
@@ -1399,6 +1508,8 @@ class ProtocolPostgresAdapter:
             stage_kind_options=list(PROTOCOL_STAGE_KIND_OPTIONS),
             artifact_kind_options=list(PROTOCOL_ARTIFACT_KIND_OPTIONS),
             selector_kind_options=list(PROTOCOL_SELECTOR_KIND_OPTIONS),
+            default_surface="standard",
+            operator_surface_available=self._access_can_edit_protocol_internals(access),
         )
 
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
@@ -1548,10 +1659,15 @@ class ProtocolPostgresAdapter:
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
+        authoring_surface: str = "",
         expected_revision: int | None = None,
     ) -> ProtocolMutationRecord:
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
+        try:
+            normalized_surface = self._normalize_authoring_surface(authoring_surface, access=access)
+        except PermissionError as exc:
+            return ProtocolMutationRecord(ok=False, status="forbidden", message=str(exc))
         protocol_key = str(protocol_id or uuid.uuid4().hex).strip()
         raw_definition = draft_protocol_document_data(definition_json.as_dict())
         now = utcnow_iso()
@@ -1597,6 +1713,13 @@ class ProtocolPostgresAdapter:
                 description=description,
             )
             raw_definition = draft_protocol_document_data(raw_definition)
+            if normalized_surface == "standard":
+                restriction = self._validate_standard_surface_document(
+                    raw_definition,
+                    existing_definition=(existing_row.get("draft_definition_json") or {}) if existing_row is not None else None,
+                )
+                if restriction:
+                    return ProtocolMutationRecord(ok=False, status="forbidden", message=restriction)
             validation = validate_protocol_document(raw_definition, mode="draft")
             strict_document = self._strict_protocol_document(raw_definition)
             raw_hash = protocol_definition_content_hash(strict_document) if strict_document is not None else hashlib.sha256(
@@ -2323,6 +2446,7 @@ class ProtocolPostgresAdapter:
                 if run_row is None:
                     raise RuntimeError("Failed to create protocol run")
                 for participant in document.participants:
+                    participant_selector, required_skills = _participant_assignment_projection(document, participant.participant_key)
                     db_cur.execute(
                         f"""
                         INSERT INTO {SCHEMA}.protocol_run_participants (
@@ -2338,10 +2462,10 @@ class ProtocolPostgresAdapter:
                             run_id,
                             participant.participant_key,
                             participant.display_name or participant.participant_key,
-                            jsonb(normalized_requested_skills(selector=participant.selector)),
-                            jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),
+                            jsonb(required_skills),
+                            jsonb(participant_selector.model_dump(mode="json") if participant_selector is not None else {}),
                             protocol_participant_session_key(run_id, participant.participant_key),
-                            jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),
+                            jsonb({}),
                             now,
                             now,
                         ),
@@ -2449,6 +2573,7 @@ class ProtocolPostgresAdapter:
                 definition_document=canonical_protocol_document(detail.version.definition_json),
                 participants=detail.participants,
                 stage_executions=detail.stage_executions,
+                tasks=detail.tasks,
                 artifacts=detail.artifacts,
                 transitions=detail.transitions,
             )
@@ -2604,6 +2729,8 @@ class ProtocolPostgresAdapter:
                 "stage_key": row.get("stage_key", ""),
                 "participant_key": row.get("participant_key", ""),
                 "display_name": row.get("display_name", ""),
+                "decision": row.get("decision", ""),
+                "decision_summary": row.get("decision_summary", ""),
                 "response_text": row.get("response_text", ""),
                 "run_org_id": row.get("run_org_id", PROTOCOL_DEFAULT_RUN_ORG_ID),
                 "created_by": row.get("created_by", ""),
@@ -2653,6 +2780,8 @@ class ProtocolPostgresAdapter:
         if not protocol_id:
             raise ValueError("protocol_id is required to create a scenario.")
         display_name = str(candidate.display_name or "").strip() or "Untitled scenario"
+        decision = str(candidate.decision or "").strip().lower()
+        decision_summary = str(candidate.decision_summary or "").strip()
         response_text = str(candidate.response_text or "")
         now = utcnow_iso()
         scenario_id = uuid.uuid4().hex
@@ -2664,9 +2793,9 @@ class ProtocolPostgresAdapter:
                     f"""
                     INSERT INTO {SCHEMA}.protocol_scenarios (
                         protocol_scenario_id, protocol_id, stage_key, participant_key,
-                        display_name, response_text, run_org_id, created_by,
+                        display_name, decision, decision_summary, response_text, run_org_id, created_by,
                         created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
@@ -2675,6 +2804,8 @@ class ProtocolPostgresAdapter:
                         str(candidate.stage_key or "").strip(),
                         str(candidate.participant_key or "").strip(),
                         display_name,
+                        decision,
+                        decision_summary,
                         response_text,
                         org_id,
                         actor_ref,

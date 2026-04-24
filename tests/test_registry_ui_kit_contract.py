@@ -171,21 +171,15 @@ def test_main_css_carries_kit_primitive_classes() -> None:
         ".kit-workflow-canvas",
         ".kit-workflow-viewbar",
         ".kit-workflow-viewbar-title",
-        ".kit-workflow-overview",
-        ".kit-workflow-overview-card",
-        ".kit-workflow-overview-label",
+        ".kit-workflow-shell-scene",
+        ".kit-workflow-outline",
+        ".kit-workflow-outline-item",
+        ".kit-workflow-outline-child",
         ".kit-workflow-controls",
         ".kit-workflow-viewport",
-        ".kit-workflow-frame",
-        ".kit-workflow-graph",
-        ".kit-workflow-guide-layer",
-        ".kit-workflow-lane-guide",
-        ".kit-workflow-lane-guide-label",
-        ".kit-workflow-lane-guide-sublabel",
-        ".kit-workflow-node",
-        ".kit-workflow-node-wrap",
-        ".kit-workflow-node-segment",
-        ".kit-workflow-edge-label",
+        ".kit-workflow-canvas-column",
+        ".kit-workflow-viewport-cy",
+        ".kit-workflow-cy-host",
         ".kit-workflow-accessory",
         ".kit-rehearsal-panel",
         ".kit-rehearsal-session",
@@ -212,7 +206,9 @@ def test_main_css_carries_kit_primitive_classes() -> None:
     assert "@media (max-width: 720px)" in css
     assert ".kit-lifecycle-header-top" in css
     assert "position: absolute;" in css
-    assert ".kit-workflow-view-topology .kit-workflow-node" in css
+    assert ".kit-workflow-shell-scene" in css
+    assert ".kit-workflow-outline" in css
+    assert ".kit-workflow-cy-host" in css
     assert ".kit-workflow-view-full" not in css
     assert ".kit-workflow-view-focus" not in css
     assert ".kit-workflow-compact" not in css

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import mimetypes
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
 from pydantic import ValidationError
 
 from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
+    ProtocolArtifactRecord,
     ProtocolDraftCreateRecord,
     ProtocolRunCreateRecord,
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
 
+from .artifact_paths import artifact_download_name, resolve_protocol_artifact_path, resolve_protocol_artifact_rehearsal_text
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .rehearsal import RehearsalSessionManager
@@ -253,6 +257,7 @@ def build_protocol_router(
     @router.post("/v1/protocols")
     async def resource_create_protocol(
         request: Request,
+        authoring_surface: str | None = Header(default=None, alias="X-Protocol-Authoring-Surface"),
         auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
@@ -266,6 +271,7 @@ def build_protocol_router(
             display_name=str(payload.get("display_name", "") or ""),
             description=str(payload.get("description", "") or ""),
             definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
+            authoring_surface=str(authoring_surface or ""),
         )
         if not result.ok:
             raise _protocol_result_http_error(result)
@@ -307,6 +313,7 @@ def build_protocol_router(
         protocol_id: str,
         request: Request,
         if_match: str | None = Header(default=None, alias="If-Match"),
+        authoring_surface: str | None = Header(default=None, alias="X-Protocol-Authoring-Surface"),
         auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
@@ -321,6 +328,7 @@ def build_protocol_router(
             display_name=str(payload.get("display_name", "") or ""),
             description=str(payload.get("description", "") or ""),
             definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
+            authoring_surface=str(authoring_surface or ""),
             expected_revision=expected_revision,
         )
         if not result.ok:
@@ -487,6 +495,58 @@ def build_protocol_router(
         except KeyError as exc:
             raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
         return _json_payload({"artifacts": artifacts})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content")
+    def resource_get_protocol_run_artifact_content(
+        run_id: str,
+        artifact_key: str,
+        download: bool = Query(default=False),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> Response:
+        try:
+            detail = store.get_protocol_run(run_id, access=protocol_access(auth))
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        artifact = next(
+            (item for item in detail.artifacts if str(item.artifact_key or "").strip() == str(artifact_key or "").strip()),
+            None,
+        )
+        if artifact is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_NOT_FOUND", message="Protocol artifact not found.")
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        preferred_name = artifact_download_name(
+            artifact_key=str(artifact.artifact_key or ""),
+            preferred_path=str(artifact.workspace_path or artifact.location or ""),
+        )
+        media_type = mimetypes.guess_type(preferred_name)[0] or "application/octet-stream"
+        if resolved_path is None:
+            content_text = resolve_protocol_artifact_rehearsal_text(detail, artifact)
+            if content_text:
+                disposition = "attachment" if download else "inline"
+                return Response(
+                    content=content_text.encode("utf-8"),
+                    media_type=media_type,
+                    headers={"Content-Disposition": f'{disposition}; filename="{preferred_name}"'},
+                )
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_PATH_UNAVAILABLE",
+                message="Artifact path is not available on this host.",
+                details={
+                    "artifact_key": artifact.artifact_key,
+                    "workspace_path": artifact.workspace_path,
+                    "location": artifact.location,
+                },
+            )
+        return FileResponse(
+            path=resolved_path,
+            media_type=media_type,
+            filename=preferred_name or resolved_path.name,
+            content_disposition_type="attachment" if download else "inline",
+        )
 
     @router.get("/v1/protocol-runs/{run_id}/timeline")
     def resource_get_protocol_run_timeline(

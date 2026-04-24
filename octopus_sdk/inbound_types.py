@@ -88,6 +88,8 @@ class InboundMessage:
     context_text: str = ""
     constraints_text: str = ""
     requested_skills: tuple[str, ...] = ()
+    protocol_stage_contract: dict[str, JsonValue] = field(default_factory=dict)
+    working_dir_hint: str = ""
     authority_ref: str = ""
     authorized_actor_key: str = ""
     skip_approval: bool = False
@@ -218,6 +220,8 @@ def serialize_inbound(
                 "context_text": event.context_text,
                 "constraints_text": event.constraints_text,
                 "requested_skills": list(event.requested_skills),
+                "protocol_stage_contract": event.protocol_stage_contract,
+                "working_dir_hint": event.working_dir_hint,
                 "authority_ref": event.authority_ref,
                 "authorized_actor_key": event.authorized_actor_key,
                 "skip_approval": event.skip_approval,
@@ -332,6 +336,8 @@ def deserialize_inbound(
             context_text=str(data.get("context_text", "") or ""),
             constraints_text=str(data.get("constraints_text", "") or ""),
             requested_skills=tuple(str(item).strip() for item in (data.get("requested_skills", []) or []) if str(item).strip()),
+            protocol_stage_contract=dict(data.get("protocol_stage_contract", {}) or {}),
+            working_dir_hint=str(data.get("working_dir_hint", "") or ""),
             authority_ref=authority_ref,
             authorized_actor_key=str(data.get("authorized_actor_key", "") or ""),
             skip_approval=bool(data.get("skip_approval", False)),

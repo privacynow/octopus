@@ -530,6 +530,25 @@ window.UI = (() => {
         }
     }
 
+    function joinDisplayPath(root, relativeOrAbsolute) {
+        const value = String(relativeOrAbsolute || '').trim();
+        if (!value) return '';
+        if (value.startsWith('/')) return value;
+        const prefix = String(root || '').trim().replace(/\/+$/, '');
+        return prefix ? `${prefix}/${value}` : value;
+    }
+
+    function basenameDisplayPath(path) {
+        const value = String(path || '').trim().replace(/\/+$/, '');
+        if (!value) return '';
+        const segments = value.split('/');
+        return String(segments[segments.length - 1] || '').trim();
+    }
+
+    function isPreviewableFilePath(path) {
+        return /\.(md|markdown|txt|log|json|jsonl|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(String(path || '').trim());
+    }
+
     function _cloneCachedValue(value) {
         if (typeof structuredClone === 'function') {
             try {
@@ -662,6 +681,15 @@ window.UI = (() => {
             });
         }
 
+        function applyValue(nextValue, target = null) {
+            const normalizedValue = String(nextValue ?? '');
+            setActive(normalizedValue);
+            if (typeof onChange === 'function') {
+                const match = (options || []).find((option) => String(option.value ?? '') === normalizedValue) || null;
+                onChange(normalizedValue, match, target);
+            }
+        }
+
         (options || []).forEach((option, index) => {
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -675,22 +703,17 @@ window.UI = (() => {
             if (option.title) btn.title = option.title;
             group.appendChild(btn);
             buttons.set(String(option.value ?? ''), btn);
-            btn.addEventListener('click', () => {
-                const nextValue = String(option.value ?? '');
-                setActive(nextValue);
-                if (typeof onChange === 'function') {
-                    onChange(nextValue, option, btn);
-                }
-            });
+        });
+        group.addEventListener('click', (event) => {
+            const target = event.target instanceof Element
+                ? event.target.closest('.segmented-control-btn')
+                : null;
+            if (!(target instanceof HTMLButtonElement) || !group.contains(target)) return;
+            applyValue(target.dataset.value || '', target);
         });
 
         bindSegmentedControlKeyboard(group, (target) => {
-            const nextValue = String(target.dataset.value || '');
-            setActive(nextValue);
-            if (typeof onChange === 'function') {
-                const match = (options || []).find((option) => String(option.value ?? '') === nextValue) || null;
-                onChange(nextValue, match, target);
-            }
+            applyValue(target.dataset.value || '', target);
         });
         setActive(value);
 
@@ -908,6 +931,27 @@ window.UI = (() => {
         });
     }
 
+    async function copyText(text, {
+        successMessage = 'Copied to clipboard.',
+        errorMessage = 'Copy failed.',
+    } = {}) {
+        const value = String(text || '');
+        if (!value) {
+            throw new Error('Nothing to copy.');
+        }
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+            throw new Error('Clipboard access unavailable.');
+        }
+        try {
+            await navigator.clipboard.writeText(value);
+            if (successMessage) notify(successMessage, 'success');
+            return true;
+        } catch (err) {
+            if (errorMessage) reportError(errorMessage, err, { context: 'Clipboard write failed' });
+            throw err;
+        }
+    }
+
     function filterProtocolRunAgents(agents) {
         return filterManagedAgents(agents);
     }
@@ -929,16 +973,8 @@ window.UI = (() => {
         return typeof document !== 'undefined' && Boolean(document.hidden);
     }
 
-    function reconcileChildren(container, nextNodes) {
-        const target = container.cloneNode(false);
-        Array.from(nextNodes || []).forEach((node) => {
-            target.appendChild(node);
-        });
-        if (typeof morphdom !== 'function') {
-            container.replaceChildren(...Array.from(target.childNodes));
-            return;
-        }
-        morphdom(container, target, {
+    function _morphOptions() {
+        return {
             childrenOnly: true,
             getNodeKey(node) {
                 if (!(node instanceof Element)) return undefined;
@@ -957,7 +993,28 @@ window.UI = (() => {
                 }
                 return true;
             },
+        };
+    }
+
+    function reconcileElement(container, nextNode) {
+        if (!(container instanceof Element) || !(nextNode instanceof Element)) return;
+        if (typeof morphdom !== 'function') {
+            container.replaceWith(nextNode);
+            return;
+        }
+        morphdom(container, nextNode, _morphOptions());
+    }
+
+    function reconcileChildren(container, nextNodes) {
+        const target = container.cloneNode(false);
+        Array.from(nextNodes || []).forEach((node) => {
+            target.appendChild(node);
         });
+        if (typeof morphdom !== 'function') {
+            container.replaceChildren(...Array.from(target.childNodes));
+            return;
+        }
+        morphdom(container, target, _morphOptions());
     }
 
     function bindSegmentedControlKeyboard(group, onActivate) {
@@ -1035,6 +1092,9 @@ window.UI = (() => {
         formatTime,
         formatApprovalTime,
         safeFilename,
+        joinDisplayPath,
+        basenameDisplayPath,
+        isPreviewableFilePath,
         readQueryParam,
         updateQueryParams,
         notify,
@@ -1067,11 +1127,13 @@ window.UI = (() => {
         buildConversationTypeBadge,
         isBackgrounded,
         reconcileChildren,
+        reconcileElement,
         bindSegmentedControlKeyboard,
         createErrorCard,
         renderError,
         showDialog,
         showConfirm,
         showTextDialog,
+        copyText,
     };
 })();

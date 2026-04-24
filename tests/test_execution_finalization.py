@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -148,6 +149,132 @@ async def test_finalization_reports_routed_task_result() -> None:
     assert payload.completion_tokens == 8
     assert payload.cost_usd == 0.19
     assert payload.provider == "claude"
+
+
+@pytest.mark.asyncio
+async def test_finalization_uses_execution_working_dir_for_protocol_artifacts(tmp_path: Path) -> None:
+    reported: list[object] = []
+    artifact_path = tmp_path / "source-data.csv"
+    artifact_path.write_text("department,region,amount\nsales,west,10\n", encoding="utf-8")
+
+    class FakeRequest:
+        def as_dict(self):
+            return {
+                "internal_context": {
+                    "protocol_stage_contract": {
+                        "protocol_run_id": "run-1",
+                        "protocol_stage_execution_id": "stage-exec-1",
+                        "participant_key": "data-loader",
+                        "stage_key": "load-data",
+                        "stage_kind": "work",
+                        "output_artifacts": [
+                            {
+                                "artifact_key": "artifact_1",
+                                "artifact_kind": "workspace_file",
+                                "path": "source-data.csv",
+                                "verify": True,
+                            }
+                        ],
+                    }
+                }
+            }
+
+    class FakeInspection:
+        async def get_task(self, authority_ref, routed_task_id):
+            del authority_ref, routed_task_id
+            return type("TaskDetail", (), {"request": FakeRequest()})()
+
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            del routed_task_id, authority_ref
+            reported.append(result)
+            return TaskResultReport(status="reported", routed_task_id="task-artifacts")
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(
+            status="completed",
+            reply_text="done",
+            working_dir=str(tmp_path),
+        ),
+        context=FinalizationContext(
+            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            item_id="item-artifacts",
+            conversation_key="registry:conv-artifacts",
+            runtime_chat="registry:conv-artifacts",
+            conversation_ref="registry:conv-artifacts",
+            routed_task_id="task-artifacts",
+            authority_ref=registry_authority_ref("default"),
+            task_routing=FakeTaskRouting(),
+            registry_inspection=FakeInspection(),
+            working_dir_resolver=lambda _chat: "",
+        ),
+    )
+
+    assert result.routed_result_status == "reported"
+    assert len(reported) == 1
+    payload = reported[0]
+    assert payload.working_dir == str(tmp_path)
+    assert len(payload.artifacts) == 1
+    assert payload.artifacts[0]["artifact_key"] == "artifact_1"
+    assert payload.artifacts[0]["path"] == "source-data.csv"
+    assert payload.artifacts[0]["exists"] is True
+    assert payload.artifacts[0]["verification_state"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_finalization_uses_event_contract_and_working_dir_hint_without_registry_inspection(tmp_path: Path) -> None:
+    reported: list[object] = []
+    artifact_path = tmp_path / "source-data.csv"
+    artifact_path.write_text("department,region,amount\nsales,west,10\n", encoding="utf-8")
+
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            del routed_task_id, authority_ref
+            reported.append(result)
+            return TaskResultReport(status="reported", routed_task_id="task-artifacts")
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(
+            status="completed",
+            reply_text="done",
+        ),
+        context=FinalizationContext(
+            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": "", "working_dir": tmp_path})(),
+            item_id="item-artifacts-local",
+            conversation_key="registry:conv-artifacts-local",
+            runtime_chat="registry:conv-artifacts-local",
+            conversation_ref="registry:conv-artifacts-local",
+            routed_task_id="task-artifacts-local",
+            authority_ref=registry_authority_ref("default"),
+            task_routing=FakeTaskRouting(),
+            protocol_stage_contract={
+                "protocol_run_id": "run-1",
+                "protocol_stage_execution_id": "stage-exec-1",
+                "participant_key": "data-loader",
+                "stage_key": "load-data",
+                "stage_kind": "work",
+                "output_artifacts": [
+                    {
+                        "artifact_key": "artifact_1",
+                        "artifact_kind": "workspace_file",
+                        "path": "source-data.csv",
+                        "verify": True,
+                    }
+                ],
+            },
+            working_dir_hint=str(tmp_path),
+            registry_inspection=None,
+            working_dir_resolver=lambda _chat: "",
+        ),
+    )
+
+    assert result.routed_result_status == "reported"
+    assert len(reported) == 1
+    payload = reported[0]
+    assert payload.working_dir == str(tmp_path)
+    assert len(payload.artifacts) == 1
+    assert payload.artifacts[0]["artifact_key"] == "artifact_1"
+    assert payload.artifacts[0]["exists"] is True
 
 
 @pytest.mark.asyncio

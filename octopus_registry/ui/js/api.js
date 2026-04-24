@@ -41,7 +41,7 @@ const API = (() => {
         }
     }
 
-    async function request(method, path, { body, params, raw, headers } = {}) {
+    async function request(method, path, { body, params, raw, headers, timeoutMs } = {}) {
         const url = new URL(path, window.location.origin);
         if (params) {
             for (const [k, v] of Object.entries(params)) {
@@ -52,7 +52,7 @@ const API = (() => {
             method,
             headers: { 'Content-Type': 'application/json', ...(headers || {}) },
             credentials: 'same-origin',
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+            signal: AbortSignal.timeout(Number.isFinite(timeoutMs) ? timeoutMs : REQUEST_TIMEOUT),
         };
         if (body !== undefined) opts.body = JSON.stringify(body);
         if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
@@ -136,6 +136,14 @@ const API = (() => {
             throw new Error('Agent selection required');
         }
         return `/v1/agents/${encodeURIComponent(value)}`;
+    }
+
+    function _protocolArtifactContentPath(runId, artifactKey) {
+        return `/v1/protocol-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactKey)}/content`;
+    }
+
+    function _taskArtifactContentPath(taskId, artifactKey) {
+        return `/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifactKey)}/content`;
     }
 
     return {
@@ -230,6 +238,15 @@ const API = (() => {
             request('GET', '/v1/tasks', { params: opts }),
         getTask: (id) =>
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
+        getTaskArtifactText: (taskId, artifactKey) =>
+            request('GET', _taskArtifactContentPath(taskId, artifactKey), { raw: true }),
+        taskArtifactContentUrl: (taskId, artifactKey, opts = {}) => {
+            const url = new URL(_taskArtifactContentPath(taskId, artifactKey), window.location.origin);
+            if (opts.download) {
+                url.searchParams.set('download', '1');
+            }
+            return url.toString();
+        },
 
         // Protocols
         listProtocols: (opts = {}) =>
@@ -248,14 +265,20 @@ const API = (() => {
             request('POST', '/v1/protocols/parse', { body }),
         createProtocolDraft: (body = {}) =>
             request('POST', '/v1/protocol-drafts', { body }),
-        createProtocol: (body = {}) =>
-            request('POST', '/v1/protocols', { body }),
+        createProtocol: (body = {}, opts = {}) =>
+            request('POST', '/v1/protocols', {
+                body,
+                headers: opts.authoringSurface ? { 'X-Protocol-Authoring-Surface': String(opts.authoringSurface) } : undefined,
+            }),
         deleteProtocol: (id) =>
             request('DELETE', `/v1/protocols/${encodeURIComponent(id)}`),
         saveProtocolDraft: (id, body = {}, opts = {}) =>
             request('PUT', `/v1/protocols/${encodeURIComponent(id)}/draft`, {
                 body,
-                headers: Number.isFinite(opts.ifMatch) ? { 'If-Match': String(opts.ifMatch) } : undefined,
+                headers: {
+                    ...(Number.isFinite(opts.ifMatch) ? { 'If-Match': String(opts.ifMatch) } : {}),
+                    ...(opts.authoringSurface ? { 'X-Protocol-Authoring-Surface': String(opts.authoringSurface) } : {}),
+                },
             }),
         validateProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
@@ -282,6 +305,15 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
         getProtocolRunArtifacts: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts`),
+        getProtocolRunArtifactText: (id, artifactKey) =>
+            request('GET', _protocolArtifactContentPath(id, artifactKey), { raw: true }),
+        protocolRunArtifactContentUrl: (id, artifactKey, opts = {}) => {
+            const url = new URL(_protocolArtifactContentPath(id, artifactKey), window.location.origin);
+            if (opts.download) {
+                url.searchParams.set('download', '1');
+            }
+            return url.toString();
+        },
         getProtocolRunTimeline: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/timeline`),
         exportProtocolRun: (id) =>
@@ -337,7 +369,10 @@ const API = (() => {
         rejectSkillDraft: (agentId, name, body = {}) =>
             request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/reject`, { body }),
         publishSkillDraft: (agentId, name, body = {}) =>
-            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/publish`, { body }),
+            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/publish`, {
+                body,
+                timeoutMs: 90000,
+            }),
         archiveSkillDraft: (agentId, name, body = {}) =>
             request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/archive`, { body }),
         installSkill: (agentId, name) =>

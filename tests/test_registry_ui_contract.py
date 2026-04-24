@@ -135,8 +135,12 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Kit.detailsPanel(" in workspace
     assert "Kit.validationSurface(" in workspace
     assert "Kit.rehearsalPanel(" in workspace
-    assert "Kit.selectorResolutionPreview(" in workspace
-    assert "API.listAgents({ state: 'connected', limit: 24 })" in workspace
+    assert "API.listAgents({ limit: 100 })" in workspace
+    assert "API.listRoutingSkills()" in workspace
+    assert "_agentsAdvertisingSkill(" in workspace
+    assert "_selectorAgentSkillsSection(" in workspace
+    assert "Available skills" in workspace
+    assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
     assert "API.listRehearsalSessions(" in workspace
@@ -146,7 +150,6 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
 
     # Authoring API the kit surface drives
     assert "API.getProtocolAuthoringManifest()" in workspace
-    assert "API.previewSelectorResolution(" in workspace
     assert "API.createProtocolDraft(" in workspace
     assert "created?.run?.protocol_run_id" in workspace
     assert "API.saveProtocolDraft(" in workspace
@@ -157,16 +160,12 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "ifMatch: draftRevision" in workspace
     assert "PROTOCOL_DRAFT_CONFLICT" in workspace
     assert "state: 'conflict'" in workspace
+    assert "API.previewSelectorResolution(" not in workspace
     assert "_reloadServerDraftConflict" in workspace
     assert "_overwriteServerDraftConflict" in workspace
     assert "let editorMode = { kind: 'idle'" in workspace
-    assert "_startParticipantInsert(" in workspace
-    assert "_confirmParticipantInsert(" in workspace
     assert "_startStageInsert(" in workspace
     assert "_confirmStageInsert(" in workspace
-    assert "_startConnectMode(" in workspace
-    assert "_cancelTransitionConnect(" in workspace
-    assert "_commitConnectField(" in workspace
     assert "_rewriteKeyReferences(" in workspace
     assert "inputs: (stage.inputs || []).map" in workspace
     assert "outputs: (stage.outputs || []).map" in workspace
@@ -175,34 +174,52 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_isAuthoringAssignableAgent(" in workspace
     assert "_authoringAssignableAgents(" in workspace
     assert "_selectorCatalogEntries(" in workspace
+    assert "_documentSelectorValues(" in workspace
+    assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
     assert "_selectorEditor(" in workspace
-    assert "showForm: false" in workspace
-    assert "showSuggestions: false" in workspace
-    assert "let workflowView = { kind: 'detail', segmentId: '', scope: 'focus' }" in workspace
-    assert "let workflowViewport = { topology: 'fit' }" in workspace
-    assert "_workflowViewportValue(" in workspace
-    assert "TOPOLOGY_MOBILE_MEDIA_QUERY" in workspace
-    assert "_isSmallScreenTopologyViewport()" in workspace
-    assert "_topologyScopeActions(" in workspace
-    assert "_topologyScopedGraph(" in workspace
+    assert "_currentAuthoringSurface()" in workspace
+    assert "operator_surface_available" in workspace
+    assert "_normalizeStageWriteCapability(" in workspace
+    assert "write_capable: Boolean(stage?.write_capable || outputs.length)" in workspace
+    assert "Available now" in workspace
+    assert "Preferred agent:" in workspace
+    assert "quickstart-chip" in workspace
+    assert "pins the step to" in workspace
+    assert "Required skill" in workspace
+    assert "Pin matching agent (optional)" in workspace
+    assert "Specific agent" in workspace
+    assert "Show workflow map" in workspace
+    assert "Hide workflow map" in workspace
+    assert "workflow_map" in workspace
+    assert "let canvasViewport = { zoom: 'fit' }" in workspace
+    assert "_selectionFromQuery(" in workspace
+    assert "_selectionQueryState(" in workspace
     assert "_buildWorkflowProjection(" in workspace
-    assert "_normalizeWorkflowView(" in workspace
-    assert "_setDetailSegment(" in workspace
-    assert "_detailSurfaceEl(" in workspace
-    assert "_surfaceCanvasEl(" in workspace
+    assert "_workflowStoryScene(" in workspace
+    assert "_focusedWorkflowScene(" in workspace
+    assert "_workflowMapEl(" in workspace
+    assert "_progressiveWorkflowEl(" in workspace
+    assert "_segmentPanelEl(" in workspace
     assert "_participantEditorShell(" in workspace
     assert "_routeEditorPanel(" in workspace
-    assert "_stageEditorHero(" in workspace
     assert "_stageRoutingPanel(" in workspace
     assert "window.addEventListener('resize', onResize);" in workspace
-    assert "Assignment rule" in workspace
-    assert "Runtime role tag" in workspace
-    assert "Workflow overview" in workspace
-    assert "Topology" in workspace
+    assert "_startParticipantInsert(" not in workspace
+    assert "_confirmParticipantInsert(" not in workspace
+    assert "'Create new role…'" in workspace
+    assert "Assignment" in workspace
+    assert "Workflow stages" in workspace
+    assert "Edit participant assignment" not in workspace
+    assert "+ Add participant" not in workspace
     assert "Visual map" not in workspace
     assert "Workflow phases" not in workspace
     assert "Planner role" not in workspace
     assert "Reviewer role" not in workspace
+    assert "_startConnectMode(" not in workspace
+    assert "_cancelTransitionConnect(" not in workspace
+    assert "_commitConnectField(" not in workspace
+    assert "'Topology'" not in workspace
+    assert "'Workflow overview'" not in workspace
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
@@ -276,13 +293,13 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "renderIssuesSurface" not in workspace
     assert "renderLauncherStrip" not in workspace
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
-    assert "UI.subscribeWithRefresh(cleanups, 'agents'" not in workspace
     assert "UI.readQueryParam('protocol_view'" not in workspace
     assert "protocol_view:" in workspace  # kept in _writeState to clear legacy URLs
     assert "API.getProtocolTemplate('software-engineering')" not in workspace
     assert "loadDefaultTemplate" not in workspace
 
     # Protocol authoring lifecycle subscription is retained
+    assert "UI.subscribeWithRefresh(cleanups, 'agents'" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'protocols'" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
 
@@ -310,16 +327,14 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".kit-lifecycle-header" in css
     assert ".kit-authoring-workspace" in css
     assert ".kit-workflow-canvas" in css
-    assert ".kit-workflow-graph" in css
-    assert ".kit-workflow-overview" in css
-    assert ".kit-workflow-overview-card" in css
-    assert ".kit-workflow-overview-label" in css
+    assert ".kit-workflow-shell-scene" in css
+    assert ".kit-workflow-outline" in css
+    assert ".kit-workflow-cy-host" in css
+    assert ".kit-workflow-outline-item" in css
+    assert ".kit-workflow-outline-child" in css
     assert ".kit-workflow-controls" in css
-    assert ".kit-workflow-lane-guide-label" in css
-    assert ".kit-workflow-lane-guide-sublabel" in css
-    assert ".kit-workflow-node" in css
-    assert ".kit-workflow-node-wrap {" in css
-    assert "position: absolute;" in css
+    assert ".kit-workflow-viewport-cy" in css
+    assert ".kit-protocol-segment-panel" in css
     assert ".kit-details-panel" in css
     assert ".kit-validation" in css
     assert ".kit-authored-catalog" in css

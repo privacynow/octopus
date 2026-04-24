@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from pathlib import Path
 import string
 import time
 import uuid
@@ -13,6 +14,8 @@ from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
     ProtocolAccessContextRecord,
     ProtocolDraftCreateRecord,
+    ProtocolRunRecord,
+    ProtocolStageExecutionRecord,
     ProtocolStageDefinitionRecord,
     TargetSelector,
     canonical_protocol_document,
@@ -22,8 +25,9 @@ from octopus_sdk.protocols import (
     validate_protocol_document,
 )
 from octopus_sdk.protocols.builtins import builtin_protocol_document
+from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
-from octopus_registry.protocol_runtime import runtime_protocol_selector
+from octopus_registry.protocol_runtime import evaluate_protocol_dispatch, runtime_protocol_selector
 from octopus_registry.postgres import get_connection
 from octopus_registry.store_postgres import RegistryPostgresStore
 from psycopg.types.json import Jsonb
@@ -60,6 +64,7 @@ def _generated_linear_protocol(seed: int) -> dict[str, object]:
             {
                 "stage_key": stage_key,
                 "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "planning"},
                 "stage_kind": "work",
                 "write_capable": True,
                 "strict_completion": bool(rng.getrandbits(1)),
@@ -78,7 +83,7 @@ def _generated_linear_protocol(seed: int) -> dict[str, object]:
             "display_name": f"Generated {seed}",
             "description": "Generated protocol for validator coverage.",
         },
-        "participants": [{"participant_key": "worker", "display_name": "Worker", "selector": {"kind": "skill", "value": "planning"}}],
+        "participants": [{"participant_key": "worker", "display_name": "Worker"}],
         "artifacts": artifacts,
         "stages": stages,
         "policies": {
@@ -122,27 +127,52 @@ def test_validate_protocol_document_accepts_minimal_protocol() -> None:
 
 def test_canonical_protocol_document_synthesizes_selector_from_legacy_required_skill() -> None:
     legacy = protocol_document()
-    legacy["participants"][0].pop("selector", None)
+    legacy["stages"][0].pop("selector", None)
     legacy["participants"][0]["required_skills"] = ["planning"]
 
     document = canonical_protocol_document(legacy)
 
-    participant = document.participant("worker")
-    assert participant.selector is not None
-    assert participant.selector.kind == "skill"
-    assert participant.selector.value == "planning"
+    stage = document.stage("planning")
+    assert stage.selector is not None
+    assert stage.selector.kind == "skill"
+    assert stage.selector.value == "planning"
     assert "required_skills" not in document.model_dump(mode="json")["participants"][0]
+    assert "selector" not in document.model_dump(mode="json")["participants"][0]
 
 
-def test_validate_protocol_document_requires_assignment_rule_for_participants() -> None:
+def test_canonical_protocol_document_marks_output_stage_write_capable_when_unspecified() -> None:
+    source = protocol_document()
+    source["stages"][0].pop("write_capable", None)
+    source["stages"][0]["outputs"] = ["plan"]
+
+    document = canonical_protocol_document(source)
+
+    assert document.stage("planning").write_capable is True
+
+
+def test_canonical_protocol_document_migrates_participant_selector_to_stage_selector() -> None:
+    legacy = protocol_document()
+    legacy["stages"][0].pop("selector", None)
+    legacy["participants"][0]["selector"] = {"kind": "skill", "value": "planning"}
+
+    document = canonical_protocol_document(legacy)
+
+    stage = document.stage("planning")
+    assert stage.selector is not None
+    assert stage.selector.kind == "skill"
+    assert stage.selector.value == "planning"
+    assert "selector" not in document.model_dump(mode="json")["participants"][0]
+
+
+def test_validate_protocol_document_requires_assignment_rule_for_stages() -> None:
     invalid = protocol_document()
-    invalid["participants"][0].pop("selector", None)
+    invalid["stages"][0].pop("selector", None)
 
     result = validate_protocol_document(invalid)
 
     assert result.ok is False
     assert result.issues
-    assert any(item.code == "participant.selector_required" for item in result.issues)
+    assert any(item.code == "stage.selector_required" for item in result.issues)
 
 
 def test_validate_protocol_document_warns_when_legacy_required_skills_has_multiple_values() -> None:
@@ -161,8 +191,10 @@ def test_builtin_protocol_templates_use_selector_backed_assignment() -> None:
         document = builtin_protocol_document(slug)
         assert document.participants
         for participant in document.participants:
-            assert participant.selector is not None, f"{slug} participant {participant.participant_key} must declare a selector"
+            assert "selector" not in participant.model_dump(mode="json")
             assert "required_skills" not in participant.model_dump(mode="json")
+        for stage in document.stages:
+            assert stage.selector is not None, f"{slug} stage {stage.stage_key} must declare a selector"
 
 
 def test_runtime_protocol_selector_prefers_entry_agent_for_skill_selectors() -> None:
@@ -174,6 +206,41 @@ def test_runtime_protocol_selector_prefers_entry_agent_for_skill_selectors() -> 
     assert selector.kind == "skill"
     assert selector.value == "planning"
     assert selector.preferred_agent_id == "agent-1"
+
+
+def test_runtime_dispatch_reports_missing_stage_selector_as_stage_error() -> None:
+    document = canonical_protocol_document({
+        **protocol_document(),
+        "stages": [
+            {**stage, "selector": None} if stage["stage_key"] == "planning" else stage
+            for stage in protocol_document()["stages"]
+        ],
+    })
+
+    decision = evaluate_protocol_dispatch(
+        protocol_engine=ProtocolRunEngine(),
+        document=document,
+        run=ProtocolRunRecord(
+            protocol_run_id="run-1",
+            created_at="2026-04-19T00:00:00+00:00",
+            current_stage_execution_id="planning-exec",
+        ),
+        stage_execution=ProtocolStageExecutionRecord(
+            protocol_stage_execution_id="planning-exec",
+            protocol_run_id="run-1",
+            stage_key="planning",
+            participant_key="worker",
+            status="queued",
+        ),
+        stage_executions=[],
+        artifacts=[],
+        previous_feedback="",
+        now="2026-04-19T00:00:00+00:00",
+        resolve_selector=lambda selector: {"agent_id": "agent-1", "authority_ref": "registry:local"},
+    )
+
+    assert decision.run_status == "blocked"
+    assert decision.failure_code == "stage_selector_required"
 
 
 def test_parse_protocol_stage_decision_requires_explicit_review_decision() -> None:
@@ -396,6 +463,27 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert detail.run.status == "completed"
     assert detail.run.termination_summary == "Accepted."
+
+
+def test_registry_store_run_participants_project_stage_owned_selectors(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, created, _detail = running_protocol_run(store)
+
+    participants = store.get_protocol_run_participants(created.run.protocol_run_id, access=operator_access())
+    by_key = {item.participant_key: item for item in participants}
+
+    assert by_key["worker"].target_selector.as_dict() == {
+        "kind": "skill",
+        "value": "planning",
+        "preferred_agent_id": "",
+    }
+    assert by_key["worker"].required_skills == ["planning"]
+    assert by_key["reviewer"].target_selector.as_dict() == {
+        "kind": "skill",
+        "value": "review",
+        "preferred_agent_id": "",
+    }
+    assert by_key["reviewer"].required_skills == ["review"]
 
 
 def test_registry_store_duplicate_routed_task_result_is_idempotent(postgres_registry_truncated: str) -> None:
@@ -874,8 +962,87 @@ def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres
     assert any(item.slug == "software-engineering" for item in manifest.templates)
     assert any(item.slug == "document-approval" for item in manifest.templates)
     assert "design" in manifest.sections
-    assert "advanced" in manifest.sections
+    assert "advanced" not in manifest.sections
     assert "review" in manifest.stage_kind_options
+    assert manifest.default_surface == "standard"
+    assert manifest.operator_surface_available is True
+
+
+def test_registry_store_standard_surface_rejects_new_operator_only_selector(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    author_access = ProtocolAccessContextRecord(
+        actor_ref="author-session",
+        org_id="local",
+        roles=["author"],
+    )
+    document = protocol_document()
+    document["stages"][0]["selector"] = {"kind": "role", "value": "platform-review"}
+
+    saved = store.save_protocol_draft(
+        access=author_access,
+        protocol_id="",
+        slug="standard-surface-rejects-role-selector",
+        display_name="Standard Surface Rejects Role Selector",
+        description="Reject advanced selector kinds on the standard surface.",
+        definition_json=RegistryJsonRecord.model_validate(document),
+        authoring_surface="standard",
+    )
+
+    assert saved.ok is False
+    assert saved.status == "forbidden"
+    assert "runtime selector kind" in (saved.message or "")
+
+
+def test_registry_store_standard_surface_preserves_existing_operator_only_fields_when_unchanged(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    base = protocol_document()
+    base["stages"][0]["selector"] = {"kind": "role", "value": "platform-review"}
+    base["stages"][0]["timeout_seconds"] = 300
+
+    created = store.save_protocol_draft(
+        access=operator_access(),
+        protocol_id="",
+        slug="operator-managed-selector",
+        display_name="Operator Managed Selector",
+        description="Created through the operator surface.",
+        definition_json=RegistryJsonRecord.model_validate(base),
+        authoring_surface="operator",
+    )
+    assert created.ok is True
+    assert created.protocol is not None
+
+    author_access = ProtocolAccessContextRecord(
+        actor_ref="author-session",
+        org_id="local",
+        roles=["author"],
+    )
+    updated = {
+        **base,
+        "metadata": {
+            **base["metadata"],
+            "description": "Normal authors can still edit surrounding protocol metadata.",
+        },
+    }
+    saved = store.save_protocol_draft(
+        access=author_access,
+        protocol_id=created.protocol.protocol_id,
+        slug="operator-managed-selector",
+        display_name="Operator Managed Selector",
+        description="Normal authors can still edit surrounding protocol metadata.",
+        definition_json=RegistryJsonRecord.model_validate(updated),
+        authoring_surface="standard",
+        expected_revision=created.protocol.draft_revision,
+    )
+
+    assert saved.ok is True
+    assert saved.protocol is not None
+    assert saved.protocol.draft_revision > created.protocol.draft_revision
+    assert saved.draft_definition_json["stages"][0]["selector"]["kind"] == "role"
+    assert saved.draft_definition_json["stages"][0]["timeout_seconds"] == 300
 
 
 def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_starter(postgres_registry_truncated: str) -> None:
@@ -1369,3 +1536,67 @@ def test_recipient_conversation_event_carries_protocol_stage_navigation_context(
     assert isinstance(context, dict)
     assert context.get("protocol_run_id") == created.run.protocol_run_id
     assert context.get("stage_key") == "planning"
+
+
+def test_protocol_run_detail_and_task_payloads_include_lineage_and_artifact_location(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+    working_dir = "/tmp/protocol-run-artifacts"
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "lineage-1",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "working_dir": working_dir,
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "abc123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    task = store.get_task(first_stage.routed_task_id)
+    assert task.protocol_run_id == created.run.protocol_run_id
+    assert task.protocol_stage_execution_id == first_stage.protocol_stage_execution_id
+    assert task.protocol_definition_version_id == created.run.protocol_definition_version_id
+    assert task.stage_key == "planning"
+    assert task.participant_key == "worker"
+    assert task.working_dir == working_dir
+    assert task.artifact_count == 1
+    assert task.request is not None
+    assert task.result is not None
+
+    listed = next(
+        item for item in store.list_tasks(protocol_run_id=created.run.protocol_run_id)
+        if item.routed_task_id == first_stage.routed_task_id
+    )
+    assert listed.protocol_run_id == created.run.protocol_run_id
+    assert listed.stage_key == "planning"
+    assert listed.participant_key == "worker"
+    assert listed.working_dir == working_dir
+    assert listed.artifact_count == 1
+    assert listed.request is not None
+    assert listed.result is not None
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert refreshed.tasks, "Run detail should include linked routed tasks for operational lineage"
+    linked = next(item for item in refreshed.tasks if item.routed_task_id == first_stage.routed_task_id)
+    assert linked.stage_key == "planning"
+    artifact = next(item for item in refreshed.artifacts if item.artifact_key == "plan")
+    assert artifact.workspace_path == "protocol/plan.md"
+    assert Path(artifact.location).resolve() == (Path(working_dir) / "protocol/plan.md").resolve()

@@ -1221,6 +1221,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
+        authoring_surface: str = "",
         expected_revision: int | None = None,
     ) -> ProtocolMutationRecord:
         return self._protocol_store.save_protocol_draft(
@@ -1230,6 +1231,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             display_name=display_name,
             description=description,
             definition_json=definition_json,
+            authoring_surface=authoring_surface,
             expected_revision=expected_revision,
         )
 
@@ -1427,6 +1429,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         for_agent_id: str | None = None,
         parent_conversation_id: str = "",
+        protocol_run_id: str = "",
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
@@ -1438,6 +1441,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 dialect=_POSTGRES_STORE_DIALECT,
                 for_agent_id=for_agent_id,
                 parent_conversation_id=parent_conversation_id,
+                protocol_run_id=protocol_run_id,
                 cursor=cursor,
                 limit=limit,
                 status=status,

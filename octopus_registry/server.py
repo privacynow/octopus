@@ -6,11 +6,12 @@ import asyncio
 from contextlib import asynccontextmanager
 import hmac
 import logging
+import mimetypes
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
 from starlette.websockets import WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from .auth import (
     AuthContext,
@@ -30,6 +31,12 @@ from .auth import (
     ui_password_matches,
     ui_session_is_valid,
     validate_settings,
+)
+from .artifact_paths import (
+    artifact_download_name,
+    resolve_protocol_artifact_path,
+    resolve_task_artifact_path,
+    resolve_task_artifact_rehearsal_text,
 )
 from .ws import WebSocketManager
 from .rehearsal import RehearsalSessionManager
@@ -1216,6 +1223,7 @@ def resource_list_tasks(
     limit: int = Query(default=25, ge=1, le=100),
     status: str = Query(default=""),
     parent_conversation_id: str = Query(default=""),
+    protocol_run_id: str = Query(default=""),
     completed_since_iso: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
@@ -1223,6 +1231,7 @@ def resource_list_tasks(
     tasks = store.list_tasks(
         for_agent_id=_scoped_agent_id(auth),
         parent_conversation_id=parent_conversation_id,
+        protocol_run_id=protocol_run_id,
         cursor=cursor,
         limit=limit,
         status=status,
@@ -1249,6 +1258,81 @@ def resource_get_task(
         }:
             raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
     return _json_payload(task)
+
+
+@app.get("/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content")
+def resource_get_task_artifact_content(
+    routed_task_id: str,
+    artifact_key: str,
+    download: bool = Query(default=False),
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> Response:
+    try:
+        task = store.get_task(routed_task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
+    if auth.agent_id:
+        agent_id = auth.agent_id
+        if agent_id not in {
+            str(task.get("origin_agent_id", "")),
+            str(task.get("target_agent_id", "")),
+        }:
+            raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
+    resolved_path = resolve_task_artifact_path(task, artifact_key)
+    detail = None
+    if resolved_path is None:
+        protocol_run_id = _protocol_run_id_from_task_record(task)
+        if protocol_run_id:
+            try:
+                detail = store.get_protocol_run(protocol_run_id, access=_protocol_access(auth))
+            except KeyError:
+                detail = None
+            if detail is not None:
+                resolved_path = resolve_task_artifact_path(task, artifact_key, run_detail=detail)
+                if resolved_path is None:
+                    stage_execution_id = str(task.protocol_stage_execution_id or "").strip()
+                    for artifact in detail.artifacts or []:
+                        if str(artifact.artifact_key or "").strip() != str(artifact_key or "").strip():
+                            continue
+                        produced_stage_id = str(artifact.produced_by_stage_execution_id or "").strip()
+                        if stage_execution_id and produced_stage_id and produced_stage_id != stage_execution_id:
+                            continue
+                        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+                        if resolved_path is not None:
+                            break
+    preferred_path = ""
+    result_payload = task.result.as_dict() if task.result is not None else {}
+    artifacts = result_payload.get("artifacts", ()) if isinstance(result_payload, dict) else ()
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("artifact_key", "") or "").strip() != str(artifact_key or "").strip():
+                continue
+            preferred_path = str(item.get("path", "") or "").strip()
+            break
+    preferred_name = artifact_download_name(
+        artifact_key=str(artifact_key or ""),
+        preferred_path=preferred_path,
+    )
+    media_type = mimetypes.guess_type(preferred_name)[0] or "application/octet-stream"
+    if resolved_path is None:
+        content_text = resolve_task_artifact_rehearsal_text(task, artifact_key, run_detail=detail)
+        if content_text:
+            disposition = "attachment" if download else "inline"
+            return Response(
+                content=content_text.encode("utf-8"),
+                media_type=media_type,
+                headers={"Content-Disposition": f'{disposition}; filename="{preferred_name}"'},
+            )
+        raise HTTPException(status_code=409, detail="Artifact path is not available on this host.")
+    return FileResponse(
+        path=resolved_path,
+        media_type=media_type,
+        filename=preferred_name or resolved_path.name,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @app.get("/v1/routing/skills")

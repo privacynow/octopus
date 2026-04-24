@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import app.octopus_cli.core as octopus_core
-from app.octopus_cli.core import OctopusManager, PromptIO
+from app.octopus_cli.core import DockerRunner, OctopusManager, PromptIO
 from app.octopus_cli.models import Action, RegistryConnection, RegistryDeployOptions, RegistryState
 
 
@@ -173,6 +173,66 @@ def test_compose_runtime_services_use_stack_specific_db_host() -> None:
         "OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@postgres:5432/bot}"
         not in compose_text
     )
+
+
+def test_registry_compose_command_uses_generated_workspace_override(tmp_path: Path) -> None:
+    registry_dir = tmp_path / ".deploy" / "registry"
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    (registry_dir / ".env").write_text("REGISTRY_UI_TOKEN=test\n", encoding="utf-8")
+    (registry_dir / "docker-compose.workspace.yml").write_text("services:\n  service:\n", encoding="utf-8")
+
+    runner = DockerRunner(tmp_path)
+
+    command, env = runner.registry_compose_command("up", "-d", "service")
+
+    assert command == [
+        "docker",
+        "compose",
+        "--project-directory",
+        ".",
+        "-p",
+        "octopus-registry",
+        "-f",
+        "infra/compose/docker-compose.yml",
+        "--profile",
+        "registry",
+        "--env-file",
+        ".deploy/registry/.env",
+        "-f",
+        ".deploy/registry/docker-compose.workspace.yml",
+        "up",
+        "-d",
+        "service",
+    ]
+    assert env["OCTOPUS_DB_HOST"] == "registry-postgres"
+
+
+def test_start_registry_regenerates_workspace_override_from_configured_workspaces(tmp_path: Path) -> None:
+    registry_dir = tmp_path / ".deploy" / "registry"
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    (registry_dir / ".env").write_text(
+        "\n".join(
+            [
+                "REGISTRY_ENROLL_TOKEN=test-enroll",
+                "REGISTRY_UI_TOKEN=test-ui",
+                "REGISTRY_ALLOW_HTTP=1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workspace_root = tmp_path / "workspace-root"
+    workspace_root.mkdir()
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+    manager.ensure_registry_image_ready = lambda force=False: None  # type: ignore[method-assign]
+    manager.create_workspace("workspace", str(workspace_root))
+
+    manager.start_registry()
+
+    override = (registry_dir / "docker-compose.workspace.yml").read_text(encoding="utf-8")
+    assert "services:" in override
+    assert "  service:" in override
+    assert f"      - {workspace_root}:/workspace/workspace:rw" in override
 
 
 def test_connect_targets_default_to_all_eligible_registry_bots(tmp_path: Path) -> None:

@@ -150,6 +150,8 @@ def build_registry_message_delivery(
     context_text: str = "",
     constraints_text: str = "",
     requested_skills: tuple[str, ...] = (),
+    protocol_stage_contract: dict[str, Any] | None = None,
+    working_dir_hint: str = "",
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> tuple[str, str, str, str]:
@@ -168,6 +170,8 @@ def build_registry_message_delivery(
         context_text=context_text,
         constraints_text=constraints_text,
         requested_skills=requested_skills,
+        protocol_stage_contract=protocol_stage_contract,
+        working_dir_hint=working_dir_hint,
         source_transport=source_transport,
         admission_class=admission_class,
     )
@@ -191,6 +195,8 @@ def build_registry_message_envelope(
     context_text: str = "",
     constraints_text: str = "",
     requested_skills: tuple[str, ...] = (),
+    protocol_stage_contract: dict[str, Any] | None = None,
+    working_dir_hint: str = "",
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> InboundEnvelope:
@@ -220,6 +226,8 @@ def build_registry_message_envelope(
         context_text=context_text,
         constraints_text=constraints_text,
         requested_skills=requested_skills,
+        protocol_stage_contract=dict(protocol_stage_contract or {}),
+        working_dir_hint=str(working_dir_hint or ""),
         authorized_actor_key=authorized_actor_key,
         authority_ref=registry_authority_ref(registry_id),
         skip_approval=skip_approval,
@@ -375,14 +383,19 @@ async def admit_registry_delivery(
             context_text=_coerce_registry_message_text(request.get("context", "")),
             constraints_text=_coerce_registry_message_text(request.get("constraints", "")),
             requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
+            protocol_stage_contract=_protocol_stage_contract_from_request(request),
             registry_id=registry_id,
         )
         if runtime is not None and envelope.conversation_key:
-            _apply_routed_task_session_overrides(
+            working_dir_hint = _apply_routed_task_session_overrides(
                 config=config,
                 runtime=runtime,
                 conversation_key=envelope.conversation_key,
                 request=request,
+            )
+            envelope = replace(
+                envelope,
+                event=replace(envelope.event, working_dir_hint=working_dir_hint),
             )
         await submitter.admit_message(envelope)
         return "accepted"
@@ -415,11 +428,9 @@ def _apply_routed_task_session_overrides(
     runtime: RegistryDeliveryRuntime,
     conversation_key: str,
     request: dict[str, Any],
-) -> None:
+) -> str:
     project_id = str(request.get("project_id_override", "") or "").strip()
     file_policy = str(request.get("file_policy_override", "") or "").strip()
-    if not project_id and not file_policy:
-        return
     session = _load_session(config, runtime, conversation_key)
     mutated = False
     if project_id and session.project_id != project_id:
@@ -435,6 +446,21 @@ def _apply_routed_task_session_overrides(
         mutated = True
     if mutated:
         _save_session(config, conversation_key, session)
+    resolved = runtime.services.sessions.resolve_context(
+        session,
+        config=config,
+        provider_name=runtime.provider_name,
+        trust_tier="trusted",
+    )
+    return str(resolved.working_dir or config.working_dir or "").strip()
+
+
+def _protocol_stage_contract_from_request(request: dict[str, Any]) -> dict[str, Any]:
+    internal_context = request.get("internal_context", {})
+    if not isinstance(internal_context, dict):
+        return {}
+    contract = internal_context.get("protocol_stage_contract", {})
+    return dict(contract) if isinstance(contract, dict) else {}
 
 
 async def handle_registry_delivery(

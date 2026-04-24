@@ -776,13 +776,13 @@ class CodexProvider:
                     proc.kill()
                     await proc.wait()
                     stderr = (await stderr_task).decode("utf-8", errors="replace").strip()
-                    return RunResult(text="", timed_out=True, returncode=124)
+                    return RunResult(text="", working_dir=cwd, timed_out=True, returncode=124)
             else:
                 stdout_task.cancel()
                 proc.kill()
                 await proc.wait()
                 stderr = (await stderr_task).decode("utf-8", errors="replace").strip()
-                return RunResult(text="", timed_out=True, returncode=124)
+                return RunResult(text="", working_dir=cwd, timed_out=True, returncode=124)
 
         # User-initiated cancel: consume_stdout killed the process.
         if cancel is not None and cancel.is_set():
@@ -790,6 +790,7 @@ class CodexProvider:
             if thread_id:
                 state_updates["thread_id"] = thread_id
             return RunResult(text=final_text or "", cancelled=True,
+                             working_dir=cwd,
                              provider_state_updates=state_updates,
                              tool_executions=tool_records)
 
@@ -803,6 +804,7 @@ class CodexProvider:
             log.warning("codex run failed with rc=%d", proc.returncode)
             return RunResult(
                 text=self._safe_failure_text(proc.returncode),
+                working_dir=cwd,
                 returncode=proc.returncode,
                 provider_state_updates=state_updates,
                 tool_executions=tool_records,
@@ -811,6 +813,7 @@ class CodexProvider:
         if failed_file_change and not successful_file_change:
             return RunResult(
                 text="Codex reported a file-change failure before completing the request.",
+                working_dir=cwd,
                 returncode=1,
                 provider_state_updates=state_updates,
                 tool_executions=tool_records,
@@ -818,6 +821,7 @@ class CodexProvider:
 
         return RunResult(
             text=reply,
+            working_dir=cwd,
             provider_state_updates=state_updates,
             prompt_tokens=usage_input,
             completion_tokens=usage_output,

@@ -151,13 +151,13 @@ def evaluate_protocol_dispatch(
     try:
         selector = protocol_engine.dispatch_target_selector(
             run=run,
-            participant=document.participant(stage.participant_key),
+            stage=stage,
         )
     except ValueError as exc:
         return protocol_engine.dispatch_blocked(
             run=run,
             stage_execution=stage_execution,
-            error_code="PARTICIPANT_SELECTOR_REQUIRED",
+            error_code="STAGE_SELECTOR_REQUIRED",
             error_detail=str(exc),
         )
     selector = runtime_protocol_selector(selector=selector, entry_agent_id=run.entry_agent_id)

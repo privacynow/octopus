@@ -473,6 +473,7 @@ class ClaudeProvider:
             extra_env = context.credential_env if context else {}
 
             working_dir = context.working_dir if context else ""
+            effective_working_dir = working_dir or str(self.config.working_dir)
             is_resume = self._should_resume(provider_state)
             continuity_updates = self._continuity_updates(provider_state)
             log.info(
@@ -495,6 +496,7 @@ class ClaudeProvider:
         if cancel is not None and cancel.is_set():
             return RunResult(
                 text=accumulated,
+                working_dir=effective_working_dir,
                 cancelled=True,
                 provider_state_updates=continuity_updates,
                 tool_executions=tool_executions,
@@ -505,7 +507,7 @@ class ClaudeProvider:
             # is dead — the CLI hangs silently instead of emitting an error.
             # Fresh-session timeouts are just slow API; do NOT reset those.
             return RunResult(
-                text="", timed_out=True, returncode=124,
+                text="", working_dir=effective_working_dir, timed_out=True, returncode=124,
                 resume_failed=is_resume,
                 provider_state_updates=continuity_updates,
                 tool_executions=tool_executions,
@@ -519,6 +521,7 @@ class ClaudeProvider:
                 text = f"{text}\n{detail}"
             return RunResult(
                 text=text,
+                working_dir=effective_working_dir,
                 returncode=rc,
                 resume_failed=is_resume and self._is_resume_failure(error_text),
                 provider_state_updates=continuity_updates,
@@ -542,6 +545,7 @@ class ClaudeProvider:
 
         return RunResult(
             text=final_text,
+            working_dir=effective_working_dir,
             denials=denials,
             provider_state_updates=continuity_updates,
             prompt_tokens=usage.get("input_tokens", 0),
@@ -575,20 +579,22 @@ class ClaudeProvider:
             cmd[idx:idx] = ["--append-system-prompt", system_prompt]
 
         working_dir = context.working_dir if context else ""
+        effective_working_dir = working_dir or str(self.config.working_dir)
         accumulated, result_data, rc, _stderr, _tool_executions = await self._run_process(
             cmd, progress, timeout=120, working_dir=working_dir,
             cancel=cancel,
         )
 
         if cancel is not None and cancel.is_set():
-            return RunResult(text="", cancelled=True)
+            return RunResult(text="", working_dir=effective_working_dir, cancelled=True)
 
         if rc == -1:
-            return RunResult(text="", timed_out=True, returncode=124)
+            return RunResult(text="", working_dir=effective_working_dir, timed_out=True, returncode=124)
 
         if rc != 0:
             return RunResult(
                 text=f"[Approval check error (rc={rc})]",
+                working_dir=effective_working_dir,
                 returncode=rc,
             )
 
@@ -596,6 +602,7 @@ class ClaudeProvider:
         usage = result_data.get("usage", {})
         return RunResult(
             text=final_text,
+            working_dir=effective_working_dir,
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
             cached_prompt_tokens=(

@@ -626,6 +626,7 @@ class AbstractRegistryStore(Protocol):
         *,
         for_agent_id: str | None = None,
         parent_conversation_id: str = "",
+        protocol_run_id: str = "",
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
@@ -729,6 +730,7 @@ class AbstractRegistryStore(Protocol):
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
+        authoring_surface: str = "",
         expected_revision: int | None = None,
     ) -> ProtocolMutationRecord:
         """Create or update one protocol draft."""

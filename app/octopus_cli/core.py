@@ -356,8 +356,11 @@ class DockerRunner:
             "registry",
             "--env-file",
             ".deploy/registry/.env",
-            *args,
         ]
+        workspace_compose = self.repo_dir / ".deploy" / "registry" / "docker-compose.workspace.yml"
+        if workspace_compose.exists():
+            command += ["-f", str(workspace_compose.relative_to(self.repo_dir))]
+        command += [*args]
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
             "OCTOPUS_DB_HOST": "registry-postgres",
@@ -1169,6 +1172,7 @@ class OctopusManager:
             values = parse_env_file(self.registry_env_file())
         values = self._validated_registry_deploy_values(deploy, existing=values, creating=created)
         write_env_file(self.registry_env_file(), values)
+        self.regenerate_registry_workspace_compose_override()
         self.docker.registry_compose("run", "--rm", "db-init", capture_output=False)
         self.docker.registry_compose("up", "-d", "--remove-orphans", "service", capture_output=False)
         state = self.inspect_state().registry
@@ -1193,6 +1197,7 @@ class OctopusManager:
             return
         values = self._validated_registry_deploy_values(deploy, existing=parse_env_file(self.registry_env_file()), creating=False)
         write_env_file(self.registry_env_file(), values)
+        self.regenerate_registry_workspace_compose_override()
         self.docker.registry_compose("run", "--rm", "db-init", capture_output=False)
         args = ["up", "-d", "--remove-orphans"]
         if force_recreate:
@@ -1581,6 +1586,7 @@ class OctopusManager:
             ),
         )
         (ws_dir / "members.txt").write_text("", encoding="utf-8")
+        self.regenerate_registry_workspace_compose_override()
 
     def render_bot_workspace_env_content(self, slug: str) -> str:
         env_values = self.bot_values(slug)
@@ -1612,20 +1618,48 @@ class OctopusManager:
             f"BOT_AGENT_TAGS={','.join(merged_tags)}\n"
         )
 
-    def write_bot_workspace_compose_override(self, slug: str, output_path: Path, services: list[str]) -> None:
-        memberships = self.workspace_memberships(slug)
-        ws_env_path = self.deploy_dir / "bots" / slug / "workspace.env"
+    def write_workspace_compose_override(
+        self,
+        output_path: Path,
+        *,
+        services: list[str],
+        workspace_slugs: list[str],
+        env_file: Path | None = None,
+    ) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         lines = ["services:"]
         for service in services:
             lines.append(f"  {service}:")
-            lines.append("    env_file:")
-            lines.append(f"      - {ws_env_path.relative_to(self.repo_dir)}")
+            if env_file is not None:
+                lines.append("    env_file:")
+                lines.append(f"      - {env_file.relative_to(self.repo_dir)}")
             lines.append("    volumes:")
-            for ws_slug in memberships:
+            for ws_slug in workspace_slugs:
                 lines.append(
                     f"      - {self.workspace_root(ws_slug)}:{self.workspace_mount(ws_slug)}:{self.workspace_mode(ws_slug)}"
                 )
         output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def write_bot_workspace_compose_override(self, slug: str, output_path: Path, services: list[str]) -> None:
+        self.write_workspace_compose_override(
+            output_path,
+            services=services,
+            workspace_slugs=self.workspace_memberships(slug),
+            env_file=self.deploy_dir / "bots" / slug / "workspace.env",
+        )
+
+    def regenerate_registry_workspace_compose_override(self) -> None:
+        compose_override = self.deploy_dir / "registry" / "docker-compose.workspace.yml"
+        workspace_slugs = self.list_workspace_slugs()
+        if not workspace_slugs:
+            if compose_override.exists():
+                compose_override.unlink()
+            return
+        self.write_workspace_compose_override(
+            compose_override,
+            services=["service"],
+            workspace_slugs=workspace_slugs,
+        )
 
     def regenerate_bot_workspace_env(self, slug: str) -> None:
         ws_env_path = self.deploy_dir / "bots" / slug / "workspace.env"

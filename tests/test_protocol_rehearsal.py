@@ -10,7 +10,9 @@ Postgres store.
 
 from __future__ import annotations
 
-from octopus_sdk.protocols import REHEARSAL_AUTHORITY_REF
+import time
+
+from octopus_sdk.protocols import REHEARSAL_AUTHORITY_REF, software_engineering_protocol_document
 from octopus_registry.rehearsal import RehearsalSessionManager, REHEARSAL_AGENT_SLUG
 from octopus_registry.store_postgres import RegistryPostgresStore
 from tests.support.protocol_support import operator_access, published_protocol
@@ -44,6 +46,7 @@ def _simple_rehearsable_document() -> dict[str, object]:
             {
                 "stage_key": "planning",
                 "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "planning"},
                 "stage_kind": "work",
                 "write_capable": False,
                 "inputs": [],
@@ -54,6 +57,7 @@ def _simple_rehearsable_document() -> dict[str, object]:
             {
                 "stage_key": "review",
                 "participant_key": "reviewer",
+                "selector": {"kind": "skill", "value": "review"},
                 "stage_kind": "review",
                 "inputs": [],
                 "outputs": [],
@@ -189,6 +193,74 @@ def test_rehearsal_manager_queues_and_completes_stage_without_external_egress(
     assert str(rehearsal_card.role or "") == "rehearsal"
 
 
+def test_rehearsal_poll_refreshes_reserved_agent_heartbeat(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
+
+    agents_before = store.list_agents(for_agent_id=rehearsal_agent_id, limit=1)
+    assert agents_before
+    first_seen = str(agents_before[0].last_heartbeat_at or "")
+    assert first_seen
+
+    time.sleep(0.02)
+    manager._poll_once_sync()
+
+    agents_after = store.list_agents(for_agent_id=rehearsal_agent_id, limit=1)
+    assert agents_after
+    refreshed = str(agents_after[0].last_heartbeat_at or "")
+    assert refreshed
+    assert refreshed >= first_seen
+
+
+def test_rehearsal_synthesizes_required_outputs_for_write_capable_stage(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
+    published = published_protocol(store, document=software_engineering_protocol_document().model_dump(mode="json"))
+
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": rehearsal_agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Add audit logging to export requests without changing the export API.",
+            "constraints_json": {},
+            "is_rehearsal": True,
+        },
+        access=operator_access(),
+    )
+    assert created.ok is True
+    run_id = created.run.protocol_run_id
+
+    manager._poll_once_sync()
+    pending = manager.list_pending(protocol_run_id=run_id)
+    assert len(pending) == 1
+    first_session = pending[0]
+    assert first_session.stage_key == "planning"
+    assert first_session.require_output_verification is True
+    assert [item["artifact_key"] for item in first_session.output_artifacts] == ["plan"]
+
+    accepted = manager.respond(
+        routed_task_id=first_session.routed_task_id,
+        response_text="Plan updated with audit logging scope, failure handling, and test approach.",
+        decision="completed",
+        decision_summary="Planning completed.",
+    )
+    assert accepted is True
+
+    advanced = store.get_protocol_run(run_id, access=operator_access())
+    assert advanced.run.current_stage_key == "plan_review"
+    artifacts = store.get_protocol_run_artifacts(run_id, access=operator_access())
+    plan = next(item for item in artifacts if item.artifact_key == "plan")
+    assert plan.exists is True
+    assert plan.verification_state == "verified"
+    assert str(plan.content_hash or "").strip()
+
+
 def test_protocol_scenarios_round_trip_through_store(
     postgres_registry_truncated: str,
 ) -> None:
@@ -207,6 +279,8 @@ def test_protocol_scenarios_round_trip_through_store(
             "stage_key": "planning",
             "participant_key": "worker",
             "display_name": "Happy path plan",
+            "decision": "completed",
+            "decision_summary": "Planning completed.",
             "response_text": "Plan drafted; ready for review.",
         },
         access=operator_access(),
@@ -214,6 +288,8 @@ def test_protocol_scenarios_round_trip_through_store(
     assert created.protocol_scenario_id
     assert created.protocol_id == published.protocol.protocol_id
     assert created.display_name == "Happy path plan"
+    assert created.decision == "completed"
+    assert created.decision_summary == "Planning completed."
 
     listed = store.list_protocol_scenarios(
         protocol_id=published.protocol.protocol_id,

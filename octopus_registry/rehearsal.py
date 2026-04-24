@@ -23,13 +23,14 @@ rewrites the selector to ``role=rehearsal`` for rehearsal runs.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from octopus_sdk.protocols import REHEARSAL_AUTHORITY_REF
-from octopus_sdk.registry.models import AgentCard
+from octopus_sdk.protocols import ProtocolArtifactObservationRecord, REHEARSAL_AUTHORITY_REF
+from octopus_sdk.registry.models import AgentCard, utcnow_iso
 
 from .store_base import AbstractRegistryStore
 
@@ -52,8 +53,11 @@ class RehearsalPendingSession:
     routed_task_id: str
     stage_key: str
     participant_key: str
+    stage_kind: str
     instructions: str
     created_at: str
+    require_output_verification: bool = False
+    output_artifacts: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -62,7 +66,10 @@ class RehearsalPendingSession:
             "routed_task_id": self.routed_task_id,
             "stage_key": self.stage_key,
             "participant_key": self.participant_key,
+            "stage_kind": self.stage_kind,
             "instructions": self.instructions,
+            "require_output_verification": bool(self.require_output_verification),
+            "output_artifacts": list(self.output_artifacts),
             "created_at": self.created_at,
         }
 
@@ -79,6 +86,14 @@ class RehearsalSessionManager:
     _pending_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _stop_event: asyncio.Event | None = None
     _task: asyncio.Task[None] | None = None
+
+    @staticmethod
+    def _heartbeat_payload() -> dict[str, Any]:
+        return {
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 16,
+        }
 
     def ensure_agent(self) -> tuple[str, str]:
         """Idempotently enroll the reserved rehearsal agent; cache the token."""
@@ -104,10 +119,7 @@ class RehearsalSessionManager:
         self._agent_id = str(enrollment.agent_id or "")
         self._agent_token = str(enrollment.agent_token or "")
         try:
-            self.store.heartbeat(
-                self._agent_token,
-                {"connectivity_state": "connected", "current_capacity": 0, "max_capacity": 16},
-            )
+            self.store.heartbeat(self._agent_token, self._heartbeat_payload())
         except Exception:
             log.warning("Rehearsal bot initial heartbeat failed", exc_info=True)
         return self._agent_id, self._agent_token
@@ -154,6 +166,7 @@ class RehearsalSessionManager:
         if not self._agent_token:
             return
         try:
+            self.store.heartbeat(self._agent_token, self._heartbeat_payload())
             result = self.store.poll(
                 self._agent_token,
                 cursor=int(self._poll_cursor or "0") if str(self._poll_cursor).isdigit() else 0,
@@ -202,13 +215,25 @@ class RehearsalSessionManager:
             if hasattr(raw_ctx, "as_dict")
             else (raw_ctx if isinstance(raw_ctx, dict) else {})
         )
+        raw_internal = payload.get("internal_context")
+        internal_context = (
+            raw_internal.as_dict()
+            if hasattr(raw_internal, "as_dict")
+            else (raw_internal if isinstance(raw_internal, dict) else {})
+        )
+        contract = internal_context.get("protocol_stage_contract")
+        if not isinstance(contract, dict):
+            contract = {}
         session = RehearsalPendingSession(
             protocol_run_id=str(context.get("protocol_run_id", "") or ""),
             stage_execution_id=str(context.get("protocol_stage_execution_id", "") or ""),
             routed_task_id=routed_task_id,
             stage_key=str(context.get("stage_key", "") or ""),
             participant_key=str(context.get("participant_key", "") or ""),
+            stage_kind=str(contract.get("stage_kind", "") or "work"),
             instructions=str(payload.get("instructions", "") or ""),
+            require_output_verification=bool(contract.get("require_output_verification", False)),
+            output_artifacts=list(contract.get("output_artifacts", []) or []),
             created_at=str(payload.get("created_at", "") or ""),
         )
         self._pending[routed_task_id] = session
@@ -236,6 +261,7 @@ class RehearsalSessionManager:
         response_text: str,
         decision: str = "",
         decision_summary: str = "",
+        artifacts: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Submit an author response, closing the pending stage task.
 
@@ -257,12 +283,22 @@ class RehearsalSessionManager:
             body_lines.append(f"PROTOCOL_DECISION: {decision_token}")
         body_lines.append(f"PROTOCOL_SUMMARY: {summary_token}")
         full_text = "\n".join(line for line in body_lines if line)
+        artifact_observations = [
+            ProtocolArtifactObservationRecord.model_validate(item).model_dump(mode="json")
+            for item in (artifacts or [])
+        ]
+        if not artifact_observations:
+            artifact_observations = self._synthesized_artifact_observations(
+                session=session,
+                response_text=response_text,
+            )
         payload = {
             "routed_task_id": token,
             "status": "completed",
             "transition_id": uuid.uuid4().hex,
             "summary": summary_token,
             "full_text": full_text,
+            "artifacts": artifact_observations,
         }
         try:
             self.store.update_routed_task_result(self._agent_token, token, payload)
@@ -271,3 +307,35 @@ class RehearsalSessionManager:
             return False
         self._pending.pop(token, None)
         return True
+
+    @staticmethod
+    def _synthesized_artifact_observations(
+        *,
+        session: RehearsalPendingSession,
+        response_text: str,
+    ) -> list[dict[str, Any]]:
+        outputs = list(session.output_artifacts or [])
+        if not outputs:
+            return []
+        observed_at = str(session.created_at or "").strip() or utcnow_iso()
+        digest_source = str(response_text or "")
+        observations: list[dict[str, Any]] = []
+        for item in outputs:
+            artifact_key = str(item.get("artifact_key", "") or "").strip()
+            if not artifact_key:
+                continue
+            hashed = hashlib.sha256(f"{artifact_key}\n{digest_source}".encode("utf-8")).hexdigest()
+            observations.append(
+                ProtocolArtifactObservationRecord(
+                    artifact_key=artifact_key,
+                    artifact_kind=str(item.get("artifact_kind", "") or "workspace_file"),
+                    path=str(item.get("path", "") or ""),
+                    exists=True,
+                    size_bytes=len(digest_source.encode("utf-8")),
+                    content_hash=hashed,
+                    modified_at=observed_at,
+                    observed_at=observed_at,
+                    verification_state="verified" if session.require_output_verification else "available",
+                ).model_dump(mode="json")
+            )
+        return observations

@@ -1,14 +1,32 @@
 const { test, expect } = require('./playwright-runtime');
 const {
   connectStep,
-  createParticipant,
   createStep,
   discardDraft,
   login,
+  outlineStepNode,
   openBlankDraft,
+  openStagePanel,
   openTemplateDraft,
+  selectStep,
   waitForSaved,
 } = require('./helpers/protocol-helpers');
+
+const SOFTWARE_ENGINEERING_STAGE_KEYS = [
+  'planning',
+  'plan_review',
+  'architecture',
+  'architecture_review',
+  'implementation',
+  'implementation_review',
+  'acceptance',
+];
+
+const DOCUMENT_APPROVAL_STAGE_KEYS = [
+  'draft_document',
+  'review_document',
+  'approve_document',
+];
 
 test('capture protocol authoring states', async ({ page }) => {
   await login(page);
@@ -25,81 +43,89 @@ test('capture protocol authoring states', async ({ page }) => {
   await lifecycle.getByLabel('Name').blur();
   await waitForSaved(page);
 
-  await page.getByRole('button', { name: /\+ Add participant/i }).first().click();
+  await page.getByRole('button', { name: /Add( first)? step/i }).first().click();
   const participantEditor = page.locator('.kit-stage-editor').first();
-  await participantEditor.getByLabel('Name').fill('Planner');
-  await participantEditor.getByLabel('Key').fill('planner');
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-participant-page.png', fullPage: true });
+  const stepBasics = await openStagePanel(page, participantEditor, {
+    tab: 'Basics',
+    heading: 'Step basics',
+  });
+  await stepBasics.getByLabel('Name').fill('Plan');
+  await stepBasics.getByLabel('Role name').fill('Planner');
+  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-step-create-page.png', fullPage: true });
   await page.getByRole('button', { name: 'Cancel' }).click();
 
-  const plannerKey = await createParticipant(page, { name: 'Planner', key: 'planner', selectorKind: 'skill', selectorValue: 'planning' });
-
-  const planKey = await createStep(page, { name: 'Plan', key: 'plan', ownerParticipant: plannerKey });
-  const reviewerKey = await createParticipant(page, { name: 'Reviewer', key: 'reviewer', selectorKind: 'skill', selectorValue: 'review' });
+  const planKey = await createStep(page, {
+    name: 'Plan',
+    key: 'plan',
+    roleName: 'Planner',
+    roleKey: 'planner',
+    selectorKind: 'skill',
+    selectorValue: '__first__',
+  });
   const reviewKey = await createStep(page, {
     name: 'Review',
     key: 'review',
-    ownerParticipant: reviewerKey,
+    roleName: 'Reviewer',
+    roleKey: 'reviewer',
+    selectorKind: 'skill',
+    selectorValue: '__first__',
     stageKind: 'review',
   });
 
   await connectStep(page, planKey, reviewKey);
   await connectStep(page, reviewKey, '__complete__');
-  await page.getByTestId(`workflow-step-${planKey}`).click();
+  await selectStep(page, planKey);
   await expect(page.getByTestId('stage-route-plan::completed')).toBeVisible();
-  await page.getByTestId(`workflow-step-${reviewKey}`).click();
+  await selectStep(page, reviewKey);
   await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
 
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-page.png', fullPage: true });
-  await page.locator('.kit-protocol-detail').screenshot({
+  await page.locator('.kit-authoring-primary-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-focus.png',
   });
 
   await discardDraft(page);
 
-  await openTemplateDraft(page, 'Software Engineering');
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
+  await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-page.png', fullPage: true });
-  await page.locator('.kit-workflow-overview').screenshot({
+  await page.locator('.kit-authoring-primary-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-focus.png',
   });
 
-  await page.getByTestId('workflow-node-segment:planning').click();
-  await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');
+  await page.getByTestId('workflow-stage-planning').click();
+  await expect(page.locator('.kit-stage-editor').getByLabel('Name').first()).toHaveValue('Planning');
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-page.png', fullPage: true });
-  await page.locator('.kit-protocol-detail').screenshot({
+  await page.locator('.kit-authoring-primary-column').screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-detail.png',
   });
 
-  await page.getByRole('button', { name: 'Topology' }).click();
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Topology');
-  const topologyToolbar = page.locator('.kit-workflow-toolbar');
-  await expect(topologyToolbar.getByRole('button', { name: 'Focus', exact: true })).toBeVisible();
+  await selectStep(page, 'planning');
+  await expect(page.locator('.kit-stage-editor')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-page.png', fullPage: true });
-  await page.locator('.kit-workflow-viewport').screenshot({
+  await page.getByRole('button', { name: 'Show workflow map', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Hide workflow map', exact: true })).toBeVisible();
+  await page.locator('.kit-workflow-canvas').first().screenshot({
     path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-graph.png',
-  });
-  await topologyToolbar.getByRole('button', { name: 'Full graph', exact: true }).click();
-  await page.locator('.kit-workflow-viewport').screenshot({
-    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-graph-expanded.png',
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow overview');
-  await expect(page.locator('.kit-workflow-viewbar')).toContainText('desktop only');
+  await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
   await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png', fullPage: true });
-  await page.getByTestId('workflow-node-segment:planning').click();
-  await expect(page.locator('.kit-protocol-detail-title')).toContainText('Planning');
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png', fullPage: true });
+  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png' });
+  await selectStep(page, 'planning');
+  await expect(page.locator('.kit-stage-editor').getByLabel('Name').first()).toHaveValue('Planning');
+  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png' });
 
   await discardDraft(page);
 
-  await openTemplateDraft(page, 'Document Approval');
-  await expect(page.getByTestId('workflow-step-draft_document')).toBeVisible();
+  await openTemplateDraft(page, 'Document Approval', { expectedStageKeys: DOCUMENT_APPROVAL_STAGE_KEYS });
+  await expect(page.getByTestId('workflow-stage-draft_document')).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-page.png', fullPage: true });
-  await page.getByRole('button', { name: 'Author' }).first().click();
-  await expect(page.locator('.kit-stage-editor').first().getByRole('heading', { name: 'Assignment rule' }).first()).toBeVisible();
+  await page.getByTestId('workflow-stage-draft_document').click();
+  await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
+  await selectStep(page, 'draft_document');
+  await expect(page.locator('.kit-stage-editor').first().getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
   await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-participant-page.png', fullPage: true });
 
   await discardDraft(page);

@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 import yaml
 
-from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, RoutedTaskRequest, TargetSelector, utcnow_iso
+from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, RoutedTaskRequest, TargetSelector, TaskRecord, utcnow_iso
 
 ProtocolLifecycleState = Literal["draft", "published", "archived"]
 ProtocolVisibility = Literal["org_private", "org_shared", "registry_template"]
@@ -29,6 +29,7 @@ ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "e
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
 ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
 ProtocolValidationMode = Literal["strict", "draft"]
+ProtocolAuthoringSurface = Literal["standard", "operator"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
@@ -61,8 +62,8 @@ PROTOCOL_SELECTOR_KIND_OPTIONS: tuple[str, ...] = ("agent", "skill", "role")
 PROTOCOL_AUTHORING_SECTION_OPTIONS: tuple[str, ...] = (
     "design",
     "review",
-    "advanced",
 )
+PROTOCOL_AUTHORING_SURFACE_OPTIONS: tuple[ProtocolAuthoringSurface, ...] = ("standard", "operator")
 
 _TERMINAL_STAGE_TARGETS = frozenset({"__complete__", "__failed__", "__cancelled__"})
 _DECISION_RE = re.compile(r"(?im)^\s*PROTOCOL_DECISION:\s*([a-z0-9_-]+)\s*$")
@@ -139,7 +140,6 @@ def protocol_retention_until(now: str | None = None, *, days: int = PROTOCOL_DEF
 class ProtocolParticipantDefinitionRecord(RegistryRecordModel):
     participant_key: str = Field(..., min_length=1)
     display_name: str = ""
-    selector: TargetSelector | None = None
     instructions: str = ""
 
     @field_validator("participant_key", mode="before")
@@ -179,6 +179,7 @@ class ProtocolStageDefinitionRecord(RegistryRecordModel):
     stage_key: str = Field(..., min_length=1)
     display_name: str = ""
     participant_key: str = Field(..., min_length=1)
+    selector: TargetSelector | None = None
     stage_kind: ProtocolStageKind = "work"
     instructions: str = ""
     inputs: list[str] = Field(default_factory=list)
@@ -393,6 +394,8 @@ class ProtocolAuthoringManifestRecord(RegistryRecordModel):
     stage_kind_options: list[ProtocolStageKind] = Field(default_factory=lambda: list(PROTOCOL_STAGE_KIND_OPTIONS))
     artifact_kind_options: list[ProtocolArtifactKind] = Field(default_factory=lambda: list(PROTOCOL_ARTIFACT_KIND_OPTIONS))
     selector_kind_options: list[str] = Field(default_factory=lambda: list(PROTOCOL_SELECTOR_KIND_OPTIONS))
+    default_surface: ProtocolAuthoringSurface = "standard"
+    operator_surface_available: bool = False
 
 
 class ProtocolDraftCreateRecord(RegistryRecordModel):
@@ -527,6 +530,8 @@ class ProtocolScenarioRecord(RegistryRecordModel):
     stage_key: str = ""
     participant_key: str = ""
     display_name: str = ""
+    decision: str = ""
+    decision_summary: str = ""
     response_text: str = ""
     run_org_id: str = PROTOCOL_DEFAULT_RUN_ORG_ID
     created_by: str = ""
@@ -574,6 +579,7 @@ class ProtocolRunDetailRecord(RegistryRecordModel):
     version: ProtocolDefinitionVersionRecord
     participants: list[ProtocolRunParticipantRecord] = Field(default_factory=list)
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
+    tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
@@ -585,6 +591,7 @@ class ProtocolRunExportRecord(RegistryRecordModel):
     definition_document: ProtocolDefinitionDocumentRecord
     participants: list[ProtocolRunParticipantRecord] = Field(default_factory=list)
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
+    tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
@@ -736,7 +743,7 @@ class ProtocolEngineDecisionRecord(RegistryRecordModel):
     participant_resolution_reason: str = ""
     participant_resolved_agent_id: str = ""
     participant_resolved_authority_ref: str = ""
-    participant_selector_snapshot: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    selector_snapshot: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     transition_metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     routed_task_request: RoutedTaskRequest | None = None
 
@@ -793,6 +800,7 @@ __all__ = [
         "PROTOCOL_ARTIFACT_KIND_OPTIONS",
         "PROTOCOL_SELECTOR_KIND_OPTIONS",
         "PROTOCOL_AUTHORING_SECTION_OPTIONS",
+        "PROTOCOL_AUTHORING_SURFACE_OPTIONS",
         "RegistryJsonRecord",
         "RegistryRecordModel",
         "RoutedTaskRequest",

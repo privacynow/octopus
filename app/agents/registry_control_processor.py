@@ -40,7 +40,6 @@ from octopus_sdk.registry.models import (
 from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
 from octopus_sdk.config import RegistryConnectionConfig
 
-
 class RegistryControlAccess(Protocol):
     @property
     def registries(self) -> tuple[RegistryConnectionConfig, ...]: ...

@@ -46,17 +46,6 @@ function renderAgentDetail(container, params) {
         };
     }
 
-    function executionBadge(snapshot) {
-        const badge = document.createElement('span');
-        const faulted = snapshot.state === 'faulted';
-        badge.className = `badge badge-${faulted ? 'faulted' : 'healthy'}`;
-        badge.textContent = faulted ? 'execution faulted' : 'execution ready';
-        if (faulted && snapshot.detail) {
-            badge.title = snapshot.detail;
-        }
-        return badge;
-    }
-
     async function openAgentConversation(agent, { manage = '' } = {}) {
         if (openConversationBusy) return false;
         openConversationBusy = true;
@@ -128,12 +117,6 @@ function renderAgentDetail(container, params) {
 
         const actions = document.createElement('div');
         actions.className = 'workspace-actions';
-        const transportStatus = document.createElement('span');
-        transportStatus.className = `badge badge-${agent.connectivity_state || 'stopped'}`;
-        transportStatus.textContent = `transport ${agent.connectivity_state || 'unknown'}`;
-        actions.appendChild(transportStatus);
-        actions.appendChild(executionBadge(execution));
-
         actions.appendChild(createAgentActionButton(agent, { label: 'Start conversation', primary: true }));
         actions.appendChild(createAgentActionButton(agent, { label: 'Run protocol', manage: 'protocols' }));
 

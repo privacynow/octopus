@@ -492,6 +492,13 @@ select {
     gap: var(--space-2);
     flex-wrap: wrap;
     justify-content: flex-end;
+    min-width: 0;
+}
+
+.workspace-actions .badge {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .meta-inline {
@@ -501,6 +508,10 @@ select {
     gap: var(--space-2);
     color: var(--text-secondary);
     font-size: var(--text-sm);
+}
+
+.meta-inline span {
+    overflow-wrap: anywhere;
 }
 
 .meta-inline-quiet {
@@ -2503,6 +2514,7 @@ select {
 
     .workspace-actions {
         justify-content: flex-start;
+        width: 100%;
     }
 
     .conversation-layout {

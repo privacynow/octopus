@@ -803,6 +803,21 @@ Current open findings:
   expansion and creates horizontal pressure on desktop.
 - Runs: long detail content can push the page vertically instead of living in a
   bounded work region.
+- Runs / real Safari: changing the status filter while a run is selected can
+  leave a stale `run_id` in the URL for a run that is no longer visible. In the
+  observed path, filtering to `Running` after inspecting a completed run made
+  the visible running row remain collapsed while the URL still referenced the
+  completed run. Expected behavior: filter changes clear incompatible
+  selections, and selecting a visible row expands that row inline with a matching
+  `run_id`.
+- Runs / real Safari: the Participants section for a completed run renders
+  participant rows like `Acceptance reviewer · running` even when the resolved
+  outcome is `OK`. Expected behavior: participant labels prioritize the resolved
+  assignment/outcome and do not imply a completed run is still actively running.
+- Runs / real Safari: Safari Reader Mode can flatten the Registry app into a
+  non-interactive article-like page if accidentally toggled. Expected behavior:
+  the app should not advertise itself as reader-friendly article content, and
+  the audit must avoid `Cmd+Shift+R` because Safari treats it as Reader Mode.
 - Conversations: list and full conversation detail still rely too heavily on
   full-document vertical flow.
 - Conversations: linked runs/tasks are visible but not consistently inspectable

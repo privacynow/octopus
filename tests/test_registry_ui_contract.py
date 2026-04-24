@@ -223,7 +223,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
-    assert "API.getProtocolRun(currentRunId)" in workspace
+    assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace

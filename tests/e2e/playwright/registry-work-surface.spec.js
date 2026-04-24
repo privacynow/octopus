@@ -33,6 +33,10 @@ async function findRunWithLineage(page) {
   throw new Error('Expected at least one protocol run with multiple stage executions.');
 }
 
+function statusLabel(status) {
+  return String(status || '').replace(/^\w/, (char) => char.toUpperCase());
+}
+
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {
   await login(page);
   const { id, detail } = await findRunWithLineage(page);
@@ -68,6 +72,44 @@ test('runs use inline expansion instead of the old split detail board', async ({
   const metrics = await layoutMetrics(page);
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
   await page.screenshot({ path: '.tmp/visual-registry/runs-desktop.png', fullPage: false });
+});
+
+test('runs clear stale selection when the status filter changes', async ({ page }) => {
+  await login(page);
+  const listResponse = await page.request.get('/v1/protocol-runs?limit=50');
+  expect(listResponse.ok()).toBeTruthy();
+  const payload = await listResponse.json();
+  const runs = Array.isArray(payload?.runs) ? payload.runs : [];
+  const selected = runs.find((run) => run.protocol_run_id && run.status);
+  expect(selected).toBeTruthy();
+  const target = runs.find((run) => run.protocol_run_id && run.status && run.status !== selected.status);
+  test.skip(!target, 'Need at least two run statuses to verify stale selection clearing.');
+
+  await page.goto(`/ui/runs?run_id=${selected.protocol_run_id}`);
+  await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(1);
+  await page.locator('.kit-runs-filter-chip').filter({ hasText: statusLabel(target.status) }).click();
+  await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(0);
+  expect(new URL(page.url()).searchParams.get('run_id')).toBeFalsy();
+  expect(new URL(page.url()).searchParams.get('status')).toBe(target.status);
+
+  await page.locator('.kit-runs-list-row').first().click();
+  await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(1);
+  await expect(page.locator('.kit-runs-list-row[aria-expanded="true"]')).toHaveCount(1);
+  expect(new URL(page.url()).searchParams.get('run_id')).toBeTruthy();
+});
+
+test('run participants prefer resolved outcomes over raw running state', async ({ page }) => {
+  await login(page);
+  const { id, detail } = await findRunWithLineage(page);
+  const participant = (detail.participants || []).find((item) => item.resolution_outcome);
+  test.skip(!participant, 'Need a run participant with a resolved outcome.');
+
+  await page.goto(`/ui/runs?run_id=${id}`);
+  const sectionTabs = page.getByRole('tablist', { name: 'Run detail section' }).getByRole('tab');
+  await sectionTabs.filter({ hasText: 'Participants' }).click();
+  const displayName = participant.display_name || participant.participant_key;
+  await expect(page.getByText(`${displayName} · ${participant.resolution_outcome}`)).toBeVisible();
+  await expect(page.getByText(`${displayName} · ${participant.state || 'running'}`)).toHaveCount(0);
 });
 
 test('conversation list exposes inline context before opening the full workspace', async ({ page }) => {

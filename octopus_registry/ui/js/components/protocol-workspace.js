@@ -5806,6 +5806,7 @@ function renderProtocolRuns(container) {
     let activeLineageStageId = '';
     let activeRunDetailSection = '';
     let currentRunSubscription = null;
+    let runDetailRequestToken = 0;
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -5865,6 +5866,7 @@ function renderProtocolRuns(container) {
             void loadRunDetail();
             return;
         }
+        runDetailRequestToken += 1;
         currentRunId = '';
         runDetailLoading = false;
         _writeState({ push });
@@ -6180,6 +6182,15 @@ function renderProtocolRuns(container) {
             },
             onStatusFilter: (value) => {
                 runStatusFilter = value || '';
+                currentRunId = '';
+                currentRun = null;
+                currentIssues = [];
+                lastRunEvent = null;
+                activeLineageStageId = '';
+                activeRunDetailSection = '';
+                runDetailLoading = false;
+                runDetailRequestToken += 1;
+                _bindRunSubscription();
                 _writeState({ push: true });
                 renderRunsRoute();
             },
@@ -6536,7 +6547,7 @@ function renderProtocolRuns(container) {
             sectionPanel.appendChild(participantTitle);
             const participantList = document.createElement('div');
             const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
-                label: `${item.display_name || item.participant_key} · ${item.state || item.resolution_outcome || 'queued'}`,
+                label: `${item.display_name || item.participant_key} · ${item.resolution_outcome || item.state || 'queued'}`,
                 sublabel: item.resolution_reason || item.resolved_agent_id || item.session_key || '',
                 badgeText: item.resolution_outcome || '',
             }));
@@ -6621,6 +6632,7 @@ function renderProtocolRuns(container) {
 
     async function loadRunDetail({ soft = false } = {}) {
         if (!currentRunId) {
+            runDetailRequestToken += 1;
             currentRun = null;
             currentIssues = [];
             lastRunEvent = null;
@@ -6630,12 +6642,18 @@ function renderProtocolRuns(container) {
             renderRunsRoute();
             return;
         }
+        const requestedRunId = String(currentRunId || '');
+        const requestToken = runDetailRequestToken + 1;
+        runDetailRequestToken = requestToken;
         try {
             runDetailLoading = true;
             const [runDetail, issues] = await Promise.all([
-                API.getProtocolRun(currentRunId),
-                API.listProtocolIssues({ protocol_run_id: currentRunId, limit: 50 }),
+                API.getProtocolRun(requestedRunId),
+                API.listProtocolIssues({ protocol_run_id: requestedRunId, limit: 50 }),
             ]);
+            if (requestToken !== runDetailRequestToken || requestedRunId !== String(currentRunId || '')) {
+                return;
+            }
             currentRun = runDetail;
             currentIssues = issues.issues || issues || [];
             runDetailLoading = false;
@@ -6643,6 +6661,9 @@ function renderProtocolRuns(container) {
             _bindRunSubscription();
             renderRunsRoute();
         } catch (err) {
+            if (requestToken !== runDetailRequestToken || requestedRunId !== String(currentRunId || '')) {
+                return;
+            }
             runDetailLoading = false;
             if (soft && currentRun) {
                 UI.reportError('Failed to refresh the protocol run detail', err, {

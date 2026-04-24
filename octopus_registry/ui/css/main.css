@@ -391,6 +391,7 @@ select {
 #content {
     margin-left: var(--sidebar-width);
     flex: 1;
+    min-width: 0;
     min-height: 100vh;
     padding: clamp(18px, 1.8vw, 24px);
     max-width: none;
@@ -398,6 +399,8 @@ select {
 }
 
 #content > .content-inner {
+    width: 100%;
+    min-width: 0;
     max-width: var(--content-max);
     margin: 0 auto;
 }
@@ -788,6 +791,7 @@ select {
 .card,
 .workspace-section,
 .summary-card {
+    min-width: 0;
     padding: var(--card-padding);
 }
 

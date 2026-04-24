@@ -91,13 +91,14 @@ database objects or implementation layers.
 ## Latest Active Fixes
 
 - Real Safari full-audit pass on 2026-04-24 confirmed the next blocking
-  defect: completed protocol stage tasks expand inline on the Tasks surface,
-  but produced artifacts are missing there even when the matching Run shows
-  those artifacts. This violates the artifact action contract because a human
+  defect: completed protocol stage tasks opened by clicking a collapsed Tasks
+  row did not re-render into their expanded artifact state, even when the API
+  payload already contained `result.artifacts` and the matching Run showed the
+  artifacts. This violates the artifact action contract because a human
   entering from Tasks cannot preview, open, download, or copy output paths
   without knowing to jump to Runs. Fix direction: keep the existing shared task
-  artifact renderer and repair task payload enrichment so real protocol-stage
-  tasks receive their produced artifact evidence from the run.
+  artifact renderer, make expansion state part of the task-list render
+  signature, and force one re-render when a row expands or collapses.
 - The same Safari pass confirmed the Runs and Dashboard surfaces still expose
   stale/running protocol work as normal `running` or `leased` work even when a
   stuck-lease issue exists elsewhere. This is tracked as an active usability

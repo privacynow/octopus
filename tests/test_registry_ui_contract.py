@@ -912,6 +912,20 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "getProtocolRunArtifactText" not in api_js
 
 
+def test_task_expansion_rerenders_clicked_rows_before_showing_artifacts() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "expanded: expandedTaskIds.has(String(task.routed_task_id || ''))" in task_list
+    assert "if (!taskDetails.has(taskId) && !(task.request || task.result))" in task_list
+    assert "void loadTaskDetail(taskId);" in task_list
+    assert "renderList(currentTasks, currentListData);" in task_list
+    assert "const artifactEvidence = UI.taskArtifactEvidence(detailPayload);" in task_list
+    assert "outputsLabel.textContent = 'Outputs';" in task_list
+
+
 def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_safe() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     helper = (

@@ -238,6 +238,7 @@ function renderTaskList(container) {
                 conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
                 protocolRunId: String(task.protocol_run_id || ''),
                 stageKey: String(task.stage_key || ''),
+                expanded: expandedTaskIds.has(String(task.routed_task_id || '')),
                 detailState: taskDetailsLoading.has(String(task.routed_task_id || ''))
                     ? 'loading'
                     : taskDetailErrors.has(String(task.routed_task_id || ''))
@@ -462,6 +463,7 @@ function renderTaskList(container) {
                 if (!taskDetails.has(taskId) && !(task.request || task.result)) {
                     void loadTaskDetail(taskId);
                 }
+                renderList(currentTasks, currentListData);
             } else {
                 detail.hidden = true;
                 row.setAttribute('aria-expanded', 'false');
@@ -470,6 +472,7 @@ function renderTaskList(container) {
                     currentTaskId = '';
                     _writeState();
                 }
+                renderList(currentTasks, currentListData);
             }
         });
 

@@ -2227,6 +2227,7 @@ window.Kit = (() => {
         onSearch = null,
         onStatusFilter = null,
         onSelect = null,
+        renderExpanded = null,
         emptyHint = '',
     } = {}) {
         const root = document.createElement('div');
@@ -2272,10 +2273,19 @@ window.Kit = (() => {
             ));
         } else {
             entries.forEach((run) => {
+                const selected = String(run.id || '') === String(selectedId || '');
+                const entry = document.createElement('article');
+                entry.className = 'kit-runs-list-entry';
+                if (selected) {
+                    entry.classList.add('is-selected');
+                }
+                entry.dataset.runId = String(run.id || '');
+
                 const row = document.createElement('button');
                 row.type = 'button';
                 row.className = 'kit-runs-list-row';
-                if (String(run.id || '') === String(selectedId || '')) {
+                row.setAttribute('aria-expanded', String(selected));
+                if (selected) {
                     row.classList.add('is-selected');
                 }
                 row.dataset.runId = String(run.id || '');
@@ -2305,7 +2315,16 @@ window.Kit = (() => {
                 if (typeof onSelect === 'function') {
                     row.addEventListener('click', () => onSelect(run));
                 }
-                list.appendChild(row);
+                entry.appendChild(row);
+
+                if (selected && typeof renderExpanded === 'function') {
+                    const expanded = renderExpanded(run);
+                    if (expanded instanceof Node) {
+                        expanded.classList.add('kit-runs-inline-detail');
+                        entry.appendChild(expanded);
+                    }
+                }
+                list.appendChild(entry);
             });
         }
         root.appendChild(list);

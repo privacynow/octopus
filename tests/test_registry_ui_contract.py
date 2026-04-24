@@ -923,7 +923,13 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert ".list-row-with-artifact-actions {" in css
     assert "grid-template-columns: minmax(0, 1fr);" in css
     assert ".list-row-with-artifact-actions .artifact-action-row" in css
-    assert ".dashboard-board[data-route=\"protocol-runs\"]" in css
+    assert ".protocol-runs-workbench" in css
+    assert "renderExpanded = null" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    assert "renderExpanded: () => _buildRunDetailPanel()" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

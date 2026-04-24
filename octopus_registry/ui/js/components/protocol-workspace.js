@@ -5787,7 +5787,9 @@ function renderProtocolRuns(container) {
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
+        contentInner.classList.add('protocol-runs-route-shell');
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+        cleanups.add(() => contentInner.classList.remove('protocol-runs-route-shell'));
     }
 
     let runs = [];
@@ -5862,25 +5864,42 @@ function renderProtocolRuns(container) {
     }
 
     function _issueRows() {
-        return _filteredIssues().map((item) => UI.renderListRow({
-            label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.protocol_display_name || item.protocol_id || 'Protocol issue'}`,
-            sublabel: [
-                item.stage_key ? `stage ${item.stage_key}` : '',
-                item.issue_detail || item.issue_code || '',
-            ].filter(Boolean).join(' · '),
-            badgeText: item.issue_code || item.stage_key || '',
-            className: item.protocol_run_id === currentRunId ? 'is-selected' : '',
-            onClick: () => {
-                currentRunId = item.protocol_run_id;
-                currentRun = null;
-                currentIssues = [];
-                lastRunEvent = null;
-                runDetailLoading = true;
-                _writeState({ push: true });
-                renderRunsRoute();
-                void loadRunDetail();
-            },
-        }));
+        return _filteredIssues().map((item) => {
+            const selected = String(item.protocol_run_id || '') === String(currentRunId || '');
+            const shell = document.createElement('article');
+            shell.className = 'kit-runs-list-entry';
+            if (selected) {
+                shell.classList.add('is-selected');
+            }
+            shell.dataset.runId = String(item.protocol_run_id || '');
+            const row = UI.renderListRow({
+                label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.protocol_display_name || item.protocol_id || 'Protocol issue'}`,
+                sublabel: [
+                    item.stage_key ? `stage ${item.stage_key}` : '',
+                    item.issue_detail || item.issue_code || '',
+                ].filter(Boolean).join(' · '),
+                badgeText: item.issue_code || item.stage_key || '',
+                className: selected ? 'is-selected' : '',
+                onClick: () => {
+                    currentRunId = item.protocol_run_id;
+                    currentRun = null;
+                    currentIssues = [];
+                    lastRunEvent = null;
+                    runDetailLoading = true;
+                    _writeState({ push: true });
+                    renderRunsRoute();
+                    void loadRunDetail();
+                },
+            });
+            row.setAttribute('aria-expanded', String(selected));
+            shell.appendChild(row);
+            if (selected) {
+                const detail = _buildRunDetailPanel();
+                detail.classList.add('kit-runs-inline-detail');
+                shell.appendChild(detail);
+            }
+            return shell;
+        });
     }
 
     function _buildRunSummaryGrid() {
@@ -6159,6 +6178,7 @@ function renderProtocolRuns(container) {
                 renderRunsRoute();
                 void loadRunDetail();
             },
+            renderExpanded: () => _buildRunDetailPanel(),
         }));
         return panel;
     }
@@ -6472,26 +6492,12 @@ function renderProtocolRuns(container) {
             runSearch,
             timelineParticipantFilter,
         }, () => {
-            const compact = _isCompactViewport();
-            const board = document.createElement('div');
-            board.className = 'dashboard-board';
-            board.dataset.route = 'protocol-runs';
-            board.dataset.hasSelection = currentRunId ? 'true' : 'false';
-            board.dataset.issueMode = issueKindFilter ? 'true' : 'false';
-
-            const listColumn = document.createElement('div');
-            listColumn.className = 'dashboard-column';
-            listColumn.appendChild(_buildRunNavigatorPanel());
-
-            const detailColumn = document.createElement('div');
-            detailColumn.className = 'dashboard-column';
-            detailColumn.appendChild(_buildRunDetailPanel());
-
-            board.appendChild(listColumn);
-            if (!compact || currentRunId) {
-                board.appendChild(detailColumn);
-            }
-            return board;
+            const workbench = document.createElement('div');
+            workbench.className = 'protocol-runs-workbench';
+            workbench.dataset.hasSelection = currentRunId ? 'true' : 'false';
+            workbench.dataset.issueMode = issueKindFilter ? 'true' : 'false';
+            workbench.appendChild(_buildRunNavigatorPanel());
+            return workbench;
         });
     }
 

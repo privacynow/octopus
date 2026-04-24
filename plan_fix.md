@@ -1,280 +1,349 @@
-# Registry UI/UX Consolidation Plan
+# Registry Human-Usability Refactor Plan
 
 ## Status
 
-This is the active implementation plan.
+This is the active plan. It replaces the previous incremental UI cleanup plan.
 
-Latest correction: artifact access must be Registry-wide, not Runs-only. Runs
-already had the clearest artifact affordance, but Tasks, conversation task
-boards, dashboard task summaries, task-thread activity, and any future surface
-using task payloads must receive the same artifact evidence from the shared
-task API. The implementation must enrich `/v1/tasks` and `/v1/tasks/{id}` from
-the owning protocol run's artifact observations, then let the existing shared
-artifact row render preview/open/download/copy everywhere without page-local
-duplication.
+Implementation progress:
 
-## Current Scope Correction: Registry-Wide Desktop UX
+- Runs default split-pane composition has been removed in source. The selected
+  run now expands inline through the existing `Kit.runsList` path.
+- Runs route now has a viewport-bounded shell so long selected-run content
+  scrolls inside the work area instead of forcing page-level document scroll.
+- Conversation list rows now support inline inspection for status, agent,
+  primary actions, and linked runs before opening the full conversation
+  workspace.
+- Conversation list now has a viewport-bounded shell with internal list
+  scrolling.
+- Shared artifact action rendering is still reused; no new artifact row path
+  was introduced.
+- Remaining phases still require full visual audit, broader Work-surface
+  alignment, deployment, and end-to-end scenario execution.
 
-The active defect is not isolated to Runs. Runs exposed the clearest failure,
-but the same design problem exists across the Registry: shared list rows,
-detail panels, action groups, metadata grids, split workspaces, and dense
-section stacks were optimized around narrow/mobile containment and then reused
-on desktop without a coherent desktop information hierarchy.
+The latest finding is product-level, not page-level: the Registry still has
+multiple competing interaction models for the same kind of object. Stages and
+some task views use progressive inline expansion. Runs use a split list/detail
+workbench. Conversations use a full-page document/workspace with long vertical
+flow. Agents, capabilities, protocol authoring, tasks, approvals, and artifacts
+each expose related concepts with different density, action placement, and
+expansion behavior.
 
-This pass applies to every primary Registry surface:
+That inconsistency is the core usability failure. The fix is not more local CSS
+or another one-off Runs redesign. The fix is one Registry interaction grammar,
+applied across every major surface.
 
-- Dashboard
-- Conversations and conversation detail
-- Runs and run detail
-- Tasks and task detail
-- Approvals
-- Protocols and protocol authoring
-- Templates
-- Capabilities
-- Agents and agent detail
-- Operations, routing, guidance, usage, and diagnostics
+## What Went Wrong In The Previous Pass
 
-The product rule is:
+The prior work improved pieces of the UI but did not fully solve the human
+workflow:
 
-> Desktop is not just wider mobile. Desktop gets a stable work surface,
-> readable hierarchy, visible primary actions, and container-aware wrapping.
-> Narrow/mobile keeps the progressive single-column model.
+- Desktop was treated as wider mobile instead of a distinct work surface with
+  its own hierarchy and reading rhythm.
+- Runs kept an old split-pane model while stages/tasks moved toward inline
+  progressive editing.
+- Conversations still behave like a long document rather than a bounded
+  workspace with persistent context and reachable actions.
+- Related objects such as run, task, conversation, approval, stage, and artifact
+  are still rendered as neighboring resources instead of one lineage.
+- Some clickable-looking rows do not reveal the expected details in place.
+- Horizontal pressure was reduced in isolated spots but not solved at the
+  interaction-model level.
+- Vertical overflow is still uncontrolled on long Runs and Conversations views.
+- Dense metadata, repeated pills, borders, and raw technical concepts still
+  compete with the user's actual job.
 
-### Definition of Done for This Pass
+The new plan treats these symptoms as one design-system and product-flow issue.
 
-- Every shared row that looks clickable either performs a primary action or no
-  longer advertises clickability through cursor, hover, role, or focus styling.
-- Every concrete artifact reference has the same preview/open/download/copy
-  affordances where the file exists, and a clear unavailable state where it
-  does not.
-- Artifact action groups wrap within their actual panel/container on desktop;
-  they must not depend only on viewport breakpoints.
-- List/detail pages use a desktop workbench pattern that keeps the selected
-  object readable without clipping actions or forcing unrelated concepts into
-  one horizontal row.
-- Dashboard, Runs, Tasks, Conversations, Agents, Capabilities, Protocols, and
-  Approvals all use the same shared density, spacing, action-row, and row
-  affordance contracts.
-- Mobile/narrow behavior remains progressive: one primary object at a time,
-  no horizontal overflow, and no hidden action groups.
-- Visual validation includes real desktop Safari plus narrow viewport checks.
+## Product North Star
 
-### Desktop UX Contracts
+A human user should be able to:
 
-1. **Stable work area**: desktop list/detail pages may use side-by-side layout,
-   but the detail column must be treated as a constrained container. Rows inside
-   it must wrap or stack based on available container space, not the global
-   viewport width.
-2. **Object hierarchy over piles**: runs, tasks, conversations, approvals,
-   participants, and artifacts must be grouped by their relationship to the
-   selected object. A detail panel should tell one story before exposing raw
-   resource lists.
-3. **Visible actions**: primary actions belong in stable header/action regions.
-   Secondary row actions may wrap below metadata, but must remain visible
-   without horizontal scrolling on desktop.
-4. **Artifact consistency**: any artifact reference uses one shared artifact-row
-   contract. Existing files can be previewed/opened/downloaded/copied. Missing
-   declared outputs show missing state and copy-path only.
-5. **Reduced cognitive load**: dense internals such as selector diagnostics,
-   raw capacity, worker internals, routing internals, and raw IDs remain
-   operator/technical details, not the dominant default content.
-6. **No parallel UI path**: implement these rules by extending existing shared
-   primitives and page renderers. Do not add duplicate run/detail/task/artifact
-   components.
+- create or choose a protocol
+- start work from a conversation, agent, protocol, or dashboard
+- follow execution from protocol to run to stage to task to artifact
+- understand what happened without joining separate lists mentally
+- preview, open, download, or copy produced artifacts wherever they appear
+- recover from blocked, failed, or stale work without needing raw internals
+- use agents and capabilities without understanding selector diagnostics,
+  workers, raw capacity, or routing plumbing
 
-### Immediate Implementation Steps
+The UI must make the workflow visible through product concepts, not through
+database objects or implementation layers.
 
-1. Update shared list-row semantics so passive rows are visually passive and
-   actionable rows are explicitly marked.
-2. Extend the existing artifact action helper and list-row integration so
-   artifact rows stack metadata, verification, and actions reliably in
-   constrained desktop panels.
-3. Apply a container-safe layout contract to shared workbench, editor-panel,
-   dashboard-board, metadata-grid, action-row, task-item, lineage, and kit list
-   widgets.
-4. Convert run detail, task detail, dashboard sections, conversations, agents,
-   capabilities, approvals, and protocols to consume those shared contracts
-   instead of page-local one-off spacing.
-5. Add UI contract tests that fail if artifact actions are only mobile-wrapped
-   or passive rows still advertise clickability.
-6. Enrich task list/detail payloads with protocol-run artifact observations so
-   every task consumer, including conversations and dashboard-derived task
-   sections, can use the same artifact row contract.
-7. Validate in real Safari at desktop width and in a narrow/mobile viewport.
+## Core Product Rule
 
-The Registry UI is no longer blocked by one isolated protocol-editor bug. The
-current failure mode is product-level cognitive overload: internal system
-concepts are exposed as first-class user surfaces, related concepts are split
-across multiple tabs, and the places where redundancy would help users act are
-missing.
+Use one object interaction grammar everywhere:
 
-This plan replaces the previous protocol-only framing with a Registry-wide UI
-consolidation plan. Protocol authoring remains part of the work, but the larger
-goal is to make the product understandable from a human user's perspective:
+1. A row/card gives a readable summary.
+2. Clicking the row expands details inline directly under that row/card.
+3. Only one item in a list is expanded by default unless a surface explicitly
+   needs multi-select comparison.
+4. The expanded content is progressive: summary first, artifacts/actions next,
+   lineage/context next, technical details last.
+5. Full detail pages still exist for deep links and power use, but they are
+   secondary. They must not be the only way to inspect an object.
+6. URLs with an object id select and expand the matching row, not just open a
+   disconnected side panel.
 
-- users should know where to create workflows
-- users should know where to start work
-- users should know what agents can do
-- users should know what happened after execution
-- users should know where outputs/artifacts live
-- operators should still have diagnostics, but not as default authoring UI
-- the same object should not appear under multiple names unless the distinction
-  is meaningful and visible
+This same grammar applies to runs, conversations, tasks, approvals, protocol
+stages, agents, capabilities, and dashboard work cards unless there is a clear
+product reason to make an exception.
 
-No implementation should add parallel UI or API paths. Consolidate existing
-surfaces and extend the current components, stores, SDK interfaces, and tests in
-place.
+## Viewport Contract
 
-## Core Problem Statement
+Primary Registry work surfaces must be viewport-bounded:
 
-The Registry currently exposes implementation layers as peer navigation items:
+- The app shell stays within the browser viewport.
+- Navigation and page identity remain stable.
+- Search/filter/action regions do not scroll away immediately.
+- Lists use internal scrolling or visible pagination sized to the available
+  work area.
+- Expanded details are contained and scroll internally when needed.
+- Conversation composer and primary actions remain reachable.
+- No surface relies on full-document vertical scrolling for normal operation.
+- No surface introduces horizontal page overflow at desktop or narrow widths.
 
-- Gallery
-- Protocols
-- Runs
-- Tasks
-- Conversations
-- Agents
-- Skills
-- Routing
-- Guidance
-- Workers / capacity / selector diagnostics inside agent detail
+Long content is allowed, but it must live inside an intentional work region, not
+push the whole application below the screen.
 
-This asks users to understand the Registry's internals before they can do
-simple work. A user should not need to know the difference between installed
-skills, advertised skills, routing skills, selector resolution, task threads,
-runtime workers, and protocol templates just to answer:
+## Shared Design Contracts
 
-- What can this agent do?
-- Can I start a conversation with it?
-- Can I run a protocol?
-- Where are the outputs?
-- Is the system healthy enough to use?
+### 1. Expandable Object Row
 
-The main live issues are:
+Every repeated operational object should use the same contract:
 
-1. `Gallery` is actually a small protocol-template/examples surface, not a
-   gallery of all protocols. It conflicts with `Protocols` and creates a false
-   mental model.
-2. `Agents` is overloaded. The page mixes profile, health, skills, routing
-   diagnostics, admin controls, workers, capacity, conversations, and task
-   threads into one dense scroll.
-3. The agent page has the wrong redundancy. It repeats health/connectivity in
-   multiple places, but does not keep `Start conversation` available when the
-   user scrolls down into related work.
-4. `Skills`, `Advertised skills`, and `Routing` describe the same capability
-   domain from different system layers. They are currently presented as
-   separate product concepts.
-5. `Selector resolution preview` is useful as an operator diagnostic, but it is
-   not meaningful on the default agent profile page.
-6. `Capacity 0 / 1` exposes scheduler internals without explanation. It is not
-   legible as user-facing state.
-7. `Workers` is empty for current agents and reads as broken or irrelevant.
-   Worker/runtime diagnostics should not occupy default product space when
-   empty.
-8. Admin controls are visually and conceptually mixed into normal agent use.
-   Trust tier, token rotation, capacity mutation, and soft-delete are operator
-   tools.
-9. Skill lists are intimidating and not scalable. A flat list of every skill or
-   generated skill name does not help a user pick a capability.
-10. Runs, tasks, conversations, approvals, and artifacts are still not presented
-    as one clear execution lineage.
-11. Protocols can be created and launched, but the route from protocol template
-    to authored protocol to conversation launch to run outputs is still spread
-    across too many surfaces.
-12. Deployment practice must be disciplined: code changes happen in the source
-    checkout, then push/pull into the canonical Octopus checkout. Do not deploy
-    from stale local `.deploy` state and do not use source-to-target sync as the
-    deployment mechanism.
+- summary title
+- human status
+- key context
+- primary action or inline expand action
+- secondary actions that wrap inside the row
+- expanded region directly below the selected row
 
-## Product Principles
+Rows that do not expand or navigate must not look clickable.
 
-### 1. Product nouns beat system nouns
+### 2. Progressive Expansion Panel
 
-Default navigation should use terms that match user goals:
+Expanded panels use the same section order:
 
-- Work
-- Build
-- Team
-- Operations
+1. Outcome or current state
+2. Primary actions
+3. Produced or expected artifacts
+4. Lineage and related work
+5. Decisions, approvals, or issues
+6. Technical details
 
-Internal terms are allowed only where they directly support an operator task.
+Sections should be collapsed or summarized when they are not central to the
+current task.
 
-### 2. One concept, one primary home
+### 3. Execution Lineage
 
-Each object type needs one primary surface:
-
-- authored workflows live in `Protocols`
-- reusable starters live in `Templates`
-- human-facing execution lives in `Runs`
-- people/agents live in `Agents`
-- agent abilities live in `Capabilities`
-- low-level routing diagnostics live in `Operations`
-
-Cross-links are allowed. Duplicate primary homes are not.
-
-### 3. Progressive disclosure by default
-
-The default path shows what the user can act on now. Diagnostics and internals
-are behind explicit progressive disclosure or operator-only routes.
-
-### 4. Good redundancy is action redundancy
-
-Repeat important actions where users need them:
-
-- start conversation from agent header and related-work section
-- run protocol from protocol page, conversation page, and agent context
-- open/download/copy artifact wherever a concrete artifact appears
-
-Do not repeat passive status labels without adding comprehension or action.
-
-### 5. Capabilities are user-facing; routing is infrastructure
-
-Users choose capabilities. The system routes. Operators inspect routing.
-
-### 6. Run lineage is one story
-
-Every execution view should reveal:
+Execution views must present one story:
 
 - protocol
 - run
-- stages
-- routed tasks
-- agent/participant assignment
-- approvals/decisions
-- conversations/activity
-- artifacts read, written, reviewed, approved, or verified
+- stage
+- task
+- assigned agent or participant
+- conversation or activity
+- approval or decision
+- artifacts
 
-The user should not have to mentally join independent lists.
+The user should be able to enter from any of these objects and understand the
+same hierarchy.
 
-### 7. Shared workspace artifacts are first-class outputs
+### 4. Artifact Action Contract
 
-Concrete runtime artifacts must consistently expose:
+Every concrete artifact reference uses the same shared artifact row:
 
 - label
 - producing stage/task
 - path
-- verification state
-- preview/open/download/copy path actions when available
+- verification or availability state
+- Preview when previewable
+- Open when browser-viewable
+- Download when bytes are available
+- Copy path
 
-Declared design-time artifacts must not pretend bytes exist before a run has
-produced them.
+Declared artifacts that have not been produced must say `Not produced yet` or
+`Declared only`. They must not render broken Preview/Open/Download actions.
 
-### 8. Operator tools stay available, but not dominant
+### 5. Capability Contract
 
-Routing, selector preview, workers, token rotation, trust tier, and raw capacity
-are real capabilities. They belong in `Operations` or operator drawers, not in
-the normal author/agent/product path.
+Users see capabilities. Operators see routing internals.
+
+Default authoring and conversation surfaces should show:
+
+- capability name
+- plain-language description
+- available agents
+- where it can be used
+- setup state
+
+Default surfaces should not show selector resolution, advertised skill plumbing,
+generated timestamp skill spam, raw worker state, or raw capacity mutation.
+
+### 6. Density Contract
+
+Lower density is achieved by reducing simultaneous concepts, not by shrinking
+everything.
+
+Default UI should use:
+
+- fewer borders
+- calmer typography for inactive rows
+- more whitespace around major decisions
+- compact rows only for repeated scan lists
+- plain-language labels instead of raw IDs wherever possible
+- technical details behind explicit disclosure
+
+## Current Live Defects To Fix
+
+### Runs
+
+Observed problem:
+
+- Runs uses a split list/detail layout while stages and tasks use inline
+  expansion.
+- The selected run detail appears disconnected from the clicked row.
+- The layout is horizontally strained on desktop because the list and detail
+  column compete for width.
+- Artifact rows, lineage entries, participant filters, metadata cards, and
+  action groups fight for space inside the detail column.
+- The page behaves like a long document and can run past the screen vertically.
+- Output rows can look clickable even when the meaningful action is hidden in
+  small buttons.
+
+Target behavior:
+
+- Runs list is full-width within the work area.
+- Clicking a run expands the run detail inline under that run row.
+- The expanded run panel contains progressive sections:
+  - state and outcome
+  - outputs/artifacts
+  - stage timeline
+  - task lineage
+  - approvals/decisions
+  - participants
+  - issues/support diagnostics
+- The old side-detail panel is removed from the default path.
+- Deep links select and expand the target run.
+- Running/stale/blocked states are human-readable. A run that is no longer
+  advancing should not look simply healthy and `running`.
+- Long lineage uses contained scrolling or section pagination.
+
+### Conversations
+
+Observed problem:
+
+- Conversation list is calmer than Runs but still uses full-page vertical flow.
+- Selecting a conversation navigates away instead of first offering inline
+  context.
+- Conversation detail can become a long workspace where task boards, linked
+  runs, artifacts, and messages exceed the viewport.
+- Composer and primary actions can become detached from the current context.
+- Operational task threads can look empty when the useful content is activity.
+- Linked runs are visible, but not progressively inspectable in place.
+
+Target behavior:
+
+- Conversation rows can expand inline for preview, linked runs, recent tasks,
+  recent artifacts, and primary actions.
+- `Open full conversation` remains available for message-heavy work.
+- Full conversation detail is a viewport-bounded workspace.
+- Header/context remains stable.
+- Composer remains reachable.
+- Linked runs and tasks expand in place using the same run/task expansion
+  contract.
+- Operational task threads default to the activity/task view when that is the
+  useful content.
+- Long task/activity lists are paginated or internally scrolled within the
+  available work area.
+
+### Tasks
+
+Observed problem:
+
+- Task detail is closer to the target model, but still must be aligned with
+  Runs and Conversations.
+- Task artifacts and parent lineage must remain consistent everywhere a task
+  appears.
+
+Target behavior:
+
+- Task rows expand inline under the clicked task.
+- Expanded task content shows parent run, parent stage, assignment, expected
+  outputs, actual artifacts, and conversation/activity.
+- Task detail deep links select and expand the matching task.
+- Artifact actions are identical to Runs and Conversations.
+
+### Approvals
+
+Observed problem:
+
+- Approvals can read as isolated decisions rather than part of execution
+  lineage.
+
+Target behavior:
+
+- Approval rows expand inline.
+- Expanded approval content shows the run/stage/task context, artifact(s) under
+  review, decision state, reviewer, and links/actions.
+- Approval artifacts use the same artifact row contract.
+
+### Dashboard
+
+Observed problem:
+
+- Dashboard risks becoming another duplicate resource index.
+
+Target behavior:
+
+- Dashboard shows high-level entry points and attention items.
+- Dashboard cards expand inline only enough to orient the user.
+- Full details route to the canonical surface, where the selected row expands.
+- Recent artifacts use the same action contract.
+
+### Protocols And Stages
+
+Observed problem:
+
+- Protocol stages are closest to the desired inline model, but density and
+  screen movement can still disrupt work.
+- Stage authoring must not reintroduce side panels or disconnected drawers.
+
+Target behavior:
+
+- Stage editor remains inline under the selected stage.
+- Add-stage and remove-stage actions stay local to the stage.
+- Stage sub-sections are progressive and do not push the active work below the
+  screen unnecessarily.
+- Artifact expectations are clear before execution and become actionable after
+  a run produces bytes.
+- Standard authoring hides internal runtime selector and advanced plumbing.
+
+### Agents And Capabilities
+
+Observed problem:
+
+- Agents and capabilities still expose too many internal concepts as default
+  content.
+- Capabilities can become an intimidating wall of names.
+- There is still risk of duplicated skill/routing/advertised-skill concepts.
+
+Target behavior:
+
+- Agent list uses human status: Ready, Busy, Unavailable, Needs setup.
+- Agent detail has a stable header with Start conversation and Run protocol.
+- Capabilities are grouped, searchable, and summarized.
+- Generated timestamp names do not appear in default pickers.
+- Selector preview, raw routing, worker diagnostics, token rotation, trust
+  mutation, and capacity mutation live in Operations or technical details.
 
 ## Target Information Architecture
 
-### Primary Navigation
+### Work
 
-Replace the current flat navigation with four grouped areas.
-
-#### Work
-
-Default operational work surfaces:
+Surfaces:
 
 - Dashboard
 - Conversations
@@ -282,1035 +351,461 @@ Default operational work surfaces:
 - Tasks
 - Approvals
 
-`Work` answers: what is happening, what needs attention, and where do I resume?
+Purpose:
 
-#### Build
+- what is happening
+- what needs attention
+- where to resume
+- where to inspect outputs
 
-Creation and authoring surfaces:
+### Build
+
+Surfaces:
 
 - Protocols
 - Templates
-- Capabilities, if skill authoring is user-facing
+- Capabilities when authoring is user-facing
 
-`Build` answers: what can I create, edit, publish, and reuse?
+Purpose:
 
-#### Team
+- create, edit, publish, reuse, and launch workflows
 
-People/agent surfaces:
+### Team
+
+Surfaces:
 
 - Agents
 - Agent detail
-- Agent conversations/runs/tasks
+- Agent-related work
 
-`Team` answers: who can do work, what can they do, and how do I start with
-them?
+Purpose:
 
-#### Operations
+- understand who can do work
+- start work with an agent
+- inspect an agent's recent work
 
-Operator-only or advanced surfaces:
+### Operations
+
+Surfaces:
 
 - Routing
 - Selector diagnostics
 - Worker/runtime diagnostics
-- Guidance/provider configuration
-- Trust/capacity/token controls
-- Usage
+- Provider guidance
+- Capacity, trust, tokens, usage
 
-`Operations` answers: how is the system wired and healthy?
+Purpose:
 
-### Navigation Decisions
+- inspect and operate the system
+- not default authoring or execution flow
 
-- Rename `Gallery` to `Templates`.
-- Move `Templates` under `Protocols` or keep it as a secondary item in `Build`,
-  not as a peer that sounds like all protocols.
-- Do not show `Routing`, `Guidance`, or selector diagnostics in the normal
-  authoring path unless the current user/session is in operator mode.
-- Keep `Runs` top-level because it is a real user need, but every protocol and
-  conversation should link into the same run detail contract.
+## Implementation Guidance
 
-## Target Page Designs
+Do not add parallel UI layers. Extend existing shared primitives and page
+renderers in place.
 
-## Protocols and Templates
+Before adding a new function, component, CSS class, or API projection:
 
-### Problem
+1. Search for the existing shared primitive.
+2. Extend the shared primitive if the concept is the same.
+3. Replace page-local behavior with the shared primitive when possible.
+4. Add a new helper only if there is no coherent existing owner.
+5. If a new helper is necessary, document its single responsibility and use it
+   from every relevant surface immediately.
 
-`Gallery` currently contains protocol examples/templates, while `Protocols`
-contains authored definitions. The split is understandable internally but not
-obvious to users.
+Known shared concepts that should have one owner:
 
-### Target
+- object row
+- expandable detail panel
+- work-surface viewport container
+- action row
+- metadata grid
+- artifact row/actions
+- lineage projection
+- capability projection
+- status badge/status language
+- pagination/internal-scroll behavior
 
-`Protocols` becomes the workflow home:
+## Implementation Phases
 
-- Published
-- Drafts
-- Templates
-- Recent runs
+### Phase 0: Inventory And Removal Map
 
-Templates are starters, not a separate product destination.
+Goals:
 
-### Behavior
+- identify every list/detail, side-panel, drawer, and full-document-scroll
+  pattern
+- map each to the target inline expansion grammar
+- find page-local duplicate row/artifact/action components
 
-- `New protocol` opens a choice:
-  - start blank
-  - start from template
-  - compose from existing protocol/capability
-- Template cards clearly say `Template`, not `Protocol`.
-- Using a template creates an authored draft and moves the user into the normal
-  protocol editor.
-- Published protocol detail includes:
-  - start from conversation
-  - run now
-  - recent runs
-  - output artifacts from recent runs
-  - edit draft if permitted
+Steps:
 
-### Acceptance
+1. Inventory Runs, Conversations, Tasks, Approvals, Dashboard, Protocols,
+   Agents, Capabilities, and Operations.
+2. Mark each current pattern:
+   - keep and extend
+   - replace with shared expandable row
+   - move to Operations
+   - delete as duplicate/dead code
+3. Identify old split-pane assumptions in CSS and JS.
+4. Identify tests that assert old side-panel behavior.
+5. Update this plan with any discovered blockers before implementation.
 
-- A user can explain the difference between a template and a protocol from the
-  UI alone.
-- There is no top-level `Gallery` label.
-- No protocol exists only in Templates unless it is explicitly a template.
-- Creating a protocol from a template follows the same authoring pipeline as
-  blank creation.
+Acceptance:
 
-## Agent List
+- every affected surface has one target interaction model
+- no duplicate replacement components are proposed
+- old tests that encode broken UI are listed for rewrite or deletion
 
-### Problem
+### Phase 1: Shared Interaction Grammar
 
-Agent cards combine status, identity, provider, slug, capacity, and trust tier
-without prioritizing what users need.
+Goals:
 
-### Target
+- create or extend one reusable object-row and expansion contract
+- create one viewport-bounded work-surface contract
 
-Agent list answers:
+Steps:
 
-- Is this agent usable?
-- What kind of agent is it?
-- What can I start?
-- What are its top capabilities?
+1. Extend the existing shared list/row primitive to support inline expansion.
+2. Extend the existing panel/section primitive for progressive expansion
+   content.
+3. Add a shared work-surface layout that bounds list and expansion content to
+   the viewport.
+4. Add a shared internal-scroll/pagination rule for long sections.
+5. Ensure action rows wrap inside their container, not based only on global
+   viewport breakpoints.
+6. Ensure passive rows do not advertise clickability.
 
-### Behavior
+Acceptance:
 
-Each agent card should show:
+- one shared row expansion contract exists
+- one shared viewport work-surface contract exists
+- shared artifact rows fit inside the expansion panel
+- desktop and narrow use the same mental model
 
-- display name
-- status: `Ready`, `Busy`, `Unavailable`, or `Needs setup`
-- provider
-- top 3 capabilities plus `+N more`
-- last active time
-- primary action: `Start conversation`
-- secondary action: `View details`
+### Phase 2: Runs Inline Expansion
 
-Avoid showing raw values such as `capacity 0/1` on the list. If capacity must be
-visible, translate it:
+Goals:
 
-- `Ready`
-- `Busy: 1 of 1 work slots used`
-- `Idle: 0 of 1 work slots used`
+- remove the default split-pane Runs experience
+- make Runs match the progressive stage/task model
 
-### Acceptance
+Steps:
 
-- The list is scannable with M1, M2, M3, and Rehearsal.
-- A user can start a conversation without opening the detail page.
-- Raw agent IDs are not shown in the default card.
-- Raw capacity notation is not shown in the default card.
-
-## Agent Detail
-
-### Problem
-
-Agent detail is currently a mixed admin/runtime/capability/conversation page.
-It is too dense and too scroll-dependent.
-
-### Target
-
-Agent detail becomes a progressive profile with persistent actions.
-
-### Default Layout
-
-#### Header
-
-Show:
-
-- agent name
-- simple status
-- provider
-- slug if needed, but subdued
-- primary CTA: `Start conversation`
-- secondary CTA: `Run protocol with this agent`
-
-Keep the primary CTA sticky or repeated near the bottom of related work.
-
-#### Overview
-
-Show only human-legible basics:
-
-- provider
-- status
-- last active
-- trust tier if meaningful to users
-- workspace/scope only if it affects use
-
-Move raw IDs into `Technical details`.
-
-#### Capabilities
-
-Show curated capability groups:
-
-- Core engineering
-- Integrations
-- Review and quality
-- Custom
-
-Show top capabilities first. Allow search/filter. Do not dump every skill as a
-wall of chips.
-
-Use capability names users understand. Keep raw selectors hidden unless the user
-opens technical details.
-
-#### Related Work
-
-Show:
-
-- recent conversations
-- recent runs
-- active tasks
-- recent artifacts if they exist
-
-Use one combined “recent work” story before listing every task thread.
-
-#### Technical Details
-
-Collapsed by default:
-
-- agent ID
-- slug
-- transport
-- execution state
-- raw capacity
-- registry scope
-- advertised skills/raw selectors
-
-#### Operations
-
-Visible only for operators or behind an explicit `Operations` tab/drawer:
-
-- trust tier mutation
-- capacity mutation
-- token rotation
-- disconnect / soft-delete
-- selector resolution preview
-- worker diagnostics
-
-### Workers
-
-Hide `Workers` when empty in the default view.
-
-If workers exist, show a compact runtime summary:
-
-- process count
-- last heartbeat
-- current assignment
-- link to diagnostics
-
-Full worker detail belongs in Operations.
-
-### Selector Preview
-
-Move selector preview out of default agent detail.
-
-New home:
-
-- `Operations > Routing diagnostics`
-- optional deep link from agent technical details: `Test routing selectors`
-
-Rename to `Routing selector test` or `Selector diagnostics`.
-
-Explain it in product terms:
-
-> Test how @agent, @skill, and @role selectors resolve before changing routing
-> or protocol assignment rules.
-
-### Acceptance
-
-- Default agent page fits the first meaningful summary and primary actions in
-  one viewport on desktop.
-- Mobile shows a clear header, status, and primary action before any dense data.
-- `Start conversation` is reachable without scrolling back to the top.
-- `Selector resolution preview` is not visible on the default agent page.
-- Empty workers are not visible on the default agent page.
-- Admin actions are not mixed into normal agent use.
-
-## Capabilities, Skills, and Routing
-
-### Problem
-
-The current UI has three overlapping concepts:
-
-- installed skills
-- advertised skills
-- routing skills
-
-Users see them as separate lists and cannot tell which one they should care
-about.
-
-### Target
-
-Create one user-facing concept: `Capabilities`.
-
-Capabilities answer:
-
-- what can agents do?
-- which agents can do it?
-- can I use it in a conversation?
-- can I assign it in a protocol stage?
-- does it require setup?
-
-Routing is the operator implementation layer behind capabilities.
-
-### Behavior
-
-#### Capabilities Page
-
-Replace or consolidate `Skills` and the user-facing parts of `Routing`.
-
-Each capability row/card shows:
-
-- name
-- description
-- category
-- available agents
-- setup status
-- use surfaces:
-  - conversation
-  - protocol stage
-  - routing selector
-- status:
-  - available
-  - setup required
-  - disabled
-  - operator-only
-
-#### Agent Capability View
-
-On agent detail, show capabilities scoped to that agent with the same model.
-
-#### Routing Diagnostics
-
-Move raw routing toggles and advertised-by details into Operations:
-
-- capability enable/disable
-- advertised-by raw agents
-- selector test
-- routing policy internals
-
-### Generated / Duplicate Skills
-
-Generated skills with timestamp suffixes must not appear as normal catalog
-choices.
-
-Rules:
-
-- standard picker shows published, named, user-meaningful capabilities only
-- generated/prototype skills are grouped under `Generated` or hidden behind
-  `Show generated capabilities`
-- duplicate names collapse to one capability with version/source detail
-- if a skill is stale, deleted, or superseded, it is not shown in default
-  authoring pickers
-
-### Acceptance
-
-- A user sees one capability list, not separate skill/routing concepts.
-- Agent detail and protocol assignment use the same capability presentation.
-- Routing internals remain accessible to operators.
-- Timestamp-generated skill names do not pollute default pickers.
-- The same capability can be used from conversation and protocol assignment
-  without duplicative UI logic.
-
-## Conversations
-
-### Problem
-
-Conversations are the natural starting point for work, but protocol launch and
-agent/capability use are still inconsistently surfaced. Operational task
-threads also look like empty chats when their useful content is activity.
-
-### Target
-
-Conversation detail becomes the primary “do work” surface.
-
-### Behavior
-
-Conversation composer should support:
-
-- mention agent
-- choose capability
-- start protocol
-- attach or reference artifact
-- inspect linked runs
-
-Protocol launch from conversation should use the same published protocol list as
-the protocol page.
-
-Operational task threads should default to activity view when activity is the
-main content. Message-first conversations should default to chat.
-
-### Acceptance
-
-- A user can start a published protocol from a conversation without leaving the
-  conversation surface.
-- A user can use an agent/capability from the same area.
-- Linked runs appear in context and open to run detail.
-- Operational task threads do not look empty when they contain activity.
-
-## Runs, Tasks, Approvals, and Artifacts
-
-### Problem
-
-Runs, tasks, approvals, conversations, and artifacts are currently rendered as
-neighboring resources. Users need to see the hierarchy and lineage.
-
-### Target
-
-Execution UI presents one connected story:
-
-- protocol
-- run
-- stage execution
-- task
-- conversation/activity
-- approval/decision
-- artifacts
-
-### Behavior
-
-#### Run Detail
-
-Run detail should be the canonical execution record.
-
-Show:
-
-- run status
-- current/final stage
-- protocol name and version
-- linked conversation
-- stage timeline
-- output artifacts
-- decisions/approvals
-- task lineage
-
-#### Task Detail
-
-Task detail should always show:
-
-- parent run if any
-- parent stage if any
-- assigned agent
-- expected inputs/outputs
-- actual artifacts produced
-- links back to run and conversation/activity
-
-#### Approval Detail
-
-Approval detail should show:
-
-- run/stage/task context
-- artifact(s) under review
-- decision and reviewer
-- links back to run and conversation/activity
-
-#### Artifact References
-
-Wherever a concrete artifact appears, expose the same action contract:
-
-- Preview when previewable
-- Open when browser-viewable
-- Download
-- Copy path
-
-Where an artifact is only declared and not yet produced:
-
-- show `Not produced yet`
-- show which stage is expected to produce it
-- do not render broken file actions
-
-### Acceptance
-
-- A user can start from a run, task, approval, or conversation and understand
-  where they are in the same execution hierarchy.
-- Runtime artifacts have consistent actions across surfaces.
-- Declared-but-not-produced artifacts are clearly non-actionable.
-- Duplicate artifact rows for the same current artifact are collapsed with
-  history/stage context.
-
-## Dashboard
-
-### Problem
-
-Dashboard should orient users but must not become another redundant resource
-index.
-
-### Target
-
-Dashboard answers:
-
-- What needs attention?
-- What recently completed?
-- What can I start?
-- Are agents ready?
-
-### Behavior
-
-Dashboard sections:
-
-- Attention: failed runs, blocked tasks, approvals needed
-- Start: conversation, protocol, template
-- Active work: running runs/tasks
-- Outputs: recent artifacts
-- Team: agent readiness summary
-
-Each card links to the canonical surface, not a duplicate mini-detail.
-
-### Acceptance
-
-- Dashboard gives entry points without duplicating full pages.
-- Agent status appears as a summary, not a second agent page.
-- Recent artifacts link to the same artifact action contract.
-
-## Operations
-
-### Problem
-
-Admin/operator functions are scattered through normal pages.
-
-### Target
-
-Operations becomes the home for infrastructure and diagnostics.
-
-### Surfaces
-
-- Routing policies
-- Capability routing toggles
-- Selector diagnostics
-- Worker/runtime diagnostics
-- Provider setup/guidance
-- Trust and token management
-- Capacity management
-- Usage / quotas
-
-### Behavior
-
-Operations pages should be explicit about audience:
-
-> These controls affect how Registry routes and executes work.
-
-Normal users should not encounter these controls accidentally.
-
-### Acceptance
-
-- Normal agent detail does not show operator-only controls by default.
-- Operators can still reach every existing diagnostic/control capability.
-- Selector preview remains test-covered but is no longer a default profile
-  widget.
-
-## Visual and Interaction Direction
-
-### Density
-
-Reduce cognitive load by removing simultaneous structure, not merely shrinking
-spacing.
-
-Rules:
-
-- fewer borders
-- fewer all-caps labels
-- less repeated metadata
-- stronger section hierarchy
-- more whitespace around major decisions
-- compact only where scanning repeated rows
-
-### Progressive Panels
-
-Use progressive disclosure consistently:
-
-- summary first
-- primary action next
-- related work next
-- details on demand
-- operations last
-
-### Responsive Behavior
-
-Mobile must not become a single long dense document.
-
-Rules:
-
-- sticky primary actions where appropriate
-- collapsible technical details
-- searchable capability lists
-- related work tabs instead of huge stacked lists
-- no horizontal overflow
-
-## Implementation Plan
-
-## Phase 0: Inventory and Product Boundaries
-
-### Goals
-
-- Identify every current navigation item and its user/operator purpose.
-- Map each existing component to the target information architecture.
-- Decide which surfaces are default, progressive, or operator-only.
-
-### Steps
-
-1. Document current routes:
-   - Dashboard
-   - Conversations
-   - Tasks
-   - Protocols
-   - Gallery
-   - Runs
-   - Agents
-   - Usage
-   - Routing
-   - Skills
-   - Guidance
-2. Classify each route:
-   - user-facing work
-   - user-facing build
-   - team/agent
-   - operator/diagnostic
-3. Identify duplicated concepts:
-   - Gallery/Templates
-   - Skills/Capabilities/Routing
-   - agent status pills/overview fields
-   - conversations/task threads/activity
-4. Identify missing useful redundancy:
-   - start conversation from agent lower sections
-   - run protocol from agent context
-   - artifact actions across all references
-5. Produce route migration notes before code edits.
-
-### Acceptance
-
-- Every existing route has one target home.
-- No capability is lost.
-- No new parallel implementation path is proposed.
-
-## Phase 1: Navigation and Terminology
-
-### Goals
-
-- Rename confusing surfaces.
-- Group navigation by product intent.
-- Hide or demote operator surfaces from normal flow.
-
-### Steps
-
-1. Rename `Gallery` to `Templates`.
-2. Move Templates into the `Build` group or into Protocols as an internal tab.
-3. Group navigation visually:
-   - Work
-   - Build
-   - Team
-   - Operations
-4. Move `Routing`, `Guidance`, and low-level diagnostics under Operations.
-5. Decide whether `Skills` remains visible or becomes `Capabilities`.
-6. Update labels and empty-state copy.
-7. Update route tests and accessibility expectations.
-
-### Acceptance
-
-- No top-level route is named `Gallery`.
-- Navigation communicates intent without requiring internal knowledge.
-- Operator surfaces are still reachable but clearly separate.
-
-## Phase 2: Protocols + Templates Consolidation
-
-### Goals
-
-- Make protocol creation and template usage one coherent workflow.
-
-### Steps
-
-1. Add Templates as a tab/section in Protocols.
-2. Keep `Start blank` and `Use template` as creation choices.
-3. Ensure template use creates a normal protocol draft.
-4. Add recent runs and launch affordances to published protocol detail.
-5. Remove any duplicated Gallery-only behavior.
-6. Update E2E tests:
-   - start blank
-   - create from template
-   - publish
-   - launch from conversation
-   - verify artifacts
-
-### Acceptance
-
-- Templates are clearly starters.
-- Authored protocols remain in Protocols.
-- The protocol lifecycle is discoverable from one home.
-
-## Phase 3: Agent Page Refactor
-
-### Goals
-
-- Make agents usable as team members, not admin records.
-
-### Steps
-
-1. Refactor agent list cards:
-   - display status as Ready/Busy/Unavailable/Needs setup
-   - show top capabilities
-   - add `Start conversation`
-   - demote raw capacity
-2. Refactor agent detail:
-   - header with sticky/repeated `Start conversation`
-   - capability summary
-   - recent work
-   - collapsed technical details
-   - operator-only operations panel
-3. Move selector preview into Operations.
-4. Hide empty workers by default.
-5. Translate capacity labels.
-6. Remove repeated status pills that duplicate overview facts.
-7. Add responsive behavior for mobile:
-   - sticky action bar
-   - capability search
-   - related work tabs
-
-### Acceptance
-
-- A normal user can use an agent without seeing routing diagnostics.
-- Start conversation is always easy to reach.
-- Capability summary is scannable.
-- Admin/runtime internals are progressive or operator-only.
-
-## Phase 4: Capabilities Consolidation
-
-### Goals
-
-- Merge the user-facing parts of Skills and Routing into one capability model.
-
-### Steps
-
-1. Define a UI projection for capability:
-   - name
-   - description
-   - category
-   - available agents
-   - setup state
-   - routing state
-   - usable surfaces
-2. Reuse this projection in:
-   - agent detail
-   - protocol assignment
-   - conversation composer
-   - capability management
-3. Move raw advertised skills and routing toggles to Operations.
-4. Group generated/prototype skills.
-5. Collapse duplicate/generated timestamp names.
-6. Add search/filter/category behavior.
-7. Update tests for:
-   - agent capability display
-   - protocol assignment picker
-   - conversation capability use
-   - routing diagnostics still accessible to operators
-
-### Acceptance
-
-- Users see capabilities, not routing internals.
-- The same capability appears consistently across agent, protocol, and
-  conversation surfaces.
-- Generated junk names do not pollute default lists.
-
-## Phase 5: Conversation-First Work Launch
-
-### Goals
-
-- Make conversations the natural place to use agents, capabilities, and
-  protocols.
-
-### Steps
-
-1. Keep agent quick-start visible.
-2. Add protocol launch with search/select in conversation detail.
-3. Add capability selection in the same interaction model.
-4. Show linked runs directly in conversation context.
-5. Default operational task threads to activity/task view.
-6. Ensure protocol launch uses SDK/shared infrastructure, not a UI-only path.
-7. Test from Registry UI and Telegram where applicable.
-
-### Acceptance
-
-- A user can start work from conversation with:
-  - agent
-  - capability
-  - protocol
-- Linked runs and outputs are visible after execution.
-- Task threads do not appear empty when activity exists.
-
-## Phase 6: Execution Lineage and Artifact Contract
-
-### Goals
-
-- Make runs/tasks/approvals/conversations/artifacts read as one hierarchy.
-
-### Steps
-
-1. Define shared lineage card/component data:
-   - protocol
-   - run
-   - stage
-   - task
-   - agent
-   - conversation
-   - artifacts
-2. Use the shared projection in:
-   - Runs
-   - Tasks
-   - Approvals
-   - Conversations
-   - Agent related work
-   - Dashboard
-3. Ensure artifact rows use one action component everywhere.
-4. Distinguish declared artifacts from produced artifacts.
-5. Collapse duplicate current artifacts with history.
-6. Add output previews/open/download/copy path across all surfaces.
-
-### Acceptance
-
-- User can trace any task back to run/protocol/conversation.
-- User can trace any artifact back to stage/task/run.
-- Concrete artifact actions behave consistently everywhere.
-- No broken actions appear for unproduced artifacts.
-
-## Phase 7: Operations Surface
-
-### Goals
-
-- Preserve operator power while removing it from normal user flow.
-
-### Steps
-
-1. Create or consolidate Operations sections:
-   - Routing
-   - Selector diagnostics
-   - Worker diagnostics
-   - Provider/guidance setup
-   - Capacity and trust controls
-   - Tokens/disconnect
-2. Move existing controls rather than reimplementing them.
-3. Add clear warnings and audience copy.
-4. Gate operator-only controls consistently in UI and API.
-5. Update tests for both standard and operator surfaces.
-
-### Acceptance
-
-- Normal users do not see operator controls in default agent/product views.
-- Operators retain all required controls.
-- API permissions match UI visibility.
-
-## Phase 8: Visual System Cleanup
-
-### Goals
-
-- Restore lightness and scan quality without hiding important actions.
-
-### Steps
-
-1. Audit cards, borders, labels, and repeated metadata.
-2. Define density levels:
-   - hero/summary
-   - repeated list rows
+1. Convert Runs list to a full-width viewport-bounded work surface.
+2. Move run detail into inline expansion under the selected run row.
+3. Preserve deep links by selecting and expanding the matching run.
+4. Rebuild run expansion with shared sections:
+   - summary/outcome
+   - outputs
+   - lineage
+   - participants
+   - decisions
+   - issues
    - technical details
-   - diagnostic tables
-3. Reduce unnecessary borders and all-caps labels.
-4. Increase spacing around major decisions.
-5. Use compact rows only for repeated scan lists.
-6. Verify desktop and mobile screenshots at each step.
+5. Replace page-local artifact rendering with the shared artifact row.
+6. Add stale/running state language for runs that are not advancing.
+7. Remove dead side-panel CSS, JS branches, and tests.
 
-### Acceptance
+Acceptance:
 
-- Default pages no longer look like dense admin forms.
-- Mobile does not become a long unstructured scroll.
-- Important actions remain visible.
+- Runs has no default disconnected side-detail panel.
+- Clicking a run expands detail inline under that run.
+- Run detail does not create horizontal overflow on desktop.
+- Run detail does not push the whole page beyond the viewport for normal use.
+- Artifacts can be previewed/opened/downloaded/copied from the expanded run.
 
-## Phase 9: Testing and Visual Verification
+### Phase 3: Conversations Viewport Workspace
 
-### Required Scenario Specs
+Goals:
 
-Each release candidate must pass UI-level scenarios for:
+- make Conversations consistent without losing the conversation workspace
+  value
 
-1. Create protocol from blank.
-2. Create protocol from template.
-3. Launch protocol from conversation.
-4. Use agent capability from conversation.
-5. Assign capability/agent in protocol stage.
-6. Execute protocol and verify artifacts.
-7. Open run from conversation.
-8. Open task from run.
-9. Open artifact from run/task/conversation/agent related work.
-10. Operator opens routing diagnostics and selector test.
+Steps:
 
-### Negative Invariants
+1. Add inline expansion to the conversation list for quick preview and linked
+   work.
+2. Keep `Open full conversation` as a secondary action.
+3. Refactor full conversation detail into a viewport-bounded workspace.
+4. Keep header/context and composer reachable.
+5. Make linked runs expand in place using the Run expansion contract.
+6. Make linked tasks expand in place using the Task expansion contract.
+7. Default operational task threads to activity/tasks when messages are empty.
+8. Add pagination or internal scrolling for long activity/task lists.
 
-Standard user paths must not show:
+Acceptance:
 
-- custom runtime selector
-- Advanced protocol internals
-- selector resolution preview on agent detail
-- token rotation
-- soft-delete
-- raw capacity mutation
-- empty workers panel
-- generated timestamp skill spam in default pickers
+- Conversation list supports inline inspection.
+- Full conversation detail does not become an uncontrolled document scroll.
+- Composer remains reachable.
+- Linked runs/tasks are inspectable without context-jumping.
+- Empty-looking operational task threads are eliminated.
 
-### Visual Audit
+### Phase 4: Tasks, Approvals, Dashboard Alignment
 
-Use screenshots for:
+Goals:
 
-- desktop nav
-- mobile nav
-- protocols/templates
-- agent list
-- agent detail top
-- agent detail scrolled related work
-- capabilities page
-- conversation launch
-- run detail artifacts
-- task detail lineage
-- operations diagnostics
+- align adjacent Work surfaces with the same grammar
 
-The visual audit is breadth. Scenario specs are the release bar.
+Steps:
 
-## Deployment Rule
+1. Ensure task list/detail uses the same row expansion and viewport contract.
+2. Ensure approval list/detail uses the same row expansion and lineage sections.
+3. Ensure Dashboard cards link to canonical surfaces and only expand enough to
+   orient the user.
+4. Remove duplicate artifact/action rendering from these pages.
+5. Rewrite tests that assumed side panels or disconnected details.
 
-Do not deploy from the source checkout if its `.deploy` state is not canonical.
+Acceptance:
 
-Required deployment workflow:
+- tasks, approvals, and dashboard work cards follow the same interaction model
+- artifacts and lineage read the same across all Work surfaces
+- no duplicate page-local artifact row remains
 
-1. Commit changes in `/Users/tinker/output/bots/telegram-agent-bot`.
+### Phase 5: Protocol, Agent, And Capability Cleanup
+
+Goals:
+
+- keep the authoring and team surfaces aligned with the same product rules
+
+Steps:
+
+1. Preserve inline protocol stage editing.
+2. Ensure stage sub-sections are progressive and viewport-aware.
+3. Keep internal runtime selector and advanced plumbing out of the standard
+   authoring path.
+4. Refactor agent detail around summary, actions, capabilities, related work,
+   technical details, and operations.
+5. Keep `Start conversation` and `Run protocol` reachable in agent context.
+6. Consolidate skills/routing/advertised skills into user-facing capabilities.
+7. Hide generated timestamp skill spam from default pickers.
+
+Acceptance:
+
+- standard authors do not see operator plumbing
+- agents are usable without understanding internals
+- capabilities are scannable and reused across conversation/protocol/agent UI
+
+### Phase 6: Visual Density And Desktop Polish
+
+Goals:
+
+- make the product feel calm and readable without hiding useful actions
+
+Steps:
+
+1. Reduce borders where section hierarchy already communicates grouping.
+2. Use quieter typography for inactive rows.
+3. Increase internal padding where rows feel cramped.
+4. Reduce spacing between inactive repeated rows where the current rhythm feels
+   wasteful.
+5. Keep active expanded rows visually clear but not heavy.
+6. Audit action placement so users do not have to scan across the entire
+   screen for primary actions.
+7. Validate in real desktop Safari, not only a narrow automated viewport.
+
+Acceptance:
+
+- inactive rows are easy to scan but not visually loud
+- active rows are clear without making the screen dense
+- desktop feels intentionally designed, not stretched mobile
+- narrow/mobile remains usable
+
+### Phase 7: Tests And Product Scenarios
+
+Goals:
+
+- make the UI behavior enforceable
+- stop relying on direct database setup as a substitute for human workflow
+
+Required UI scenarios:
+
+1. Create a protocol from blank through UI.
+2. Create a protocol from template through UI.
+3. Add, remove, and reorder/inspect stages through UI.
+4. Select capability and optional agent through UI.
+5. Launch a protocol from conversation through UI.
+6. Execute a realistic software-engineering protocol and verify outputs.
+7. Open the run from conversation and inspect inline run expansion.
+8. Open the task from run and inspect inline task expansion.
+9. Preview/open/download/copy artifacts from run, task, conversation, and
+   dashboard references.
+10. Inspect a stale/running/problem run and verify the status language is
+    understandable.
+11. Use an agent from the agent page without seeing operator internals.
+12. Open Operations and verify routing/selector diagnostics remain available
+    for operator paths.
+
+Negative invariants:
+
+- no custom runtime selector in standard protocol authoring
+- no `Advanced` plumbing section in standard authoring
+- no selector preview on default agent detail
+- no raw token/trust/capacity mutation in normal user flow
+- no empty workers panel in default agent detail
+- no generated timestamp skill spam in default pickers
+- no disconnected Runs side-detail panel in the default Runs path
+- no page-level horizontal overflow on desktop or narrow widths
+
+Testing rules:
+
+- UI scenarios must create and mutate state through product UI or product APIs,
+  not direct database writes.
+- Database inspection is allowed only to diagnose or verify, never as the
+  primary way to create UI state.
+- Contract tests should cover shared primitives so fixes stay consolidated.
+- Old tests that assert broken split-pane or duplicate behavior must be removed
+  or rewritten.
+
+### Phase 8: Visual Audit And Deployment
+
+Goals:
+
+- verify breadth after scenario depth is green
+- deploy from the canonical flow only
+
+Visual audit must include:
+
+- real desktop Safari Runs list and expanded run
+- real desktop Safari Conversations list and full conversation
+- narrow/mobile Runs and Conversations
+- Tasks inline expansion
+- Approvals inline expansion
+- Protocol stage editor
+- Agent list and agent detail
+- Capabilities picker/search
+- Dashboard recent work and artifacts
+- Operations routing/selector diagnostics
+
+The screenshot audit is breadth. Passing scenario specs are the release bar.
+
+Deployment rule:
+
+1. Commit in `/Users/tinker/output/bots/telegram-agent-bot`.
 2. Push from that checkout.
 3. Pull in `/Users/tinker/octopus`.
 4. Redeploy from `/Users/tinker/octopus`.
 
-Do not use source-to-target rsync as the deployment mechanism.
+Do not use source-to-target sync as the deployment mechanism.
 
-## Definition of Done
+## Definition Of Done
 
 This work is done only when:
 
-- navigation no longer exposes confusing duplicate product nouns
-- `Gallery` is gone or renamed/moved as Templates
-- agent list and detail are usable without understanding internals
-- capabilities replace the user-facing Skills/Routing split
-- selector preview and worker diagnostics are operator diagnostics
-- capacity is translated into human status
-- start conversation is available where users need it
-- protocol template to protocol draft to conversation launch is one coherent
-  path
-- runs/tasks/approvals/conversations/artifacts share one lineage contract
-- artifact actions are consistent wherever concrete artifacts appear
-- standard paths hide operator-only controls
-- scenario specs pass end to end
-- visual audit confirms desktop and mobile are progressive and lower-density
-- deployment follows push/pull only
+- Runs uses inline expansion by default and no longer uses a disconnected
+  side-detail panel.
+- Conversations list supports inline inspection and full conversation detail is
+  viewport-bounded.
+- Runs and Conversations do not overflow horizontally on real desktop Safari.
+- Runs and Conversations do not rely on uncontrolled full-document vertical
+  scrolling for normal use.
+- Tasks, Approvals, Dashboard, Protocol stages, Agents, and Capabilities follow
+  the same object interaction grammar where applicable.
+- Artifacts use one preview/open/download/copy contract everywhere concrete
+  bytes exist.
+- Declared or missing artifacts never show broken file actions.
+- Users can trace protocol, run, stage, task, conversation, approval, and
+  artifact as one lineage.
+- Standard authoring paths hide operator internals.
+- Operator tools remain available in Operations.
+- UI scenario tests exercise real product flows instead of direct database
+  state creation.
+- Old duplicate/dead UI paths and tests are deleted as the new shared contract
+  replaces them.
+- Visual audit confirms desktop and narrow/mobile are both usable.
+- Deployment follows push here, pull there.
 
-## Risks
+## Risks And Mitigations
 
-### Risk: Hiding Operator Tools Too Aggressively
+### Risk: Inline Expansion Becomes Too Tall
 
-Mitigation: move controls to Operations with explicit links from technical
-details, rather than deleting capabilities.
+Mitigation:
 
-### Risk: Capabilities Model Becomes Another Parallel Layer
+- allow one expanded row by default
+- make sections progressive
+- use internal scrolling/pagination inside long sections
+- keep full detail pages as secondary escape hatches
 
-Mitigation: capability UI must be a projection over existing skill/routing data,
-not a new independent data store.
+### Risk: Removing Split Panes Hurts High-Volume Triage
 
-### Risk: Templates Lose Discoverability
+Mitigation:
 
-Mitigation: expose Templates inside Protocols and in the create flow, not as a
-separate confusing top-level Gallery.
+- preserve fast filters/search
+- keep keyboard-friendly row selection
+- keep compact summaries
+- use inline expansion for detail without losing list context
 
-### Risk: Artifact Actions Diverge Again
+### Risk: Conversations Need A Different Model
 
-Mitigation: one shared artifact action component and one shared artifact lineage
-projection.
+Mitigation:
 
-### Risk: Visual Cleanup Only Shrinks the UI
+- use inline expansion for conversation list and linked objects
+- keep full conversation as a bounded workspace
+- do not force message-heavy work into a tiny row expansion
 
-Mitigation: remove simultaneous sections and repeated labels before tightening
-spacing.
+### Risk: Shared Primitives Become Over-General
 
-### Risk: Tests Keep Cheating with API/DB Setup
+Mitigation:
 
-Mitigation: scenario specs must create state through UI/API-backed product
-actions, not direct database mutation.
+- shared primitives own layout and interaction contracts
+- page renderers still own product-specific content
+- avoid new parallel run/task/conversation components
+
+### Risk: Visual Cleanup Only Shrinks The UI
+
+Mitigation:
+
+- reduce simultaneous concepts first
+- then tune spacing, borders, and typography
+- validate visually after each major surface
+
+### Risk: Tests Miss Human Workflow Again
+
+Mitigation:
+
+- require UI-created state for scenario tests
+- include artifact outcome assertions
+- include real desktop Safari visual checks
+- record discovered issues in this plan before continuing broad audit
 
 ## Immediate Next Steps
 
-1. Implement navigation terminology and grouping.
-2. Fold Gallery into Protocols as Templates.
-3. Refactor agent detail into:
-   - summary
-   - capabilities
-   - related work
-   - technical details
-   - operations
-4. Consolidate user-facing Skills/Routing into Capabilities.
-5. Move selector preview and worker diagnostics into Operations.
-6. Add scenario specs and negative invariants before broad visual polish.
-7. Run visual audit after each major surface change.
+1. Inventory existing split-pane, side-panel, drawer, row, artifact, and
+   viewport patterns.
+2. Replace the old Runs split-pane target with inline expansion in the shared
+   interaction contract.
+3. Add or extend the shared viewport-bounded work-surface primitive.
+4. Convert Runs to inline expansion and delete the old default side-detail
+   path.
+5. Convert Conversations list/detail to the same row/linked-object expansion
+   model with a bounded full workspace.
+6. Align Tasks, Approvals, and Dashboard with the shared work-surface and
+   artifact contract.
+7. Preserve and polish the Protocol stage inline editor under the same
+   progressive-section rules.
+8. Run UI scenarios and real Safari visual audit after each major surface.
 
-## Live Audit Findings
+## Open Findings Log
 
-### Finding: Protocol Launch Can Produce Semantically Mismatched Artifacts
+New findings discovered during implementation or audit must be added here with:
 
-During UI-only launch from an agent conversation, the selected published
-software-engineering simulator accepted a new release-note-generator problem
-statement but kept static feature-flag simulator artifact paths and stage
-language. The run did execute and produced downloadable artifacts, but the
-artifact contract did not adapt to the user's stated outcome.
+- surface
+- reproduction path
+- observed behavior
+- expected behavior
+- severity
+- fix owner or phase
+- verification method
 
-Required fix:
+Current open findings:
 
-- make protocol launch make the selected protocol's fixed scope explicit before
-  start, or require a template/protocol whose artifact paths are generic enough
-  for arbitrary software-engineering problems
-- add a scenario assertion that the problem statement, selected protocol name,
-  artifact names, artifact paths, and generated artifact contents describe the
-  same product
-- prevent future "UI-only simulator <timestamp>" protocols from polluting the
-  normal published-protocol selector, or move test fixtures behind an operator
-  filter
-- keep the Protocols tab as the full catalog, but make conversation launch
-  progressive: recent official protocols first, search for the rest, and no
-  timestamped fixture wall in the default selector
-
-Implementation status:
-
-- Default conversation protocol launch now collapses timestamp-generated
-  protocols by family and shows only the latest family entry.
-- Search remains able to find older generated versions when an operator/user
-  intentionally needs them.
-- The launch form now shows a protocol-scope warning: the problem statement is
-  run context, not a schema rewrite. Published stage instructions and artifact
-  paths remain fixed by the selected protocol.
-- Capability lists and agent capability chips now hide timestamp-generated
-  capability names by default while preserving search-based discovery.
-- Artifact `Preview` now uses the same shared artifact action component with a
-  delegated content-link preview handler, so produced artifacts use one
-  preview/open/download/copy contract across run, task, and conversation
-  references.
-
-Remaining product work:
-
-- Create or publish non-fixture protocols whose names, stage instructions,
-  artifact paths, and generated outputs are generic enough for the advertised
-  workflow.
-- Add an end-to-end scenario that launches one of those protocols from the UI
-  and asserts semantic alignment between selected protocol, problem statement,
-  artifact path, artifact title, and artifact content.
+- Runs: default split-pane detail is inconsistent with stage/task inline
+  expansion and creates horizontal pressure on desktop.
+- Runs: long detail content can push the page vertically instead of living in a
+  bounded work region.
+- Conversations: list and full conversation detail still rely too heavily on
+  full-document vertical flow.
+- Conversations: linked runs/tasks are visible but not consistently inspectable
+  inline.
+- Cross-surface: the same operational object uses different interaction models
+  depending on route.

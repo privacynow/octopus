@@ -417,6 +417,22 @@ select {
     overflow: hidden;
 }
 
+#content > .content-inner.protocol-runs-route-shell {
+    min-height: calc(100dvh - (2 * clamp(18px, 1.8vw, 24px)));
+    height: calc(100dvh - (2 * clamp(18px, 1.8vw, 24px)));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#content > .content-inner.conversation-list-route-shell {
+    min-height: calc(100dvh - (2 * clamp(18px, 1.8vw, 24px)));
+    height: calc(100dvh - (2 * clamp(18px, 1.8vw, 24px)));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
 .agent-detail-conversation-groups {
     display: grid;
     gap: var(--space-4);
@@ -911,6 +927,31 @@ select {
     border-bottom: 0;
 }
 
+.conversation-list-entry {
+    display: grid;
+    min-width: 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.conversation-list-entry:last-child {
+    border-bottom: 0;
+}
+
+.conversation-list-entry > .list-row {
+    border-bottom: 0;
+}
+
+.conversation-inline-detail {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: var(--space-3);
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg-secondary) 86%, white);
+    max-height: min(62dvh, 46rem);
+    overflow-y: auto;
+}
+
 .list-row-action {
     margin-right: var(--space-3);
     white-space: nowrap;
@@ -1272,6 +1313,28 @@ select {
     box-shadow: var(--shadow-card);
 }
 
+#content > .content-inner.conversation-list-route-shell .admin-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#content > .content-inner.conversation-list-route-shell .list-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#content > .content-inner.conversation-list-route-shell .list-container {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
 .workbench-row {
     display: flex;
     align-items: center;
@@ -1369,10 +1432,6 @@ select {
     grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
     gap: var(--space-3);
     align-items: start;
-}
-
-.dashboard-board[data-route="protocol-runs"] {
-    grid-template-columns: minmax(320px, 0.78fr) minmax(560px, 1.22fr);
 }
 
 .dashboard-board-stacked {
@@ -2164,6 +2223,12 @@ select {
     align-content: start;
 }
 
+#content > .content-inner.protocol-runs-route-shell .protocol-route-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .protocol-surface-panel {
     align-content: start;
 }
@@ -2172,6 +2237,24 @@ select {
     display: grid;
     gap: var(--space-3);
     min-width: 0;
+}
+
+.protocol-runs-workbench {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#content > .content-inner.protocol-runs-route-shell .protocol-surface-shell {
+    min-height: 0;
+    overflow: hidden;
+}
+
+#content > .content-inner.protocol-runs-route-shell .protocol-panel {
+    min-height: 0;
+    overflow: hidden;
 }
 
 .protocol-surface {
@@ -2560,6 +2643,15 @@ select {
     }
 
     #content > .content-inner.conversation-route-shell {
+        height: calc(100dvh - 4.4rem - var(--space-5));
+        min-height: calc(100dvh - 4.4rem - var(--space-5));
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    #content > .content-inner.conversation-list-route-shell,
+    #content > .content-inner.protocol-runs-route-shell {
         height: calc(100dvh - 4.4rem - var(--space-5));
         min-height: calc(100dvh - 4.4rem - var(--space-5));
         display: flex;
@@ -4683,15 +4775,7 @@ select {
         padding: 0 0.68rem;
     }
 
-    .dashboard-board[data-route="protocol-runs"][data-has-selection="true"] > .dashboard-column:first-child {
-        order: 2;
-    }
-
-    .dashboard-board[data-route="protocol-runs"][data-has-selection="true"] > .dashboard-column:last-child {
-        order: 1;
-    }
-
-    .dashboard-board[data-route="protocol-runs"] .editor-panel {
+    .protocol-runs-workbench .editor-panel {
         gap: var(--space-2-5);
         padding: var(--space-3);
     }
@@ -4865,6 +4949,7 @@ select {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
+    min-height: 0;
 }
 
 .kit-runs-filters {
@@ -4906,6 +4991,15 @@ select {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: var(--space-1);
+}
+
+.kit-runs-list-entry {
+    display: grid;
+    gap: 0;
+    min-width: 0;
 }
 
 .kit-runs-list-row {
@@ -4919,7 +5013,7 @@ select {
     gap: var(--space-1);
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--color-border, #e2e4e9);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     background: var(--color-surface, #ffffff);
 }
@@ -4931,6 +5025,20 @@ select {
 .kit-runs-list-row.is-selected {
     border-color: var(--color-accent, #4867ff);
     background: var(--color-accent-subtle, #e4ebff);
+}
+
+.kit-runs-list-entry.is-selected .kit-runs-list-row {
+    border-end-start-radius: 0;
+    border-end-end-radius: 0;
+}
+
+.kit-runs-inline-detail {
+    border-start-start-radius: 0;
+    border-start-end-radius: 0;
+    box-shadow: none;
+    overflow: hidden;
+    max-height: min(72dvh, 58rem);
+    overflow-y: auto;
 }
 
 .kit-runs-list-row-head {

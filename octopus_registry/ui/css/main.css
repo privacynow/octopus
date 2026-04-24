@@ -932,16 +932,19 @@ select {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
+    overflow: hidden;
 }
 
 .list-row-with-artifact-actions .list-row-main {
     grid-column: 1 / 2;
+    width: 100%;
 }
 
 .list-row-with-artifact-actions .badge {
     grid-column: 1 / -1;
     justify-self: start;
     max-width: 100%;
+    margin-top: var(--space-1);
 }
 
 .list-row-with-artifact-actions .artifact-action-row {
@@ -953,7 +956,13 @@ select {
 
 .list-row-with-artifact-actions .list-row-sublabel {
     white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
     overflow-wrap: anywhere;
+}
+
+.list-row-with-artifact-actions .list-row-label {
+    white-space: normal;
 }
 
 .list-section-label {

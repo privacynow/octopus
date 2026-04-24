@@ -4,7 +4,7 @@
 function renderAgentDetail(container, params) {
     const agentId = params.id;
     const cleanups = UI.beginCleanupScope();
-    const convosLimit = UI.DEFAULT_PAGE_LIMIT;
+    const convosLimit = Math.min(UI.DEFAULT_PAGE_LIMIT, 8);
     let detailLoaded = false;
     let conversationsLoaded = false;
     let agentDisplayName = '';

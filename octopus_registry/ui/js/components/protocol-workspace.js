@@ -5803,6 +5803,7 @@ function renderProtocolRuns(container) {
     let runStatusFilter = UI.readQueryParam('status', '');
     let issueKindFilter = _protocolIssueFilterValue(UI.readQueryParam('issue_kind', ''));
     let timelineParticipantFilter = '';
+    let activeLineageStageId = '';
     let currentRunSubscription = null;
 
     const header = document.createElement('header');
@@ -5885,6 +5886,7 @@ function renderProtocolRuns(container) {
                     currentRun = null;
                     currentIssues = [];
                     lastRunEvent = null;
+                    activeLineageStageId = '';
                     runDetailLoading = true;
                     _writeState({ push: true });
                     renderRunsRoute();
@@ -6173,6 +6175,7 @@ function renderProtocolRuns(container) {
                 currentRun = null;
                 currentIssues = [];
                 lastRunEvent = null;
+                activeLineageStageId = '';
                 runDetailLoading = true;
                 _writeState({ push: true });
                 renderRunsRoute();
@@ -6216,6 +6219,7 @@ function renderProtocolRuns(container) {
             [{ value: '', label: 'All participants' }, ...participantOptions],
             (value) => {
                 timelineParticipantFilter = value || '';
+                activeLineageStageId = '';
                 renderRunsRoute();
             },
             { label: 'Timeline participant filter', value: timelineParticipantFilter || '' },
@@ -6326,7 +6330,46 @@ function renderProtocolRuns(container) {
 
         const stageList = document.createElement('div');
         stageList.className = 'protocol-lineage-list';
-        const stageNodes = stageRows.map((item) => {
+        const stageRowId = (item, index = 0) => String(
+            item.protocol_stage_execution_id
+                || item.routed_task_id
+                || item.stage_key
+                || `lineage-stage-${index}`,
+        );
+        const stageRowIds = new Set(stageRows.map((item, index) => stageRowId(item, index)).filter(Boolean));
+        if (stageRows.length && (!activeLineageStageId || !stageRowIds.has(activeLineageStageId))) {
+            const currentStageKey = String(currentRun.run?.current_stage_key || '');
+            const preferredIndex = stageRows.findIndex((item) => String(item.stage_key || '') === currentStageKey);
+            activeLineageStageId = stageRowId(
+                preferredIndex >= 0 ? stageRows[preferredIndex] : stageRows[0],
+                preferredIndex >= 0 ? preferredIndex : 0,
+            );
+        }
+        if (stageRows.length) {
+            const stageNav = UI.createSegmentedControl(
+                stageRows.map((item, index) => {
+                    const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
+                    const label = `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'} · ${item.status || 'queued'}`;
+                    return {
+                        value: stageRowId(item, index),
+                        label,
+                        title: label,
+                    };
+                }),
+                (value) => {
+                    activeLineageStageId = value || '';
+                    renderRunsRoute();
+                },
+                { label: 'Execution stage', value: activeLineageStageId || '' },
+            );
+            stageNav.element.classList.add('kit-stage-workspace-nav');
+            const stageToolbar = document.createElement('div');
+            stageToolbar.className = 'kit-stage-workspace-toolbar';
+            stageToolbar.appendChild(stageNav.element);
+            detailPanel.appendChild(stageToolbar);
+        }
+
+        const buildLineageStageCard = (item) => {
             const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
             const task = taskById.get(String(item.routed_task_id || '')) || null;
             const producedArtifacts = artifactsByProducer.get(String(item.protocol_stage_execution_id || '')) || [];
@@ -6358,6 +6401,21 @@ function renderProtocolRuns(container) {
                 head.appendChild(badge);
             }
             card.appendChild(head);
+
+            const note = document.createElement('div');
+            note.className = 'protocol-lineage-note';
+            note.textContent = [
+                `Attempt ${String(item.attempt || 1)}`,
+                item.completed_at
+                    ? `Completed ${UI.relativeTime(item.completed_at)}`
+                    : item.started_at
+                        ? `Started ${UI.relativeTime(item.started_at)}`
+                        : '',
+                producedArtifacts.length
+                    ? `${producedArtifacts.length} output${producedArtifacts.length === 1 ? '' : 's'}`
+                    : '',
+            ].filter(Boolean).join(' · ');
+            card.appendChild(note);
 
             const facts = UI.renderMetadataGrid([
                 { label: 'Task', value: item.routed_task_id || '—' },
@@ -6420,8 +6478,15 @@ function renderProtocolRuns(container) {
             }
 
             return card;
-        });
-        UI.reconcileChildren(stageList, stageNodes.length ? stageNodes : [UI.renderEmptyState('No stage executions match this participant filter.', true)]);
+        };
+        const activeStageIndex = stageRows.findIndex((item, index) => stageRowId(item, index) === activeLineageStageId);
+        const activeStageRow = activeStageIndex >= 0 ? stageRows[activeStageIndex] : null;
+        UI.reconcileChildren(
+            stageList,
+            activeStageRow
+                ? [buildLineageStageCard(activeStageRow)]
+                : [UI.renderEmptyState('No stage executions match this participant filter.', true)],
+        );
         detailPanel.appendChild(stageList);
 
         const participantTitle = document.createElement('div');

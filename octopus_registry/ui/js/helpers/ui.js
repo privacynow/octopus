@@ -979,15 +979,11 @@ window.UI = (() => {
             if (option.id) btn.id = option.id;
             if (option.controls) btn.setAttribute('aria-controls', option.controls);
             if (option.title) btn.title = option.title;
+            btn.addEventListener('click', () => {
+                applyValue(btn.dataset.value || '', btn);
+            });
             group.appendChild(btn);
             buttons.set(String(option.value ?? ''), btn);
-        });
-        group.addEventListener('click', (event) => {
-            const target = event.target instanceof Element
-                ? event.target.closest('.segmented-control-btn')
-                : null;
-            if (!(target instanceof HTMLButtonElement) || !group.contains(target)) return;
-            applyValue(target.dataset.value || '', target);
         });
 
         bindSegmentedControlKeyboard(group, (target) => {

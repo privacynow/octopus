@@ -102,6 +102,18 @@ database objects or implementation layers.
 - After every redeploy, real Safari must be hard-refreshed with
   `Option+Command+R` before visual judgment, because a normal reload can keep
   stale CSS and JavaScript assets.
+- Shared segmented controls must activate from the button itself, not from a
+  fragile delegated click path. Run evidence, stage editor subtabs, and other
+  tabbed controls should all inherit the same reliable behavior from
+  `UI.createSegmentedControl`.
+- Run detail global chrome must stay quiet. Summary metadata and run-level
+  interventions belong in `Overview`, not above every evidence tab. Retry,
+  accept, send back, and cancel should only appear when the current run state
+  and stage transitions make that action real; export remains available as an
+  audit action.
+- Dark theme kit pills must use the shared theme tokens instead of falling back
+  to light-only `--color-*` defaults. Filter chips, status chips, and related
+  list pills must remain readable in both light and dark themes.
 
 ## Core Product Rule
 

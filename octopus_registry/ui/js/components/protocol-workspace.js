@@ -5941,7 +5941,20 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _currentRunAllowedDecisions() {
+        const currentStageKey = String(currentRun?.run?.current_stage_key || '').trim();
+        if (!currentStageKey) return new Set();
+        const stage = (currentRun?.version?.definition_json?.stages || [])
+            .find((item) => String(item?.stage_key || '') === currentStageKey) || null;
+        return new Set(Object.keys(stage?.transitions || {})
+            .map((decision) => String(decision || '').trim().toLowerCase())
+            .filter(Boolean));
+    }
+
     function _runActionSpecs() {
+        const status = String(currentRun?.run.status || '');
+        const active = !['completed', 'failed', 'cancelled'].includes(status);
+        const allowedDecisions = _currentRunAllowedDecisions();
         return [
             {
                 action: 'retry',
@@ -5950,25 +5963,28 @@ function renderProtocolRuns(container) {
                 confirmLabel: 'Retry run',
                 successMessage: 'Protocol run retry submitted.',
                 requireReason: false,
-                enabled: ['blocked', 'failed', 'cancelled'].includes(String(currentRun?.run.status || '')),
+                visible: ['blocked', 'failed', 'cancelled'].includes(status),
+                enabled: ['blocked', 'failed', 'cancelled'].includes(status),
             },
             {
                 action: 'accept',
                 label: 'Accept',
-                note: 'Accept forces the current review or acceptance stage forward using the reason you provide as audit context.',
+                note: 'Accept records an operator review decision for the current stage using the reason you provide as audit context.',
                 confirmLabel: 'Accept run',
                 successMessage: 'Protocol run accepted.',
                 requireReason: false,
-                enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun?.run.status || '')),
+                visible: active && allowedDecisions.has('accept'),
+                enabled: active && allowedDecisions.has('accept'),
             },
             {
                 action: 'send-back',
                 label: 'Send back',
-                note: 'Send back forces a revise decision and requires a short reason that explains what needs to change.',
+                note: 'Send back records an operator revise decision and requires a short reason that explains what needs to change.',
                 confirmLabel: 'Send back',
                 successMessage: 'Protocol run sent back.',
                 requireReason: true,
-                enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun?.run.status || '')),
+                visible: active && allowedDecisions.has('revise'),
+                enabled: active && allowedDecisions.has('revise'),
             },
             {
                 action: 'cancel',
@@ -5977,7 +5993,8 @@ function renderProtocolRuns(container) {
                 confirmLabel: 'Cancel run',
                 successMessage: 'Protocol run cancelled.',
                 requireReason: true,
-                enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun?.run.status || '')),
+                visible: active,
+                enabled: active,
             },
         ];
     }
@@ -6053,10 +6070,10 @@ function renderProtocolRuns(container) {
         });
     }
 
-    function _buildRunActionBar() {
+    function _buildRunActionBar({ sticky = false } = {}) {
         const runActionBar = document.createElement('div');
-        runActionBar.className = 'editor-actions protocol-sticky-actions';
-        _runActionSpecs().forEach((spec) => {
+        runActionBar.className = sticky ? 'editor-actions protocol-sticky-actions' : 'editor-actions';
+        _runActionSpecs().filter((spec) => spec.visible !== false).forEach((spec) => {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = spec.action === 'cancel' ? 'btn' : 'btn btn-primary';
@@ -6226,9 +6243,6 @@ function renderProtocolRuns(container) {
             ));
             return detailPanel;
         }
-
-        detailPanel.appendChild(_buildRunSummaryGrid());
-        detailPanel.appendChild(_buildRunActionBar());
 
         const stageDefinitionByKey = new Map(
             (currentRun.version?.definition_json?.stages || []).map((item) => [String(item.stage_key || ''), item]),
@@ -6491,6 +6505,7 @@ function renderProtocolRuns(container) {
             const section = document.createElement('div');
             section.className = 'studio-stack';
             appendSectionTitle(section, 'Overview', 'The run story starts with state, active issue, current stage, and next action.');
+            section.appendChild(_buildRunSummaryGrid());
             if (currentIssues.length) {
                 const issueSummary = document.createElement('div');
                 issueSummary.className = 'run-evidence-issue-list';
@@ -6503,13 +6518,12 @@ function renderProtocolRuns(container) {
                 section.appendChild(issueSummary);
             }
             const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')) || stageRows[stageRows.length - 1] || null;
-            section.appendChild(UI.renderMetadataGrid([
-                { label: 'Status', value: currentRun.run.status || 'queued' },
-                { label: 'Current stage', value: currentStage ? (stageDefinitionByKey.get(String(currentStage.stage_key || ''))?.display_name || currentStage.stage_key || 'Stage') : '—' },
-                { label: 'Stages', value: String(stageRows.length) },
-                { label: 'Artifacts', value: `${artifactRows.length} available${pendingArtifactRows.length ? `, ${pendingArtifactRows.length} missing` : ''}` },
-                { label: 'Issues', value: String(currentIssues.length || 0) },
-            ], { compact: true }));
+            appendSectionTitle(
+                section,
+                'Run controls',
+                'These are operator interventions for the current run state. They only appear when the current stage can actually accept that intervention; export is always available for audit.',
+            );
+            section.appendChild(_buildRunActionBar());
             if (currentStage) {
                 section.appendChild(buildStageEvidenceCard(currentStage, Math.max(stageRows.indexOf(currentStage), 0)));
             }

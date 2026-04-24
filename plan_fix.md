@@ -114,6 +114,9 @@ database objects or implementation layers.
 - Dark theme kit pills must use the shared theme tokens instead of falling back
   to light-only `--color-*` defaults. Filter chips, status chips, and related
   list pills must remain readable in both light and dark themes.
+- Artifact rows may remain row-clickable for preview, but their accessible name
+  must describe the artifact itself, not swallow child actions such as
+  `Preview`, `Open`, `Download`, and `Copy path`.
 
 ## Core Product Rule
 

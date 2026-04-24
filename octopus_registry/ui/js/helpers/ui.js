@@ -225,6 +225,9 @@ window.UI = (() => {
         } else if (isAction && !usePressableContainer) {
             row.type = 'button';
         }
+        if (usePressableContainer) {
+            row.setAttribute('aria-label', [label, sublabel, badgeText].filter(Boolean).join(' · '));
+        }
 
         const main = document.createElement('div');
         main.className = 'list-row-main';

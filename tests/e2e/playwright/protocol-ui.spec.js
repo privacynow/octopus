@@ -175,7 +175,7 @@ async function createAndPublishCustomSkill(page, {
     options.map((option) => String(option.value || '')).filter(Boolean),
   )).toContain(agentId);
   await agentSelect.selectOption(agentId);
-  await page.getByRole('button', { name: 'New custom skill', exact: true }).click();
+  await page.getByRole('button', { name: 'New capability', exact: true }).click();
   await page.getByPlaceholder('skill-slug').fill(skillName);
   await page.getByPlaceholder('Short description').first().fill(description);
   await page.getByRole('button', { name: 'Create draft', exact: true }).click();
@@ -1022,19 +1022,27 @@ test.describe('protocol authoring live', () => {
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === publishKey)).toBe(true);
 
       await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
-      await expect(page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).first()).toBeVisible({ timeout: 15000 });
       const runDetail = page.locator('.editor-panel').filter({ hasText: 'Run detail' }).first();
-      await expect(runDetail).toContainText('Outputs');
+      const evidenceTabs = page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab');
+      await evidenceTabs.filter({ hasText: 'Artifacts' }).click();
+      await expect(runDetail).toContainText('Artifacts');
       await expect(runDetail).toContainText('source-data.csv');
-      await expect(runDetail).toContainText('Produced by Load data');
+      await expect(runDetail).toContainText('1. Load data');
       await expect(runDetail).not.toContainText('Declared but missing');
-      await page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).getByRole('link', { name: 'Open activity' }).click();
+      await evidenceTabs.filter({ hasText: 'Stages' }).click();
+      const stageTabs = page.getByRole('tablist', { name: 'Run stage evidence' }).getByRole('tab');
+      await stageTabs.filter({ hasText: 'Load data' }).click();
+      const loadStageCard = page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).first();
+      await expect(loadStageCard).toBeVisible({ timeout: 15000 });
+      await loadStageCard.getByRole('link', { name: 'Open activity' }).click();
       await expect(page).toHaveURL(/\/ui\/conversations\/.+view=tasks/);
       await expect(page.locator('.conversation-task-view')).toBeVisible({ timeout: 15000 });
       await expect(page.locator('.conversation-task-card').filter({ hasText: 'Load data' }).first()).toContainText('Outputs');
       await expect(page.locator('.conversation-task-card').filter({ hasText: 'Load data' }).first()).toContainText('source-data.csv');
       await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
 
+      await page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab').filter({ hasText: 'Stages' }).click();
+      await page.getByRole('tablist', { name: 'Run stage evidence' }).getByRole('tab').filter({ hasText: 'Load data' }).click();
       await page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).getByRole('link', { name: 'Open task' }).click();
       await expect(page.locator('.task-lineage-banner')).toContainText(runId);
       const loadTask = page.locator('.task-item').filter({ hasText: 'Load data' }).first();
@@ -1445,7 +1453,8 @@ test.describe('protocol authoring live', () => {
       expect(String(finalDetail.run?.status || '')).toBe('completed');
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'review_document' && String(item.decision || '') === 'revise')).toBe(true);
       await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
-      await expect(page.locator('main')).toContainText('Outputs');
+      await page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab').filter({ hasText: 'Artifacts' }).click();
+      await expect(page.locator('main')).toContainText('Artifacts');
       await expect(page.locator('main')).toContainText('document.md');
       await page.getByRole('button', { name: 'Preview' }).first().click();
       await expect(page.locator('.confirm-dialog .event-pre')).toContainText('## Executive summary');

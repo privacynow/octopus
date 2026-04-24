@@ -20,6 +20,12 @@ Implementation progress:
 - Runs evidence now uses the single `Overview / Stages / Artifacts / Audit`
   model in source, and `Stages` has a nested stage navigator so a long protocol
   does not dump every stage card at once.
+- The latest broad Playwright pass exposed follow-on issues now tracked in the
+  active work: authoring was requesting disconnected M3's skill catalog and
+  surfacing 503 console errors; E2E specs still encoded removed `Outputs` and
+  `Open conversation` labels; one data-analysis execution remained `running`
+  beyond the current scenario timeout and must be inspected as a real stuck-run
+  risk, not dismissed as a test artifact.
 - Remaining phases still require full visual audit, broader Work-surface
   alignment, deployment verification, and end-to-end scenario execution.
 

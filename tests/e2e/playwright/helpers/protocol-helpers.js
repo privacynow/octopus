@@ -194,7 +194,7 @@ async function openBlankDraft(page) {
 
 async function openConversationForAgentFromUi(page, agentId) {
   await page.goto(`/ui/agents/${encodeURIComponent(String(agentId || '').trim())}`, { waitUntil: 'domcontentloaded' });
-  const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
+  const openConversation = page.getByRole('button', { name: 'Start conversation', exact: true }).first();
   await expect(openConversation).toBeVisible({ timeout: 15000 });
   await openConversation.click();
   await expect(page).toHaveURL(/\/ui\/conversations\//, { timeout: 15000 });

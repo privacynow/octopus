@@ -44,26 +44,23 @@ test('runs use inline expansion instead of the old split detail board', async ({
   await expect(page.locator('.protocol-runs-workbench')).toHaveCount(1);
   await expect(page.locator('.dashboard-board[data-route="protocol-runs"]')).toHaveCount(0);
   await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(1);
-  await expect(page.getByRole('tablist', { name: 'Run detail section' })).toHaveCount(1);
+  await expect(page.getByRole('tablist', { name: 'Run evidence section' })).toHaveCount(1);
   await expect(page.locator('.protocol-lineage-card')).toHaveCount(0);
 
-  const sectionTabs = page.getByRole('tablist', { name: 'Run detail section' }).getByRole('tab');
-  await expect(sectionTabs).toHaveCount(5);
-  await sectionTabs.filter({ hasText: 'Execution' }).click();
-  await expect(page.locator('.protocol-lineage-card')).toHaveCount(1);
+  const sectionTabs = page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab');
+  await expect(sectionTabs).toHaveCount(4);
+  await sectionTabs.filter({ hasText: 'Stages' }).click();
+  await expect(page.getByRole('tablist', { name: 'Execution stage' })).toHaveCount(0);
+  await expect(page.locator('.protocol-lineage-card')).toHaveCount(detail.stage_executions.length);
 
-  const stageTabs = page.getByRole('tablist', { name: 'Execution stage' }).getByRole('tab');
-  await expect(stageTabs).toHaveCount(detail.stage_executions.length);
-  const targetStage = detail.stage_executions[1];
-  const stageDefinitions = new Map(
-    (detail.version?.definition_json?.stages || []).map((stage) => [String(stage.stage_key || ''), stage]),
-  );
-  const targetDefinition = stageDefinitions.get(String(targetStage.stage_key || '')) || {};
-  await stageTabs.nth(1).click();
-  await expect(stageTabs.nth(1)).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('.protocol-lineage-title')).toHaveText(
-    `${targetDefinition.display_name || targetStage.stage_key || 'Stage'} · ${targetStage.status}`,
-  );
+  const stageDefinitions = detail.version?.definition_json?.stages || [];
+  const firstDefinition = stageDefinitions[0] || {};
+  const lastDefinition = stageDefinitions[stageDefinitions.length - 1] || {};
+  await expect(page.locator('.protocol-lineage-title').first()).toContainText(firstDefinition.display_name || firstDefinition.stage_key || '');
+  await expect(page.locator('.protocol-lineage-title').last()).toContainText(lastDefinition.display_name || lastDefinition.stage_key || '');
+
+  await sectionTabs.filter({ hasText: 'Artifacts' }).click();
+  await expect(page.locator('.artifact-list-row').first()).toBeVisible();
   await expect(page.locator('.kit-runs-list-row[aria-expanded="true"]')).toHaveCount(1);
   await page.locator('.kit-runs-list-row[aria-expanded="true"]').click();
   await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(0);
@@ -105,8 +102,8 @@ test('run participants prefer resolved outcomes over raw running state', async (
   test.skip(!participant, 'Need a run participant with a resolved outcome.');
 
   await page.goto(`/ui/runs?run_id=${id}`);
-  const sectionTabs = page.getByRole('tablist', { name: 'Run detail section' }).getByRole('tab');
-  await sectionTabs.filter({ hasText: 'Participants' }).click();
+  const sectionTabs = page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab');
+  await sectionTabs.filter({ hasText: 'Audit' }).click();
   const displayName = participant.display_name || participant.participant_key;
   await expect(page.getByText(`${displayName} · ${participant.resolution_outcome}`)).toBeVisible();
   await expect(page.getByText(`${displayName} · ${participant.state || 'running'}`)).toHaveCount(0);

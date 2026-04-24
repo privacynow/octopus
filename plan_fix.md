@@ -17,16 +17,18 @@ Implementation progress:
   scrolling.
 - Shared artifact action rendering is still reused; no new artifact row path
   was introduced.
-- Remaining phases still require full visual audit, broader Work-surface
-  alignment, deployment, and end-to-end scenario execution.
+- Remaining phases still require a Runs evidence-model refactor, full visual
+  audit, broader Work-surface alignment, deployment, and end-to-end scenario
+  execution.
 
 The latest finding is product-level, not page-level: the Registry still has
 multiple competing interaction models for the same kind of object. Stages and
-some task views use progressive inline expansion. Runs use a split list/detail
-workbench. Conversations use a full-page document/workspace with long vertical
-flow. Agents, capabilities, protocol authoring, tasks, approvals, and artifacts
-each expose related concepts with different density, action placement, and
-expansion behavior.
+some task views use progressive inline expansion. Runs now expand inline, but
+the expanded run still renders outputs, execution, participants, decisions, and
+issues as unrelated sub-apps with different layout models. Conversations use a
+full-page document/workspace with long vertical flow. Agents, capabilities,
+protocol authoring, tasks, approvals, and artifacts each expose related
+concepts with different density, action placement, and expansion behavior.
 
 That inconsistency is the core usability failure. The fix is not more local CSS
 or another one-off Runs redesign. The fix is one Registry interaction grammar,
@@ -39,8 +41,9 @@ workflow:
 
 - Desktop was treated as wider mobile instead of a distinct work surface with
   its own hierarchy and reading rhythm.
-- Runs kept an old split-pane model while stages/tasks moved toward inline
-  progressive editing.
+- Runs moved to inline expansion but kept the old mental model inside the
+  expanded detail: Outputs, Execution, Participants, Decisions, and Issues each
+  tell a different story about the same run evidence.
 - Conversations still behave like a long document rather than a bounded
   workspace with persistent context and reachable actions.
 - Related objects such as run, task, conversation, approval, stage, and artifact
@@ -48,7 +51,8 @@ workflow:
 - Some clickable-looking rows do not reveal the expected details in place.
 - Horizontal pressure was reduced in isolated spots but not solved at the
   interaction-model level.
-- Vertical overflow is still uncontrolled on long Runs and Conversations views.
+- Vertical overflow is still uncontrolled on long Runs and Conversations views,
+  and Runs can embed a dense dashboard inside a single expanded row.
 - Dense metadata, repeated pills, borders, and raw technical concepts still
   compete with the user's actual job.
 
@@ -88,6 +92,39 @@ Use one object interaction grammar everywhere:
 This same grammar applies to runs, conversations, tasks, approvals, protocol
 stages, agents, capabilities, and dashboard work cards unless there is a clear
 product reason to make an exception.
+
+## Runs Product Model
+
+The Runs surface must use one hierarchy:
+
+1. Run
+2. Stages in authored workflow order
+3. Stage evidence
+4. Artifacts, tasks, decisions, participants, and issues attached to that stage
+
+Global run views are allowed, but they must be rollups of this hierarchy, not a
+second unrelated model. For example:
+
+- `Overview` summarizes the run state, current problem, blocking issues, and
+  next actions.
+- `Stages` is the primary inspection model and shows stages in workflow order
+  from Planning through Acceptance.
+- `Artifacts` is the same artifact renderer grouped by producing stage; it is
+  not a separate flat artifact universe with a different visual language.
+- `Audit` is the raw operational escape hatch for participants, decisions, and
+  technical events.
+
+Runs fails usability review if:
+
+- the same artifact appears in `Outputs` and `Execution` through different row
+  models
+- stage order is reversed from the authored workflow
+- more than two navigation layers are visible at once
+- status problems such as stuck leases are hidden behind an Issues tab
+- participants and decisions are shown as primary concepts before the user can
+  understand the stage they belong to
+- a user must mentally join run, task, stage, conversation, and artifact from
+  separate screens to understand what happened
 
 ## Viewport Contract
 
@@ -202,34 +239,43 @@ Default UI should use:
 
 Observed problem:
 
-- Runs uses a split list/detail layout while stages and tasks use inline
-  expansion.
-- The selected run detail appears disconnected from the clicked row.
-- The layout is horizontally strained on desktop because the list and detail
-  column compete for width.
-- Artifact rows, lineage entries, participant filters, metadata cards, and
-  action groups fight for space inside the detail column.
-- The page behaves like a long document and can run past the screen vertically.
-- Output rows can look clickable even when the meaningful action is hidden in
-  small buttons.
+- Runs uses inline expansion now, but the expanded detail still has no single
+  product model.
+- `Outputs` presents artifacts as a flat list.
+- `Execution` presents stage outputs through a different stage card model.
+- `Participants` and `Decisions` expose raw operational records as peer tabs,
+  even though they are usually supporting evidence for a stage.
+- `Issues` hides critical state such as stuck leases behind a tab instead of
+  elevating it to the run row and header.
+- Stage order in Execution can be reverse-chronological instead of authored
+  workflow order, so Acceptance appears before Planning.
+- The detail region can show triage tabs, status chips, run-row expansion,
+  detail tabs, participant filters, stage tabs, metadata cards, action groups,
+  and artifact rows at the same time.
+- The visual language changes between subtabs, making users infer whether they
+  are looking at the same evidence, a different evidence set, or raw internals.
 
 Target behavior:
 
-- Runs list is full-width within the work area.
+- Runs list remains full-width within the work area.
 - Clicking a run expands the run detail inline under that run row.
-- The expanded run panel contains progressive sections:
-  - state and outcome
-  - outputs/artifacts
-  - stage timeline
-  - task lineage
-  - approvals/decisions
-  - participants
-  - issues/support diagnostics
-- The old side-detail panel is removed from the default path.
-- Deep links select and expand the target run.
-- Running/stale/blocked states are human-readable. A run that is no longer
-  advancing should not look simply healthy and `running`.
-- Long lineage uses contained scrolling or section pagination.
+- The expanded run panel uses four progressive sections at most:
+  - `Overview`: state, outcome, active issue, next action, and root context
+  - `Stages`: workflow-ordered stage timeline with stage evidence inline
+  - `Artifacts`: the same artifact row grouped by producing stage
+  - `Audit`: decisions, participants, raw task links, and support diagnostics
+- Stage order follows the authored workflow, not reverse execution insertion
+  order.
+- Output artifacts and stage artifacts use the same renderer and same action
+  placement.
+- Participants and decisions are contextual inside Stages first, then available
+  in Audit for raw inspection.
+- Critical issues are elevated into the run row and Overview before the user
+  opens Audit.
+- Deep links select and expand the target run and open the most relevant
+  section without creating another route-specific model.
+- Long lineage uses contained scrolling or section pagination inside the
+  expanded run panel.
 
 ### Conversations
 
@@ -482,37 +528,57 @@ Acceptance:
 - shared artifact rows fit inside the expansion panel
 - desktop and narrow use the same mental model
 
-### Phase 2: Runs Inline Expansion
+### Phase 2: Runs Evidence-Model Refactor
 
 Goals:
 
-- remove the default split-pane Runs experience
-- make Runs match the progressive stage/task model
+- keep inline run expansion
+- replace the current competing run sub-models with one evidence hierarchy
+- make Runs match the progressive stage/task model without hiding critical
+  state
 
 Steps:
 
-1. Convert Runs list to a full-width viewport-bounded work surface.
-2. Move run detail into inline expansion under the selected run row.
-3. Preserve deep links by selecting and expanding the matching run.
-4. Rebuild run expansion with shared sections:
-   - summary/outcome
-   - outputs
-   - lineage
-   - participants
-   - decisions
-   - issues
-   - technical details
-5. Replace page-local artifact rendering with the shared artifact row.
-6. Add stale/running state language for runs that are not advancing.
-7. Remove dead side-panel CSS, JS branches, and tests.
+1. Keep the existing full-width inline run list and remove any remaining dead
+   side-detail assumptions.
+2. Replace the run detail sub-tabs with at most four sections: `Overview`,
+   `Stages`, `Artifacts`, and `Audit`.
+3. Make `Stages` the primary inspection model:
+   - sort stages by authored workflow order
+   - show current/completed/blocked state per stage
+   - show the assigned participant/agent as supporting context
+   - show stage tasks and stage artifacts inline
+   - show stage decisions or approvals as contextual evidence
+4. Make `Artifacts` a rollup of the same stage artifact rows:
+   - group by producing stage
+   - use the same Preview/Open/Download/Copy path action row
+   - show declared/missing outputs without broken actions
+5. Move raw `Participants` and `Decisions` into `Audit`:
+   - retain all operational data
+   - present it as support/debug evidence, not primary user workflow
+6. Elevate critical status:
+   - stuck lease, blocked, failed, timeout, or stale-running state appears in
+     the run row and Overview
+   - Issues remains available in Audit but is not the only discovery path
+7. Preserve deep links by selecting the target run and activating the relevant
+   section without creating a second route-specific renderer.
+8. Remove duplicate Outputs/Execution artifact row rendering and tests that
+   assert separate visual models.
 
 Acceptance:
 
 - Runs has no default disconnected side-detail panel.
 - Clicking a run expands detail inline under that run.
+- The expanded run has no more than two visible navigation layers at once.
+- Stage order is Planning to Acceptance for the Software Engineering protocol.
+- `Overview` surfaces stuck/blocked/stale status without opening Audit.
+- `Stages` and `Artifacts` use the same artifact component and action layout.
+- Artifacts can be previewed/opened/downloaded/copied from both stage context
+  and rollup context.
+- Participants and decisions remain inspectable but do not dominate the default
+  run understanding path.
 - Run detail does not create horizontal overflow on desktop.
 - Run detail does not push the whole page beyond the viewport for normal use.
-- Artifacts can be previewed/opened/downloaded/copied from the expanded run.
 
 ### Phase 3: Conversations Viewport Workspace
 
@@ -667,6 +733,9 @@ Goals:
 Visual audit must include:
 
 - real desktop Safari Runs list and expanded run
+- real desktop Safari Runs Overview, Stages, Artifacts, and Audit sections
+- real desktop Safari comparison that the same artifact renders consistently
+  in stage context and artifact rollup context
 - real desktop Safari Conversations list and full conversation
 - narrow/mobile Runs and Conversations
 - Tasks inline expansion
@@ -694,6 +763,14 @@ This work is done only when:
 
 - Runs uses inline expansion by default and no longer uses a disconnected
   side-detail panel.
+- Runs uses one evidence hierarchy: Run -> Stages -> stage evidence ->
+  artifacts/tasks/decisions/participants/issues.
+- Runs does not render the same artifact or stage evidence through unrelated
+  visual models across subtabs.
+- Runs exposes no more than two visible navigation layers at once.
+- Runs shows critical stuck/blocked/stale status in the row and overview, not
+  only inside an Issues or Audit tab.
+- Runs stages are ordered by authored workflow order.
 - Conversations list supports inline inspection and full conversation detail is
   viewport-bounded.
 - Runs and Conversations do not overflow horizontally on real desktop Safari.
@@ -716,6 +793,16 @@ This work is done only when:
 - Deployment follows push here, pull there.
 
 ## Risks And Mitigations
+
+### Risk: Inline Runs Become A Dashboard Inside A Row
+
+Mitigation:
+
+- keep `Overview`, `Stages`, `Artifacts`, and `Audit` as the only default
+  sections
+- make `Stages` the primary path and demote raw records to `Audit`
+- avoid participant filters, stage tabs, and detail tabs being visible together
+- require the artifact rollup to reuse the same stage artifact renderer
 
 ### Risk: Inline Expansion Becomes Too Tall
 
@@ -770,19 +857,18 @@ Mitigation:
 
 ## Immediate Next Steps
 
-1. Inventory existing split-pane, side-panel, drawer, row, artifact, and
-   viewport patterns.
-2. Replace the old Runs split-pane target with inline expansion in the shared
-   interaction contract.
-3. Add or extend the shared viewport-bounded work-surface primitive.
-4. Convert Runs to inline expansion and delete the old default side-detail
-   path.
-5. Convert Conversations list/detail to the same row/linked-object expansion
-   model with a bounded full workspace.
-6. Align Tasks, Approvals, and Dashboard with the shared work-surface and
-   artifact contract.
-7. Preserve and polish the Protocol stage inline editor under the same
-   progressive-section rules.
+1. Refactor Runs expanded detail to the `Overview`, `Stages`, `Artifacts`,
+   `Audit` evidence model.
+2. Sort run stages by authored workflow order and verify Software Engineering
+   reads Planning through Acceptance.
+3. Consolidate Outputs and Execution artifact rendering into one shared row
+   contract grouped by producing stage.
+4. Move raw Participants and Decisions into Audit while surfacing their
+   stage-relevant summaries inside Stages.
+5. Elevate stuck/blocked/stale state into the run row and Overview.
+6. Convert Conversations linked runs to the same bounded run preview model.
+7. Continue aligning Tasks, Approvals, Dashboard, Protocol stages, Agents, and
+   Capabilities with the shared work-surface and artifact contracts.
 8. Run UI scenarios and real Safari visual audit after each major surface.
 
 ## Open Findings Log
@@ -799,6 +885,31 @@ New findings discovered during implementation or audit must be added here with:
 
 Current open findings:
 
+- Runs / real Safari: the expanded run detail is technically inline but still
+  uses competing sub-models. `Outputs` renders artifacts as a flat list,
+  `Execution` renders stage evidence with different navigation and row
+  treatment, `Participants` and `Decisions` expose raw records as peer tabs,
+  and `Issues` hides critical state. Expected behavior: one evidence hierarchy
+  with `Overview`, `Stages`, `Artifacts`, and `Audit`, where global views are
+  rollups of stage evidence rather than separate visual systems. Severity:
+  high. Fix owner: Runs evidence-model refactor. Verification method: real
+  Safari expanded run review plus automated assertions that stage order,
+  artifact actions, issue elevation, and section count match the Runs Product
+  Model.
+- Runs / real Safari: Execution can show Software Engineering stages in reverse
+  human order, with Acceptance before Planning. Expected behavior: stages
+  render in authored workflow order from Planning through Acceptance unless the
+  user explicitly chooses an audit chronology. Severity: high. Fix owner: Runs
+  evidence-model refactor. Verification method: open a Software Engineering
+  run and assert visible stage order starts with Planning and ends with
+  Acceptance.
+- Runs / real Safari: more than two navigation layers can be visible at once
+  in one expanded run: triage tabs, status chips, run-row expansion, run detail
+  tabs, participant filters, and execution stage tabs. Expected behavior: the
+  default run detail exposes at most one run-section control plus one local
+  progressive control inside the active section. Severity: high. Fix owner:
+  Runs evidence-model refactor. Verification method: visual audit and DOM
+  assertions for visible tab groups/navigation controls inside expanded run.
 - Runs / real Safari: a run can show the plain row/status value `running` even
   when its write lease has expired and the detail Issues section reports
   `stuck lease · lease_expired`. Expected behavior: stuck/problem state is
@@ -836,8 +947,9 @@ Current open findings:
 
 Resolved or verified in the latest implementation passes:
 
-- Runs: split-pane detail was replaced by inline expansion with section tabs,
-  a bounded execution work surface, and collapse-on-active-row behavior.
+- Runs: split-pane detail was replaced by inline expansion and
+  collapse-on-active-row behavior. The internal run evidence model remains open
+  and is tracked above.
 - Runs / real Safari: changing the status filter clears stale incompatible
   selections and removes stale `run_id` values.
 - Runs / real Safari: completed participant rows prefer resolved outcomes over

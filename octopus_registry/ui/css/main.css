@@ -2212,6 +2212,27 @@ select {
     line-height: 1.45;
 }
 
+.run-evidence-panel {
+    gap: var(--space-4);
+}
+
+.run-evidence-section-head {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.run-evidence-section-head .quiet-note {
+    margin: 0;
+}
+
+.run-evidence-issue-list {
+    display: grid;
+    border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: color-mix(in srgb, var(--danger) 6%, var(--bg));
+}
+
 .admin-shell {
     display: grid;
     gap: var(--space-3);

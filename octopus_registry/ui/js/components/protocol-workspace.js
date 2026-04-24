@@ -5802,8 +5802,6 @@ function renderProtocolRuns(container) {
     let runSearch = '';
     let runStatusFilter = UI.readQueryParam('status', '');
     let issueKindFilter = _protocolIssueFilterValue(UI.readQueryParam('issue_kind', ''));
-    let timelineParticipantFilter = '';
-    let activeLineageStageId = '';
     let activeRunDetailSection = '';
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
@@ -5856,7 +5854,6 @@ function renderProtocolRuns(container) {
         currentRun = null;
         currentIssues = [];
         lastRunEvent = null;
-        activeLineageStageId = '';
         activeRunDetailSection = '';
         if (normalizedRunId && normalizedRunId !== String(currentRunId || '')) {
             currentRunId = normalizedRunId;
@@ -6186,7 +6183,6 @@ function renderProtocolRuns(container) {
                 currentRun = null;
                 currentIssues = [];
                 lastRunEvent = null;
-                activeLineageStageId = '';
                 activeRunDetailSection = '';
                 runDetailLoading = false;
                 runDetailRequestToken += 1;
@@ -6228,29 +6224,46 @@ function renderProtocolRuns(container) {
         detailPanel.appendChild(_buildRunSummaryGrid());
         detailPanel.appendChild(_buildRunActionBar());
 
-        const { stageRows, transitionRows, participantOptions } = _filteredProtocolTimelineData(currentRun, timelineParticipantFilter);
-        const participantControl = UI.createSegmentedControl(
-            [{ value: '', label: 'All participants' }, ...participantOptions],
-            (value) => {
-                timelineParticipantFilter = value || '';
-                activeLineageStageId = '';
-                renderRunsRoute();
-            },
-            { label: 'Timeline participant filter', value: timelineParticipantFilter || '' },
-        );
-
         const stageDefinitionByKey = new Map(
             (currentRun.version?.definition_json?.stages || []).map((item) => [String(item.stage_key || ''), item]),
+        );
+        const stageOrderByKey = new Map(
+            (currentRun.version?.definition_json?.stages || []).map((item, index) => [String(item.stage_key || ''), index]),
         );
         const artifactDefinitionByKey = new Map(
             (currentRun.version?.definition_json?.artifacts || []).map((item) => [String(item.artifact_key || ''), item]),
         );
+        const stageRows = [...(currentRun.stage_executions || [])].sort((left, right) => {
+            const leftOrder = stageOrderByKey.has(String(left.stage_key || ''))
+                ? stageOrderByKey.get(String(left.stage_key || ''))
+                : Number.MAX_SAFE_INTEGER;
+            const rightOrder = stageOrderByKey.has(String(right.stage_key || ''))
+                ? stageOrderByKey.get(String(right.stage_key || ''))
+                : Number.MAX_SAFE_INTEGER;
+            if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+            const leftAttempt = Number(left.attempt || 0);
+            const rightAttempt = Number(right.attempt || 0);
+            if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt;
+            return String(left.started_at || '').localeCompare(String(right.started_at || ''));
+        });
+        const { transitionRows } = _filteredProtocolTimelineData(currentRun, '');
         const stageById = new Map(
             (currentRun.stage_executions || []).map((item) => [String(item.protocol_stage_execution_id || ''), item]),
         );
         const taskById = new Map(
             (currentRun.tasks || []).map((item) => [String(item.routed_task_id || ''), item]),
         );
+        const participantByKey = new Map(
+            (currentRun.participants || []).map((item) => [String(item.participant_key || ''), item]),
+        );
+        const issuesByStageKey = new Map();
+        (currentIssues || []).forEach((item) => {
+            const key = String(item.stage_key || '').trim();
+            if (!key) return;
+            const bucket = issuesByStageKey.get(key) || [];
+            bucket.push(item);
+            issuesByStageKey.set(key, bucket);
+        });
         const artifactsByProducer = new Map();
         (currentRun.artifacts || []).forEach((item) => {
             const key = String(item.produced_by_stage_execution_id || '').trim();
@@ -6291,95 +6304,74 @@ function renderProtocolRuns(container) {
             }
         });
 
-        const appendArtifactList = (target, titleText, rows, { emptyText = '', missing = false } = {}) => {
+        const appendSectionTitle = (target, titleText, noteText = '') => {
+            const wrap = document.createElement('div');
+            wrap.className = 'run-evidence-section-head';
             const title = document.createElement('div');
             title.className = 'editor-section-title';
             title.textContent = titleText;
-            target.appendChild(title);
-            const list = document.createElement('div');
-            const nodes = rows.map((item) => {
-                const producer = stageById.get(String(item.produced_by_stage_execution_id || '')) || null;
-                const producerDef = producer ? stageDefinitionByKey.get(String(producer.stage_key || '')) || {} : {};
-                const definition = artifactDefinitionByKey.get(String(item.artifact_key || '')) || null;
-                const relationship = missing
-                    ? 'Declared output not yet recorded'
-                    : producer
-                        ? `Produced by ${producerDef.display_name || producer.stage_key || producer.protocol_stage_execution_id}`
-                        : 'Produced output';
-                const pathLabel = _protocolArtifactDisplayPath(item) || _artifactDefinitionPath(definition || item);
-                const identifier = definition && String(definition.display_name || '').trim()
-                    ? String(item.artifact_key || '').trim()
-                    : '';
-                return UI.createArtifactListRow({
-                    label: _protocolArtifactDisplayLabel(item, definition),
-                    sublabelParts: [
-                        relationship,
-                        pathLabel,
-                        identifier,
-                        _protocolArtifactLabel(item),
-                    ],
-                    badgeText: missing ? 'missing' : (item.verification_state || item.state || 'available'),
-                    badgeClass: missing ? 'badge-blocked' : 'badge-connected',
-                    actionRow: _protocolArtifactActionRow(
-                        currentRun.run.protocol_run_id,
-                        item,
-                        definition,
-                        { missing: missing || !item.exists },
-                    ),
-                });
-            });
-            UI.reconcileChildren(list, nodes.length ? nodes : [UI.renderEmptyState(emptyText, true)]);
-            target.appendChild(list);
+            wrap.appendChild(title);
+            if (noteText) {
+                const note = document.createElement('p');
+                note.className = 'quiet-note';
+                note.textContent = noteText;
+                wrap.appendChild(note);
+            }
+            target.appendChild(wrap);
         };
 
-        const stageList = document.createElement('div');
-        stageList.className = 'protocol-lineage-list';
-        const stageRowId = (item, index = 0) => String(
-            item.protocol_stage_execution_id
-                || item.routed_task_id
-                || item.stage_key
-                || `lineage-stage-${index}`,
-        );
-        const stageRowIds = new Set(stageRows.map((item, index) => stageRowId(item, index)).filter(Boolean));
-        if (stageRows.length && (!activeLineageStageId || !stageRowIds.has(activeLineageStageId))) {
-            const currentStageKey = String(currentRun.run?.current_stage_key || '');
-            const preferredIndex = stageRows.findIndex((item) => String(item.stage_key || '') === currentStageKey);
-            activeLineageStageId = stageRowId(
-                preferredIndex >= 0 ? stageRows[preferredIndex] : stageRows[0],
-                preferredIndex >= 0 ? preferredIndex : 0,
-            );
-        }
-        if (stageRows.length) {
-            const stageNav = UI.createSegmentedControl(
-                stageRows.map((item, index) => {
-                    const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
-                    const label = `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'} · ${item.status || 'queued'}`;
-                    return {
-                        value: stageRowId(item, index),
-                        label,
-                        title: label,
-                    };
-                }),
-                (value) => {
-                    activeLineageStageId = value || '';
-                    renderRunsRoute();
-                },
-                { label: 'Execution stage', value: activeLineageStageId || '' },
-            );
-            stageNav.element.classList.add('kit-stage-workspace-nav');
-            const stageToolbar = document.createElement('div');
-            stageToolbar.className = 'kit-stage-workspace-toolbar';
-            stageToolbar.appendChild(stageNav.element);
-            stageList.appendChild(stageToolbar);
-        }
+        const createRunArtifactRow = (artifact, { relationship = 'Produced output', missing = false } = {}) => {
+            const definition = artifactDefinitionByKey.get(String(artifact.artifact_key || '')) || null;
+            const pathLabel = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
+            const identifier = definition && String(definition.display_name || '').trim()
+                ? String(artifact.artifact_key || '').trim()
+                : '';
+            return UI.createArtifactListRow({
+                label: _protocolArtifactDisplayLabel(artifact, definition),
+                sublabelParts: [
+                    relationship,
+                    pathLabel,
+                    identifier,
+                    _protocolArtifactLabel(artifact),
+                ],
+                badgeText: missing ? 'missing' : (artifact.verification_state || artifact.state || 'available'),
+                badgeClass: missing ? 'badge-blocked' : 'badge-connected',
+                actionRow: _protocolArtifactActionRow(
+                    currentRun.run.protocol_run_id,
+                    artifact,
+                    definition,
+                    { missing: missing || !artifact.exists },
+                ),
+            });
+        };
 
-        const buildLineageStageCard = (item) => {
+        const createArtifactList = (rows, { emptyText = '', relationshipFor = null, missing = false } = {}) => {
+            const list = document.createElement('div');
+            list.className = 'task-artifact-list';
+            const nodes = rows.map((artifact) => createRunArtifactRow(artifact, {
+                relationship: typeof relationshipFor === 'function' ? relationshipFor(artifact) : relationshipFor || 'Produced output',
+                missing,
+            }));
+            UI.reconcileChildren(list, nodes.length ? nodes : [UI.renderEmptyState(emptyText, true)]);
+            return list;
+        };
+
+        const transitionsForStage = (stageExecutionId) => transitionRows.filter((item) =>
+            String(item.to_stage_execution_id || '') === String(stageExecutionId || '')
+            || String(item.from_stage_execution_id || '') === String(stageExecutionId || ''),
+        );
+
+        const buildStageEvidenceCard = (item, index) => {
             const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
             const task = taskById.get(String(item.routed_task_id || '')) || null;
             const producedArtifacts = artifactsByProducer.get(String(item.protocol_stage_execution_id || '')) || [];
+            const participant = participantByKey.get(String(item.participant_key || '')) || {};
+            const stageTransitions = transitionsForStage(item.protocol_stage_execution_id);
+            const stageIssues = issuesByStageKey.get(String(item.stage_key || '')) || [];
 
             const card = document.createElement('article');
             card.className = 'protocol-lineage-card';
+            card.dataset.stageKey = String(item.stage_key || '');
 
             const head = document.createElement('div');
             head.className = 'protocol-lineage-head';
@@ -6387,12 +6379,12 @@ function renderProtocolRuns(container) {
             titleWrap.className = 'protocol-lineage-copy';
             const label = document.createElement('strong');
             label.className = 'protocol-lineage-title';
-            label.textContent = `${stageDef.display_name || item.stage_key || 'Stage'} · ${item.status}`;
+            label.textContent = `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'} · ${item.status}`;
             titleWrap.appendChild(label);
             const subtitle = document.createElement('div');
             subtitle.className = 'protocol-lineage-subtitle';
             subtitle.textContent = [
-                item.participant_key || '',
+                participant.display_name || item.participant_key || '',
                 task ? (task.target_display_name || task.target_agent_id || '') : '',
                 item.decision_summary || item.failure_detail || '',
             ].filter(Boolean).join(' · ');
@@ -6405,6 +6397,18 @@ function renderProtocolRuns(container) {
                 head.appendChild(badge);
             }
             card.appendChild(head);
+
+            if (stageIssues.length) {
+                const issueList = document.createElement('div');
+                issueList.className = 'run-evidence-issue-list';
+                UI.reconcileChildren(issueList, stageIssues.map((issue) => UI.renderListRow({
+                    label: `${String(issue.issue_kind || '').replace(/_/g, ' ')} · ${issue.issue_code || 'issue'}`,
+                    sublabel: issue.issue_detail || issue.updated_at || '',
+                    badgeText: issue.stage_key || '',
+                    badgeClass: 'badge-blocked',
+                })));
+                card.appendChild(issueList);
+            }
 
             const note = document.createElement('div');
             note.className = 'protocol-lineage-note';
@@ -6434,31 +6438,24 @@ function renderProtocolRuns(container) {
                 outputsLabel.className = 'detail-label';
                 outputsLabel.textContent = 'Outputs';
                 card.appendChild(outputsLabel);
+                card.appendChild(createArtifactList(producedArtifacts, {
+                    relationshipFor: () => 'Produced by this stage',
+                }));
+            }
 
-                const outputsList = document.createElement('div');
-                outputsList.className = 'task-artifact-list';
-                const outputNodes = producedArtifacts.map((artifact) => {
-                    const definition = artifactDefinitionByKey.get(String(artifact.artifact_key || '')) || null;
-                    return UI.createArtifactListRow({
-                        label: _protocolArtifactDisplayLabel(artifact, definition),
-                        sublabelParts: [
-                            'Produced by this stage',
-                            _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact),
-                            String(artifact.artifact_key || '').trim(),
-                            _protocolArtifactLabel(artifact),
-                        ],
-                        badgeText: artifact.verification_state || artifact.state || 'available',
-                        badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
-                        actionRow: _protocolArtifactActionRow(
-                            currentRun.run.protocol_run_id,
-                            artifact,
-                            definition,
-                            { missing: !artifact.exists },
-                        ),
-                    });
-                });
-                UI.reconcileChildren(outputsList, outputNodes);
-                card.appendChild(outputsList);
+            if (stageTransitions.length) {
+                const decisionsLabel = document.createElement('div');
+                decisionsLabel.className = 'detail-label';
+                decisionsLabel.textContent = 'Decisions';
+                card.appendChild(decisionsLabel);
+                const decisionList = document.createElement('div');
+                const decisionRows = stageTransitions.slice(0, 3).map((transition) => UI.renderListRow({
+                    label: `${transition.transition_kind} · ${transition.decision || 'n/a'}`,
+                    sublabel: [transition.reason || transition.actor_ref || '', transition.error_code || ''].filter(Boolean).join(' · '),
+                    badgeText: String(transition.metadata_json?.target_agent_id || ''),
+                }));
+                UI.reconcileChildren(decisionList, decisionRows);
+                card.appendChild(decisionList);
             }
 
             const actions = document.createElement('div');
@@ -6483,37 +6480,53 @@ function renderProtocolRuns(container) {
 
             return card;
         };
-        const activeStageIndex = stageRows.findIndex((item, index) => stageRowId(item, index) === activeLineageStageId);
-        const activeStageRow = activeStageIndex >= 0 ? stageRows[activeStageIndex] : null;
-        UI.reconcileChildren(
-            stageList,
-            activeStageRow
-                ? [...Array.from(stageList.childNodes), buildLineageStageCard(activeStageRow)]
-                : [UI.renderEmptyState('No stage executions match this participant filter.', true)],
-        );
+
+        const buildOverviewSection = () => {
+            const section = document.createElement('div');
+            section.className = 'studio-stack';
+            appendSectionTitle(section, 'Overview', 'The run story starts with state, active issue, current stage, and next action.');
+            if (currentIssues.length) {
+                const issueSummary = document.createElement('div');
+                issueSummary.className = 'run-evidence-issue-list';
+                UI.reconcileChildren(issueSummary, currentIssues.slice(0, 3).map((issue) => UI.renderListRow({
+                    label: `${String(issue.issue_kind || '').replace(/_/g, ' ')} · ${issue.issue_code || issue.stage_key || 'issue'}`,
+                    sublabel: issue.issue_detail || issue.updated_at || '',
+                    badgeText: issue.stage_key || '',
+                    badgeClass: 'badge-blocked',
+                })));
+                section.appendChild(issueSummary);
+            }
+            const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')) || stageRows[stageRows.length - 1] || null;
+            section.appendChild(UI.renderMetadataGrid([
+                { label: 'Status', value: currentRun.run.status || 'queued' },
+                { label: 'Current stage', value: currentStage ? (stageDefinitionByKey.get(String(currentStage.stage_key || ''))?.display_name || currentStage.stage_key || 'Stage') : '—' },
+                { label: 'Stages', value: String(stageRows.length) },
+                { label: 'Artifacts', value: `${artifactRows.length} available${pendingArtifactRows.length ? `, ${pendingArtifactRows.length} missing` : ''}` },
+                { label: 'Issues', value: String(currentIssues.length || 0) },
+            ], { compact: true }));
+            if (currentStage) {
+                section.appendChild(buildStageEvidenceCard(currentStage, Math.max(stageRows.indexOf(currentStage), 0)));
+            }
+            return section;
+        };
 
         const sectionOptions = [
-            { value: 'outputs', label: `Outputs${artifactRows.length ? ` (${artifactRows.length})` : ''}` },
-            { value: 'lineage', label: 'Execution' },
-            { value: 'participants', label: `Participants${currentRun.participants?.length ? ` (${currentRun.participants.length})` : ''}` },
-            { value: 'decisions', label: `Decisions${transitionRows.length ? ` (${transitionRows.length})` : ''}` },
-            { value: 'issues', label: `Issues${currentIssues?.length ? ` (${currentIssues.length})` : ''}` },
+            { value: 'overview', label: currentIssues.length ? `Overview (${currentIssues.length} issue${currentIssues.length === 1 ? '' : 's'})` : 'Overview' },
+            { value: 'stages', label: `Stages (${stageRows.length})` },
+            { value: 'artifacts', label: `Artifacts (${artifactRows.length})` },
+            { value: 'audit', label: 'Audit' },
         ];
         const sectionValues = new Set(sectionOptions.map((item) => item.value));
         if (!sectionValues.has(activeRunDetailSection || '')) {
-            activeRunDetailSection = issueListActive
-                ? 'issues'
-                : artifactRows.length
-                    ? 'outputs'
-                    : 'lineage';
+            activeRunDetailSection = 'overview';
         }
         const sectionControl = UI.createSegmentedControl(
             sectionOptions,
             (value) => {
-                activeRunDetailSection = value || 'outputs';
+                activeRunDetailSection = value || 'overview';
                 renderRunsRoute();
             },
-            { label: 'Run detail section', value: activeRunDetailSection || 'outputs' },
+            { label: 'Run evidence section', value: activeRunDetailSection || 'overview' },
         );
         sectionControl.element.classList.add('kit-stage-workspace-nav');
         const sectionToolbar = document.createElement('div');
@@ -6522,42 +6535,53 @@ function renderProtocolRuns(container) {
         detailPanel.appendChild(sectionToolbar);
 
         const sectionPanel = document.createElement('div');
-        sectionPanel.className = 'studio-stack';
-        if (activeRunDetailSection === 'outputs') {
-            appendArtifactList(sectionPanel, 'Outputs', artifactRows, {
-                emptyText: 'No produced outputs recorded yet.',
-            });
-            if (pendingArtifactRows.length) {
-                appendArtifactList(sectionPanel, 'Declared but missing', pendingArtifactRows, {
-                    emptyText: 'No declared outputs are currently missing.',
-                    missing: true,
-                });
-            }
-        } else if (activeRunDetailSection === 'lineage') {
-            const stageTitle = document.createElement('div');
-            stageTitle.className = 'editor-section-title';
-            stageTitle.textContent = 'Execution lineage';
-            sectionPanel.appendChild(stageTitle);
-            sectionPanel.appendChild(participantControl.element);
+        sectionPanel.className = 'studio-stack run-evidence-panel';
+        if (activeRunDetailSection === 'overview') {
+            sectionPanel.appendChild(buildOverviewSection());
+        } else if (activeRunDetailSection === 'stages') {
+            appendSectionTitle(sectionPanel, 'Stages', 'Workflow evidence is ordered by the authored protocol, not by reverse event chronology.');
+            const stageList = document.createElement('div');
+            stageList.className = 'protocol-lineage-list';
+            UI.reconcileChildren(
+                stageList,
+                stageRows.length
+                    ? stageRows.map((item, index) => buildStageEvidenceCard(item, index))
+                    : [UI.renderEmptyState('No stage executions recorded for this run yet.', true)],
+            );
             sectionPanel.appendChild(stageList);
-        } else if (activeRunDetailSection === 'participants') {
-            const participantTitle = document.createElement('div');
-            participantTitle.className = 'editor-section-title';
-            participantTitle.textContent = 'Participants';
-            sectionPanel.appendChild(participantTitle);
+        } else if (activeRunDetailSection === 'artifacts') {
+            appendSectionTitle(sectionPanel, 'Artifacts', 'This is the same artifact evidence shown under each stage, grouped by the stage that produced it.');
+            stageRows.forEach((stage, index) => {
+                const producedArtifacts = artifactsByProducer.get(String(stage.protocol_stage_execution_id || '')) || [];
+                if (!producedArtifacts.length) return;
+                const stageDef = stageDefinitionByKey.get(String(stage.stage_key || '')) || {};
+                appendSectionTitle(sectionPanel, `${index + 1}. ${stageDef.display_name || stage.stage_key || 'Stage'}`);
+                sectionPanel.appendChild(createArtifactList(producedArtifacts, {
+                    relationshipFor: () => 'Produced by this stage',
+                }));
+            });
+            if (!artifactRows.length) {
+                sectionPanel.appendChild(UI.renderEmptyState('No produced outputs recorded yet.', true));
+            }
+            if (pendingArtifactRows.length) {
+                appendSectionTitle(sectionPanel, 'Declared but missing');
+                sectionPanel.appendChild(createArtifactList(pendingArtifactRows, {
+                    relationshipFor: () => 'Declared output not yet recorded',
+                    missing: true,
+                }));
+            }
+        } else {
+            appendSectionTitle(sectionPanel, 'Audit', 'Raw participants, decisions, and support issues remain available here without driving the default run story.');
             const participantList = document.createElement('div');
             const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
                 label: `${item.display_name || item.participant_key} · ${item.resolution_outcome || item.state || 'queued'}`,
                 sublabel: item.resolution_reason || item.resolved_agent_id || item.session_key || '',
                 badgeText: item.resolution_outcome || '',
             }));
+            appendSectionTitle(sectionPanel, 'Participants');
             UI.reconcileChildren(participantList, participantRows.length ? participantRows : [UI.renderEmptyState('No participants resolved yet.', true)]);
             sectionPanel.appendChild(participantList);
-        } else if (activeRunDetailSection === 'decisions') {
-            const transitionTitle = document.createElement('div');
-            transitionTitle.className = 'editor-section-title';
-            transitionTitle.textContent = 'Decision history';
-            sectionPanel.appendChild(transitionTitle);
+
             const transitionList = document.createElement('div');
             transitionList.setAttribute('aria-live', 'polite');
             const transitionNodes = transitionRows.map((item) => UI.renderListRow({
@@ -6565,19 +6589,17 @@ function renderProtocolRuns(container) {
                 sublabel: [item.reason || item.actor_ref || '', item.error_code || ''].filter(Boolean).join(' · '),
                 badgeText: String(item.metadata_json?.target_agent_id || ''),
             }));
-            UI.reconcileChildren(transitionList, transitionNodes.length ? transitionNodes : [UI.renderEmptyState('No transitions match this participant filter.', true)]);
+            appendSectionTitle(sectionPanel, 'Decision history');
+            UI.reconcileChildren(transitionList, transitionNodes.length ? transitionNodes : [UI.renderEmptyState('No transitions recorded yet.', true)]);
             sectionPanel.appendChild(transitionList);
-        } else {
-            const issueDetailTitle = document.createElement('div');
-            issueDetailTitle.className = 'editor-section-title';
-            issueDetailTitle.textContent = 'Support issues';
-            sectionPanel.appendChild(issueDetailTitle);
+
             const issueDetailList = document.createElement('div');
             const issueDetailRows = (currentIssues || []).map((item) => UI.renderListRow({
                 label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
                 sublabel: item.issue_detail || item.updated_at || '',
                 badgeText: item.stage_key || '',
             }));
+            appendSectionTitle(sectionPanel, 'Support issues');
             UI.reconcileChildren(
                 issueDetailList,
                 issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)],
@@ -6599,8 +6621,6 @@ function renderProtocolRuns(container) {
             issueKindFilter,
             runStatusFilter,
             runSearch,
-            timelineParticipantFilter,
-            activeLineageStageId,
             activeRunDetailSection,
         }, () => {
             const workbench = document.createElement('div');

@@ -799,40 +799,65 @@ New findings discovered during implementation or audit must be added here with:
 
 Current open findings:
 
-- Runs: default split-pane detail is inconsistent with stage/task inline
-  expansion and creates horizontal pressure on desktop.
-- Runs: long detail content can push the page vertically instead of living in a
-  bounded work region.
-- Runs / real Safari: changing the status filter while a run is selected can
-  leave a stale `run_id` in the URL for a run that is no longer visible. In the
-  observed path, filtering to `Running` after inspecting a completed run made
-  the visible running row remain collapsed while the URL still referenced the
-  completed run. Expected behavior: filter changes clear incompatible
-  selections, and selecting a visible row expands that row inline with a matching
-  `run_id`.
-- Runs / real Safari: the Participants section for a completed run renders
-  participant rows like `Acceptance reviewer · running` even when the resolved
-  outcome is `OK`. Expected behavior: participant labels prioritize the resolved
-  assignment/outcome and do not imply a completed run is still actively running.
-- Runs / real Safari: Safari Reader Mode can flatten the Registry app into a
-  non-interactive article-like page if accidentally toggled. Expected behavior:
-  the app should not advertise itself as reader-friendly article content, and
-  the audit must avoid `Cmd+Shift+R` because Safari treats it as Reader Mode.
-- Conversations: list and full conversation detail still rely too heavily on
-  full-document vertical flow.
-- Conversations: linked runs/tasks are visible but not consistently inspectable
-  inline.
-- Conversations / real Safari: clicking a different conversation row switches
-  the inline expansion correctly, but clicking the already-expanded row does
-  not collapse it even though the accessibility tree reports
-  `aria-expanded=true` and exposes a `Collapse` action. Expected behavior: the
-  conversation list must use the same click-to-expand/click-to-collapse model
-  as Runs, Tasks, and protocol stages.
-- Conversations / real Safari: linked runs inside the conversation list preview
-  and full conversation header render as navigation links/chips only. They can
-  take the user to Runs, but they cannot be inspected inline from the current
+- Runs / real Safari: a run can show the plain row/status value `running` even
+  when its write lease has expired and the detail Issues section reports
+  `stuck lease · lease_expired`. Expected behavior: stuck/problem state is
+  visible at row and status-summary level without requiring users to discover
+  the Issues tab. Severity: medium-high. Verification method: load
+  `/ui/runs?status=running`, expand a stuck run, and confirm the row/status
+  calls out the stuck lease condition before opening Issues.
+- Tasks / real Safari: task rows allowed multiple inline details to remain open
+  at once, unlike Runs, Conversations, and protocol stages. Expected behavior:
+  one expanded task detail at a time, clicking a different task collapses the
+  prior task, and clicking the active task collapses it. Severity: medium.
+  Fix owner: current implementation pass. Verification method: automated
+  Playwright work-surface spec and real Safari `/ui/tasks` click-through.
+- Tasks / real Safari: a completed implementation task for run
+  `186e8080c07342e2943dd0fbf821c740` did not surface produced implementation
+  artifacts inline, while the corresponding run Outputs section did expose
+  artifact actions. Expected behavior: every task, conversation, dashboard, and
+  run reference to a concrete generated artifact uses the same preview/open/
+  download/copy contract. Severity: high. Fix owner: artifact lineage pass.
+  Verification method: create or reuse a protocol run with produced artifacts,
+  open the linked task from `/ui/tasks` and from the conversation task view,
+  and confirm artifact actions are present where bytes exist.
+- Conversations / real Safari: linked runs inside conversation previews and
+  full conversation headers are still navigation links/chips only. They can
+  route users to Runs, but they cannot be inspected progressively from the
   conversation context. Expected behavior: linked runs use the shared run
-  expansion contract or an equivalent progressive preview so users can inspect
+  expansion contract or an equivalent bounded preview so users can inspect
   state/artifacts without mentally jumping between disconnected pages.
-- Cross-surface: the same operational object uses different interaction models
-  depending on route.
+  Severity: medium. Fix owner: linked-object lineage pass. Verification method:
+  open `/ui/conversations`, expand a conversation with linked runs, and inspect
+  the run without leaving the conversation work surface.
+- Protocols / real Safari: one route transition from Templates to Protocols
+  briefly rendered the previous Templates content under the Protocols URL until
+  reload. This was not reproduced on a second attempt. Expected behavior:
+  route content and URL always reconcile without manual refresh. Severity: low
+  unless reproduced. Verification method: repeat top-nav transitions across
+  Templates, Protocols, Runs, Conversations, Tasks, Agents, and Capabilities in
+  real Safari with cache disabled/normal refresh.
+- Audit coverage: this pass exercised broad real Safari flows, but it has not
+  yet produced a literal 500+ screenshot corpus. Expected behavior: do not
+  claim the 500+ screenshot breadth gate until the harness records and indexes
+  that many distinct Safari screenshots. Severity: process. Verification
+  method: screenshot manifest with count, route, viewport, action, and result.
+
+Resolved or verified in the latest implementation passes:
+
+- Runs: split-pane detail was replaced by inline expansion with section tabs,
+  a bounded execution work surface, and collapse-on-active-row behavior.
+- Runs / real Safari: changing the status filter clears stale incompatible
+  selections and removes stale `run_id` values.
+- Runs / real Safari: completed participant rows prefer resolved outcomes over
+  raw running state.
+- Runs / real Safari: artifact Outputs expose the shared Preview/Open/Download/
+  Copy path action row when concrete bytes exist.
+- Conversations / real Safari: the list uses inline expansion, one expanded
+  conversation at a time, and click-to-collapse for the active row.
+- Conversations / real Safari: the full conversation page uses top-level tabs
+  rather than rendering all subsections simultaneously.
+- Protocol stages / real Safari: stage rows expand inline, Done collapses the
+  editor, Assignment hides Advanced/custom runtime internals, Files & outputs
+  stays on the selected stage, and the workflow map remains interactive on
+  demand.

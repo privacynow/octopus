@@ -131,6 +131,28 @@ test('conversation list exposes inline context before opening the full workspace
   await page.screenshot({ path: '.tmp/visual-registry/conversations-inline-desktop.png', fullPage: false });
 });
 
+test('tasks keep one inline detail open at a time', async ({ page }) => {
+  await login(page);
+  await page.goto('/ui/tasks');
+  const rows = page.locator('.task-item-row');
+  await expect(rows.first()).toBeVisible();
+  const rowCount = await rows.count();
+  test.skip(rowCount < 2, 'Need at least two tasks to verify single-detail expansion.');
+
+  await rows.nth(0).click();
+  await expect(rows.nth(0)).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.task-item-row[aria-expanded="true"]')).toHaveCount(1);
+
+  await rows.nth(1).click();
+  await expect(rows.nth(0)).toHaveAttribute('aria-expanded', 'false');
+  await expect(rows.nth(1)).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.task-item-row[aria-expanded="true"]')).toHaveCount(1);
+
+  await rows.nth(1).click();
+  await expect(page.locator('.task-item-row[aria-expanded="true"]')).toHaveCount(0);
+  expect(new URL(page.url()).searchParams.get('task_id')).toBeFalsy();
+});
+
 test('conversation detail keeps the workspace viewport bounded', async ({ page }) => {
   await login(page);
   await page.goto('/ui/conversations/ed29524b7a177caf34417638bc0ad3c3?view=tasks');

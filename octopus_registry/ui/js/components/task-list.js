@@ -446,9 +446,16 @@ function renderTaskList(container) {
 
         row.addEventListener('click', () => {
             const nextExpanded = detail.hidden;
-            detail.hidden = !nextExpanded;
-            row.setAttribute('aria-expanded', String(nextExpanded));
             if (nextExpanded) {
+                Array.from(listEl.querySelectorAll('.task-item-row[aria-expanded="true"]')).forEach((expandedRow) => {
+                    if (expandedRow === row) return;
+                    expandedRow.setAttribute('aria-expanded', 'false');
+                    const expandedDetail = expandedRow.closest('.task-item')?.querySelector('.task-item-detail');
+                    if (expandedDetail) expandedDetail.hidden = true;
+                });
+                detail.hidden = false;
+                row.setAttribute('aria-expanded', 'true');
+                expandedTaskIds.clear();
                 expandedTaskIds.add(taskId);
                 currentTaskId = taskId;
                 _writeState();
@@ -456,6 +463,8 @@ function renderTaskList(container) {
                     void loadTaskDetail(taskId);
                 }
             } else {
+                detail.hidden = true;
+                row.setAttribute('aria-expanded', 'false');
                 expandedTaskIds.delete(taskId);
                 if (currentTaskId === taskId) {
                     currentTaskId = '';

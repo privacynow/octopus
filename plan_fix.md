@@ -1166,3 +1166,28 @@ actions, not direct database mutation.
 5. Move selector preview and worker diagnostics into Operations.
 6. Add scenario specs and negative invariants before broad visual polish.
 7. Run visual audit after each major surface change.
+
+## Live Audit Findings
+
+### Finding: Protocol Launch Can Produce Semantically Mismatched Artifacts
+
+During UI-only launch from an agent conversation, the selected published
+software-engineering simulator accepted a new release-note-generator problem
+statement but kept static feature-flag simulator artifact paths and stage
+language. The run did execute and produced downloadable artifacts, but the
+artifact contract did not adapt to the user's stated outcome.
+
+Required fix:
+
+- make protocol launch make the selected protocol's fixed scope explicit before
+  start, or require a template/protocol whose artifact paths are generic enough
+  for arbitrary software-engineering problems
+- add a scenario assertion that the problem statement, selected protocol name,
+  artifact names, artifact paths, and generated artifact contents describe the
+  same product
+- prevent future "UI-only simulator <timestamp>" protocols from polluting the
+  normal published-protocol selector, or move test fixtures behind an operator
+  filter
+- keep the Protocols tab as the full catalog, but make conversation launch
+  progressive: recent official protocols first, search for the rest, and no
+  timestamped fixture wall in the default selector

@@ -239,6 +239,9 @@ window.UI = (() => {
         }
 
         if (trailing instanceof Node) {
+            if (trailing.classList && trailing.classList.contains('artifact-action-row')) {
+                row.classList.add('list-row-with-artifact-actions');
+            }
             row.appendChild(trailing);
         }
 
@@ -618,7 +621,7 @@ window.UI = (() => {
         copyErrorMessage = 'Failed to copy the artifact path.',
     } = {}) {
         const actionRow = document.createElement('div');
-        actionRow.className = 'list-row-actions';
+        actionRow.className = 'list-row-actions artifact-action-row';
 
         const stop = (event) => {
             if (!stopPropagation || !event) return;

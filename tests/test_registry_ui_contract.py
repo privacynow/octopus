@@ -786,8 +786,8 @@ def test_agent_surfaces_distinguish_transport_from_execution_and_offer_reset() -
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "transport " in agent_detail
-    assert "execution faulted" in agent_detail
+    assert "transport " not in agent_detail
+    assert "Execution faulted" in agent_detail
     assert "Reset execution" in agent_detail
     assert "resetAgentExecutionFault" in agent_detail
     # Agents list now renders through Kit.agentsList (plan §8), which surfaces

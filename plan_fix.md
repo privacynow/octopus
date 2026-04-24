@@ -1203,6 +1203,9 @@ Implementation status:
   paths remain fixed by the selected protocol.
 - Capability lists and agent capability chips now hide timestamp-generated
   capability names by default while preserving search-based discovery.
+- Artifact `Preview` now uses the same shared artifact action component with a
+  content-link fallback, so a produced artifact still has an actionable path if
+  inline JavaScript preview fails.
 
 Remaining product work:
 

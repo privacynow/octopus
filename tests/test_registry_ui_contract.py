@@ -864,6 +864,23 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "function compactGeneratedName(" in helper
 
 
+def test_artifact_preview_actions_have_link_fallbacks() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    protocol_workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function createArtifactActionRow({" in helper
+    assert "previewHref = ''" in helper
+    assert "const previewUrl = String(previewHref || openHref || '').trim();" in helper
+    assert "previewBtn.setAttribute('role', 'button');" in helper
+    assert "if (previewUrl) event.preventDefault();" in helper
+    assert "openHref: missing ? '' : API.protocolRunArtifactContentUrl" in protocol_workspace
+
+
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     helper = (

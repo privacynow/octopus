@@ -635,6 +635,7 @@ window.UI = (() => {
     function createArtifactActionRow({
         previewable = false,
         onPreview = null,
+        previewHref = '',
         openHref = '',
         downloadHref = '',
         copyPathText = '',
@@ -652,12 +653,19 @@ window.UI = (() => {
         };
 
         if (available && previewable && typeof onPreview === 'function') {
-            const previewBtn = document.createElement('button');
-            previewBtn.type = 'button';
+            const previewUrl = String(previewHref || openHref || '').trim();
+            const previewBtn = previewUrl ? document.createElement('a') : document.createElement('button');
+            if (previewUrl) {
+                previewBtn.href = previewUrl;
+                previewBtn.setAttribute('role', 'button');
+            } else {
+                previewBtn.type = 'button';
+            }
             previewBtn.className = 'btn btn-sm';
             previewBtn.textContent = 'Preview';
             previewBtn.addEventListener('click', (event) => {
                 stop(event);
+                if (previewUrl) event.preventDefault();
                 void onPreview();
             });
             actionRow.appendChild(previewBtn);

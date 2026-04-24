@@ -2313,7 +2313,10 @@ window.Kit = (() => {
                 }
 
                 if (typeof onSelect === 'function') {
-                    row.addEventListener('click', () => onSelect(run));
+                    row.addEventListener('click', () => onSelect({
+                        ...run,
+                        id: row.dataset.runId || run.id || '',
+                    }));
                 }
                 entry.appendChild(row);
 

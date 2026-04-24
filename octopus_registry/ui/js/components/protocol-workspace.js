@@ -5804,6 +5804,7 @@ function renderProtocolRuns(container) {
     let issueKindFilter = _protocolIssueFilterValue(UI.readQueryParam('issue_kind', ''));
     let timelineParticipantFilter = '';
     let activeLineageStageId = '';
+    let activeRunDetailSection = '';
     let currentRunSubscription = null;
 
     const header = document.createElement('header');
@@ -5849,6 +5850,28 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _setRunSelection(nextRunId, { push = true } = {}) {
+        const normalizedRunId = String(nextRunId || '');
+        currentRun = null;
+        currentIssues = [];
+        lastRunEvent = null;
+        activeLineageStageId = '';
+        activeRunDetailSection = '';
+        if (normalizedRunId && normalizedRunId !== String(currentRunId || '')) {
+            currentRunId = normalizedRunId;
+            runDetailLoading = true;
+            _writeState({ push });
+            renderRunsRoute();
+            void loadRunDetail();
+            return;
+        }
+        currentRunId = '';
+        runDetailLoading = false;
+        _writeState({ push });
+        _bindRunSubscription();
+        renderRunsRoute();
+    }
+
     function _filteredIssues() {
         return (protocolIssues || []).filter((item) => {
             const haystack = [
@@ -5881,17 +5904,7 @@ function renderProtocolRuns(container) {
                 ].filter(Boolean).join(' · '),
                 badgeText: item.issue_code || item.stage_key || '',
                 className: selected ? 'is-selected' : '',
-                onClick: () => {
-                    currentRunId = item.protocol_run_id;
-                    currentRun = null;
-                    currentIssues = [];
-                    lastRunEvent = null;
-                    activeLineageStageId = '';
-                    runDetailLoading = true;
-                    _writeState({ push: true });
-                    renderRunsRoute();
-                    void loadRunDetail();
-                },
+                onClick: () => _setRunSelection(item.protocol_run_id),
             });
             row.setAttribute('aria-expanded', String(selected));
             shell.appendChild(row);
@@ -6170,17 +6183,7 @@ function renderProtocolRuns(container) {
                 _writeState({ push: true });
                 renderRunsRoute();
             },
-            onSelect: (run) => {
-                currentRunId = run.id;
-                currentRun = null;
-                currentIssues = [];
-                lastRunEvent = null;
-                activeLineageStageId = '';
-                runDetailLoading = true;
-                _writeState({ push: true });
-                renderRunsRoute();
-                void loadRunDetail();
-            },
+            onSelect: (run) => _setRunSelection(run.id),
             renderExpanded: () => _buildRunDetailPanel(),
         }));
         return panel;
@@ -6277,11 +6280,11 @@ function renderProtocolRuns(container) {
             }
         });
 
-        const appendArtifactList = (titleText, rows, { emptyText = '', missing = false } = {}) => {
+        const appendArtifactList = (target, titleText, rows, { emptyText = '', missing = false } = {}) => {
             const title = document.createElement('div');
             title.className = 'editor-section-title';
             title.textContent = titleText;
-            detailPanel.appendChild(title);
+            target.appendChild(title);
             const list = document.createElement('div');
             const nodes = rows.map((item) => {
                 const producer = stageById.get(String(item.produced_by_stage_execution_id || '')) || null;
@@ -6315,18 +6318,8 @@ function renderProtocolRuns(container) {
                 });
             });
             UI.reconcileChildren(list, nodes.length ? nodes : [UI.renderEmptyState(emptyText, true)]);
-            detailPanel.appendChild(list);
+            target.appendChild(list);
         };
-
-        appendArtifactList('Outputs', artifactRows, {
-            emptyText: 'No produced outputs recorded yet.',
-        });
-        detailPanel.appendChild(participantControl.element);
-
-        const stageTitle = document.createElement('div');
-        stageTitle.className = 'editor-section-title';
-        stageTitle.textContent = 'Execution lineage';
-        detailPanel.appendChild(stageTitle);
 
         const stageList = document.createElement('div');
         stageList.className = 'protocol-lineage-list';
@@ -6366,7 +6359,7 @@ function renderProtocolRuns(container) {
             const stageToolbar = document.createElement('div');
             stageToolbar.className = 'kit-stage-workspace-toolbar';
             stageToolbar.appendChild(stageNav.element);
-            detailPanel.appendChild(stageToolbar);
+            stageList.appendChild(stageToolbar);
         }
 
         const buildLineageStageCard = (item) => {
@@ -6484,63 +6477,103 @@ function renderProtocolRuns(container) {
         UI.reconcileChildren(
             stageList,
             activeStageRow
-                ? [buildLineageStageCard(activeStageRow)]
+                ? [...Array.from(stageList.childNodes), buildLineageStageCard(activeStageRow)]
                 : [UI.renderEmptyState('No stage executions match this participant filter.', true)],
         );
-        detailPanel.appendChild(stageList);
 
-        const participantTitle = document.createElement('div');
-        participantTitle.className = 'editor-section-title';
-        participantTitle.textContent = 'Participants';
-        detailPanel.appendChild(participantTitle);
-
-        const participantList = document.createElement('div');
-        const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
-            label: `${item.display_name || item.participant_key} · ${item.state || item.resolution_outcome || 'queued'}`,
-            sublabel: item.resolution_reason || item.resolved_agent_id || item.session_key || '',
-            badgeText: item.resolution_outcome || '',
-        }));
-        UI.reconcileChildren(participantList, participantRows.length ? participantRows : [UI.renderEmptyState('No participants resolved yet.', true)]);
-        detailPanel.appendChild(participantList);
-
-        if (pendingArtifactRows.length) {
-            appendArtifactList('Declared but missing', pendingArtifactRows, {
-                emptyText: 'No declared outputs are currently missing.',
-                missing: true,
-            });
+        const sectionOptions = [
+            { value: 'outputs', label: `Outputs${artifactRows.length ? ` (${artifactRows.length})` : ''}` },
+            { value: 'lineage', label: 'Execution' },
+            { value: 'participants', label: `Participants${currentRun.participants?.length ? ` (${currentRun.participants.length})` : ''}` },
+            { value: 'decisions', label: `Decisions${transitionRows.length ? ` (${transitionRows.length})` : ''}` },
+            { value: 'issues', label: `Issues${currentIssues?.length ? ` (${currentIssues.length})` : ''}` },
+        ];
+        const sectionValues = new Set(sectionOptions.map((item) => item.value));
+        if (!sectionValues.has(activeRunDetailSection || '')) {
+            activeRunDetailSection = issueListActive
+                ? 'issues'
+                : artifactRows.length
+                    ? 'outputs'
+                    : 'lineage';
         }
-
-        const transitionTitle = document.createElement('div');
-        transitionTitle.className = 'editor-section-title';
-        transitionTitle.textContent = 'Decision history';
-        detailPanel.appendChild(transitionTitle);
-
-        const transitionList = document.createElement('div');
-        transitionList.setAttribute('aria-live', 'polite');
-        const transitionNodes = transitionRows.map((item) => UI.renderListRow({
-            label: `${item.transition_kind} · ${item.decision || 'n/a'}`,
-            sublabel: [item.reason || item.actor_ref || '', item.error_code || ''].filter(Boolean).join(' · '),
-            badgeText: String(item.metadata_json?.target_agent_id || ''),
-        }));
-        UI.reconcileChildren(transitionList, transitionNodes.length ? transitionNodes : [UI.renderEmptyState('No transitions match this participant filter.', true)]);
-        detailPanel.appendChild(transitionList);
-
-        const issueDetailTitle = document.createElement('div');
-        issueDetailTitle.className = 'editor-section-title';
-        issueDetailTitle.textContent = 'Support issues';
-        detailPanel.appendChild(issueDetailTitle);
-
-        const issueDetailList = document.createElement('div');
-        const issueDetailRows = (currentIssues || []).map((item) => UI.renderListRow({
-            label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
-            sublabel: item.issue_detail || item.updated_at || '',
-            badgeText: item.stage_key || '',
-        }));
-        UI.reconcileChildren(
-            issueDetailList,
-            issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)],
+        const sectionControl = UI.createSegmentedControl(
+            sectionOptions,
+            (value) => {
+                activeRunDetailSection = value || 'outputs';
+                renderRunsRoute();
+            },
+            { label: 'Run detail section', value: activeRunDetailSection || 'outputs' },
         );
-        detailPanel.appendChild(issueDetailList);
+        sectionControl.element.classList.add('kit-stage-workspace-nav');
+        const sectionToolbar = document.createElement('div');
+        sectionToolbar.className = 'kit-stage-workspace-toolbar';
+        sectionToolbar.appendChild(sectionControl.element);
+        detailPanel.appendChild(sectionToolbar);
+
+        const sectionPanel = document.createElement('div');
+        sectionPanel.className = 'studio-stack';
+        if (activeRunDetailSection === 'outputs') {
+            appendArtifactList(sectionPanel, 'Outputs', artifactRows, {
+                emptyText: 'No produced outputs recorded yet.',
+            });
+            if (pendingArtifactRows.length) {
+                appendArtifactList(sectionPanel, 'Declared but missing', pendingArtifactRows, {
+                    emptyText: 'No declared outputs are currently missing.',
+                    missing: true,
+                });
+            }
+        } else if (activeRunDetailSection === 'lineage') {
+            const stageTitle = document.createElement('div');
+            stageTitle.className = 'editor-section-title';
+            stageTitle.textContent = 'Execution lineage';
+            sectionPanel.appendChild(stageTitle);
+            sectionPanel.appendChild(participantControl.element);
+            sectionPanel.appendChild(stageList);
+        } else if (activeRunDetailSection === 'participants') {
+            const participantTitle = document.createElement('div');
+            participantTitle.className = 'editor-section-title';
+            participantTitle.textContent = 'Participants';
+            sectionPanel.appendChild(participantTitle);
+            const participantList = document.createElement('div');
+            const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
+                label: `${item.display_name || item.participant_key} · ${item.state || item.resolution_outcome || 'queued'}`,
+                sublabel: item.resolution_reason || item.resolved_agent_id || item.session_key || '',
+                badgeText: item.resolution_outcome || '',
+            }));
+            UI.reconcileChildren(participantList, participantRows.length ? participantRows : [UI.renderEmptyState('No participants resolved yet.', true)]);
+            sectionPanel.appendChild(participantList);
+        } else if (activeRunDetailSection === 'decisions') {
+            const transitionTitle = document.createElement('div');
+            transitionTitle.className = 'editor-section-title';
+            transitionTitle.textContent = 'Decision history';
+            sectionPanel.appendChild(transitionTitle);
+            const transitionList = document.createElement('div');
+            transitionList.setAttribute('aria-live', 'polite');
+            const transitionNodes = transitionRows.map((item) => UI.renderListRow({
+                label: `${item.transition_kind} · ${item.decision || 'n/a'}`,
+                sublabel: [item.reason || item.actor_ref || '', item.error_code || ''].filter(Boolean).join(' · '),
+                badgeText: String(item.metadata_json?.target_agent_id || ''),
+            }));
+            UI.reconcileChildren(transitionList, transitionNodes.length ? transitionNodes : [UI.renderEmptyState('No transitions match this participant filter.', true)]);
+            sectionPanel.appendChild(transitionList);
+        } else {
+            const issueDetailTitle = document.createElement('div');
+            issueDetailTitle.className = 'editor-section-title';
+            issueDetailTitle.textContent = 'Support issues';
+            sectionPanel.appendChild(issueDetailTitle);
+            const issueDetailList = document.createElement('div');
+            const issueDetailRows = (currentIssues || []).map((item) => UI.renderListRow({
+                label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
+                sublabel: item.issue_detail || item.updated_at || '',
+                badgeText: item.stage_key || '',
+            }));
+            UI.reconcileChildren(
+                issueDetailList,
+                issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)],
+            );
+            sectionPanel.appendChild(issueDetailList);
+        }
+        detailPanel.appendChild(sectionPanel);
         return detailPanel;
     }
 
@@ -6556,6 +6589,8 @@ function renderProtocolRuns(container) {
             runStatusFilter,
             runSearch,
             timelineParticipantFilter,
+            activeLineageStageId,
+            activeRunDetailSection,
         }, () => {
             const workbench = document.createElement('div');
             workbench.className = 'protocol-runs-workbench';

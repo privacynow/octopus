@@ -546,8 +546,14 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
     css = (
         repo_root / "octopus_registry" / "ui" / "css" / "main.css"
     ).read_text(encoding="utf-8")
+    kit = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
 
     assert "window.RegistrySkillHub = RegistrySkillHub;" in skill_catalog
+    assert "function _isGeneratedSkill(" in skill_catalog
+    assert "!_isGeneratedSkill(skill)" in skill_catalog
+    assert "!UI.isGeneratedTimestampName(skill)" in kit
     assert "function buildSkillsCard(agent) {" in agent_detail
     assert "Manage capabilities" in agent_detail
     assert "Open Capabilities page" in agent_detail
@@ -832,8 +838,16 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
     ).read_text(encoding="utf-8")
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
 
     assert "function renderProtocolsPanel()" in detail
+    assert "function conversationProtocolOptions(" in detail
+    assert "conversationProtocolLabel(" in detail
+    assert "Showing the latest version of each generated protocol family." in detail
+    assert "Protocol scope" in detail
+    assert "will not rewrite the workflow schema at launch time." in detail
     assert "Conversation protocols" in detail
     assert "Start a published protocol" in detail
     assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
@@ -846,6 +860,8 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "value === 'skills' || value === 'settings' || value === 'protocols'" in detail
     assert "Started protocol run" in detail
     assert "Open run" in detail
+    assert "function generatedTimestamp(" in helper
+    assert "function compactGeneratedName(" in helper
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

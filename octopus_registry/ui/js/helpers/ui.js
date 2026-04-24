@@ -557,6 +557,29 @@ window.UI = (() => {
         return /\.(md|markdown|txt|log|json|jsonl|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(String(path || '').trim());
     }
 
+    function generatedTimestamp(value) {
+        const match = String(value || '').trim().match(/(?:^|[\s_-])(\d{10,})(?:\b|$)/);
+        return match ? match[1] : '';
+    }
+
+    function isGeneratedTimestampName(value) {
+        return Boolean(generatedTimestamp(value));
+    }
+
+    function compactGeneratedName(value, { stripUiOnly = false } = {}) {
+        const original = String(value || '').trim();
+        if (!original) return '';
+        let label = original
+            .replace(/(?:[\s_-]+)\d{10,}(?:\b|$)/g, '')
+            .replace(/[-_]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (stripUiOnly) {
+            label = label.replace(/^ui only\s+/i, '').trim();
+        }
+        return label || original;
+    }
+
     function conversationHref(conversationId, {
         view = '',
         conversationType = '',
@@ -1228,6 +1251,9 @@ window.UI = (() => {
         joinDisplayPath,
         basenameDisplayPath,
         isPreviewableFilePath,
+        generatedTimestamp,
+        isGeneratedTimestampName,
+        compactGeneratedName,
         conversationHref,
         taskArtifactEvidence,
         taskExpectedOutput,

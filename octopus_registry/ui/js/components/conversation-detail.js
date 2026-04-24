@@ -1253,6 +1253,74 @@ function renderConversationDetail(container, params) {
         });
     }
 
+    function conversationProtocolTimestamp(protocol) {
+        return UI.generatedTimestamp(protocol?.display_name || '')
+            || UI.generatedTimestamp(protocol?.slug || '');
+    }
+
+    function conversationProtocolLabel(protocol) {
+        return UI.compactGeneratedName(
+            protocol?.display_name || protocol?.slug || protocol?.protocol_id || '',
+            { stripUiOnly: true },
+        );
+    }
+
+    function conversationProtocolFamilyKey(protocol) {
+        return UI.compactGeneratedName(
+            protocol?.slug || protocol?.display_name || protocol?.protocol_id || '',
+            { stripUiOnly: true },
+        ).toLowerCase();
+    }
+
+    function conversationProtocolSearchMatches(protocol, queryText) {
+        const query = String(queryText || '').trim().toLowerCase();
+        if (!query) return true;
+        const haystack = [
+            protocol?.display_name || '',
+            protocol?.slug || '',
+            protocol?.protocol_id || '',
+            conversationProtocolLabel(protocol),
+        ].join(' ').toLowerCase();
+        return haystack.includes(query);
+    }
+
+    function compareConversationProtocols(left, right) {
+        const leftTimestamp = Number(conversationProtocolTimestamp(left) || 0);
+        const rightTimestamp = Number(conversationProtocolTimestamp(right) || 0);
+        if (leftTimestamp !== rightTimestamp) return rightTimestamp - leftTimestamp;
+        return conversationProtocolLabel(left).localeCompare(conversationProtocolLabel(right));
+    }
+
+    function conversationProtocolOptions(protocols, queryText = '') {
+        const query = String(queryText || '').trim();
+        const matching = (protocols || [])
+            .filter((item) => conversationProtocolSearchMatches(item, query))
+            .sort(compareConversationProtocols);
+        if (query) {
+            return { protocols: matching, hiddenCount: 0, collapsedCount: 0 };
+        }
+
+        const byFamily = new Map();
+        let collapsedCount = 0;
+        matching.forEach((item) => {
+            const familyKey = conversationProtocolFamilyKey(item);
+            const existing = byFamily.get(familyKey);
+            if (!existing) {
+                byFamily.set(familyKey, item);
+                return;
+            }
+            collapsedCount += 1;
+            if (compareConversationProtocols(item, existing) < 0) {
+                byFamily.set(familyKey, item);
+            }
+        });
+        return {
+            protocols: [...byFamily.values()].sort(compareConversationProtocols),
+            hiddenCount: collapsedCount,
+            collapsedCount,
+        };
+    }
+
     function renderProtocolsPanel() {
         const agentId = managementAgentId();
         syncManagementControls();
@@ -1262,16 +1330,8 @@ function renderConversationDetail(container, params) {
             return;
         }
 
-        const filteredProtocols = (availableConversationProtocols || []).filter((item) => {
-            const query = String(protocolSearchQuery || '').trim().toLowerCase();
-            if (!query) return true;
-            const haystack = [
-                item.display_name || '',
-                item.slug || '',
-                item.protocol_id || '',
-            ].join(' ').toLowerCase();
-            return haystack.includes(query);
-        });
+        const protocolOptions = conversationProtocolOptions(availableConversationProtocols || [], protocolSearchQuery);
+        const filteredProtocols = protocolOptions.protocols;
         if (selectedProtocolId && !filteredProtocols.some((item) => String(item.protocol_id || '') === selectedProtocolId)) {
             if (!protocolSearchQuery) {
                 selectedProtocolId = filteredProtocols[0] ? String(filteredProtocols[0].protocol_id || '') : '';
@@ -1287,10 +1347,14 @@ function renderConversationDetail(container, params) {
             selectedProtocolId: String(selectedProtocolId || ''),
             problemStatement: String(protocolProblemStatement || ''),
             workspaceRef: protocolWorkspaceRef(),
+            hiddenProtocolCount: Number(protocolOptions.hiddenCount || 0),
             availableProtocols: filteredProtocols.map((item) => ({
                 id: String(item.protocol_id || ''),
-                label: String(item.display_name || item.slug || item.protocol_id || ''),
+                label: conversationProtocolLabel(item),
+                rawLabel: String(item.display_name || item.slug || item.protocol_id || ''),
                 slug: String(item.slug || ''),
+                generated: Boolean(conversationProtocolTimestamp(item)),
+                timestamp: conversationProtocolTimestamp(item),
             })),
             linkedRuns: (linkedProtocolRuns || []).map((run) => ({
                 id: String(run.protocol_run_id || ''),
@@ -1370,13 +1434,22 @@ function renderConversationDetail(container, params) {
             });
             form.appendChild(search);
 
+            if (state.hiddenProtocolCount && !state.search) {
+                const hiddenNote = document.createElement('p');
+                hiddenNote.className = 'quiet-note';
+                hiddenNote.textContent = `Showing the latest version of each generated protocol family. ${state.hiddenProtocolCount} older generated versions are hidden; search to inspect them.`;
+                form.appendChild(hiddenNote);
+            }
+
             const select = document.createElement('select');
             select.className = 'input';
             select.setAttribute('aria-label', 'Published protocol');
             state.availableProtocols.forEach((item) => {
                 const option = document.createElement('option');
                 option.value = item.id;
-                option.textContent = item.slug ? `${item.label} · ${item.slug}` : item.label;
+                const suffix = state.search && item.timestamp ? ` · generated ${item.timestamp}` : '';
+                const showIdentifier = state.search || !item.generated;
+                option.textContent = showIdentifier && item.slug ? `${item.label}${suffix} · ${item.slug}` : `${item.label}${suffix}`;
                 if (item.id === state.selectedProtocolId) {
                     option.selected = true;
                 }
@@ -1384,13 +1457,28 @@ function renderConversationDetail(container, params) {
             });
             select.addEventListener('change', () => {
                 selectedProtocolId = String(select.value || '').trim();
+                renderProtocolsPanel();
             });
             form.appendChild(select);
+
+            const selectedProtocol = state.availableProtocols.find((item) => item.id === state.selectedProtocolId) || state.availableProtocols[0] || null;
+            if (selectedProtocol) {
+                const scope = document.createElement('div');
+                scope.className = 'settings-row';
+                let rawScope = '';
+                if (selectedProtocol.generated) {
+                    rawScope = `Generated protocol family${state.search && selectedProtocol.timestamp ? ` ${selectedProtocol.timestamp}` : ''}. `;
+                } else if (selectedProtocol.rawLabel && selectedProtocol.rawLabel !== selectedProtocol.label) {
+                    rawScope = `Published as ${selectedProtocol.rawLabel}. `;
+                }
+                scope.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">Protocol scope</strong><span class="settings-row-sublabel">${UI.esc(rawScope)}This run uses the protocol's published stage instructions and artifact paths. Write a problem statement that fits this workflow; it will not rewrite the workflow schema at launch time.</span></div>`;
+                form.appendChild(scope);
+            }
 
             const problem = document.createElement('textarea');
             problem.className = 'input';
             problem.rows = 4;
-            problem.placeholder = 'Describe what this protocol should accomplish';
+            problem.placeholder = 'Describe the concrete run context for this protocol';
             problem.setAttribute('aria-label', 'Describe what this protocol should accomplish');
             problem.value = state.problemStatement;
             problem.addEventListener('input', () => {
@@ -1987,7 +2075,7 @@ function renderConversationDetail(container, params) {
         const match = (availableConversationProtocols || []).find(
             (item) => String(item.protocol_id || '').trim() === target,
         );
-        return String(match?.display_name || match?.slug || match?.protocol_id || target).trim() || target;
+        return conversationProtocolLabel(match || { display_name: target }) || target;
     }
 
     function protocolRunSummary(run) {

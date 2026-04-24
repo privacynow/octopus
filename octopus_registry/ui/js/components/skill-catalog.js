@@ -37,12 +37,17 @@ const RegistrySkillHub = (() => {
         return haystack.includes(queryText);
     }
 
+    function _isGeneratedSkill(skill) {
+        return UI.isGeneratedTimestampName(skill?.display_name || skill?.name || '');
+    }
+
     function visibleLocalSkills(skills, queryText = '') {
         const normalized = String(queryText || '').trim().toLowerCase();
+        const list = Array.isArray(skills) ? skills : [];
         if (!normalized) {
-            return Array.isArray(skills) ? skills : [];
+            return list.filter((skill) => !_isGeneratedSkill(skill));
         }
-        return (skills || []).filter((skill) => _matchesLocalQuery(skill, normalized));
+        return list.filter((skill) => _matchesLocalQuery(skill, normalized));
     }
 
     function visibleStoreSkills(skills, queryText = '') {

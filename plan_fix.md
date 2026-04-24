@@ -1191,3 +1191,24 @@ Required fix:
 - keep the Protocols tab as the full catalog, but make conversation launch
   progressive: recent official protocols first, search for the rest, and no
   timestamped fixture wall in the default selector
+
+Implementation status:
+
+- Default conversation protocol launch now collapses timestamp-generated
+  protocols by family and shows only the latest family entry.
+- Search remains able to find older generated versions when an operator/user
+  intentionally needs them.
+- The launch form now shows a protocol-scope warning: the problem statement is
+  run context, not a schema rewrite. Published stage instructions and artifact
+  paths remain fixed by the selected protocol.
+- Capability lists and agent capability chips now hide timestamp-generated
+  capability names by default while preserving search-based discovery.
+
+Remaining product work:
+
+- Create or publish non-fixture protocols whose names, stage instructions,
+  artifact paths, and generated outputs are generic enough for the advertised
+  workflow.
+- Add an end-to-end scenario that launches one of those protocols from the UI
+  and asserts semantic alignment between selected protocol, problem statement,
+  artifact path, artifact title, and artifact content.

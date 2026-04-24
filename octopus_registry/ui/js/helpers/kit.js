@@ -2384,7 +2384,9 @@ window.Kit = (() => {
         const values = Array.isArray(agent?.routingSkills)
             ? agent.routingSkills
             : (Array.isArray(agent?.routing_skills) ? agent.routing_skills : []);
-        return [...new Set(values.map((skill) => String(skill || '').trim()).filter(Boolean))];
+        return [...new Set(values
+            .map((skill) => String(skill || '').trim())
+            .filter((skill) => skill && !UI.isGeneratedTimestampName(skill)))];
     }
 
     function _agentCapacity(agent) {

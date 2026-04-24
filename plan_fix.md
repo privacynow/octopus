@@ -90,6 +90,24 @@ database objects or implementation layers.
 
 ## Latest Active Fixes
 
+- Real Safari full-audit pass on 2026-04-24 confirmed the next blocking
+  defect: completed protocol stage tasks expand inline on the Tasks surface,
+  but produced artifacts are missing there even when the matching Run shows
+  those artifacts. This violates the artifact action contract because a human
+  entering from Tasks cannot preview, open, download, or copy output paths
+  without knowing to jump to Runs. Fix direction: keep the existing shared task
+  artifact renderer and repair task payload enrichment so real protocol-stage
+  tasks receive their produced artifact evidence from the run.
+- The same Safari pass confirmed the Runs and Dashboard surfaces still expose
+  stale/running protocol work as normal `running` or `leased` work even when a
+  stuck-lease issue exists elsewhere. This is tracked as an active usability
+  follow-up: stale state must be visible at the row/card where the user sees
+  the work, not only inside a separate issue tab or dashboard footer.
+- The same Safari pass confirmed the Protocols list is functionally correct but
+  visually flooded by timestamped/generated scenario definitions. This is a
+  release-readiness risk for human use. Test-created protocols must either be
+  cleaned up, created in an explicit test namespace, or filtered from the
+  default team-authored list without hiding real team protocols.
 - Run stage evidence navigation must be keyed by a stable stage identity with a
   safe fallback to stage key, so clicking `Load data`, `Architecture`, or any
   other stage changes the inline evidence card predictably.

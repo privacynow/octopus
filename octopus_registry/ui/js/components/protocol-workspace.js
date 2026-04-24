@@ -5586,6 +5586,7 @@ function renderProtocolWorkspace(container) {
                 label: Kit.dict.label('protocol.catalog.gallery'),
                 onClick: () => Router.navigate('/ui/gallery'),
             },
+            compactGeneratedFamilies: true,
         });
     }
 
@@ -5891,6 +5892,12 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _issueAttentionLabel(issue) {
+        const kind = String(issue?.issue_kind || '').trim().replace(/_/g, ' ');
+        const code = String(issue?.issue_code || '').trim().replace(/_/g, ' ');
+        return (kind || code || 'Issue').replace(/\b\w/g, (char) => char.toUpperCase());
+    }
+
     function _issueRows() {
         return _filteredIssues().map((item) => {
             const selected = String(item.protocol_run_id || '') === String(currentRunId || '');
@@ -6168,6 +6175,13 @@ function renderProtocolRuns(container) {
             return panel;
         }
 
+        const issuesByRunId = new Map();
+        (protocolIssues || []).forEach((issue) => {
+            const runId = String(issue.protocol_run_id || '').trim();
+            if (!runId || issuesByRunId.has(runId)) return;
+            issuesByRunId.set(runId, issue);
+        });
+
         const listRuns = (runs || []).filter((item) => {
             if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
             if (!runSearch) return true;
@@ -6179,16 +6193,22 @@ function renderProtocolRuns(container) {
                 item.protocol_id || '',
             ].join(' ').toLowerCase();
             return haystack.includes(runSearch.toLowerCase());
-        }).map((item) => ({
-            id: item.protocol_run_id || item.id || item.run_id || '',
-            status: item.status,
-            title: item.current_stage_key
-                ? `${item.current_stage_key} · ${item.status}`
-                : (item.status || 'queued'),
-            subtitle: item.problem_statement || item.protocol_run_id,
-            badge: item.protocol_id || '',
-            raw: item,
-        }));
+        }).map((item) => {
+            const runId = item.protocol_run_id || item.id || item.run_id || '';
+            const issue = issuesByRunId.get(String(runId || '').trim()) || null;
+            return {
+                id: runId,
+                status: item.status,
+                attention: issue ? _issueAttentionLabel(issue) : '',
+                attentionStatus: issue ? 'blocked' : '',
+                title: item.current_stage_key
+                    ? `${item.current_stage_key} · ${item.status}`
+                    : (item.status || 'queued'),
+                subtitle: item.problem_statement || item.protocol_run_id,
+                badge: item.protocol_id || '',
+                raw: item,
+            };
+        });
 
         panel.appendChild(Kit.runsList({
             runs: listRuns,

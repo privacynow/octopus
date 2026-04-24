@@ -786,6 +786,7 @@ window.Kit = (() => {
         search = '',
         createAction = null,
         secondaryAction = null,
+        compactGeneratedFamilies = false,
     } = {}) {
         const container = document.createElement('section');
         container.className = 'kit-authored-catalog';
@@ -906,8 +907,45 @@ window.Kit = (() => {
             return hay.includes(query);
         }
 
+        function _compactGeneratedRecords(items) {
+            const groups = new Map();
+            const output = [];
+            (items || []).forEach((record) => {
+                const generatedSource = UI.generatedTimestamp(record.display_name || '')
+                    ? record.display_name
+                    : UI.generatedTimestamp(record.slug || '')
+                        ? record.slug
+                        : '';
+                if (!generatedSource) {
+                    output.push(record);
+                    return;
+                }
+                const family = UI.compactGeneratedName(generatedSource, { stripUiOnly: true });
+                const key = [
+                    String(record.lifecycle_state || 'draft'),
+                    family.toLowerCase(),
+                ].join(':');
+                if (!groups.has(key)) {
+                    const collapsedRecord = {
+                        ...record,
+                        display_name: family,
+                        _catalogCollapsedCount: 1,
+                    };
+                    groups.set(key, collapsedRecord);
+                    output.push(collapsedRecord);
+                    return;
+                }
+                const existing = groups.get(key);
+                existing._catalogCollapsedCount = Number(existing._catalogCollapsedCount || 1) + 1;
+            });
+            return output;
+        }
+
         function renderList() {
-            const filtered = records.filter(_matches);
+            const matched = records.filter(_matches);
+            const filtered = compactGeneratedFamilies && !state.search.trim()
+                ? _compactGeneratedRecords(matched)
+                : matched;
             listEl.innerHTML = '';
             if (!filtered.length) {
                 const emptyCard = document.createElement('li');
@@ -992,6 +1030,12 @@ window.Kit = (() => {
                     published.className = 'kit-catalog-card-meta-item';
                     published.textContent = 'Versioned';
                     meta.appendChild(published);
+                }
+                if (Number(record._catalogCollapsedCount || 0) > 1) {
+                    const collapsed = document.createElement('span');
+                    collapsed.className = 'kit-catalog-card-meta-item';
+                    collapsed.textContent = `Latest of ${Number(record._catalogCollapsedCount || 0)} generated variants`;
+                    meta.appendChild(collapsed);
                 }
                 button.appendChild(meta);
 
@@ -2293,6 +2337,12 @@ window.Kit = (() => {
                 const head = document.createElement('div');
                 head.className = 'kit-runs-list-row-head';
                 head.appendChild(_runStatusChip(run.status));
+                if (run.attention) {
+                    const attentionChip = _runStatusChip(run.attentionStatus || 'blocked');
+                    attentionChip.classList.add('kit-run-status-attention');
+                    attentionChip.textContent = String(run.attention || '');
+                    head.appendChild(attentionChip);
+                }
                 const title = document.createElement('span');
                 title.className = 'kit-runs-list-row-title';
                 title.textContent = String(run.title || run.id || '');

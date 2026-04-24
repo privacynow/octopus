@@ -3716,7 +3716,6 @@ def test_task_payloads_merge_protocol_run_artifacts_for_all_task_surfaces(monkey
         target_agent_id="agent-2",
         status="completed",
         protocol_run_id="run-1",
-        protocol_stage_execution_id="stage-1",
         stage_key="implementation",
         working_dir="/workspace/workspace",
         request=RegistryJsonRecord.model_validate({

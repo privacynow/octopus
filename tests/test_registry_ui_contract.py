@@ -862,6 +862,12 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Open run" in detail
     assert "function generatedTimestamp(" in helper
     assert "function compactGeneratedName(" in helper
+    assert "compactGeneratedFamilies: true" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    assert "Latest of ${Number(record._catalogCollapsedCount || 0)} generated variants" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
 
 
 def test_artifact_preview_actions_have_link_fallbacks() -> None:
@@ -927,7 +933,13 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "renderExpanded = null" in (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
+    assert "kit-run-status-attention" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
     assert "renderExpanded: () => _buildRunDetailPanel()" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    assert "issuesByRunId" in (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
 

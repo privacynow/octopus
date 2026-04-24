@@ -12,11 +12,20 @@ def protocol_run_id_from_task_record(task: TaskRecord) -> str:
     routed_task_id = str(task.routed_task_id or "").strip()
     if not routed_task_id.startswith("protocol-stage:"):
         return ""
+    return str(_task_request_context(task).get("protocol_run_id", "") or "").strip()
+
+
+def _task_request_context(task: TaskRecord) -> dict[str, Any]:
     request_payload = task.request.as_dict() if task.request is not None else {}
-    context = request_payload.get("context", {})
-    if not isinstance(context, dict):
-        return ""
-    return str(context.get("protocol_run_id", "") or "").strip()
+    context = request_payload.get("context", {}) if isinstance(request_payload, dict) else {}
+    return context if isinstance(context, dict) else {}
+
+
+def _protocol_stage_execution_id_from_task_record(task: TaskRecord) -> str:
+    direct_stage_id = str(task.protocol_stage_execution_id or "").strip()
+    if direct_stage_id:
+        return direct_stage_id
+    return str(_task_request_context(task).get("protocol_stage_execution_id", "") or "").strip()
 
 
 def _task_expected_output_keys(task: TaskRecord) -> set[str]:
@@ -38,7 +47,7 @@ def _task_expected_output_keys(task: TaskRecord) -> set[str]:
 
 
 def _protocol_artifact_payloads_for_task(task: TaskRecord, detail: Any) -> list[dict[str, Any]]:
-    stage_execution_id = str(task.protocol_stage_execution_id or "").strip()
+    stage_execution_id = _protocol_stage_execution_id_from_task_record(task)
     if not stage_execution_id or detail is None:
         return []
     expected_keys = _task_expected_output_keys(task)

@@ -2216,6 +2216,21 @@ select {
     gap: var(--space-4);
 }
 
+.run-stage-evidence-nav.segmented-control {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.run-stage-evidence-nav.segmented-control::-webkit-scrollbar {
+    display: none;
+}
+
+.run-stage-evidence-nav .segmented-control-btn {
+    flex: 0 0 auto;
+}
+
 .run-evidence-section-head {
     display: grid;
     gap: 0.2rem;

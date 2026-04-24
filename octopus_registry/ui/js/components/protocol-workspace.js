@@ -5803,6 +5803,7 @@ function renderProtocolRuns(container) {
     let runStatusFilter = UI.readQueryParam('status', '');
     let issueKindFilter = _protocolIssueFilterValue(UI.readQueryParam('issue_kind', ''));
     let activeRunDetailSection = '';
+    let activeRunStageExecutionId = '';
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
 
@@ -5855,6 +5856,7 @@ function renderProtocolRuns(container) {
         currentIssues = [];
         lastRunEvent = null;
         activeRunDetailSection = '';
+        activeRunStageExecutionId = '';
         if (normalizedRunId && normalizedRunId !== String(currentRunId || '')) {
             currentRunId = normalizedRunId;
             runDetailLoading = true;
@@ -6184,6 +6186,7 @@ function renderProtocolRuns(container) {
                 currentIssues = [];
                 lastRunEvent = null;
                 activeRunDetailSection = '';
+                activeRunStageExecutionId = '';
                 runDetailLoading = false;
                 runDetailRequestToken += 1;
                 _bindRunSubscription();
@@ -6540,15 +6543,45 @@ function renderProtocolRuns(container) {
             sectionPanel.appendChild(buildOverviewSection());
         } else if (activeRunDetailSection === 'stages') {
             appendSectionTitle(sectionPanel, 'Stages', 'Workflow evidence is ordered by the authored protocol, not by reverse event chronology.');
-            const stageList = document.createElement('div');
-            stageList.className = 'protocol-lineage-list';
-            UI.reconcileChildren(
-                stageList,
-                stageRows.length
-                    ? stageRows.map((item, index) => buildStageEvidenceCard(item, index))
-                    : [UI.renderEmptyState('No stage executions recorded for this run yet.', true)],
-            );
-            sectionPanel.appendChild(stageList);
+            if (stageRows.length) {
+                const stageValues = new Set(stageRows.map((item) => String(item.protocol_stage_execution_id || '')));
+                const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')) || stageRows[0];
+                if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
+                    activeRunStageExecutionId = String(currentStage?.protocol_stage_execution_id || stageRows[0]?.protocol_stage_execution_id || '');
+                }
+                const stageOptions = stageRows.map((item, index) => {
+                    const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
+                    return {
+                        value: String(item.protocol_stage_execution_id || ''),
+                        label: `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'}`,
+                    };
+                });
+                const stageControl = UI.createSegmentedControl(
+                    stageOptions,
+                    (value) => {
+                        activeRunStageExecutionId = String(value || '');
+                        renderRunsRoute();
+                    },
+                    { label: 'Run stage evidence', value: activeRunStageExecutionId },
+                );
+                stageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
+                const stageToolbar = document.createElement('div');
+                stageToolbar.className = 'kit-stage-workspace-toolbar';
+                stageToolbar.appendChild(stageControl.element);
+                sectionPanel.appendChild(stageToolbar);
+
+                const selectedStageIndex = Math.max(
+                    stageRows.findIndex((item) => String(item.protocol_stage_execution_id || '') === String(activeRunStageExecutionId || '')),
+                    0,
+                );
+                const selectedStage = stageRows[selectedStageIndex] || stageRows[0];
+                const stageList = document.createElement('div');
+                stageList.className = 'protocol-lineage-list';
+                UI.reconcileChildren(stageList, [buildStageEvidenceCard(selectedStage, selectedStageIndex)]);
+                sectionPanel.appendChild(stageList);
+            } else {
+                sectionPanel.appendChild(UI.renderEmptyState('No stage executions recorded for this run yet.', true));
+            }
         } else if (activeRunDetailSection === 'artifacts') {
             appendSectionTitle(sectionPanel, 'Artifacts', 'This is the same artifact evidence shown under each stage, grouped by the stage that produced it.');
             stageRows.forEach((stage, index) => {
@@ -6622,6 +6655,7 @@ function renderProtocolRuns(container) {
             runStatusFilter,
             runSearch,
             activeRunDetailSection,
+            activeRunStageExecutionId,
         }, () => {
             const workbench = document.createElement('div');
             workbench.className = 'protocol-runs-workbench';

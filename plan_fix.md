@@ -17,9 +17,11 @@ Implementation progress:
   scrolling.
 - Shared artifact action rendering is still reused; no new artifact row path
   was introduced.
-- Remaining phases still require a Runs evidence-model refactor, full visual
-  audit, broader Work-surface alignment, deployment, and end-to-end scenario
-  execution.
+- Runs evidence now uses the single `Overview / Stages / Artifacts / Audit`
+  model in source, and `Stages` has a nested stage navigator so a long protocol
+  does not dump every stage card at once.
+- Remaining phases still require full visual audit, broader Work-surface
+  alignment, deployment verification, and end-to-end scenario execution.
 
 The latest finding is product-level, not page-level: the Registry still has
 multiple competing interaction models for the same kind of object. Stages and
@@ -276,6 +278,9 @@ Target behavior:
   section without creating another route-specific model.
 - Long lineage uses contained scrolling or section pagination inside the
   expanded run panel.
+- `Stages` uses one nested stage navigator and renders one active stage evidence
+  card at a time; the authored workflow remains visible without turning the run
+  into a vertical wall.
 
 ### Conversations
 

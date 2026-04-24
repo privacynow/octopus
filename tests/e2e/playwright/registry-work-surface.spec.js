@@ -51,13 +51,18 @@ test('runs use inline expansion instead of the old split detail board', async ({
   await expect(sectionTabs).toHaveCount(4);
   await sectionTabs.filter({ hasText: 'Stages' }).click();
   await expect(page.getByRole('tablist', { name: 'Execution stage' })).toHaveCount(0);
-  await expect(page.locator('.protocol-lineage-card')).toHaveCount(detail.stage_executions.length);
+  await expect(page.getByRole('tablist', { name: 'Run stage evidence' })).toHaveCount(1);
+  await expect(page.locator('.protocol-lineage-card')).toHaveCount(1);
 
   const stageDefinitions = detail.version?.definition_json?.stages || [];
   const firstDefinition = stageDefinitions[0] || {};
   const lastDefinition = stageDefinitions[stageDefinitions.length - 1] || {};
+  const stageTabs = page.getByRole('tablist', { name: 'Run stage evidence' }).getByRole('tab');
+  await expect(stageTabs).toHaveCount(detail.stage_executions.length);
+  await stageTabs.first().click();
   await expect(page.locator('.protocol-lineage-title').first()).toContainText(firstDefinition.display_name || firstDefinition.stage_key || '');
-  await expect(page.locator('.protocol-lineage-title').last()).toContainText(lastDefinition.display_name || lastDefinition.stage_key || '');
+  await stageTabs.last().click();
+  await expect(page.locator('.protocol-lineage-title').first()).toContainText(lastDefinition.display_name || lastDefinition.stage_key || '');
 
   await sectionTabs.filter({ hasText: 'Artifacts' }).click();
   await expect(page.locator('.artifact-list-row').first()).toBeVisible();

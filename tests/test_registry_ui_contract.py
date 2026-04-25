@@ -139,7 +139,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
-    assert "Available skills" in workspace
+    assert "Available capabilities" in workspace
     assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
@@ -185,7 +185,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Preferred agent:" in workspace
     assert "quickstart-chip" in workspace
     assert "pins the step to" in workspace
-    assert "Required skill" in workspace
+    assert "Required capability" in workspace
     assert "Pin matching agent (optional)" in workspace
     assert "Specific agent" in workspace
     assert "Show workflow map" in workspace
@@ -436,7 +436,9 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Manage what each bot can do." in skill_catalog
+    assert "Find reusable capabilities for conversations and protocol stages." in skill_catalog
+    assert "Capability catalog" in skill_catalog
+    assert "Choose a bot only when you need to manage installation or drafts." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
     assert "label: 'Studio'" not in skill_catalog
@@ -632,7 +634,8 @@ def test_dashboard_surfaces_recently_completed_tasks() -> None:
     ).read_text(encoding="utf-8")
 
     assert "createGroupedSection(" in dashboard
-    assert "'Tasks'" in dashboard
+    assert "'Work needing attention'" in dashboard
+    assert "'Tasks'" not in dashboard
     assert "loadActiveTasks()" in dashboard
     assert "loadTasksByStatus(['queued', 'submitted', 'leased', 'running'])" in dashboard
     assert "loadTasksByStatus(['failed', 'cancelled', 'timed_out'])" in dashboard

@@ -1165,7 +1165,7 @@ def test_registry_store_sources_builtin_protocol_templates_from_code_not_authore
     assert approval.display_name == "Document Approval"
 
 
-def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres_registry_truncated: str) -> None:
+def test_registry_store_authoring_options_and_templates_are_separate_resources(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -1173,16 +1173,17 @@ def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres
         assert run_init(conn) == []
         conn.commit()
 
-    manifest = store.get_protocol_authoring_manifest(access=operator_access())
+    options = store.get_protocol_authoring_options(access=operator_access())
+    templates = store.list_protocol_templates(access=operator_access())
 
-    assert manifest.templates
-    assert any(item.slug == "software-engineering" for item in manifest.templates)
-    assert any(item.slug == "document-approval" for item in manifest.templates)
-    assert "design" in manifest.sections
-    assert "advanced" not in manifest.sections
-    assert "review" in manifest.stage_kind_options
-    assert manifest.default_surface == "standard"
-    assert manifest.operator_surface_available is True
+    assert templates
+    assert any(item.slug == "software-engineering" for item in templates)
+    assert any(item.slug == "document-approval" for item in templates)
+    assert "design" in options.sections
+    assert "advanced" not in options.sections
+    assert "review" in options.stage_kind_options
+    assert options.default_surface == "standard"
+    assert options.operator_surface_available is True
 
 
 def test_registry_store_publishes_protocol_template_as_snapshot(postgres_registry_truncated: str) -> None:

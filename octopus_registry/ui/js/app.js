@@ -126,11 +126,6 @@ function _initTheme() {
     });
 }
 
-function renderProtocolTemplateRedirect(container) {
-    container.__routeReady = Promise.resolve();
-    Router.navigate('/ui/protocols?new=template', { replace: true });
-}
-
 Router.register('/ui', renderDashboard);
 Router.register('/ui/', renderDashboard);
 Router.register('/ui/approvals', renderApprovalList);
@@ -141,8 +136,6 @@ Router.register('/ui/conversations', renderConversationList);
 Router.register('/ui/conversations/:id', renderConversationDetail);
 Router.register('/ui/tasks', renderTaskList);
 Router.register('/ui/protocols', renderProtocolWorkspace);
-Router.register('/ui/templates', renderProtocolTemplateRedirect);
-Router.register('/ui/gallery', renderProtocolTemplateRedirect);
 Router.register('/ui/runs', renderProtocolRuns);
 Router.register('/ui/routing', renderRoutingPolicyList);
 Router.register('/ui/skills', renderSkillCatalog);

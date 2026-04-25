@@ -323,6 +323,12 @@ CREATE INDEX IF NOT EXISTS idx_protocol_definitions_lifecycle
     ON agent_registry.protocol_definitions (lifecycle_state, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_definitions_owner
     ON agent_registry.protocol_definitions (owner_org_id, visibility, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_definitions_catalog_visible
+    ON agent_registry.protocol_definitions (updated_at DESC, display_name ASC, slug ASC)
+    WHERE visibility <> 'registry_template';
+CREATE INDEX IF NOT EXISTS idx_protocol_definitions_template_catalog
+    ON agent_registry.protocol_definitions (updated_at DESC, display_name ASC, slug ASC)
+    WHERE visibility = 'registry_template';
 
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_definition_versions (
     protocol_definition_version_id TEXT PRIMARY KEY,

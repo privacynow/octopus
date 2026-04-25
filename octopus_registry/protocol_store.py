@@ -22,7 +22,7 @@ from octopus_sdk.protocols import (
     PROTOCOL_STAGE_KIND_OPTIONS,
     PROTOCOL_DEFAULT_VISIBILITY,
     REHEARSAL_AUTHORITY_REF,
-    ProtocolAuthoringManifestRecord,
+    ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
@@ -1473,16 +1473,24 @@ class ProtocolPostgresAdapter:
         created_after: str = "",
         include_drafts: bool | None = None,
     ) -> list[ProtocolDefinitionRecord]:
-        builtin_slugs = {
+        builtin_slugs = [
             str(item.slug or "").strip()
             for item in builtin_protocol_template_summaries()
             if str(item.slug or "").strip()
-        }
+        ]
+        if include_drafts is None:
+            include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         clauses: list[str] = []
         params: list[object] = []
+        clauses.append("visibility <> 'registry_template'")
+        for builtin_slug in builtin_slugs:
+            clauses.append("slug <> %s")
+            params.append(builtin_slug)
         if lifecycle_state:
             params.append(lifecycle_state)
             clauses.append("lifecycle_state = %s")
+        elif include_drafts is False:
+            clauses.append("lifecycle_state = 'published'")
         if slug:
             params.append(slug)
             clauses.append("slug = %s")
@@ -1493,9 +1501,10 @@ class ProtocolPostgresAdapter:
                 raise ValueError("created_after must be ISO-8601 text") from exc
             params.append(created_after_iso)
             clauses.append("created_at >= %s")
+        if not self._access_has_role(access, "admin"):
+            params.append(self._access_org_id(access))
+            clauses.append("(owner_org_id = %s OR owner_org_id = '')")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        if include_drafts is None:
-            include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
@@ -1504,17 +1513,16 @@ class ProtocolPostgresAdapter:
                 FROM {SCHEMA}.protocol_definitions
                 {where_sql}
                 ORDER BY updated_at DESC, display_name ASC, slug ASC
+                LIMIT %s OFFSET %s
                 """,
-                tuple(params),
+                tuple([*params, max(1, int(limit or 50)), max(0, int(cursor or 0))]),
             )
         visible = [
             self._protocol_record_from_row(row)
             for row in rows
             if self._protocol_visible_to_access(row, access=access, include_drafts=include_drafts)
-            and str(row.get("visibility", "") or "") != "registry_template"
-            and str(row.get("slug", "") or "").strip() not in builtin_slugs
         ]
-        return visible[cursor : cursor + limit]
+        return visible
 
     def get_protocol_template(self, slug: str, *, access: ProtocolAccessContextRecord) -> ProtocolDefinitionDocumentRecord:
         if not self._config.protocol_registry_templates_enabled:
@@ -1557,15 +1565,14 @@ class ProtocolPostgresAdapter:
             ]
         return builtin_summaries + authored_summaries
 
-    def get_protocol_authoring_manifest(
+    def get_protocol_authoring_options(
         self,
         *,
         access: ProtocolAccessContextRecord,
-    ) -> ProtocolAuthoringManifestRecord:
+    ) -> ProtocolAuthoringOptionsRecord:
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             raise PermissionError("Protocol authoring requires author access.")
-        return ProtocolAuthoringManifestRecord(
-            templates=self.list_protocol_templates(access=access),
+        return ProtocolAuthoringOptionsRecord(
             sections=list(PROTOCOL_AUTHORING_SECTION_OPTIONS),
             stage_kind_options=list(PROTOCOL_STAGE_KIND_OPTIONS),
             artifact_kind_options=list(PROTOCOL_ARTIFACT_KIND_OPTIONS),

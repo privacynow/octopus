@@ -1220,7 +1220,7 @@ def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, 
     assert response.status_code == 200
     paths = response.json()["paths"]
     assert "/v1/protocols/{protocol_id}/archive" in paths
-    assert "/v1/protocol-authoring/manifest" in paths
+    assert "/v1/protocol-authoring/options" in paths
     assert "/v1/protocol-drafts" in paths
     protocol_list_parameters = {
         item["name"]
@@ -1239,10 +1239,11 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
     assert response.status_code == 200
     paths = response.json()["paths"]
     assert "/v1/protocol-templates" in paths
+    assert "/v1/protocol-templates/{slug}" in paths
     assert "/v1/protocols/parse" in paths
     assert "/v1/protocols/{protocol_id}/draft/export" in paths
     assert "/v1/protocols/{protocol_id}/diff" in paths
-    assert "/v1/protocols/{protocol_id}/template" in paths
+    assert "/v1/protocols/{protocol_id}/template" not in paths
     assert paths["/v1/protocol-drafts"]["post"]["requestBody"]
     run_list_parameters = {
         item["name"]
@@ -1427,25 +1428,13 @@ def test_protocol_parse_route_accepts_draft_mode_for_incomplete_protocols(monkey
     assert payload["document"]["stages"] == []
 
 
-def test_protocol_authoring_manifest_route_returns_templates_and_section_metadata(monkeypatch, tmp_path: Path):
+def test_protocol_authoring_options_and_template_routes_use_consistent_resources(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
     class _Store:
-        def get_protocol_authoring_manifest(self, *, access):
+        def get_protocol_authoring_options(self, *, access):
             return {
-                "templates": [
-                    {
-                        "slug": "demo-template",
-                        "display_name": "Demo Template",
-                        "description": "Reusable workflow starter.",
-                        "featured": False,
-                        "participant_count": 2,
-                        "artifact_count": 1,
-                        "stage_count": 3,
-                        "stage_kind_sequence": ["work", "review", "acceptance"],
-                    }
-                ],
                 "sections": ["design", "review"],
                 "stage_kind_options": ["work", "review", "acceptance"],
                 "artifact_kind_options": ["workspace_file", "control_plane_text"],
@@ -1454,6 +1443,59 @@ def test_protocol_authoring_manifest_route_returns_templates_and_section_metadat
                 "operator_surface_available": True,
             }
 
+        def list_protocol_templates(self, *, access):
+            return [
+                {
+                    "slug": "demo-template",
+                    "display_name": "Demo Template",
+                    "description": "Reusable workflow starter.",
+                    "featured": False,
+                    "participant_count": 2,
+                    "artifact_count": 1,
+                    "stage_count": 3,
+                    "stage_kind_sequence": ["work", "review", "acceptance"],
+                }
+            ]
+
+        def get_protocol_template(self, slug, *, access):
+            assert slug == "demo-template"
+            return {
+                "schema_version": 1,
+                "metadata": {
+                    "slug": "demo-template",
+                    "display_name": "Demo Template",
+                    "description": "Reusable workflow starter.",
+                },
+                "participants": [],
+                "artifacts": [],
+                "stages": [],
+                "policies": {"single_active_writer": True, "max_review_rounds": 5},
+            }
+
+        def publish_protocol_template(self, protocol_id, *, access, slug="", display_name="", description=""):
+            assert protocol_id == "source-protocol"
+            assert slug == "demo-template-copy"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="template_published",
+                message="Protocol template published.",
+                protocol={
+                    "protocol_id": "template-protocol",
+                    "slug": slug,
+                    "display_name": display_name,
+                    "description": description,
+                    "lifecycle_state": "published",
+                    "current_version_id": "template-version",
+                    "owner_org_id": "local",
+                    "visibility": "registry_template",
+                    "created_by": "operator",
+                    "updated_by": "operator",
+                    "draft_revision": 1,
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                },
+            )
+
     app.dependency_overrides[registry_server.get_store] = lambda: _Store()
     app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
         is_operator=True,
@@ -1461,18 +1503,35 @@ def test_protocol_authoring_manifest_route_returns_templates_and_section_metadat
         roles=("operator", "author"),
     )
     try:
-        response = client.get("/v1/protocol-authoring/manifest")
+        options_response = client.get("/v1/protocol-authoring/options")
+        templates_response = client.get("/v1/protocol-templates")
+        template_response = client.get("/v1/protocol-templates/demo-template")
+        create_response = client.post(
+            "/v1/protocol-templates",
+            json={
+                "source_protocol_id": "source-protocol",
+                "slug": "demo-template-copy",
+                "display_name": "Demo Template Copy",
+                "description": "Reusable copy.",
+            },
+        )
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_operator_session, None)
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["templates"][0]["slug"] == "demo-template"
-    assert "advanced" not in payload["sections"]
-    assert "review" in payload["stage_kind_options"]
-    assert payload["default_surface"] == "standard"
-    assert payload["operator_surface_available"] is True
+    assert options_response.status_code == 200
+    options_payload = options_response.json()
+    assert "templates" not in options_payload
+    assert "advanced" not in options_payload["sections"]
+    assert "review" in options_payload["stage_kind_options"]
+    assert options_payload["default_surface"] == "standard"
+    assert options_payload["operator_surface_available"] is True
+    assert templates_response.status_code == 200
+    assert templates_response.json()[0]["slug"] == "demo-template"
+    assert template_response.status_code == 200
+    assert template_response.json()["metadata"]["slug"] == "demo-template"
+    assert create_response.status_code == 200
+    assert create_response.json()["protocol"]["visibility"] == "registry_template"
 
 
 def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path: Path):
@@ -1980,7 +2039,6 @@ def test_protocol_definition_route_returns_not_visible_for_hidden_protocol(monke
 @pytest.mark.parametrize(
     ("path", "store_method", "args"),
     [
-        ("/v1/protocol-templates/software-engineering", "get_protocol_template", ("software-engineering",)),
         ("/v1/protocols/protocol-1/versions/version-1", "get_protocol_version", ("protocol-1", "version-1")),
         ("/v1/protocols/protocol-1/draft/export", "export_protocol_draft", ("protocol-1",)),
         ("/v1/protocols/protocol-1/diff", "diff_protocol_draft", ("protocol-1",)),

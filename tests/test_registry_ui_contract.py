@@ -153,12 +153,13 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolRun(rehearsal.runId)" in workspace
 
     # Authoring API the kit surface drives
-    assert "API.getProtocolAuthoringManifest()" in workspace
+    assert "API.getProtocolAuthoringOptions()" in workspace
+    assert "API.listProtocolTemplates()" in workspace
     assert "API.createProtocolDraft(" in workspace
     assert "created?.run?.protocol_run_id" in workspace
     assert "API.saveProtocolDraft(" in workspace
     assert "API.publishProtocol(" in workspace
-    assert "API.publishProtocolTemplate(" in workspace
+    assert "API.createProtocolTemplate(" in workspace
     assert "API.archiveProtocol(" in workspace
     assert "API.deleteProtocol(" in workspace
     assert "API.validateProtocol(" in workspace
@@ -301,7 +302,8 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
     assert "UI.readQueryParam('protocol_view'" not in workspace
     assert "protocol_view:" in workspace  # kept in _writeState to clear legacy URLs
-    assert "API.getProtocolTemplate('software-engineering')" not in workspace
+    assert "API.getProtocolTemplate(" not in workspace
+    assert "API.getProtocolAuthoringManifest(" not in workspace
     assert "loadDefaultTemplate" not in workspace
 
     # Protocol authoring lifecycle subscription is retained
@@ -310,9 +312,9 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
 
     # Router wiring
-    assert "function renderProtocolTemplateRedirect(" in app_js
-    assert "Router.register('/ui/templates', renderProtocolTemplateRedirect);" in app_js
-    assert "Router.register('/ui/gallery', renderProtocolTemplateRedirect);" in app_js
+    assert "renderProtocolTemplateRedirect" not in app_js
+    assert "Router.register('/ui/templates'" not in app_js
+    assert "Router.register('/ui/gallery'" not in app_js
     assert "renderGallery" not in app_js
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
@@ -404,7 +406,7 @@ def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     assert 'href="/ui/protocols"' in index_html
     assert '<li class="nav-group">Team</li>' not in index_html
     assert index_html.index('<li class="nav-group">Work</li>') < index_html.index('href="/ui/conversations"') < index_html.index('href="/ui/runs"') < index_html.index('href="/ui/agents"') < index_html.index('<li class="nav-group">Build</li>')
-    assert index_html.index('<li class="nav-group">Build</li>') < index_html.index('href="/ui/protocols"') < index_html.index('href="/ui/skills"') < index_html.index('<li class="nav-group">Operations</li>')
+    assert index_html.index('<li class="nav-group">Build</li>') < index_html.index('href="/ui/protocols"') < index_html.index('href="/ui/skills"') < index_html.index('href="/ui/guidance"') < index_html.index('<li class="nav-group">Operations</li>')
     assert index_html.index('<li class="nav-group">Operations</li>') < index_html.index('href="/ui/"')
 
 

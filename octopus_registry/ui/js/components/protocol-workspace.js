@@ -261,7 +261,8 @@ function renderProtocolWorkspace(container) {
     }
 
     let protocols = [];
-    let authoringManifest = null;
+    let authoringOptions = null;
+    let protocolTemplates = [];
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
     let starterMode = String(UI.readQueryParam('new', '') || '').trim().toLowerCase() === 'template' ? 'template' : '';
     let includeGeneratedCatalog = UI.readQueryParam('include_generated', '') === '1';
@@ -288,13 +289,13 @@ function renderProtocolWorkspace(container) {
     let pendingStageViewportAnchor = null;
 
     function _operatorSurfaceAvailable() {
-        return Boolean(authoringManifest?.operator_surface_available);
+        return Boolean(authoringOptions?.operator_surface_available);
     }
 
     function _currentAuthoringSurface() {
         const requested = String(UI.readQueryParam('authoring_surface', '') || '').trim().toLowerCase();
         if (requested === 'operator' && _operatorSurfaceAvailable()) return 'operator';
-        return String(authoringManifest?.default_surface || 'standard').trim().toLowerCase() === 'operator'
+        return String(authoringOptions?.default_surface || 'standard').trim().toLowerCase() === 'operator'
             && _operatorSurfaceAvailable()
             ? 'operator'
             : 'standard';
@@ -1655,8 +1656,8 @@ function renderProtocolWorkspace(container) {
         _clearAutosaveTimer();
         saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
         _syncLifecycleChip();
-        const result = await API.publishProtocolTemplate(currentProtocolId);
-        await loadAuthoringManifest();
+        const result = await API.createProtocolTemplate({ source_protocol_id: currentProtocolId });
+        await loadAuthoringOptions();
         await loadProtocols({ quiet: true });
         saveState = { state: 'saved', lastSavedAt: new Date().toISOString(), error: '' };
         render();
@@ -2720,13 +2721,13 @@ function renderProtocolWorkspace(container) {
         return normalized || 'value';
     }
 
-    function _selectorManifestKinds() {
-        const manifestKinds = Array.isArray(authoringManifest?.selector_kind_options) && authoringManifest.selector_kind_options.length
-            ? authoringManifest.selector_kind_options
+    function _selectorOptionKinds() {
+        const optionKinds = Array.isArray(authoringOptions?.selector_kind_options) && authoringOptions.selector_kind_options.length
+            ? authoringOptions.selector_kind_options
             : ['agent', 'skill', 'role'];
         const seen = new Set();
         const ordered = [];
-        [...PRIMARY_SELECTOR_KINDS, ...manifestKinds].forEach((value) => {
+        [...PRIMARY_SELECTOR_KINDS, ...optionKinds].forEach((value) => {
             const normalized = String(value || '').trim().toLowerCase();
             if (!normalized || seen.has(normalized)) return;
             seen.add(normalized);
@@ -2736,7 +2737,7 @@ function renderProtocolWorkspace(container) {
     }
 
     function _selectorAvailableKinds() {
-        const available = _selectorManifestKinds();
+        const available = _selectorOptionKinds();
         if (_currentAuthoringSurface() === 'operator') {
             return available;
         }
@@ -4000,7 +4001,7 @@ function renderProtocolWorkspace(container) {
                     { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
                     { label: 'Define shared files', tone: '', onClick: () => _openArtifactCatalog() },
                     { label: 'Open skills catalog', tone: '', onClick: () => Router.navigate('/ui/skills') },
-                    { label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/protocols?new=template') },
+                    { label: Kit.dict.label('protocol.catalog.template'), tone: '', onClick: () => Router.navigate('/ui/protocols?new=template') },
                 ],
             }
             : null;
@@ -5768,19 +5769,19 @@ function renderProtocolWorkspace(container) {
     }
 
     function _manifestStageKindOptions() {
-        return Array.isArray(authoringManifest?.stage_kind_options) && authoringManifest.stage_kind_options.length
-            ? authoringManifest.stage_kind_options
+        return Array.isArray(authoringOptions?.stage_kind_options) && authoringOptions.stage_kind_options.length
+            ? authoringOptions.stage_kind_options
             : ['work', 'review', 'acceptance'];
     }
 
     function _manifestArtifactKindOptions() {
-        return Array.isArray(authoringManifest?.artifact_kind_options) && authoringManifest.artifact_kind_options.length
-            ? authoringManifest.artifact_kind_options
+        return Array.isArray(authoringOptions?.artifact_kind_options) && authoringOptions.artifact_kind_options.length
+            ? authoringOptions.artifact_kind_options
             : ['workspace_file', 'control_plane_text'];
     }
 
     function _starterChooserEl() {
-        const templates = Array.isArray(authoringManifest?.templates) ? authoringManifest.templates : [];
+        const templates = Array.isArray(protocolTemplates) ? protocolTemplates : [];
         const shell = document.createElement('section');
         shell.className = 'editor-panel protocol-panel';
         shell.dataset.testid = 'protocol-starter';
@@ -5998,8 +5999,13 @@ function renderProtocolWorkspace(container) {
         if (!quiet) render();
     }
 
-    async function loadAuthoringManifest() {
-        authoringManifest = await API.getProtocolAuthoringManifest();
+    async function loadAuthoringOptions() {
+        const [options, templates] = await Promise.all([
+            API.getProtocolAuthoringOptions(),
+            API.listProtocolTemplates(),
+        ]);
+        authoringOptions = options;
+        protocolTemplates = Array.isArray(templates) ? templates : [];
     }
 
     async function loadAssignmentCatalog({ quiet = true } = {}) {
@@ -6085,12 +6091,13 @@ function renderProtocolWorkspace(container) {
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
-            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringManifest(), loadAssignmentCatalog({ quiet: true })]);
+            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringOptions()]);
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {
                 render();
             }
+            void loadAssignmentCatalog({ quiet: true });
         } catch (err) {
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load protocols: ' + err.message, bootstrap)]);
         }

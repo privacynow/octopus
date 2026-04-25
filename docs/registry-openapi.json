@@ -8414,9 +8414,9 @@
         "summary": "Resource Publish Progress"
       }
     },
-    "/v1/protocol-authoring/manifest": {
+    "/v1/protocol-authoring/options": {
       "get": {
-        "operationId": "resource_get_protocol_authoring_manifest_v1_protocol_authoring_manifest_get",
+        "operationId": "resource_get_protocol_authoring_options_v1_protocol_authoring_options_get",
         "parameters": [
           {
             "in": "header",
@@ -8457,7 +8457,7 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Resource Get Protocol Authoring Manifest V1 Protocol Authoring Manifest Get",
+                  "title": "Response Resource Get Protocol Authoring Options V1 Protocol Authoring Options Get",
                   "type": "object"
                 }
               }
@@ -8475,7 +8475,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Resource Get Protocol Authoring Manifest"
+        "summary": "Resource Get Protocol Authoring Options"
       }
     },
     "/v1/protocol-drafts": {
@@ -9896,12 +9896,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response Resource List Protocol Templates V1 Protocol Templates Get",
-                  "type": "array"
+                  "title": "Response Resource List Protocol Templates V1 Protocol Templates Get"
                 }
               }
             },
@@ -9919,6 +9914,80 @@
           }
         },
         "summary": "Resource List Protocol Templates"
+      },
+      "post": {
+        "operationId": "resource_create_protocol_template_v1_protocol_templates_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Create Protocol Template V1 Protocol Templates Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Create Protocol Template"
       }
     },
     "/v1/protocol-templates/{slug}": {
@@ -10815,90 +10884,6 @@
           }
         },
         "summary": "Resource Publish Protocol"
-      }
-    },
-    "/v1/protocols/{protocol_id}/template": {
-      "post": {
-        "operationId": "resource_publish_protocol_template_v1_protocols__protocol_id__template_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "protocol_id",
-            "required": true,
-            "schema": {
-              "title": "Protocol Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-csrf-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Csrf-Token"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "title": "Payload",
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Resource Publish Protocol Template V1 Protocols  Protocol Id  Template Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Resource Publish Protocol Template"
       }
     },
     "/v1/protocols/{protocol_id}/validate": {

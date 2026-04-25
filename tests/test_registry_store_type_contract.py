@@ -67,7 +67,7 @@ def test_registry_store_protocol_delegates_match_adapter_signatures() -> None:
         "list_protocols",
         "get_protocol_template",
         "list_protocol_templates",
-        "get_protocol_authoring_manifest",
+        "get_protocol_authoring_options",
         "get_protocol",
         "get_protocol_version",
         "parse_protocol_document_text",

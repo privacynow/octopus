@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.protocols import (
-    ProtocolAuthoringManifestRecord,
+    ProtocolAuthoringOptionsRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
@@ -31,6 +31,8 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
     ProtocolTransitionRecord,
     ProtocolArtifactRecord,
+    ProtocolTemplateCreateRecord,
+    ProtocolTemplateSummaryRecord,
     ProtocolInvocationPort,
     ProtocolObservationPort,
 )
@@ -340,13 +342,17 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         )
         return [ProtocolDefinitionRecord.model_validate(item) for item in result]
 
+    async def get_protocol_authoring_options(self) -> ProtocolAuthoringOptionsRecord:
+        result = await self._request("GET", "/v1/protocol-authoring/options")
+        return ProtocolAuthoringOptionsRecord.model_validate(result)
+
+    async def list_protocol_templates(self) -> list[ProtocolTemplateSummaryRecord]:
+        result = await self._request("GET", "/v1/protocol-templates")
+        return [ProtocolTemplateSummaryRecord.model_validate(item) for item in result]
+
     async def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
         result = await self._request("GET", f"/v1/protocol-templates/{slug}")
         return ProtocolDefinitionDocumentRecord.model_validate(result)
-
-    async def get_protocol_authoring_manifest(self) -> ProtocolAuthoringManifestRecord:
-        result = await self._request("GET", "/v1/protocol-authoring/manifest")
-        return ProtocolAuthoringManifestRecord.model_validate(result)
 
     async def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
         result = await self._request("GET", f"/v1/protocols/{protocol_id}")
@@ -385,6 +391,17 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         result = await self._request(
             "POST",
             "/v1/protocol-drafts",
+            json=payload.model_dump(exclude_unset=True),
+        )
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def create_protocol_template(
+        self,
+        payload: ProtocolTemplateCreateRecord,
+    ) -> ProtocolMutationRecord:
+        result = await self._request(
+            "POST",
+            "/v1/protocol-templates",
             json=payload.model_dump(exclude_unset=True),
         )
         return ProtocolMutationRecord.model_validate(result)

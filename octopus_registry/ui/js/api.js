@@ -290,12 +290,10 @@ const API = (() => {
         // Protocols
         listProtocols: (opts = {}) =>
             request('GET', '/v1/protocols', { params: opts }),
+        getProtocolAuthoringOptions: () =>
+            request('GET', '/v1/protocol-authoring/options'),
         listProtocolTemplates: () =>
             request('GET', '/v1/protocol-templates'),
-        getProtocolAuthoringManifest: () =>
-            request('GET', '/v1/protocol-authoring/manifest'),
-        getProtocolTemplate: (slug) =>
-            request('GET', `/v1/protocol-templates/${encodeURIComponent(slug)}`),
         getProtocol: (id) =>
             request('GET', `/v1/protocols/${encodeURIComponent(id)}`),
         getProtocolVersion: (protocolId, versionId) =>
@@ -323,8 +321,8 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
         publishProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
-        publishProtocolTemplate: (id, body = {}) =>
-            request('POST', `/v1/protocols/${encodeURIComponent(id)}/template`, { body }),
+        createProtocolTemplate: (body = {}) =>
+            request('POST', '/v1/protocol-templates', { body }),
         archiveProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
         exportProtocolDraft: (id, format = 'json') =>

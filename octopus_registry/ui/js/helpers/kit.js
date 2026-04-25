@@ -172,7 +172,7 @@ window.Kit = (() => {
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',
-        'protocol.catalog.gallery': 'Use a template',
+        'protocol.catalog.template': 'Use a template',
         'protocol.firstrun.participant': 'Add the first role.',
         'protocol.firstrun.stage': 'Add the first step for that role.',
         'protocol.firstrun.transition': 'Connect the step to the next step or an outcome.',

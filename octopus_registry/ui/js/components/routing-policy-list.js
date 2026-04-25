@@ -1,11 +1,11 @@
 /**
- * Routing policy — global routing-skill overrides with toggle switches.
+ * Routing diagnostics - global routing-skill overrides with toggle switches.
  */
 function renderRoutingPolicyList(container) {
     const cleanups = UI.beginCleanupScope();
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Routing</h2><p>Global registry routing policy for advertised skills. Disabled skills are excluded from discovery and direct assignment even if bots expose them.</p>';
+    header.innerHTML = '<h2>Routing Diagnostics</h2><p>Operator controls for advertised capabilities. Disabled capabilities are excluded from discovery and direct assignment even if bots expose them.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');

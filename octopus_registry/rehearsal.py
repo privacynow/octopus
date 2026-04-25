@@ -32,6 +32,7 @@ from typing import Any
 from octopus_sdk.protocols import ProtocolArtifactObservationRecord, REHEARSAL_AUTHORITY_REF
 from octopus_sdk.registry.models import AgentCard, utcnow_iso
 
+from .artifact_paths import resolve_workspace_artifact_target
 from .store_base import AbstractRegistryStore
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ class RehearsalPendingSession:
     stage_kind: str
     instructions: str
     created_at: str
+    workspace_ref: str = ""
     require_output_verification: bool = False
     output_artifacts: list[dict[str, Any]] = field(default_factory=list)
 
@@ -68,6 +70,7 @@ class RehearsalPendingSession:
             "participant_key": self.participant_key,
             "stage_kind": self.stage_kind,
             "instructions": self.instructions,
+            "workspace_ref": self.workspace_ref,
             "require_output_verification": bool(self.require_output_verification),
             "output_artifacts": list(self.output_artifacts),
             "created_at": self.created_at,
@@ -232,6 +235,7 @@ class RehearsalSessionManager:
             participant_key=str(context.get("participant_key", "") or ""),
             stage_kind=str(contract.get("stage_kind", "") or "work"),
             instructions=str(payload.get("instructions", "") or ""),
+            workspace_ref=str(payload.get("project_id_override", "") or ""),
             require_output_verification=bool(contract.get("require_output_verification", False)),
             output_artifacts=list(contract.get("output_artifacts", []) or []),
             created_at=str(payload.get("created_at", "") or ""),
@@ -262,6 +266,7 @@ class RehearsalSessionManager:
         decision: str = "",
         decision_summary: str = "",
         artifacts: list[dict[str, Any]] | None = None,
+        artifact_contents: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Submit an author response, closing the pending stage task.
 
@@ -283,15 +288,35 @@ class RehearsalSessionManager:
             body_lines.append(f"PROTOCOL_DECISION: {decision_token}")
         body_lines.append(f"PROTOCOL_SUMMARY: {summary_token}")
         full_text = "\n".join(line for line in body_lines if line)
+        inline_artifact_contents = self._normalized_artifact_contents(
+            session=session,
+            artifact_contents=artifact_contents or [],
+        )
         artifact_observations = [
             ProtocolArtifactObservationRecord.model_validate(item).model_dump(mode="json")
             for item in (artifacts or [])
         ]
-        if not artifact_observations:
-            artifact_observations = self._synthesized_artifact_observations(
+        explicit_keys = {
+            str(item.get("artifact_key", "") or "").strip()
+            for item in inline_artifact_contents
+            if str(item.get("artifact_key", "") or "").strip()
+        }
+        if explicit_keys:
+            artifact_observations.extend(
+                self._artifact_observations_from_contents(
+                    session=session,
+                    artifact_contents=inline_artifact_contents,
+                )
+            )
+        artifact_observations.extend(
+            self._synthesized_artifact_observations(
                 session=session,
                 response_text=response_text,
+                exclude_artifact_keys=explicit_keys,
             )
+        )
+        for item in inline_artifact_contents:
+            self._materialize_workspace_artifact(session=session, artifact_content=item)
         payload = {
             "routed_task_id": token,
             "status": "completed",
@@ -299,6 +324,7 @@ class RehearsalSessionManager:
             "summary": summary_token,
             "full_text": full_text,
             "artifacts": artifact_observations,
+            "artifact_contents": inline_artifact_contents,
         }
         try:
             self.store.update_routed_task_result(self._agent_token, token, payload)
@@ -313,16 +339,18 @@ class RehearsalSessionManager:
         *,
         session: RehearsalPendingSession,
         response_text: str,
+        exclude_artifact_keys: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         outputs = list(session.output_artifacts or [])
         if not outputs:
             return []
         observed_at = str(session.created_at or "").strip() or utcnow_iso()
         digest_source = str(response_text or "")
+        excluded = {str(item or "").strip() for item in (exclude_artifact_keys or set()) if str(item or "").strip()}
         observations: list[dict[str, Any]] = []
         for item in outputs:
             artifact_key = str(item.get("artifact_key", "") or "").strip()
-            if not artifact_key:
+            if not artifact_key or artifact_key in excluded:
                 continue
             hashed = hashlib.sha256(f"{artifact_key}\n{digest_source}".encode("utf-8")).hexdigest()
             observations.append(
@@ -339,3 +367,89 @@ class RehearsalSessionManager:
                 ).model_dump(mode="json")
             )
         return observations
+
+    @staticmethod
+    def _normalized_artifact_contents(
+        *,
+        session: RehearsalPendingSession,
+        artifact_contents: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        definitions = {
+            str(item.get("artifact_key", "") or "").strip(): item
+            for item in (session.output_artifacts or [])
+            if str(item.get("artifact_key", "") or "").strip()
+        }
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in artifact_contents or []:
+            if not isinstance(raw, dict):
+                continue
+            artifact_key = str(raw.get("artifact_key", "") or "").strip()
+            if not artifact_key or artifact_key in seen:
+                continue
+            definition = definitions.get(artifact_key, {})
+            normalized.append({
+                "artifact_key": artifact_key,
+                "artifact_kind": str(raw.get("artifact_kind", "") or definition.get("artifact_kind", "") or "workspace_file"),
+                "path": str(raw.get("path", "") or definition.get("path", "") or ""),
+                "content": str(raw.get("content", "") or ""),
+            })
+            seen.add(artifact_key)
+        return normalized
+
+    @staticmethod
+    def _artifact_observations_from_contents(
+        *,
+        session: RehearsalPendingSession,
+        artifact_contents: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        observed_at = utcnow_iso()
+        observations: list[dict[str, Any]] = []
+        for item in artifact_contents:
+            artifact_key = str(item.get("artifact_key", "") or "").strip()
+            if not artifact_key:
+                continue
+            content = str(item.get("content", "") or "")
+            hashed = hashlib.sha256(f"{artifact_key}\n{content}".encode("utf-8")).hexdigest()
+            observations.append(
+                ProtocolArtifactObservationRecord(
+                    artifact_key=artifact_key,
+                    artifact_kind=str(item.get("artifact_kind", "") or "workspace_file"),
+                    path=str(item.get("path", "") or ""),
+                    exists=True,
+                    size_bytes=len(content.encode("utf-8")),
+                    content_hash=hashed,
+                    modified_at=observed_at,
+                    observed_at=observed_at,
+                    verification_state="verified" if session.require_output_verification else "available",
+                ).model_dump(mode="json")
+            )
+        return observations
+
+    @staticmethod
+    def _materialize_workspace_artifact(
+        *,
+        session: RehearsalPendingSession,
+        artifact_content: dict[str, Any],
+    ) -> None:
+        artifact_kind = str(artifact_content.get("artifact_kind", "") or "workspace_file").strip()
+        artifact_path = str(artifact_content.get("path", "") or "").strip()
+        if artifact_kind != "workspace_file" or not artifact_path:
+            return
+        target_path = resolve_workspace_artifact_target(
+            workspace_ref=str(session.workspace_ref or "").strip(),
+            artifact_path=artifact_path,
+        )
+        if target_path is None:
+            return
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(str(artifact_content.get("content", "") or ""), encoding="utf-8")
+        except OSError:
+            log.warning(
+                "Rehearsal bot failed to materialize artifact path=%s run=%s stage=%s",
+                artifact_path,
+                session.protocol_run_id,
+                session.stage_key,
+                exc_info=True,
+            )

@@ -19,6 +19,11 @@ from octopus_sdk.identity import (
     telegram_conversation_ref,
     telegram_numeric_id,
 )
+from octopus_sdk.protocols import (
+    launch_protocol_from_conversation,
+    list_launchable_protocols,
+    resolve_launchable_protocol,
+)
 from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.sessions import (
     SessionState,
@@ -830,15 +835,11 @@ async def cmd_protocol(
         return
     if sub == "list":
         try:
-            protocols = await client.list_protocols()
+            protocols = await list_launchable_protocols(client)
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to list protocols. {exc}")
             return
-        published = [
-            item for item in protocols
-            if str(item.lifecycle_state or "") == "published" and str(item.current_version_id or "")
-        ]
-        rendered = telegram_presenters.protocol_list_message(published)
+        rendered = telegram_presenters.protocol_list_message(protocols)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "start":
@@ -851,21 +852,11 @@ async def cmd_protocol(
             await update.effective_message.reply_text("Usage: /protocol start <slug> <problem statement>")
             return
         try:
-            protocols = await client.list_protocols()
+            match = await resolve_launchable_protocol(client, slug)
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to load protocols. {exc}")
             return
-        match = next(
-            (
-                item
-                for item in protocols
-                if slug in {str(item.slug or "").strip(), str(item.protocol_id or "").strip()}
-                and str(item.lifecycle_state or "") == "published"
-                and str(item.current_version_id or "")
-            ),
-            None,
-        )
-        if match is None:
+        except KeyError:
             await update.effective_message.reply_text(f"Unknown published protocol: {slug}")
             return
         session = telegram_session_io.load(runtime, event.chat_id)
@@ -876,9 +867,11 @@ async def cmd_protocol(
             title=f"Telegram chat {event.chat_id}",
         )
         try:
-            result = await client.invoke_protocol(
+            launch = await launch_protocol_from_conversation(
+                client,
+                client,
                 {
-                    "protocol_id": match.protocol_id,
+                    "protocol_ref": match.protocol_id,
                     "entry_agent_id": agent_id,
                     "root_conversation_id": conversation.conversation_id,
                     "origin_channel": "telegram",
@@ -888,9 +881,17 @@ async def cmd_protocol(
                 },
                 origin="telegram",
             )
+            result = launch.mutation
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to start the protocol run. {exc}")
             return
+        except ValueError as exc:
+            await update.effective_message.reply_text(f"Failed to start the protocol run. {exc}")
+            return
+        try:
+            protocol_label = str(launch.definition.display_name or launch.definition.slug or launch.definition.protocol_id)
+        except Exception:
+            protocol_label = str(match.display_name or match.slug or match.protocol_id)
         run = result.run
         if run is None:
             await update.effective_message.reply_text("Protocol run creation failed without a run record.")
@@ -909,7 +910,7 @@ async def cmd_protocol(
         )
         rendered = telegram_presenters.protocol_run_started_message(
             run_id=run.protocol_run_id,
-            protocol_label=str(match.display_name or match.slug or match.protocol_id),
+            protocol_label=protocol_label,
             current_stage=str(run.current_stage_key or "queued"),
             deep_link=telegram_protocols.protocol_run_url(runtime, run.protocol_run_id, registry_url=registry_url),
             watching=True,

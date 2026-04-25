@@ -984,7 +984,7 @@ def test_sdk_client_parse_protocol_document_supports_draft_validation_mode():
     assert parsed.validation.next_required_actions == ["stages.add_first"]
 
 
-def test_sdk_client_list_runs_sends_entry_agent_and_origin_channel_filters():
+def test_sdk_client_list_runs_sends_entry_agent_conversation_and_origin_filters():
     from unittest.mock import patch
 
     from octopus_sdk.registry.client import RegistryClient
@@ -1015,6 +1015,7 @@ def test_sdk_client_list_runs_sends_entry_agent_and_origin_channel_filters():
         runs = asyncio.run(
             client.list_runs(
                 entry_agent_id="agent-9",
+                root_conversation_id="conv-9",
                 origin_channel="telegram",
             )
         )
@@ -1023,6 +1024,7 @@ def test_sdk_client_list_runs_sends_entry_agent_and_origin_channel_filters():
     assert captured["method"] == "GET"
     assert captured["url"].endswith("/v1/protocol-runs")
     assert captured["params"]["entry_agent_id"] == "agent-9"
+    assert captured["params"]["root_conversation_id"] == "conv-9"
     assert captured["params"]["origin_channel"] == "telegram"
 
 

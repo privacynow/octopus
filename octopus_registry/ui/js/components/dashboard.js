@@ -218,7 +218,9 @@ function renderDashboard(container) {
             ].filter(Boolean).join(' · '),
             badge: item.status || 'task',
             badgeClass: 'badge-' + (item.status || 'task'),
-            href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
+            href: item.parent_conversation_id
+                ? UI.conversationHref(item.parent_conversation_id, { operational: Boolean(item.protocol_run_id) })
+                : '/ui/tasks',
         }));
     }
 
@@ -369,7 +371,9 @@ function renderDashboard(container) {
             ].join(' · '),
             badge: item.status || 'open',
             badgeClass: 'badge-' + (item.status || 'open'),
-            href: '/ui/conversations/' + item.conversation_id,
+            href: UI.conversationHref(item.conversation_id, {
+                conversationType: item.conversation_type,
+            }),
         }));
         UI.memoizedRender(conversationsHost, rowsState, () => [
             createSection(

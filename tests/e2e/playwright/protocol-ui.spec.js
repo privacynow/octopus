@@ -11,6 +11,7 @@ const {
   login,
   outlineStepNode,
   openBlankDraft,
+  openConversationForAgentFromUi,
   openStagePanel,
   openProtocolSettings,
   openTemplateDraft,
@@ -112,10 +113,15 @@ async function waitForRunStatus(page, runId, status, timeout = 60000) {
   }, { timeout }).toBe(status);
 }
 
-async function applyScenarioAndSubmit(page, session, scenarioName) {
+async function applyScenarioAndSubmit(page, session, scenarioName, { artifactContents = {} } = {}) {
   const routedTaskId = String(await session.getAttribute('data-routed-task-id') || '');
   await session.getByRole('button', { name: scenarioName, exact: true }).click();
-  await expect(session.getByRole('textbox')).not.toHaveValue('');
+  await expect(session.locator('.kit-rehearsal-session-response').first()).not.toHaveValue('');
+  for (const [artifactLabel, content] of Object.entries(artifactContents || {})) {
+    const artifactEditor = session.locator('.kit-stage-workspace-subsection').filter({ hasText: artifactLabel }).first();
+    await expect(artifactEditor).toBeVisible();
+    await artifactEditor.locator('textarea').fill(String(content || ''));
+  }
   await Promise.all([
     page.waitForResponse((response) =>
       response.request().method() === 'POST'
@@ -169,7 +175,7 @@ async function createAndPublishCustomSkill(page, {
     options.map((option) => String(option.value || '')).filter(Boolean),
   )).toContain(agentId);
   await agentSelect.selectOption(agentId);
-  await page.getByRole('button', { name: 'New custom skill', exact: true }).click();
+  await page.getByRole('button', { name: 'New capability', exact: true }).click();
   await page.getByPlaceholder('skill-slug').fill(skillName);
   await page.getByPlaceholder('Short description').first().fill(description);
   await page.getByRole('button', { name: 'Create draft', exact: true }).click();
@@ -948,7 +954,53 @@ test.describe('protocol authoring live', () => {
         await waitForRunStage(page, rehearsalRunId, stageKey);
         const session = page.locator('.kit-rehearsal-session').first();
         await expect(session).toContainText(stageKey);
-        await applyScenarioAndSubmit(page, session, scenarioName);
+        const artifactBodies = stageKey === loadKey
+          ? {
+              'source-data.csv': [
+                'department,region,amount',
+                'Sales,west,120',
+                'Ops,east,80',
+                'Support,west,200',
+                'Finance,west,60',
+              ].join('\n'),
+            }
+          : stageKey === filterKey
+            ? {
+                'filtered-data.csv': [
+                  'department,region,amount',
+                  'Sales,west,120',
+                  'Support,west,200',
+                  'Finance,west,60',
+                ].join('\n'),
+              }
+            : stageKey === analyzeKey
+              ? {
+                  'analytics-summary.json': JSON.stringify({
+                    row_count: 3,
+                    total_amount: 380,
+                    average_amount: 126.67,
+                  }, null, 2),
+                }
+              : stageKey === renderKey
+                ? {
+                    'report.md': [
+                      '# West Region Report',
+                      '',
+                      'Row count: 3',
+                      'Total amount: 380',
+                      'Average amount: 126.67',
+                    ].join('\n'),
+                  }
+                : stageKey === publishKey
+                  ? {
+                      'published-report.json': JSON.stringify({
+                        status: 'published',
+                        published_at: '2026-04-22T00:00:00Z',
+                        report_path: 'report.md',
+                      }, null, 2),
+                    }
+                  : {};
+        await applyScenarioAndSubmit(page, session, scenarioName, { artifactContents: artifactBodies });
         if (nextState === 'completed') {
           await waitForRunStatus(page, rehearsalRunId, 'completed');
         } else {
@@ -970,13 +1022,27 @@ test.describe('protocol authoring live', () => {
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === publishKey)).toBe(true);
 
       await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
-      await expect(page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).first()).toBeVisible({ timeout: 15000 });
       const runDetail = page.locator('.editor-panel').filter({ hasText: 'Run detail' }).first();
-      await expect(runDetail).toContainText('Outputs');
+      const evidenceTabs = page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab');
+      await evidenceTabs.filter({ hasText: 'Artifacts' }).click();
+      await expect(runDetail).toContainText('Artifacts');
       await expect(runDetail).toContainText('source-data.csv');
-      await expect(runDetail).toContainText('Produced by Load data');
+      await expect(runDetail).toContainText('1. Load data');
       await expect(runDetail).not.toContainText('Declared but missing');
+      await evidenceTabs.filter({ hasText: 'Stages' }).click();
+      const stageTabs = page.getByRole('tablist', { name: 'Run stage evidence' }).getByRole('tab');
+      await stageTabs.filter({ hasText: 'Load data' }).click();
+      const loadStageCard = page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).first();
+      await expect(loadStageCard).toBeVisible({ timeout: 15000 });
+      await loadStageCard.getByRole('link', { name: 'Open activity' }).click();
+      await expect(page).toHaveURL(/\/ui\/conversations\/.+view=tasks/);
+      await expect(page.locator('.conversation-task-view')).toBeVisible({ timeout: 15000 });
+      await expect(page.locator('.conversation-task-card').filter({ hasText: 'Load data' }).first()).toContainText('Outputs');
+      await expect(page.locator('.conversation-task-card').filter({ hasText: 'Load data' }).first()).toContainText('source-data.csv');
+      await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
 
+      await page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab').filter({ hasText: 'Stages' }).click();
+      await page.getByRole('tablist', { name: 'Run stage evidence' }).getByRole('tab').filter({ hasText: 'Load data' }).click();
       await page.locator('.protocol-lineage-card').filter({ hasText: 'Load data' }).getByRole('link', { name: 'Open task' }).click();
       await expect(page.locator('.task-lineage-banner')).toContainText(runId);
       const loadTask = page.locator('.task-item').filter({ hasText: 'Load data' }).first();
@@ -1008,7 +1074,7 @@ test.describe('protocol authoring live', () => {
     const lifecycleAgent = await firstSkillLifecycleAgent(page);
     expect(lifecycleAgent.agentId).toBeTruthy();
 
-    const skillName = `meta-protocol-composer-${Date.now()}`;
+    const skillName = 'meta-protocol-composer-e2e';
     await createAndPublishCustomSkill(page, {
       agentId: lifecycleAgent.agentId,
       skillName,
@@ -1225,7 +1291,29 @@ test.describe('protocol authoring live', () => {
       for (const [stageKey, scenarioName, nextStage] of sequence) {
         const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
         await expect(session).toBeVisible({ timeout: 20000 });
-        await applyScenarioAndSubmit(page, session, scenarioName);
+        const artifactBodies = stageKey === 'draft_document'
+          ? {
+              document: scenarioName === 'Draft v1'
+                ? [
+                    '# Quarterly Risk Summary',
+                    '',
+                    '## Outstanding risks',
+                    '- Supplier concentration remains elevated.',
+                    '- Release readiness depends on two open security patches.',
+                  ].join('\n')
+                : [
+                    '# Quarterly Risk Summary',
+                    '',
+                    '## Executive summary',
+                    'Risk remains manageable, but supplier concentration and patch readiness need follow-up.',
+                    '',
+                    '## Outstanding risks',
+                    '- Supplier concentration remains elevated.',
+                    '- Release readiness depends on two open security patches.',
+                  ].join('\n'),
+            }
+          : {};
+        await applyScenarioAndSubmit(page, session, scenarioName, { artifactContents: artifactBodies });
         await waitForRunStage(page, runId, nextStage);
       }
 
@@ -1316,6 +1404,27 @@ test.describe('protocol authoring live', () => {
       await page.getByRole('button', { name: 'Rehearse' }).click();
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
       const runId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
+      const draftV1Document = [
+        '# Quarterly Risk Summary',
+        '',
+        '## Outstanding risks',
+        '',
+        '- Delayed vendor controls review',
+        '- Patch backlog still above policy threshold',
+      ].join('\n');
+      const draftV2Document = [
+        '# Quarterly Risk Summary',
+        '',
+        '## Executive summary',
+        '',
+        'The security and reliability risks remain manageable, but the vendor review delay still needs a committed owner this sprint.',
+        '',
+        '## Outstanding risks',
+        '',
+        '- Delayed vendor controls review with no approved remediation date',
+        '- Patch backlog still above policy threshold for internet-facing services',
+        '- Disaster recovery evidence is incomplete for one regional failover exercise',
+      ].join('\n');
 
       const sequence = [
         ['draft_document', 'Draft v1', 'review_document'],
@@ -1326,7 +1435,12 @@ test.describe('protocol authoring live', () => {
       for (const [stageKey, scenarioName, nextStage] of sequence) {
         const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
         await expect(session).toBeVisible({ timeout: 20000 });
-        await applyScenarioAndSubmit(page, session, scenarioName);
+        const artifactContents = scenarioName === 'Draft v1'
+          ? { 'document.md': draftV1Document }
+          : scenarioName === 'Draft v2'
+            ? { 'document.md': draftV2Document }
+            : {};
+        await applyScenarioAndSubmit(page, session, scenarioName, { artifactContents });
         await waitForRunStage(page, runId, nextStage);
       }
 
@@ -1339,13 +1453,17 @@ test.describe('protocol authoring live', () => {
       expect(String(finalDetail.run?.status || '')).toBe('completed');
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === 'review_document' && String(item.decision || '') === 'revise')).toBe(true);
       await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
-      await expect(page.locator('main')).toContainText('Outputs');
+      await page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab').filter({ hasText: 'Artifacts' }).click();
+      await expect(page.locator('main')).toContainText('Artifacts');
       await expect(page.locator('main')).toContainText('document.md');
+      await page.getByRole('button', { name: 'Preview' }).first().click();
+      await expect(page.locator('.confirm-dialog .event-pre')).toContainText('## Executive summary');
+      await page.locator('.confirm-dialog').getByRole('button', { name: 'Close' }).click();
       const artifactResponse = await page.context().request.get(
         `/v1/protocol-runs/${encodeURIComponent(runId)}/artifacts/document/content?download=1`,
       );
       expect(artifactResponse.ok()).toBe(true);
-      expect(await artifactResponse.text()).toContain('executive summary');
+      expect(await artifactResponse.text()).toContain('## Executive summary');
     } finally {
       for (const scenarioId of scenarioIds.filter(Boolean)) {
         await deleteProtocolScenario(page, scenarioId);
@@ -1404,6 +1522,125 @@ test.describe('protocol authoring live', () => {
     await lifecycle.getByLabel('Name').blur();
     await waitForSaved(page);
     await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('published protocols can be launched directly from browser conversations', async ({ page }) => {
+    test.setTimeout(120_000);
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    const connectedAgent = await firstExecutionReadyAgent(page);
+    expect(connectedAgent.agentId).toBeTruthy();
+
+    let seededProtocolId = '';
+    let runId = '';
+    try {
+      const published = await apiJson(page, 'GET', '/v1/protocols?lifecycle_state=published&limit=10');
+      expect(published.ok).toBe(true);
+      const publishedProtocols = Array.isArray(published.payload?.protocols)
+        ? published.payload.protocols
+        : Array.isArray(published.payload)
+          ? published.payload
+          : [];
+      if (!publishedProtocols.length) {
+        const draft = await apiJson(page, 'POST', '/v1/protocol-drafts', {
+          source_kind: 'template',
+          template_slug: 'document-approval',
+        });
+        expect(draft.ok).toBe(true);
+        seededProtocolId = String(draft.payload?.protocol?.protocol_id || '');
+        expect(seededProtocolId).toBeTruthy();
+        const publish = await apiJson(page, 'POST', `/v1/protocols/${encodeURIComponent(seededProtocolId)}/publish`, {});
+        expect(publish.ok).toBe(true);
+      }
+
+      await openConversationForAgentFromUi(page, connectedAgent.agentId);
+      const composer = page.getByLabel('Message text', { exact: true });
+      await expect(composer).toBeVisible({ timeout: 15000 });
+      await composer.fill('Prepare a concise launch brief for the new conversation protocol.');
+
+      await page.getByRole('button', { name: 'Protocols', exact: true }).click();
+      const protocolsPanel = page.locator('#conversation-management-panel');
+      await expect(protocolsPanel).toBeVisible({ timeout: 15000 });
+      await expect(protocolsPanel).toHaveAttribute('data-mode', 'protocols');
+      await expect(protocolsPanel).toContainText('Conversation protocols');
+      const launchTextarea = protocolsPanel.locator('textarea.input').first();
+      const launchPrompt = 'Prepare a concise launch brief for the new conversation protocol.';
+      if ((await launchTextarea.inputValue()) !== launchPrompt) {
+        await launchTextarea.fill(launchPrompt);
+      }
+      const protocolSelect = protocolsPanel.locator('select').first();
+      const firstPublishedProtocol = await protocolSelect.locator('option').evaluateAll((options) => {
+        const first = options[0];
+        return {
+          value: String(first?.value || '').trim(),
+          label: String(first?.textContent || '').trim(),
+        };
+      });
+      expect(firstPublishedProtocol.value).toBeTruthy();
+      await protocolSelect.selectOption(firstPublishedProtocol.value);
+      await Promise.all([
+        page.waitForResponse((response) =>
+          response.request().method() === 'POST'
+            && response.url().includes('/v1/protocol-runs')
+            && response.ok(),
+        ),
+        protocolsPanel.getByRole('button', { name: 'Start protocol', exact: true }).click(),
+      ]);
+      await expect(protocolsPanel).toContainText('Started ', { timeout: 15000 });
+      await expect(protocolsPanel).toContainText(firstPublishedProtocol.label.split(' · ')[0]);
+      const linkedRunLink = protocolsPanel.getByRole('link', { name: 'Open run' }).first();
+      await expect(linkedRunLink).toBeVisible({ timeout: 15000 });
+      const linkedRunHref = await linkedRunLink.evaluate((node) => node.href);
+      runId = String(new URL(linkedRunHref).searchParams.get('run_id') || '');
+      expect(runId).toBeTruthy();
+
+      await linkedRunLink.click();
+      await expect(page).toHaveURL(new RegExp(`/ui/runs\\?run_id=${runId}`), { timeout: 15000 });
+      await expect.poll(async () => {
+        const detail = await getRunDetail(page, runId);
+        return String(detail.run?.root_conversation_id || '');
+      }, { timeout: 30000 }).not.toBe('');
+      const runDetail = page.locator('.editor-panel').filter({ hasText: 'Run detail' }).first();
+      await expect(runDetail).toContainText(runId.slice(0, 8));
+    } finally {
+      if (seededProtocolId) {
+        const archive = await apiJson(page, 'POST', `/v1/protocols/${encodeURIComponent(seededProtocolId)}/archive`, {});
+        expect(archive.ok).toBe(true);
+      }
+    }
+
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('browser conversation message sending returns to visible chat timeline', async ({ page }) => {
+    test.setTimeout(180_000);
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    const connectedAgent = await firstExecutionReadyAgent(page, { preferredProvider: 'codex' });
+    expect(connectedAgent.agentId).toBeTruthy();
+
+    await openConversationForAgentFromUi(page, connectedAgent.agentId);
+    const tasksTab = page.getByRole('tab', { name: 'Tasks', exact: true });
+    await expect(tasksTab).toBeVisible({ timeout: 15000 });
+    await tasksTab.click();
+    await expect(tasksTab).toHaveAttribute('aria-selected', 'true');
+
+    const token = `LIVE_CONVERSATION_OK_${Date.now()}`;
+    await page.getByLabel('Message text', { exact: true }).fill(
+      `Reply with exactly ${token}. Do not add any other words.`,
+    );
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+
+    const conversationTab = page.getByRole('tab', { name: 'Conversation', exact: true });
+    await expect(conversationTab).toHaveAttribute('aria-selected', 'true', { timeout: 15000 });
+    await expect(page.locator('.chat-bubble.user').filter({ hasText: token })).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.chat-bubble.bot').filter({ hasText: token })).toBeVisible({ timeout: 150000 });
+
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });

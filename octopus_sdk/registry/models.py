@@ -961,6 +961,7 @@ class RoutedTaskResult(RegistryRecordModel):
     summary: str = ""
     full_text: str = ""
     artifacts: list[RegistryJsonRecord] = Field(default_factory=list)
+    artifact_contents: list[RegistryJsonRecord] = Field(default_factory=list)
     follow_up_questions: list[str] = Field(default_factory=list)
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)

@@ -6,6 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from .models import (
     ProtocolArtifactRecord,
+    ProtocolDefinitionRecord,
     ProtocolIssueRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
@@ -15,6 +16,19 @@ from .models import (
     ProtocolTransitionRecord,
 )
 from octopus_sdk.registry.models import TransportActorKey
+
+
+@runtime_checkable
+class ProtocolCatalogPort(Protocol):
+    async def list_protocols(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 50,
+        lifecycle_state: str = "",
+        slug: str = "",
+        created_after: str = "",
+    ) -> list[ProtocolDefinitionRecord]: ...
 
 
 @runtime_checkable
@@ -38,6 +52,7 @@ class ProtocolObservationPort(Protocol):
         status: str = "",
         protocol_id: str = "",
         entry_agent_id: str = "",
+        root_conversation_id: str = "",
         origin_channel: str = "",
     ) -> list[ProtocolRunRecord]: ...
 

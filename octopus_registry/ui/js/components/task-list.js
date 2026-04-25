@@ -123,7 +123,7 @@ function renderTaskList(container) {
     }
 
     function _taskSummary(task) {
-        return task.result_summary || task.result_text || task.summary || task.instructions || '';
+        return UI.compactMarkdownReferences(task.result_summary || task.result_text || task.summary || task.instructions || '');
     }
 
     function _taskRunHref(task) {
@@ -132,120 +132,31 @@ function renderTaskList(container) {
         return `/ui/runs?run_id=${encodeURIComponent(runId)}`;
     }
 
-    function _taskArtifactResolvedPath(task, artifact) {
-        return UI.joinDisplayPath(task?.working_dir || '', artifact?.path || '');
-    }
-
-    function _taskArtifactLabel(artifact, expectedOutput = null) {
-        const declaredPath = String(expectedOutput?.path || artifact?.path || '').trim();
-        return UI.basenameDisplayPath(declaredPath) || String(artifact?.artifact_key || expectedOutput?.artifact_key || 'Artifact').trim();
-    }
-
-    function _taskArtifactPreviewable(artifact) {
-        return UI.isPreviewableFilePath(artifact?.path || '');
-    }
-
-    function _taskArtifactEvidencePayload(task) {
-        if (!task || (typeof task !== 'object')) return null;
-        const request = task.request && typeof task.request === 'object' ? task.request : {};
-        const result = task.result && typeof task.result === 'object' ? task.result : {};
-        const internalContext = request.internal_context && typeof request.internal_context === 'object'
-            ? request.internal_context
-            : {};
-        const contract = internalContext.protocol_stage_contract && typeof internalContext.protocol_stage_contract === 'object'
-            ? internalContext.protocol_stage_contract
-            : {};
-        const expectedOutputs = Array.isArray(contract.output_artifacts) ? contract.output_artifacts : [];
-        const recordedArtifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
-        if (!expectedOutputs.length && !recordedArtifacts.length) return null;
-        return { expectedOutputs, recordedArtifacts };
-    }
-
-    function _taskExpectedOutput(expectedOutputs = [], artifactKey = '') {
-        const normalized = String(artifactKey || '').trim();
-        if (!normalized) return null;
-        return (expectedOutputs || []).find((item) => String(item?.artifact_key || '').trim() === normalized) || null;
-    }
-
-    async function _previewTaskArtifact(task, artifact) {
-        try {
-            const text = await API.getTaskArtifactText(task.routed_task_id, artifact.artifact_key);
-            UI.showTextDialog(
-                `${artifact.artifact_key} preview`,
-                String(text || ''),
-                { maxWidth: '920px' },
-            );
-        } catch (err) {
-            UI.reportError('Failed to preview the artifact', err, {
-                context: 'Task artifact preview failed',
-            });
-        }
-    }
-
     function _taskArtifactShell(task, artifact, expectedOutput = null) {
-        const resolvedPath = _taskArtifactResolvedPath(task, artifact);
-        const actionRow = document.createElement('div');
-        actionRow.className = 'list-row-actions';
-
-        if (_taskArtifactPreviewable(artifact)) {
-            const previewBtn = document.createElement('button');
-            previewBtn.type = 'button';
-            previewBtn.className = 'btn btn-sm';
-            previewBtn.textContent = 'Preview';
-            previewBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                void _previewTaskArtifact(task, artifact);
-            });
-            actionRow.appendChild(previewBtn);
-        }
-
-        const openHref = API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key);
-        const openLink = document.createElement('a');
-        openLink.href = openHref;
-        openLink.className = 'btn btn-sm';
-        openLink.target = '_blank';
-        openLink.rel = 'noreferrer noopener';
-        openLink.textContent = 'Open';
-        actionRow.appendChild(openLink);
-
-        const downloadLink = document.createElement('a');
-        downloadLink.href = API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true });
-        downloadLink.className = 'btn btn-sm';
-        downloadLink.textContent = 'Download';
-        actionRow.appendChild(downloadLink);
-
-        const copyBtn = document.createElement('button');
-        copyBtn.type = 'button';
-        copyBtn.className = 'btn btn-sm';
-        copyBtn.textContent = 'Copy path';
-        copyBtn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            try {
-                await UI.copyText(resolvedPath || String(artifact?.path || ''), {
-                    successMessage: 'Artifact path copied.',
-                    errorMessage: 'Failed to copy the artifact path.',
-                });
-            } catch (err) {
-                void err;
-            }
+        const resolvedPath = UI.taskArtifactDisplayPath(task, artifact, expectedOutput);
+        const actionRow = UI.createArtifactActionRow({
+            previewable: UI.taskArtifactPreviewable(artifact, expectedOutput),
+            previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
+            openHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key),
+            downloadHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true }),
+            copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),
         });
-        actionRow.appendChild(copyBtn);
 
         return {
             artifactKey: String(artifact?.artifact_key || ''),
-            row: UI.renderListRow({
-                label: _taskArtifactLabel(artifact, expectedOutput),
-                sublabel: [
+            row: UI.createArtifactListRow({
+                label: UI.taskArtifactLabel(artifact, expectedOutput),
+                sublabelParts: [
                     'Produced output',
                     resolvedPath || String(artifact?.path || ''),
                     String(artifact?.artifact_key || '').trim(),
                     Number.isFinite(Number(artifact?.size_bytes || 0)) && Number(artifact?.size_bytes || 0) > 0
                         ? `${Number(artifact.size_bytes || 0).toLocaleString()} bytes`
                         : '',
-                ].filter(Boolean).join(' · '),
+                ],
                 badgeText: artifact.verification_state || (artifact.exists ? 'available' : 'missing'),
                 badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
-                trailing: actionRow,
+                actionRow,
             }),
         };
     }
@@ -327,23 +238,27 @@ function renderTaskList(container) {
                 conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
                 protocolRunId: String(task.protocol_run_id || ''),
                 stageKey: String(task.stage_key || ''),
-                detailState: taskDetailsLoading.has(String(task.routed_task_id || ''))
-                    ? 'loading'
-                    : taskDetailErrors.has(String(task.routed_task_id || ''))
-                        ? 'error'
-                        : taskDetails.has(String(task.routed_task_id || ''))
-                            ? UI.dataSignature(taskDetails.get(String(task.routed_task_id || '')))
-                            : '',
+                expanded: expandedTaskIds.has(String(task.routed_task_id || '')),
+                detailState: _taskDetailStateSignature(String(task.routed_task_id || '')),
             })),
         });
+    }
+
+    function _taskDetailStateSignature(taskId) {
+        if (taskDetailsLoading.has(taskId)) return 'loading';
+        if (taskDetailErrors.has(taskId)) return 'error';
+        if (taskDetails.has(taskId)) return UI.dataSignature(taskDetails.get(taskId));
+        return '';
     }
 
     function createTaskItem(task) {
         const item = document.createElement('article');
         item.className = 'task-item';
         item.dataset.key = task.routed_task_id;
+        const taskId = String(task.routed_task_id || '');
+        const isExpanded = expandedTaskIds.has(taskId);
         item.dataset.signature = UI.dataSignature({
-            id: String(task.routed_task_id || ''),
+            id: taskId,
             status: String(task.status || ''),
             updatedLabel: UI.relativeTime(task.updated_at || task.created_at),
             title: String(_taskLabel(task) || ''),
@@ -353,13 +268,13 @@ function renderTaskList(container) {
             conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
             protocolRunId: String(task.protocol_run_id || ''),
             stageKey: String(task.stage_key || ''),
+            expanded: isExpanded,
+            detailState: _taskDetailStateSignature(taskId),
         });
 
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'task-item-row';
-        const taskId = String(task.routed_task_id || '');
-        const isExpanded = expandedTaskIds.has(taskId);
         row.setAttribute('aria-expanded', String(isExpanded));
 
         const primary = document.createElement('div');
@@ -455,7 +370,7 @@ function renderTaskList(container) {
                 detail.appendChild(UI.renderEmptyState('Loading task lineage…', true));
             } else if (inlineDetailPayload) {
                 const detailPayload = inlineDetailPayload;
-                const artifactEvidence = _taskArtifactEvidencePayload(detailPayload);
+                const artifactEvidence = UI.taskArtifactEvidence(detailPayload);
                 const expectedOutputs = artifactEvidence?.expectedOutputs || [];
                 const recordedArtifacts = artifactEvidence?.recordedArtifacts || [];
                 const recordedByKey = new Set(recordedArtifacts.map((artifact) => String(artifact?.artifact_key || '').trim()).filter(Boolean));
@@ -473,7 +388,7 @@ function renderTaskList(container) {
                     const outputsList = document.createElement('div');
                     outputsList.className = 'task-artifact-list';
                     const outputNodes = recordedArtifacts.map((artifact) =>
-                        _taskArtifactShell(detailPayload, artifact, _taskExpectedOutput(expectedOutputs, artifact?.artifact_key)).row);
+                        _taskArtifactShell(detailPayload, artifact, UI.taskExpectedOutput(expectedOutputs, artifact?.artifact_key)).row);
                     UI.reconcileChildren(outputsList, outputNodes);
                     detail.appendChild(outputsList);
                 }
@@ -486,7 +401,7 @@ function renderTaskList(container) {
 
                     const expectedList = document.createElement('div');
                     const expectedNodes = pendingExpected.map((artifact) => UI.renderListRow({
-                        label: _taskArtifactLabel(null, artifact),
+                        label: UI.taskArtifactLabel(null, artifact),
                         sublabel: [
                             'Declared output not yet recorded',
                             String(artifact?.path || '').trim(),
@@ -504,9 +419,11 @@ function renderTaskList(container) {
         const actions = document.createElement('div');
         actions.className = 'task-action-row';
         const openLink = document.createElement('a');
-        openLink.href = task.parent_conversation_id ? '/ui/conversations/' + task.parent_conversation_id : '/ui/tasks';
+        openLink.href = task.parent_conversation_id
+            ? UI.conversationHref(task.parent_conversation_id, { operational: Boolean(task.protocol_run_id) })
+            : '/ui/tasks';
         openLink.className = 'btn btn-sm';
-        openLink.textContent = 'Open conversation';
+        openLink.textContent = task.protocol_run_id ? 'Open activity' : 'Open conversation';
         openLink.addEventListener('click', (e) => {
             e.stopPropagation();
         });
@@ -533,21 +450,32 @@ function renderTaskList(container) {
 
         row.addEventListener('click', () => {
             const nextExpanded = detail.hidden;
-            detail.hidden = !nextExpanded;
-            row.setAttribute('aria-expanded', String(nextExpanded));
             if (nextExpanded) {
+                Array.from(listEl.querySelectorAll('.task-item-row[aria-expanded="true"]')).forEach((expandedRow) => {
+                    if (expandedRow === row) return;
+                    expandedRow.setAttribute('aria-expanded', 'false');
+                    const expandedDetail = expandedRow.closest('.task-item')?.querySelector('.task-item-detail');
+                    if (expandedDetail) expandedDetail.hidden = true;
+                });
+                detail.hidden = false;
+                row.setAttribute('aria-expanded', 'true');
+                expandedTaskIds.clear();
                 expandedTaskIds.add(taskId);
                 currentTaskId = taskId;
                 _writeState();
                 if (!taskDetails.has(taskId) && !(task.request || task.result)) {
                     void loadTaskDetail(taskId);
                 }
+                renderList(currentTasks, currentListData);
             } else {
+                detail.hidden = true;
+                row.setAttribute('aria-expanded', 'false');
                 expandedTaskIds.delete(taskId);
                 if (currentTaskId === taskId) {
                     currentTaskId = '';
                     _writeState();
                 }
+                renderList(currentTasks, currentListData);
             }
         });
 

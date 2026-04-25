@@ -764,6 +764,7 @@ class AbstractRegistryStore(Protocol):
         status: str = "",
         protocol_id: str = "",
         entry_agent_id: str = "",
+        root_conversation_id: str = "",
         origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
         """Return protocol runs in UI-ready form."""

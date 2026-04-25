@@ -18,7 +18,9 @@ function renderConversationDetail(container, params) {
     let latestSeq = 0;
     let hasMoreBefore = false;
     let loadingOlder = false;
-    let activeView = _readConversationViewParam();
+    const initialViewState = _readConversationViewState();
+    let activeView = initialViewState.value;
+    let activeViewExplicit = initialViewState.explicit;
     let requestedManagementMode = _readManagementModeParam();
     let requestedActivationSkill = _readRequestedActivationSkillParam();
     let topObserver = null;
@@ -37,7 +39,12 @@ function renderConversationDetail(container, params) {
     let conversationSkills = null;
     let conversationSettings = null;
     let availableConversationSkills = [];
+    let availableConversationProtocols = [];
+    let linkedProtocolRuns = [];
     let selectedActivationSkill = requestedActivationSkill;
+    let selectedProtocolId = '';
+    let protocolProblemStatement = '';
+    let protocolSearchQuery = '';
     let managementReloadDebounce = null;
     let pendingSkillSetup = null;
     let managementMode = 'closed';
@@ -47,9 +54,12 @@ function renderConversationDetail(container, params) {
     let managementSupport = {
         skills: true,
         settings: true,
+        protocols: true,
     };
     let skillsStatusMessage = '';
     let settingsStatusMessage = '';
+    let protocolsStatusMessage = '';
+    let latestConversationMessageCount = 0;
 
     const page = document.createElement('section');
     page.className = 'conversation-page';
@@ -116,7 +126,7 @@ function renderConversationDetail(container, params) {
     const skillsManageBtn = document.createElement('button');
     skillsManageBtn.className = 'btn btn-sm conversation-manage-trigger';
     skillsManageBtn.type = 'button';
-    skillsManageBtn.textContent = 'Skills';
+    skillsManageBtn.textContent = 'Capabilities';
     skillsManageBtn.hidden = true;
     actionGroup.appendChild(skillsManageBtn);
 
@@ -126,6 +136,13 @@ function renderConversationDetail(container, params) {
     settingsManageBtn.textContent = 'Settings';
     settingsManageBtn.hidden = true;
     actionGroup.appendChild(settingsManageBtn);
+
+    const protocolsManageBtn = document.createElement('button');
+    protocolsManageBtn.className = 'btn btn-sm conversation-manage-trigger';
+    protocolsManageBtn.type = 'button';
+    protocolsManageBtn.textContent = 'Protocols';
+    protocolsManageBtn.hidden = true;
+    actionGroup.appendChild(protocolsManageBtn);
 
     const managementPanel = document.createElement('section');
     managementPanel.className = 'conversation-management-grid';
@@ -140,8 +157,12 @@ function renderConversationDetail(container, params) {
     const settingsPanel = document.createElement('section');
     settingsPanel.className = 'card conversation-management-card';
     managementPanel.appendChild(settingsPanel);
+    const protocolsPanel = document.createElement('section');
+    protocolsPanel.className = 'card conversation-management-card';
+    managementPanel.appendChild(protocolsPanel);
     skillsManageBtn.setAttribute('aria-controls', managementPanel.id);
     settingsManageBtn.setAttribute('aria-controls', managementPanel.id);
+    protocolsManageBtn.setAttribute('aria-controls', managementPanel.id);
 
     const layout = document.createElement('div');
     layout.className = 'conversation-layout';
@@ -338,6 +359,14 @@ function renderConversationDetail(container, params) {
         return Boolean(managementAgentId());
     }
 
+    function protocolWorkspaceRef() {
+        return String((conversationSettings && conversationSettings.project_id) || '').trim();
+    }
+
+    function protocolRunHref(runId) {
+        return `/ui/runs?run_id=${encodeURIComponent(String(runId || '').trim())}`;
+    }
+
     function syncManagementQueryParams() {
         UI.updateQueryParams({
             manage: managementMode === 'closed' ? '' : managementMode,
@@ -373,20 +402,27 @@ function renderConversationDetail(container, params) {
         const available = managementAvailable();
         skillsManageBtn.hidden = !available;
         settingsManageBtn.hidden = !available;
+        protocolsManageBtn.hidden = !available;
         skillsManageBtn.className = managementMode === 'skills'
             ? 'btn btn-sm btn-primary conversation-manage-trigger'
             : 'btn btn-sm conversation-manage-trigger';
         settingsManageBtn.className = managementMode === 'settings'
             ? 'btn btn-sm btn-primary conversation-manage-trigger'
             : 'btn btn-sm conversation-manage-trigger';
+        protocolsManageBtn.className = managementMode === 'protocols'
+            ? 'btn btn-sm btn-primary conversation-manage-trigger'
+            : 'btn btn-sm conversation-manage-trigger';
         skillsManageBtn.setAttribute('aria-pressed', String(managementMode === 'skills'));
         settingsManageBtn.setAttribute('aria-pressed', String(managementMode === 'settings'));
+        protocolsManageBtn.setAttribute('aria-pressed', String(managementMode === 'protocols'));
         skillsManageBtn.setAttribute('aria-expanded', String(available && managementMode === 'skills'));
         settingsManageBtn.setAttribute('aria-expanded', String(available && managementMode === 'settings'));
+        protocolsManageBtn.setAttribute('aria-expanded', String(available && managementMode === 'protocols'));
         managementPanel.hidden = !available || managementMode === 'closed';
         managementPanel.dataset.mode = managementMode;
         skillsPanel.hidden = managementMode !== 'skills';
         settingsPanel.hidden = managementMode !== 'settings';
+        protocolsPanel.hidden = managementMode !== 'protocols';
     }
 
     function scheduleManagementIdleClose(timeoutMs = 10000) {
@@ -422,11 +458,18 @@ function renderConversationDetail(container, params) {
 
     function openManagement(nextMode, { focus = false } = {}) {
         if (!managementAvailable()) return;
+        if (nextMode === 'protocols' && !protocolProblemStatement && String(textarea.value || '').trim()) {
+            protocolProblemStatement = String(textarea.value || '').trim();
+        }
         managementMode = nextMode;
         requestedManagementMode = nextMode;
         syncManagementQueryParams();
         syncManagementControls();
+        if (meta) renderMetaCard(meta);
         scheduleManagementIdleClose();
+        if (nextMode === 'protocols' && !availableConversationProtocols.length && !linkedProtocolRuns.length) {
+            void loadConversationProtocols({ soft: true });
+        }
         if (focus) {
             requestAnimationFrame(() => {
                 const firstControl = managementPanel.querySelector('input, select, textarea')
@@ -448,8 +491,10 @@ function renderConversationDetail(container, params) {
         if (clearStatus) {
             skillsStatusMessage = '';
             settingsStatusMessage = '';
+            protocolsStatusMessage = '';
         }
         syncManagementControls();
+        if (meta) renderMetaCard(meta);
         if (activeView !== 'tasks' && !textarea.disabled) {
             requestAnimationFrame(() => textarea.focus());
         }
@@ -477,6 +522,7 @@ function renderConversationDetail(container, params) {
         syncManagementControls();
         renderSkillsPanel();
         renderSettingsPanel();
+        renderProtocolsPanel();
     }
 
     function activeConversationSkillDetails() {
@@ -505,12 +551,12 @@ function renderConversationDetail(container, params) {
         const hasExecutable = items.some((skill) => String(skill?.skill_kind || '').trim() === 'executable');
         const hasPrompt = items.some((skill) => String(skill?.skill_kind || '').trim() !== 'executable');
         if (hasPrompt && hasExecutable) {
-            return 'Prompt skills apply as operator-selected instructions here. Executable skills run through Octopus runtime orchestration.';
+            return 'Prompt capabilities apply as operator-selected instructions here. Executable capabilities run through Octopus runtime orchestration.';
         }
         if (hasExecutable) {
-            return 'Executable skills run through Octopus runtime orchestration for this conversation.';
+            return 'Executable capabilities run through Octopus runtime orchestration for this conversation.';
         }
-        return 'Prompt skills apply as operator-selected instructions for this conversation until they are deactivated.';
+        return 'Prompt capabilities apply as operator-selected instructions for this conversation until they are deactivated.';
     }
 
     async function refreshConversationSkillState({ soft = true } = {}) {
@@ -569,7 +615,7 @@ function renderConversationDetail(container, params) {
             if (result.status === 'needs_confirmation') {
                 skillsStatusMessage = `Confirm activation for ${normalizedSkill}.`;
                 renderSkillsPanel();
-                UI.showConfirm('Activate Skill', 'This skill may increase prompt size. Continue?', async () => {
+                UI.showConfirm('Activate Capability', 'This capability may increase prompt size. Continue?', async () => {
                     try {
                         const confirmed = await runManagementRequest(() => runActivation(true));
                         if (confirmed.status === 'needs_setup' && confirmed.first_requirement) {
@@ -711,7 +757,7 @@ function renderConversationDetail(container, params) {
             statusMessage: String(skillsStatusMessage || ''),
         }, (state) => {
             const nodes = [];
-            const header = createManagementHeader('Conversation skills');
+            const header = createManagementHeader('Conversation capabilities');
             if (state.supported && (state.skillState.active_skills || []).length) {
                 const clearBtn = document.createElement('button');
                 clearBtn.className = 'btn btn-sm';
@@ -721,7 +767,7 @@ function renderConversationDetail(container, params) {
                     clearBtn.disabled = true;
                     try {
                         const result = await runManagementRequest(() => API.clearConversationSkills(agentId, managementConversationPath()));
-                        skillsStatusMessage = result.status === 'cleared' ? 'Cleared active skills.' : String(result.status || 'Updated');
+                        skillsStatusMessage = result.status === 'cleared' ? 'Cleared active capabilities.' : String(result.status || 'Updated');
                         pendingSkillSetup = null;
                         selectedActivationSkill = '';
                         await refreshConversationSkillState();
@@ -737,7 +783,7 @@ function renderConversationDetail(container, params) {
             nodes.push(header);
 
             if (!state.supported) {
-                nodes.push(UI.renderEmptyState('This bot does not expose conversation skills in the registry.', true));
+                nodes.push(UI.renderEmptyState('This bot does not expose conversation capabilities in the registry.', true));
                 return nodes;
             }
 
@@ -750,7 +796,7 @@ function renderConversationDetail(container, params) {
 
             const explainer = document.createElement('p');
             explainer.className = 'quiet-note';
-            explainer.textContent = 'Use this panel to choose what is active in this conversation. Prompt skills apply as conversation instructions here; executable skills run through runtime orchestration. To install, update, or edit skills for this bot, open the Skills page.';
+            explainer.textContent = 'Use this panel to choose what is active in this conversation. Prompt capabilities apply as conversation instructions here; executable capabilities run through runtime orchestration. To install, update, or edit capabilities for this bot, open the Capabilities page.';
             nodes.push(explainer);
 
             if (state.pendingSetup) {
@@ -762,10 +808,10 @@ function renderConversationDetail(container, params) {
                 const description = document.createElement('p');
                 description.className = 'conversation-setup-copy';
                 if (foreignSetup) {
-                    description.textContent = `Another operator started setup for ${state.pendingSetup.skillName || 'this skill'} (${state.pendingSetup.ownerActor}). Finish it there or cancel the active setup first.`;
+                    description.textContent = `Another operator started setup for ${state.pendingSetup.skillName || 'this capability'} (${state.pendingSetup.ownerActor}). Finish it there or cancel the active setup first.`;
                     setupBox.appendChild(description);
                 } else if (requirement) {
-                    description.textContent = requirement.prompt || `Enter the next credential value for ${state.pendingSetup.skillName || 'this skill'}.`;
+                    description.textContent = requirement.prompt || `Enter the next credential value for ${state.pendingSetup.skillName || 'this capability'}.`;
                     setupBox.appendChild(description);
                     if (requirement.help_url) {
                         const help = document.createElement('a');
@@ -849,7 +895,7 @@ function renderConversationDetail(container, params) {
                             }
                             pendingSkillSetup = null;
                             skillsStatusMessage = result.status === 'ready'
-                                ? `Finished setup for ${result.skill_name || state.pendingSetup.skillName || 'the skill'}.`
+                                ? `Finished setup for ${result.skill_name || state.pendingSetup.skillName || 'the capability'}.`
                                 : String(result.status || 'Updated');
                             selectedActivationSkill = '';
                             await refreshConversationSkillState();
@@ -873,7 +919,7 @@ function renderConversationDetail(container, params) {
             activeSection.appendChild(activeTitle);
             const activeSkills = state.skillState.active_skill_details || [];
             if (!activeSkills.length) {
-                activeSection.appendChild(UI.renderEmptyState('No active skills in this conversation.', true));
+                activeSection.appendChild(UI.renderEmptyState('No active capabilities in this conversation.', true));
             } else {
                 const list = document.createElement('div');
                 list.className = 'conversation-skill-list';
@@ -886,7 +932,7 @@ function renderConversationDetail(container, params) {
                         skill.source_label || skill.source_kind || '',
                         skill.requires_credentials ? 'setup required' : '',
                     ].filter(Boolean).join(' • ');
-                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Skill')}</strong><span class="settings-row-sublabel">${UI.esc(summaryBits || 'Skill active in this conversation')}</span></div>`;
+                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Capability')}</strong><span class="settings-row-sublabel">${UI.esc(summaryBits || 'Capability active in this conversation')}</span></div>`;
                     const actions = document.createElement('div');
                     actions.className = 'event-card-actions';
                     const deactivate = document.createElement('button');
@@ -925,7 +971,7 @@ function renderConversationDetail(container, params) {
             activateTitle.textContent = 'Available on this bot';
             activateSection.appendChild(activateTitle);
             if (!state.activatable.length) {
-                activateSection.appendChild(UI.renderEmptyState('No additional available skills are ready to activate here.', true));
+                activateSection.appendChild(UI.renderEmptyState('No additional available capabilities are ready to activate here.', true));
             } else {
                 const controls = document.createElement('div');
                 controls.className = 'conversation-management-form';
@@ -933,7 +979,7 @@ function renderConversationDetail(container, params) {
                 select.className = 'input';
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
-                placeholder.textContent = 'Choose an available skill';
+                placeholder.textContent = 'Choose an available capability';
                 select.appendChild(placeholder);
                 state.activatable.forEach((skill) => {
                     const option = document.createElement('option');
@@ -1207,6 +1253,336 @@ function renderConversationDetail(container, params) {
         });
     }
 
+    function conversationProtocolTimestamp(protocol) {
+        return UI.generatedTimestamp(protocol?.display_name || '')
+            || UI.generatedTimestamp(protocol?.slug || '');
+    }
+
+    function conversationProtocolLabel(protocol) {
+        return UI.compactGeneratedName(
+            protocol?.display_name || protocol?.slug || protocol?.protocol_id || '',
+            { stripUiOnly: true },
+        );
+    }
+
+    function conversationProtocolFamilyKey(protocol) {
+        return UI.compactGeneratedName(
+            protocol?.slug || protocol?.display_name || protocol?.protocol_id || '',
+            { stripUiOnly: true },
+        ).toLowerCase();
+    }
+
+    function conversationProtocolSearchMatches(protocol, queryText) {
+        const query = String(queryText || '').trim().toLowerCase();
+        if (!query) return true;
+        const haystack = [
+            protocol?.display_name || '',
+            protocol?.slug || '',
+            protocol?.protocol_id || '',
+            conversationProtocolLabel(protocol),
+        ].join(' ').toLowerCase();
+        return haystack.includes(query);
+    }
+
+    function compareConversationProtocols(left, right) {
+        const leftTimestamp = Number(conversationProtocolTimestamp(left) || 0);
+        const rightTimestamp = Number(conversationProtocolTimestamp(right) || 0);
+        if (leftTimestamp !== rightTimestamp) return rightTimestamp - leftTimestamp;
+        return conversationProtocolLabel(left).localeCompare(conversationProtocolLabel(right));
+    }
+
+    function conversationProtocolOptions(protocols, queryText = '') {
+        const query = String(queryText || '').trim();
+        const matching = (protocols || [])
+            .filter((item) => conversationProtocolSearchMatches(item, query))
+            .sort(compareConversationProtocols);
+        if (query) {
+            return { protocols: matching, hiddenCount: 0, collapsedCount: 0 };
+        }
+
+        const byFamily = new Map();
+        let collapsedCount = 0;
+        matching.forEach((item) => {
+            const familyKey = conversationProtocolFamilyKey(item);
+            const existing = byFamily.get(familyKey);
+            if (!existing) {
+                byFamily.set(familyKey, item);
+                return;
+            }
+            collapsedCount += 1;
+            if (compareConversationProtocols(item, existing) < 0) {
+                byFamily.set(familyKey, item);
+            }
+        });
+        return {
+            protocols: [...byFamily.values()].sort(compareConversationProtocols),
+            hiddenCount: collapsedCount,
+            collapsedCount,
+        };
+    }
+
+    function renderProtocolsPanel() {
+        const agentId = managementAgentId();
+        syncManagementControls();
+        if (!agentId) {
+            UI.clearMemoizedRender(protocolsPanel);
+            UI.reconcileChildren(protocolsPanel, []);
+            return;
+        }
+
+        const protocolOptions = conversationProtocolOptions(availableConversationProtocols || [], protocolSearchQuery);
+        const filteredProtocols = protocolOptions.protocols;
+        if (selectedProtocolId && !filteredProtocols.some((item) => String(item.protocol_id || '') === selectedProtocolId)) {
+            if (!protocolSearchQuery) {
+                selectedProtocolId = filteredProtocols[0] ? String(filteredProtocols[0].protocol_id || '') : '';
+            }
+        } else if (!selectedProtocolId && filteredProtocols[0]) {
+            selectedProtocolId = String(filteredProtocols[0].protocol_id || '');
+        }
+
+        UI.memoizedRender(protocolsPanel, {
+            supported: managementSupport.protocols,
+            statusMessage: String(protocolsStatusMessage || ''),
+            search: String(protocolSearchQuery || ''),
+            selectedProtocolId: String(selectedProtocolId || ''),
+            problemStatement: String(protocolProblemStatement || ''),
+            workspaceRef: protocolWorkspaceRef(),
+            hiddenProtocolCount: Number(protocolOptions.hiddenCount || 0),
+            availableProtocols: filteredProtocols.map((item) => ({
+                id: String(item.protocol_id || ''),
+                label: conversationProtocolLabel(item),
+                rawLabel: String(item.display_name || item.slug || item.protocol_id || ''),
+                slug: String(item.slug || ''),
+                generated: Boolean(conversationProtocolTimestamp(item)),
+                timestamp: conversationProtocolTimestamp(item),
+            })),
+            linkedRuns: (linkedProtocolRuns || []).map((run) => ({
+                id: String(run.protocol_run_id || ''),
+                protocolId: String(run.protocol_id || ''),
+                status: String(run.status || ''),
+                stage: String(run.current_stage_key || ''),
+                updatedLabel: UI.relativeTime(run.updated_at || run.created_at),
+            })),
+        }, (state) => {
+            const nodes = [];
+            const header = createManagementHeader('Conversation protocols');
+            nodes.push(header);
+
+            if (!state.supported) {
+                nodes.push(UI.renderEmptyState('Protocol launch is not available from this conversation.', true));
+                return nodes;
+            }
+
+            if (state.statusMessage) {
+                const status = document.createElement('div');
+                status.className = 'conversation-management-status';
+                status.textContent = state.statusMessage;
+                nodes.push(status);
+            }
+
+            const explainer = document.createElement('p');
+            explainer.className = 'quiet-note';
+            explainer.textContent = 'Start a durable published workflow from this conversation. The run stays linked to this activity thread while using the current bot and project context.';
+            nodes.push(explainer);
+
+            const contextBox = document.createElement('div');
+            contextBox.className = 'conversation-management-section';
+            const contextTitle = document.createElement('div');
+            contextTitle.className = 'detail-label';
+            contextTitle.textContent = 'Launch context';
+            contextBox.appendChild(contextTitle);
+            const contextList = document.createElement('div');
+            contextList.className = 'conversation-skill-list';
+            const agentRow = document.createElement('div');
+            agentRow.className = 'settings-row';
+            agentRow.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">Entry agent</strong><span class="settings-row-sublabel">${UI.esc(UI.visibleLabel(meta?.target_display_name, agentId, 'Agent'))}</span></div>`;
+            contextList.appendChild(agentRow);
+            const projectRow = document.createElement('div');
+            projectRow.className = 'settings-row';
+            projectRow.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">Workspace</strong><span class="settings-row-sublabel">${UI.esc(state.workspaceRef || 'No project selected for this conversation')}</span></div>`;
+            contextList.appendChild(projectRow);
+            contextBox.appendChild(contextList);
+            nodes.push(contextBox);
+
+            const launchSection = document.createElement('div');
+            launchSection.className = 'conversation-management-section';
+            const launchTitle = document.createElement('div');
+            launchTitle.className = 'detail-label';
+            launchTitle.textContent = 'Start a published protocol';
+            launchSection.appendChild(launchTitle);
+
+            if (!state.availableProtocols.length) {
+                const emptyMessage = state.search
+                    ? 'No published protocols match this search.'
+                    : 'No published protocols are available to launch.';
+                launchSection.appendChild(UI.renderEmptyState(emptyMessage, true));
+                nodes.push(launchSection);
+                return nodes;
+            }
+
+            const form = document.createElement('div');
+            form.className = 'conversation-management-form';
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'input';
+            search.placeholder = 'Search published protocols';
+            search.setAttribute('aria-label', 'Search published protocols');
+            search.value = state.search;
+            search.addEventListener('input', () => {
+                protocolSearchQuery = String(search.value || '');
+                renderProtocolsPanel();
+            });
+            form.appendChild(search);
+
+            if (state.hiddenProtocolCount && !state.search) {
+                const hiddenNote = document.createElement('p');
+                hiddenNote.className = 'quiet-note';
+                hiddenNote.textContent = `Showing the latest version of each generated protocol family. ${state.hiddenProtocolCount} older generated versions are hidden; search to inspect them.`;
+                form.appendChild(hiddenNote);
+            }
+
+            const select = document.createElement('select');
+            select.className = 'input';
+            select.setAttribute('aria-label', 'Published protocol');
+            state.availableProtocols.forEach((item) => {
+                const option = document.createElement('option');
+                option.value = item.id;
+                const suffix = state.search && item.timestamp ? ` · generated ${item.timestamp}` : '';
+                const showIdentifier = state.search || !item.generated;
+                option.textContent = showIdentifier && item.slug ? `${item.label}${suffix} · ${item.slug}` : `${item.label}${suffix}`;
+                if (item.id === state.selectedProtocolId) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+            select.addEventListener('change', () => {
+                selectedProtocolId = String(select.value || '').trim();
+                renderProtocolsPanel();
+            });
+            form.appendChild(select);
+
+            const selectedProtocol = state.availableProtocols.find((item) => item.id === state.selectedProtocolId) || state.availableProtocols[0] || null;
+            if (selectedProtocol) {
+                const scope = document.createElement('div');
+                scope.className = 'settings-row';
+                let rawScope = '';
+                if (selectedProtocol.generated) {
+                    rawScope = `Generated protocol family${state.search && selectedProtocol.timestamp ? ` ${selectedProtocol.timestamp}` : ''}. `;
+                } else if (selectedProtocol.rawLabel && selectedProtocol.rawLabel !== selectedProtocol.label) {
+                    rawScope = `Published as ${selectedProtocol.rawLabel}. `;
+                }
+                scope.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">Protocol scope</strong><span class="settings-row-sublabel">${UI.esc(rawScope)}This run uses the protocol's published stage instructions and artifact paths. Write a problem statement that fits this workflow; it will not rewrite the workflow schema at launch time.</span></div>`;
+                form.appendChild(scope);
+            }
+
+            const problem = document.createElement('textarea');
+            problem.className = 'input';
+            problem.rows = 4;
+            problem.placeholder = 'Describe the concrete run context for this protocol';
+            problem.setAttribute('aria-label', 'Describe what this protocol should accomplish');
+            problem.value = state.problemStatement;
+            problem.addEventListener('input', () => {
+                protocolProblemStatement = String(problem.value || '');
+            });
+            form.appendChild(problem);
+
+            const actions = document.createElement('div');
+            actions.className = 'event-card-actions';
+            const start = document.createElement('button');
+            start.className = 'btn btn-sm btn-primary';
+            start.type = 'button';
+            start.textContent = 'Start protocol';
+            start.addEventListener('click', async () => {
+                const protocolId = String(select.value || selectedProtocolId || '').trim();
+                const problemStatement = String(problem.value || '').trim();
+                if (!protocolId || !problemStatement) {
+                    protocolsStatusMessage = 'Select a published protocol and describe the problem to solve.';
+                    renderProtocolsPanel();
+                    scheduleManagementIdleClose(12000);
+                    return;
+                }
+                start.disabled = true;
+                try {
+                    const response = await runManagementRequest(() => API.createProtocolRun({
+                        protocol_id: protocolId,
+                        entry_agent_id: agentId,
+                        root_conversation_id: convoId,
+                        origin_channel: String((meta && meta.origin_channel) || 'registry'),
+                        workspace_ref: protocolWorkspaceRef(),
+                        problem_statement: problemStatement,
+                        constraints_json: {},
+                    }));
+                    const run = response.run || null;
+                    const launched = state.availableProtocols.find((item) => item.id === protocolId);
+                    protocolsStatusMessage = launched
+                        ? `Started ${launched.label}.`
+                        : 'Protocol run started.';
+                    protocolProblemStatement = '';
+                    if (run && String(run.protocol_run_id || '').trim()) {
+                        linkedProtocolRuns = [
+                            run,
+                            ...(linkedProtocolRuns || []).filter((item) => String(item.protocol_run_id || '') !== String(run.protocol_run_id || '')),
+                        ];
+                        showProgressBanner(`Started protocol run ${String(run.protocol_run_id || '').slice(0, 8)}.`);
+                    }
+                    renderMetaCard(meta || {});
+                    renderProtocolsPanel();
+                    scheduleConversationManagementRefresh();
+                    scheduleManagementSuccessClose();
+                } catch (err) {
+                    UI.reportError('Failed to start the protocol', err, { context: 'Conversation protocol launch failed' });
+                }
+                start.disabled = false;
+            });
+            actions.appendChild(start);
+            form.appendChild(actions);
+            launchSection.appendChild(form);
+            nodes.push(launchSection);
+
+            const linkedRunsSection = document.createElement('div');
+            linkedRunsSection.className = 'conversation-management-section';
+            const linkedTitle = document.createElement('div');
+            linkedTitle.className = 'detail-label';
+            linkedTitle.textContent = 'Recent linked runs';
+            linkedRunsSection.appendChild(linkedTitle);
+            if (!state.linkedRuns.length) {
+                linkedRunsSection.appendChild(UI.renderEmptyState('No protocol runs have been started from this conversation yet.', true));
+            } else {
+                const list = document.createElement('div');
+                list.className = 'conversation-skill-list';
+                const visibleRuns = state.linkedRuns.slice(0, 3);
+                visibleRuns.forEach((run) => {
+                    const row = document.createElement('div');
+                    row.className = 'settings-row';
+                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(protocolDisplayName(run.protocolId))}</strong><span class="settings-row-sublabel">${UI.esc([protocolRunSummary({ current_stage_key: run.stage, status: run.status }), run.updatedLabel].filter(Boolean).join(' • ') || `run ${run.id.slice(0, 8)}`)}</span></div>`;
+                    const actions = document.createElement('div');
+                    actions.className = 'event-card-actions';
+                    const openRun = document.createElement('a');
+                    openRun.className = 'btn btn-sm';
+                    openRun.href = protocolRunHref(run.id);
+                    openRun.textContent = 'Open run';
+                    actions.appendChild(openRun);
+                    row.appendChild(actions);
+                    list.appendChild(row);
+                });
+                linkedRunsSection.appendChild(list);
+                if (state.linkedRuns.length > visibleRuns.length) {
+                    const overflow = document.createElement('p');
+                    overflow.className = 'quiet-note';
+                    overflow.textContent = `Showing latest ${visibleRuns.length} of ${state.linkedRuns.length} linked runs. Use the Runs page or conversation activity to inspect older runs.`;
+                    linkedRunsSection.appendChild(overflow);
+                }
+            }
+            nodes.push(linkedRunsSection);
+
+            return nodes;
+        }, {
+            signatureFn(state) {
+                return state;
+            },
+        });
+    }
+
     async function loadConversationSkills({ soft = false } = {}) {
         const agentId = managementAgentId();
         if (!agentId) {
@@ -1241,11 +1617,11 @@ function renderConversationDetail(container, params) {
                 return;
             }
             if (soft && conversationSkills) {
-                UI.reportError('Failed to refresh conversation skills', err, { context: 'Conversation skill refresh failed' });
+                UI.reportError('Failed to refresh conversation capabilities', err, { context: 'Conversation skill refresh failed' });
                 return;
             }
             UI.clearMemoizedRender(skillsPanel);
-            UI.reconcileChildren(skillsPanel, [UI.createErrorCard('Failed to load conversation skills: ' + err.message, loadConversationSkills)]);
+            UI.reconcileChildren(skillsPanel, [UI.createErrorCard('Failed to load conversation capabilities: ' + err.message, loadConversationSkills)]);
         }
     }
 
@@ -1276,12 +1652,47 @@ function renderConversationDetail(container, params) {
         }
     }
 
+    async function loadConversationProtocols({ soft = false } = {}) {
+        const agentId = managementAgentId();
+        if (!agentId) {
+            availableConversationProtocols = [];
+            linkedProtocolRuns = [];
+            managementSupport.protocols = true;
+            renderProtocolsPanel();
+            return;
+        }
+        try {
+            const [protocolData, runData] = await Promise.all([
+                API.listProtocols({ lifecycle_state: 'published', limit: 100 }),
+                API.listProtocolRuns({ root_conversation_id: convoId, limit: 25 }),
+            ]);
+            availableConversationProtocols = (protocolData.protocols || protocolData || []).filter((item) =>
+                String(item.lifecycle_state || '') === 'published'
+                && String(item.current_version_id || '').trim(),
+            );
+            linkedProtocolRuns = runData.runs || runData || [];
+            managementSupport.protocols = true;
+            renderProtocolsPanel();
+            if (meta) {
+                renderMetaCard(meta);
+            }
+        } catch (err) {
+            if (soft && (availableConversationProtocols.length || linkedProtocolRuns.length)) {
+                UI.reportError('Failed to refresh conversation protocols', err, { context: 'Conversation protocols refresh failed' });
+                return;
+            }
+            UI.clearMemoizedRender(protocolsPanel);
+            UI.reconcileChildren(protocolsPanel, [UI.createErrorCard('Failed to load conversation protocols: ' + err.message, loadConversationProtocols)]);
+        }
+    }
+
     function scheduleConversationManagementRefresh() {
         if (UI.isBackgrounded()) return;
         clearTimeout(managementReloadDebounce);
         managementReloadDebounce = setTimeout(() => {
             void loadConversationSkills({ soft: true });
             void loadConversationSettings({ soft: true });
+            void loadConversationProtocols({ soft: true });
             void loadConversation();
         }, 350);
     }
@@ -1310,15 +1721,54 @@ function renderConversationDetail(container, params) {
         syncConversationDensityForCurrentView();
     }
 
-    function applyFilter(nextView) {
-        activeView = nextView;
-        updateTimelineHeader();
-        _writeConversationViewParam(activeView);
-        if (activeView === 'tasks') {
-            loadRelatedTasks({ soft: true });
-            return;
+    function defaultConversationView() {
+        if (activeViewExplicit) return '';
+        const conversationType = String(meta?.conversation_type || '').trim();
+        if (conversationType === 'task_thread') {
+            return 'tasks';
         }
-        reloadEvents();
+        if (Number(meta?.event_count || 0) > 0 && latestConversationMessageCount === 0) {
+            return 'activity';
+        }
+        return '';
+    }
+
+    function setActiveView(nextView, { explicit = false, persist = false, load = true } = {}) {
+        const normalized = nextView === 'tasks' || nextView === 'activity' ? nextView : 'conversation';
+        if (explicit) {
+            activeViewExplicit = true;
+        }
+        const changed = activeView !== normalized;
+        activeView = normalized;
+        updateTimelineHeader();
+        if (persist) {
+            _writeConversationViewParam(activeView);
+        }
+        if (!load) {
+            return changed;
+        }
+        if (activeView === 'tasks') {
+            void loadRelatedTasks({ soft: true });
+        } else {
+            void reloadEvents();
+        }
+        return changed;
+    }
+
+    function maybeAdoptOperationalView({ load = true } = {}) {
+        const nextView = defaultConversationView();
+        if (!nextView || nextView === activeView) {
+            return false;
+        }
+        setActiveView(nextView, { load });
+        return true;
+    }
+
+    function applyFilter(nextView) {
+        setActiveView(nextView, {
+            explicit: true,
+            persist: true,
+        });
     }
 
     updateTimelineHeader();
@@ -1369,6 +1819,14 @@ function renderConversationDetail(container, params) {
         openManagement('settings', { focus: true });
     });
 
+    protocolsManageBtn.addEventListener('click', () => {
+        if (managementMode === 'protocols') {
+            closeManagement();
+            return;
+        }
+        openManagement('protocols', { focus: true });
+    });
+
     managementPanel.addEventListener('pointerdown', markManagementInteraction);
     managementPanel.addEventListener('input', markManagementInteraction);
     managementPanel.addEventListener('change', markManagementInteraction);
@@ -1389,6 +1847,12 @@ function renderConversationDetail(container, params) {
     async function sendMessage() {
         const text = textarea.value.trim();
         if (!text) return;
+        if (activeView !== 'conversation') {
+            setActiveView('conversation', {
+                explicit: true,
+                persist: true,
+            });
+        }
         sendBtn.disabled = true;
         textarea.disabled = true;
         clearSuggestions();
@@ -1397,6 +1861,7 @@ function renderConversationDetail(container, params) {
             await API.sendMessage(convoId, text);
             textarea.value = '';
             updateComposerAssist();
+            await reloadEvents();
         } catch (err) {
             UI.reportError('Failed to send the message', err, { context: 'Conversation send failed' });
         }
@@ -1604,6 +2069,21 @@ function renderConversationDetail(container, params) {
         return [];
     }
 
+    function protocolDisplayName(protocolId = '') {
+        const target = String(protocolId || '').trim();
+        if (!target) return 'Protocol run';
+        const match = (availableConversationProtocols || []).find(
+            (item) => String(item.protocol_id || '').trim() === target,
+        );
+        return conversationProtocolLabel(match || { display_name: target }) || target;
+    }
+
+    function protocolRunSummary(run) {
+        const currentStage = String(run?.current_stage_key || '').trim();
+        const status = String(run?.status || '').trim();
+        return [currentStage, status].filter(Boolean).join(' · ');
+    }
+
     function renderMetaCard(data) {
         meta = data;
         const conversationWith = UI.visibleLabel(data.target_display_name, data.target_agent_id);
@@ -1621,6 +2101,12 @@ function renderConversationDetail(container, params) {
             activeSkills: activeConversationSkillDetails()
                 .map((item) => String(item?.name || '').trim())
                 .filter(Boolean),
+            linkedRuns: (linkedProtocolRuns || []).map((run) => ({
+                id: String(run.protocol_run_id || ''),
+                protocolLabel: protocolDisplayName(run.protocol_id),
+                summary: protocolRunSummary(run),
+            })),
+            managementMode,
         }, () => {
         const title = data.title || convoId;
         const isTaskThread = String(data.conversation_type || 'conversation') === 'task_thread';
@@ -1726,34 +2212,91 @@ function renderConversationDetail(container, params) {
         if (actions.childElementCount) {
             metaRow.appendChild(actions);
         }
-        const activeSkills = activeConversationSkillDetails();
-        if (!activeSkills.length) {
+        if (managementMode !== 'closed') {
             return [titleRow, metaRow, toolbar];
         }
-        const activeRow = document.createElement('div');
-        activeRow.className = 'conversation-meta-row';
-        activeRow.dataset.key = 'active-skills-inline';
-        const label = document.createElement('span');
-        label.className = 'detail-label';
-        label.textContent = activeSkills.length === 1 ? 'Active skill' : 'Active skills';
-        activeRow.appendChild(label);
-        const chips = document.createElement('div');
-        chips.className = 'chip-row';
-        activeSkills.forEach((skill) => {
-            const chip = document.createElement('span');
-            chip.className = 'quickstart-chip static';
-            chip.textContent = UI.visibleLabel(skill.display_name, skill.name, 'Skill');
-            chips.appendChild(chip);
-        });
-        activeRow.appendChild(chips);
-        const semantics = activeSkillSemanticsNote(activeSkills);
-        if (semantics) {
-            const note = document.createElement('p');
-            note.className = 'quiet-note';
-            note.textContent = semantics;
-            activeRow.appendChild(note);
+
+        const activeSkills = activeConversationSkillDetails();
+        if (!activeSkills.length) {
+            if (!(linkedProtocolRuns || []).length) {
+                return [titleRow, metaRow, toolbar];
+            }
+        } else {
+            const activeRow = document.createElement('div');
+            activeRow.className = 'conversation-meta-row';
+            activeRow.dataset.key = 'active-skills-inline';
+            const label = document.createElement('span');
+            label.className = 'detail-label';
+                label.textContent = activeSkills.length === 1 ? 'Active capability' : 'Active capabilities';
+            activeRow.appendChild(label);
+            const chips = document.createElement('div');
+            chips.className = 'chip-row';
+            activeSkills.forEach((skill) => {
+                const chip = document.createElement('span');
+                chip.className = 'quickstart-chip static';
+                chip.textContent = UI.visibleLabel(skill.display_name, skill.name, 'Capability');
+                chips.appendChild(chip);
+            });
+            activeRow.appendChild(chips);
+            const semantics = activeSkillSemanticsNote(activeSkills);
+            if (semantics) {
+                const note = document.createElement('p');
+                note.className = 'quiet-note';
+                note.textContent = semantics;
+                activeRow.appendChild(note);
+            }
+            if (!(linkedProtocolRuns || []).length) {
+                return [titleRow, metaRow, activeRow, toolbar];
+            }
+            const runsRow = document.createElement('div');
+            runsRow.className = 'conversation-meta-row';
+            runsRow.dataset.key = 'protocol-runs-inline';
+            const runsLabel = document.createElement('span');
+            runsLabel.className = 'detail-label';
+            runsLabel.textContent = linkedProtocolRuns.length === 1 ? 'Linked run' : 'Linked runs';
+            runsRow.appendChild(runsLabel);
+            const runChips = document.createElement('div');
+            runChips.className = 'chip-row';
+            linkedProtocolRuns.slice(0, 3).forEach((run) => {
+                const runLink = document.createElement('a');
+                runLink.className = 'quickstart-chip static';
+                runLink.href = protocolRunHref(run.protocol_run_id);
+                runLink.textContent = `${protocolDisplayName(run.protocol_id)} · ${String(run.status || '').trim() || 'queued'}`;
+                runChips.appendChild(runLink);
+            });
+            if (linkedProtocolRuns.length > 3) {
+                const more = document.createElement('span');
+                more.className = 'quickstart-chip static';
+                more.textContent = `+${linkedProtocolRuns.length - 3} more`;
+                runChips.appendChild(more);
+            }
+            runsRow.appendChild(runChips);
+            return [titleRow, metaRow, activeRow, runsRow, toolbar];
         }
-        return [titleRow, metaRow, activeRow, toolbar];
+        const runsRow = document.createElement('div');
+        runsRow.className = 'conversation-meta-row';
+        runsRow.dataset.key = 'protocol-runs-inline';
+        const runsLabel = document.createElement('span');
+        runsLabel.className = 'detail-label';
+        runsLabel.textContent = linkedProtocolRuns.length === 1 ? 'Linked run' : 'Linked runs';
+        runsRow.appendChild(runsLabel);
+        const runChips = document.createElement('div');
+        runChips.className = 'chip-row';
+        linkedProtocolRuns.slice(0, 3).forEach((run) => {
+            const runLink = document.createElement('a');
+            runLink.className = 'quickstart-chip static';
+            runLink.href = protocolRunHref(run.protocol_run_id);
+            runLink.textContent = `${protocolDisplayName(run.protocol_id)} · ${String(run.status || '').trim() || 'queued'}`;
+            runChips.appendChild(runLink);
+        });
+        if (linkedProtocolRuns.length > 3) {
+            const more = document.createElement('span');
+            more.className = 'quickstart-chip static';
+            more.textContent = `+${linkedProtocolRuns.length - 3} more`;
+            runChips.appendChild(more);
+        }
+        runsRow.appendChild(runChips);
+        return [titleRow, metaRow, runsRow, toolbar];
         });
     }
 
@@ -1869,6 +2412,12 @@ function renderConversationDetail(container, params) {
             }
             tasksLoaded = true;
             if (meta) renderMetaCard(meta);
+            if (!activeViewExplicit && activeView !== 'tasks' && maybeAdoptOperationalView({ load: false })) {
+                if (activeView === 'tasks') {
+                    renderRelatedTasks(relatedTasks);
+                }
+                return;
+            }
             if (activeView === 'tasks') {
                 renderRelatedTasks(relatedTasks);
             }
@@ -1916,14 +2465,20 @@ function renderConversationDetail(container, params) {
         try {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
+            maybeAdoptOperationalView({ load: false });
             syncManagementControls();
             if (requestedActivationSkill && requestedManagementMode === 'closed') {
                 openManagement('skills');
-            } else if (requestedManagementMode === 'skills' || requestedManagementMode === 'settings') {
+            } else if (
+                requestedManagementMode === 'skills'
+                || requestedManagementMode === 'settings'
+                || requestedManagementMode === 'protocols'
+            ) {
                 openManagement(requestedManagementMode);
             }
             void loadConversationSkills({ soft: true });
             void loadConversationSettings({ soft: true });
+            void loadConversationProtocols({ soft: true });
         } catch (err) {
             UI.reconcileChildren(metaCard, [UI.createErrorCard('Failed to load conversation metadata', loadConversation)]);
         }
@@ -1942,6 +2497,13 @@ function renderConversationDetail(container, params) {
                 kind: currentKindFilter(),
             });
             const events = result.events || [];
+            latestConversationMessageCount = events.filter(shouldRenderConversationEvent).length;
+            if (!activeViewExplicit && maybeAdoptOperationalView({ load: false })) {
+                if (activeView === 'tasks') {
+                    void loadRelatedTasks({ soft: true });
+                    return;
+                }
+            }
             const visibleEvents = visibleTimelineEvents(events);
             hasMoreBefore = !!result.has_more_before;
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || 0);
@@ -2134,13 +2696,19 @@ function renderConversationDetail(container, params) {
     }
 }
 
-function _readConversationViewParam() {
+function _readConversationViewState() {
     try {
         const url = new URL(window.location.href);
         const view = url.searchParams.get('view');
-        return view === 'tasks' || view === 'activity' ? view : 'conversation';
+        return {
+            value: view === 'tasks' || view === 'activity' ? view : 'conversation',
+            explicit: Boolean(view),
+        };
     } catch {
-        return 'conversation';
+        return {
+            value: 'conversation',
+            explicit: false,
+        };
     }
 }
 
@@ -2162,7 +2730,7 @@ function _readManagementModeParam() {
     try {
         const url = new URL(window.location.href);
         const value = url.searchParams.get('manage');
-        return value === 'skills' || value === 'settings' ? value : 'closed';
+        return value === 'skills' || value === 'settings' || value === 'protocols' ? value : 'closed';
     } catch {
         return 'closed';
     }

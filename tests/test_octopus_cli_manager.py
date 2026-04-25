@@ -10,6 +10,13 @@ from app.octopus_cli.core import DockerRunner, OctopusManager, PromptIO
 from app.octopus_cli.models import Action, RegistryConnection, RegistryDeployOptions, RegistryState
 
 
+def test_compose_persists_postgres_data() -> None:
+    compose = Path("infra/compose/docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "  postgres:\n" in compose
+    assert "      - data:/var/lib/postgresql/data\n" in compose
+
+
 class _ComposeDockerRunner:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []

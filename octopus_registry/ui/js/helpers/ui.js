@@ -3,6 +3,7 @@ window.UI = (() => {
     const EVENT_PAGE_LIMIT = 50;
     let toastRegion = null;
     let activeCleanupBag = null;
+    let artifactPreviewDelegationBound = false;
     const memoizedSignatures = new WeakMap();
     const dataCache = new Map();
 
@@ -19,6 +20,16 @@ window.UI = (() => {
             return DOMPurify.sanitize(marked.parse(text));
         }
         return esc(text).replace(/\n/g, '<br>');
+    }
+
+    function compactMarkdownReferences(text) {
+        const compacted = String(text || '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, href) => {
+            const cleanLabel = String(label || '').trim();
+            const cleanHref = String(href || '').trim();
+            return cleanLabel || basenameDisplayPath(cleanHref) || cleanHref || match;
+        });
+        return compacted.replace(/\[([^\]]+)\]\([^,\s)]*/g, (match, label) =>
+            String(label || '').trim() || match);
     }
 
     function relativeTime(iso) {
@@ -198,15 +209,24 @@ window.UI = (() => {
     function renderListRow({ href, label, sublabel, sublabelNode, badgeText, badgeClass, onClick, trailing, className, signature }) {
         const isLink = !!href;
         const isAction = !href && typeof onClick === 'function';
-        const row = document.createElement(isLink ? 'a' : isAction ? 'button' : 'div');
-        row.className = ['list-row', className || ''].join(' ').trim();
+        const hasTrailing = trailing instanceof Node;
+        const usePressableContainer = isAction && hasTrailing;
+        const row = document.createElement(isLink ? 'a' : isAction && !usePressableContainer ? 'button' : 'div');
+        row.className = [
+            'list-row',
+            isLink || isAction ? 'is-actionable' : 'is-passive',
+            className || '',
+        ].join(' ').trim();
         if (signature) {
             row.dataset.signature = signature;
         }
         if (isLink) {
             row.href = href;
-        } else if (isAction) {
+        } else if (isAction && !usePressableContainer) {
             row.type = 'button';
+        }
+        if (usePressableContainer) {
+            row.setAttribute('aria-label', [label, sublabel, badgeText].filter(Boolean).join(' · '));
         }
 
         const main = document.createElement('div');
@@ -238,12 +258,27 @@ window.UI = (() => {
             row.appendChild(badge);
         }
 
-        if (trailing instanceof Node) {
+        if (hasTrailing) {
+            if (trailing.classList && trailing.classList.contains('artifact-action-row')) {
+                row.classList.add('list-row-with-artifact-actions');
+            }
             row.appendChild(trailing);
         }
 
         if (isAction) {
-            row.addEventListener('click', onClick);
+            const activate = (event) => {
+                const target = event && event.target instanceof Element ? event.target : null;
+                if (target && target !== row) {
+                    const nestedInteractive = target.closest('a, button, input, textarea, select, summary, [role="button"], [data-artifact-preview-url]');
+                    if (nestedInteractive && nestedInteractive !== row) return;
+                }
+                onClick(event);
+            };
+            if (usePressableContainer) {
+                makePressable(row, activate);
+            } else {
+                row.addEventListener('click', activate);
+            }
         }
 
         return row;
@@ -402,12 +437,17 @@ window.UI = (() => {
         heading.textContent = title;
         dialog.appendChild(heading);
 
-        if (body instanceof Node) {
-            dialog.appendChild(body);
-        } else if (String(body || '').trim()) {
-            const text = document.createElement('p');
-            text.textContent = String(body || '');
-            dialog.appendChild(text);
+        if (body instanceof Node || String(body || '').trim()) {
+            const bodyWrap = document.createElement('div');
+            bodyWrap.className = 'confirm-dialog-body';
+            if (body instanceof Node) {
+                bodyWrap.appendChild(body);
+            } else {
+                const text = document.createElement('p');
+                text.textContent = String(body || '');
+                bodyWrap.appendChild(text);
+            }
+            dialog.appendChild(bodyWrap);
         }
 
         if (actions.length) {
@@ -490,6 +530,53 @@ window.UI = (() => {
         closeBtn.addEventListener('click', () => view.close());
     }
 
+    function _artifactPreviewErrorMessage(response, text) {
+        let message = text || `HTTP ${response.status}`;
+        try {
+            const parsed = JSON.parse(text);
+            const detail = parsed && typeof parsed === 'object' && parsed.detail && typeof parsed.detail === 'object'
+                ? parsed.detail
+                : parsed;
+            if (detail && typeof detail === 'object') {
+                message = detail.message || detail.error_code || message;
+            }
+        } catch (err) {
+            void err;
+        }
+        return `${response.status}: ${message}`;
+    }
+
+    function _ensureArtifactPreviewDelegation() {
+        if (artifactPreviewDelegationBound) return;
+        artifactPreviewDelegationBound = true;
+        document.addEventListener('click', async (event) => {
+            const target = event.target instanceof Element
+                ? event.target.closest('[data-artifact-preview-url]')
+                : null;
+            if (!(target instanceof HTMLElement)) return;
+            const url = String(target.dataset.artifactPreviewUrl || '').trim();
+            if (!url) return;
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+                const response = await fetch(url, { credentials: 'same-origin' });
+                const text = await response.text();
+                if (!response.ok) {
+                    throw new Error(_artifactPreviewErrorMessage(response, text));
+                }
+                showTextDialog(
+                    target.dataset.artifactPreviewTitle || 'Artifact preview',
+                    text,
+                    { maxWidth: '920px' },
+                );
+            } catch (err) {
+                reportError('Failed to preview the artifact', err, {
+                    context: 'Artifact preview failed',
+                });
+            }
+        });
+    }
+
     function renderPagination(container, { hasPrev, hasNext, onPrev, onNext, info }) {
         if (!hasPrev && !hasNext && !String(info || '').trim()) {
             return;
@@ -548,6 +635,200 @@ window.UI = (() => {
     function isPreviewableFilePath(path) {
         return /\.(md|markdown|txt|log|json|jsonl|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(String(path || '').trim());
     }
+
+    function generatedTimestamp(value) {
+        const match = String(value || '').trim().match(/(?:^|[\s_-])(\d{10,})(?:\b|$)/);
+        return match ? match[1] : '';
+    }
+
+    function isGeneratedTimestampName(value) {
+        return Boolean(generatedTimestamp(value));
+    }
+
+    function compactGeneratedName(value, { stripUiOnly = false } = {}) {
+        const original = String(value || '').trim();
+        if (!original) return '';
+        let label = original
+            .replace(/(?:[\s_-]+)\d{10,}(?:\b|$)/g, '')
+            .replace(/[-_]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (stripUiOnly) {
+            label = label.replace(/^ui only\s+/i, '').trim();
+        }
+        return label || original;
+    }
+
+    function conversationHref(conversationId, {
+        view = '',
+        conversationType = '',
+        operational = false,
+    } = {}) {
+        const normalizedId = String(conversationId || '').trim();
+        if (!normalizedId) return '/ui/conversations';
+        const url = new URL(`/ui/conversations/${encodeURIComponent(normalizedId)}`, window.location.origin);
+        const normalizedView = String(view || '').trim();
+        if (normalizedView === 'tasks' || normalizedView === 'activity') {
+            url.searchParams.set('view', normalizedView);
+        } else if (operational || String(conversationType || '').trim() === 'task_thread') {
+            url.searchParams.set('view', 'tasks');
+        }
+        return `${url.pathname}${url.search}${url.hash}`;
+    }
+
+    function taskArtifactEvidence(task) {
+        if (!task || typeof task !== 'object') return null;
+        const request = task.request && typeof task.request === 'object' ? task.request : {};
+        const result = task.result && typeof task.result === 'object' ? task.result : {};
+        const internalContext = request.internal_context && typeof request.internal_context === 'object'
+            ? request.internal_context
+            : {};
+        const contract = internalContext.protocol_stage_contract && typeof internalContext.protocol_stage_contract === 'object'
+            ? internalContext.protocol_stage_contract
+            : {};
+        const expectedOutputs = Array.isArray(contract.output_artifacts) ? contract.output_artifacts : [];
+        const recordedArtifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+        if (!expectedOutputs.length && !recordedArtifacts.length) return null;
+        return { expectedOutputs, recordedArtifacts };
+    }
+
+    function taskExpectedOutput(expectedOutputs = [], artifactKey = '') {
+        const normalized = String(artifactKey || '').trim();
+        if (!normalized) return null;
+        return (expectedOutputs || []).find((item) => String(item?.artifact_key || '').trim() === normalized) || null;
+    }
+
+    function taskArtifactDisplayPath(task, artifact, expectedOutput = null) {
+        return joinDisplayPath(task?.working_dir || '', expectedOutput?.path || artifact?.path || '');
+    }
+
+    function taskArtifactLabel(artifact, expectedOutput = null) {
+        const declaredPath = String(expectedOutput?.path || artifact?.path || '').trim();
+        return basenameDisplayPath(declaredPath) || String(artifact?.artifact_key || expectedOutput?.artifact_key || 'Artifact').trim();
+    }
+
+    function taskArtifactPreviewable(artifact, expectedOutput = null) {
+        return isPreviewableFilePath(expectedOutput?.path || artifact?.path || '');
+    }
+
+    function createArtifactActionRow({
+        previewable = false,
+        onPreview = null,
+        previewHref = '',
+        previewTitle = 'Artifact preview',
+        openHref = '',
+        downloadHref = '',
+        copyPathText = '',
+        available = true,
+        stopPropagation = true,
+        copySuccessMessage = 'Artifact path copied.',
+        copyErrorMessage = 'Failed to copy the artifact path.',
+    } = {}) {
+        const actionRow = document.createElement('div');
+        actionRow.className = 'list-row-actions artifact-action-row';
+
+        const stop = (event) => {
+            if (!stopPropagation || !event) return;
+            event.stopPropagation();
+        };
+
+        const previewUrl = String(previewHref || openHref || '').trim();
+        if (available && previewable && (previewUrl || typeof onPreview === 'function')) {
+            const previewBtn = previewUrl ? document.createElement('a') : document.createElement('button');
+            if (previewUrl) {
+                _ensureArtifactPreviewDelegation();
+                previewBtn.href = previewUrl;
+                previewBtn.setAttribute('role', 'button');
+                previewBtn.dataset.artifactPreviewUrl = previewUrl;
+                previewBtn.dataset.artifactPreviewTitle = String(previewTitle || 'Artifact preview');
+            } else {
+                previewBtn.type = 'button';
+                previewBtn.dataset.artifactPreviewAction = 'true';
+                previewBtn.addEventListener('click', (event) => {
+                    stop(event);
+                    void onPreview();
+                });
+            }
+            previewBtn.className = 'btn btn-sm';
+            previewBtn.textContent = 'Preview';
+            actionRow.appendChild(previewBtn);
+        }
+
+        if (available && String(openHref || '').trim()) {
+            const openLink = document.createElement('a');
+            openLink.href = String(openHref || '').trim();
+            openLink.className = 'btn btn-sm';
+            openLink.target = '_blank';
+            openLink.rel = 'noreferrer noopener';
+            openLink.textContent = 'Open';
+            openLink.addEventListener('click', stop);
+            actionRow.appendChild(openLink);
+        }
+
+        if (available && String(downloadHref || '').trim()) {
+            const downloadLink = document.createElement('a');
+            downloadLink.href = String(downloadHref || '').trim();
+            downloadLink.className = 'btn btn-sm';
+            downloadLink.textContent = 'Download';
+            downloadLink.addEventListener('click', stop);
+            actionRow.appendChild(downloadLink);
+        }
+
+        if (available && String(copyPathText || '').trim()) {
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'btn btn-sm';
+            copyBtn.textContent = 'Copy path';
+            copyBtn.addEventListener('click', async (event) => {
+                stop(event);
+                try {
+                    await copyText(String(copyPathText || ''), {
+                        successMessage: copySuccessMessage,
+                        errorMessage: copyErrorMessage,
+                    });
+                } catch (err) {
+                    void err;
+                }
+            });
+            actionRow.appendChild(copyBtn);
+        }
+
+        return actionRow;
+    }
+
+    function createArtifactListRow({
+        label,
+        sublabel = '',
+        sublabelParts = [],
+        badgeText = '',
+        badgeClass = '',
+        actionRow = null,
+        className = '',
+        signature = '',
+    } = {}) {
+        const trailing = actionRow instanceof Node ? actionRow : null;
+        const previewTarget = trailing
+            ? trailing.querySelector('[data-artifact-preview-url], [data-artifact-preview-action]')
+            : null;
+        const parts = Array.isArray(sublabelParts)
+            ? sublabelParts
+            : String(sublabelParts || '').trim()
+                ? [sublabelParts]
+                : [];
+        return renderListRow({
+            label,
+            sublabel: sublabel || parts.filter(Boolean).join(' · '),
+            badgeText,
+            badgeClass,
+            trailing,
+            className: ['artifact-list-row', className || ''].join(' ').trim(),
+            signature,
+            onClick: previewTarget
+                ? () => previewTarget.click()
+                : null,
+        });
+    }
+
 
     function _cloneCachedValue(value) {
         if (typeof structuredClone === 'function') {
@@ -701,15 +982,11 @@ window.UI = (() => {
             if (option.id) btn.id = option.id;
             if (option.controls) btn.setAttribute('aria-controls', option.controls);
             if (option.title) btn.title = option.title;
+            btn.addEventListener('click', () => {
+                applyValue(btn.dataset.value || '', btn);
+            });
             group.appendChild(btn);
             buttons.set(String(option.value ?? ''), btn);
-        });
-        group.addEventListener('click', (event) => {
-            const target = event.target instanceof Element
-                ? event.target.closest('.segmented-control-btn')
-                : null;
-            if (!(target instanceof HTMLButtonElement) || !group.contains(target)) return;
-            applyValue(target.dataset.value || '', target);
         });
 
         bindSegmentedControlKeyboard(group, (target) => {
@@ -1095,6 +1372,18 @@ window.UI = (() => {
         joinDisplayPath,
         basenameDisplayPath,
         isPreviewableFilePath,
+        generatedTimestamp,
+        isGeneratedTimestampName,
+        compactGeneratedName,
+        conversationHref,
+        taskArtifactEvidence,
+        taskExpectedOutput,
+        taskArtifactDisplayPath,
+        taskArtifactLabel,
+        taskArtifactPreviewable,
+        createArtifactActionRow,
+        createArtifactListRow,
+        compactMarkdownReferences,
         readQueryParam,
         updateQueryParams,
         notify,

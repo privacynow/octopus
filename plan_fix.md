@@ -1,1037 +1,1039 @@
-**Protocol UX Product Plan**
+# Registry Human-Usability Refactor Plan
 
 ## Status
 
-This file is the active implementation plan.
+This is the active plan. It replaces the previous incremental UI cleanup plan.
 
-The current protocol editor is functionally far better than the earlier broken
-state, but it is still not product-complete. The remaining issues are not
-primarily correctness bugs. They are interaction-model, hierarchy, density, and
-workflow-usability problems.
+Implementation progress:
 
-This plan replaces the previous "verified green state" framing. The standard is
-now product-shaped:
+- Runs default split-pane composition has been removed in source. The selected
+  run now expands inline through the existing `Kit.runsList` path.
+- Runs route now has a viewport-bounded shell so long selected-run content
+  scrolls inside the work area instead of forcing page-level document scroll.
+- Conversation list rows now support inline inspection for status, agent,
+  primary actions, and linked runs before opening the full conversation
+  workspace.
+- Conversation list now has a viewport-bounded shell with internal list
+  scrolling.
+- Shared artifact action rendering is still reused; no new artifact row path
+  was introduced.
+- Runs evidence now uses the single `Overview / Stages / Artifacts / Audit`
+  model in source, and `Stages` has a nested stage navigator so a long protocol
+  does not dump every stage card at once.
+- The latest broad Playwright pass exposed follow-on issues now tracked in the
+  active work: authoring was requesting disconnected M3's skill catalog and
+  surfacing 503 console errors; E2E specs still encoded removed `Outputs` and
+  `Open conversation` labels; one data-analysis execution remained `running`
+  beyond the current scenario timeout and must be inspected as a real stuck-run
+  risk, not dismissed as a test artifact.
+- The next broad Playwright pass narrowed the active failures to two concrete
+  UI/product issues: run stage evidence navigation was not switching away from
+  the current stage when a stage execution id was missing or unstable, and the
+  meta-assistant scenario kept creating timestamp-named custom capabilities
+  that polluted authoring lists. Both are now treated as product regressions,
+  not only test-maintenance problems.
+- Remaining phases still require full visual audit, broader Work-surface
+  alignment, deployment verification, and end-to-end scenario execution.
 
-- a human author can build and evolve real workflows through the UI
-- a human operator can understand what happened after execution
-- the editing flow stays anchored and easy to follow
-- the working area stays in view
-- deeper editing does not sprawl downward into a long document
-- map, settings, and artifact definition stay available without dominating the
-  main workflow surface
-- skill selection behaves like a curated catalog, not a registry dump
-- runs, tasks, approvals, and artifacts read as one connected lineage rather
-  than unrelated admin surfaces
-- the tests prove those workflows end to end
+The latest finding is product-level, not page-level: the Registry still has
+multiple competing interaction models for the same kind of object. Stages and
+some task views use progressive inline expansion. Runs now expand inline, but
+the expanded run still renders outputs, execution, participants, decisions, and
+issues as unrelated sub-apps with different layout models. Conversations use a
+full-page document/workspace with long vertical flow. Agents, capabilities,
+protocol authoring, tasks, approvals, and artifacts each expose related
+concepts with different density, action placement, and expansion behavior.
 
-## Core Problem Statement
+That inconsistency is the core usability failure. The fix is not more local CSS
+or another one-off Runs redesign. The fix is one Registry interaction grammar,
+applied across every major surface.
 
-The current editor still behaves too much like an expanded configuration
-document and not enough like a progressive workflow builder.
+## What Went Wrong In The Previous Pass
 
-The main live problems are:
+The prior work improved pieces of the UI but did not fully solve the human
+workflow:
 
-1. Opening a stage expands a large editor below the row and pushes the working
-   area downward. The user loses the visual anchor they just clicked.
-2. Too many things are visible at once inside an open stage:
-   - basics
-   - assignment
-   - routing
-   - instructions
-   - inputs and outputs
-   - actions
-3. Secondary surfaces still interrupt the primary authoring flow:
-   - workflow map is available, but its presentation still needs to behave like
-     a focused workspace when opened
-   - protocol settings can still feel like a separate slab
-   - artifact editing can still break continuity if it behaves like a detached
-     catalog instead of a local stage-owned action
-4. The UI got more compact, but not lighter. Spacing was reduced faster than
-   chrome, borders, sections, and repeated labels were removed. That increased
-   perceived density.
-5. The interface still exposes too much of each stage at one time, which scales
-   poorly when workflows have many stages or richer artifact flows.
-6. Operational surfaces still feel siloed:
-   - `Runs`
-   - `Tasks`
-   - `Approvals`
-   - artifact/file outputs
-   - stage executions
-   are rendered like neighboring resource types, not one traceable workflow
-   history.
-7. Artifact observability is too weak after execution:
-   - users cannot clearly see where artifacts live on disk
-   - users cannot reliably open/download/copy them from the operational
-     surfaces
-   - artifacts do not read as stage inputs/outputs/reviewed outputs in a way
-     that explains the workflow result
-   - the current implementation still treats artifact bytes too much like a
-     registry-local file concern instead of a shared workspace concern
-8. The skill picker exposes raw system inventory instead of a curated catalog:
-   - generated/prototype skills leak into the standard picker
-   - timestamp-suffixed duplicates read like junk data, not intentional
-     product choices
-   - the current presentation is a flat undifferentiated list with poor scan
-     value and no meaningful grouping or source cues
-9. UX coverage still cheats too often when setup is created outside the normal
-   product flow. That makes tests less trustworthy as product-usability proof.
+- Desktop was treated as wider mobile instead of a distinct work surface with
+  its own hierarchy and reading rhythm.
+- Runs moved to inline expansion but kept the old mental model inside the
+  expanded detail: Outputs, Execution, Participants, Decisions, and Issues each
+  tell a different story about the same run evidence.
+- Conversations still behave like a long document rather than a bounded
+  workspace with persistent context and reachable actions.
+- Related objects such as run, task, conversation, approval, stage, and artifact
+  are still rendered as neighboring resources instead of one lineage.
+- Some clickable-looking rows do not reveal the expected details in place.
+- Horizontal pressure was reduced in isolated spots but not solved at the
+  interaction-model level.
+- Vertical overflow is still uncontrolled on long Runs and Conversations views,
+  and Runs can embed a dense dashboard inside a single expanded row.
+- Dense metadata, repeated pills, borders, and raw technical concepts still
+  compete with the user's actual job.
 
-The result is a product that works, but still asks the user to manage the UI
-instead of progressing naturally through the workflow they are building.
-And after the workflow runs, it still asks the user to infer lineage and output
-state instead of showing it clearly.
+The new plan treats these symptoms as one design-system and product-flow issue.
 
-## Product Standard
+## Product North Star
 
-A feature in this area is only complete when at least one scenario spec for
-each target workflow passes end to end through the UI:
+A human user should be able to:
 
-- author
-- rehearse
-- execute
+- create or choose a protocol
+- start work from a conversation, agent, protocol, or dashboard
+- follow execution from protocol to run to stage to task to artifact
+- understand what happened without joining separate lists mentally
+- preview, open, download, or copy produced artifacts wherever they appear
+- recover from blocked, failed, or stale work without needing raw internals
+- use agents and capabilities without understanding selector diagnostics,
+  workers, raw capacity, or routing plumbing
 
-Isolated controls, green APIs, or passing smoke tests are not enough.
+The UI must make the workflow visible through product concepts, not through
+database objects or implementation layers.
 
-The target workflows are:
+## Latest Active Fixes
 
-1. Software Engineering
-2. Document Approval
-3. Data Analysis / Reporting
-4. Meta Protocol Assistant
+- Real Safari full-audit pass on 2026-04-24 confirmed the next blocking
+  defect: completed protocol stage tasks opened by clicking a collapsed Tasks
+  row did not re-render into their expanded artifact state, even when the API
+  payload already contained `result.artifacts` and the matching Run showed the
+  artifacts. This violates the artifact action contract because a human
+  entering from Tasks cannot preview, open, download, or copy output paths
+  without knowing to jump to Runs. Fix direction: keep the existing shared task
+  artifact renderer, make expansion state part of the task-list render
+  signature and the keyed item signature, then force one re-render when a row
+  expands or collapses.
+- The same Safari pass confirmed the Runs and Dashboard surfaces still expose
+  stale/running protocol work as normal `running` or `leased` work even when a
+  stuck-lease issue exists elsewhere. This is tracked as an active usability
+  follow-up: stale state must be visible at the row/card where the user sees
+  the work, not only inside a separate issue tab or dashboard footer.
+- The same Safari pass confirmed the Protocols list is functionally correct but
+  visually flooded by timestamped/generated scenario definitions. This is a
+  release-readiness risk for human use. Test-created protocols must either be
+  cleaned up, created in an explicit test namespace, or filtered from the
+  default team-authored list without hiding real team protocols.
+- Run stage evidence navigation must be keyed by a stable stage identity with a
+  safe fallback to stage key, so clicking `Load data`, `Architecture`, or any
+  other stage changes the inline evidence card predictably.
+- Generated timestamp capability names must not appear in default authoring
+  lists. Capability lists may expose them through explicit search or operator
+  tooling, but normal protocol authoring should remain human-scaled.
+- E2E scenario fixtures must reuse human-named capabilities instead of creating
+  new timestamp-named skills on every run. Test data that makes the product UI
+  worse is itself a product-quality failure.
+- After every redeploy, real Safari must be hard-refreshed with
+  `Option+Command+R` before visual judgment, because a normal reload can keep
+  stale CSS and JavaScript assets.
+- Shared segmented controls must activate from the button itself, not from a
+  fragile delegated click path. Run evidence, stage editor subtabs, and other
+  tabbed controls should all inherit the same reliable behavior from
+  `UI.createSegmentedControl`.
+- Run detail global chrome must stay quiet. Summary metadata and run-level
+  interventions belong in `Overview`, not above every evidence tab. Retry,
+  accept, send back, and cancel should only appear when the current run state
+  and stage transitions make that action real; export remains available as an
+  audit action.
+- Dark theme kit pills must use the shared theme tokens instead of falling back
+  to light-only `--color-*` defaults. Filter chips, status chips, and related
+  list pills must remain readable in both light and dark themes.
+- Artifact rows may remain row-clickable for preview, but their accessible name
+  must describe the artifact itself, not swallow child actions such as
+  `Preview`, `Open`, `Download`, and `Copy path`.
 
-## Product Principles
+## Core Product Rule
 
-### 1. One anchor, one active work area
+Use one object interaction grammar everywhere:
 
-When a stage is selected, that stage stays visually anchored. The active work
-surface for that stage remains immediately adjacent to the anchor, not below a
-long stack of open content.
+1. A row/card gives a readable summary.
+2. Clicking the row expands details inline directly under that row/card.
+3. Only one item in a list is expanded by default unless a surface explicitly
+   needs multi-select comparison.
+4. The expanded content is progressive: summary first, artifacts/actions next,
+   lineage/context next, technical details last.
+5. Full detail pages still exist for deep links and power use, but they are
+   secondary. They must not be the only way to inspect an object.
+6. URLs with an object id select and expand the matching row, not just open a
+   disconnected side panel.
 
-### 2. One meaningful task at a time
+This same grammar applies to runs, conversations, tasks, approvals, protocol
+stages, agents, capabilities, and dashboard work cards unless there is a clear
+product reason to make an exception.
 
-Inside a stage, the UI should guide the user through one active subpanel at a
-time. The editor should feel progressive, not document-like.
+## Runs Product Model
 
-### 3. Secondary surfaces are focused, not stacked
+The Runs surface must use one hierarchy:
 
-Workflow map, protocol settings, and artifact definition remain available, but
-they must open as focused secondary workspaces, not as additional slabs in the
-main scroll.
+1. Run
+2. Stages in authored workflow order
+3. Stage evidence
+4. Artifacts, tasks, decisions, participants, and issues attached to that stage
 
-### 4. Space is part of the product
+Global run views are allowed, but they must be rollups of this hierarchy, not a
+second unrelated model. For example:
 
-Brightness, rhythm, and breathing room are not decorative. They are part of
-comprehension. Reducing cognitive load requires removing simultaneous structure,
-not only tightening spacing.
+- `Overview` summarizes the run state, current problem, blocking issues, and
+  next actions.
+- `Stages` is the primary inspection model and shows stages in workflow order
+  from Planning through Acceptance.
+- `Artifacts` is the same artifact renderer grouped by producing stage; it is
+  not a separate flat artifact universe with a different visual language.
+- `Audit` is the raw operational escape hatch for participants, decisions, and
+  technical events.
 
-### 5. No duplicate pipelines
+Runs fails usability review if:
 
-There is one authoring pipeline. All improvements must extend the existing
-selection, projection, and editor model in place.
+- the same artifact appears in `Outputs` and `Execution` through different row
+  models
+- stage order is reversed from the authored workflow
+- more than two navigation layers are visible at once
+- status problems such as stuck leases are hidden behind an Issues tab
+- participants and decisions are shown as primary concepts before the user can
+  understand the stage they belong to
+- a user must mentally join run, task, stage, conversation, and artifact from
+  separate screens to understand what happened
 
-### 6. UI manifests change through API-backed actions
+## Viewport Contract
 
-The product must support creating and evolving workflows, skills, and protocol
-compositions through the UI/API path. No database-first shortcuts.
+Primary Registry work surfaces must be viewport-bounded:
 
-### 7. Run lineage must be obvious
+- The app shell stays within the browser viewport.
+- Navigation and page identity remain stable.
+- Search/filter/action regions do not scroll away immediately.
+- Lists use internal scrolling or visible pagination sized to the available
+  work area.
+- Expanded details are contained and scroll internally when needed.
+- Conversation composer and primary actions remain reachable.
+- No surface relies on full-document vertical scrolling for normal operation.
+- No surface introduces horizontal page overflow at desktop or narrow widths.
 
-Operational surfaces must explain the hierarchy:
+Long content is allowed, but it must live inside an intentional work region, not
+push the whole application below the screen.
 
-- Protocol
-- Run
-- Stage execution
-- Task / routed task / assignment attempt
-- Approval / decision
-- Artifacts read, written, reviewed, approved, or verified
+## Shared Design Contracts
 
-The UI should reveal this as one story, not force the user to mentally join
-independent lists.
+### 1. Expandable Object Row
 
-### 8. Artifact observability comes before rich preview
+Every repeated operational object should use the same contract:
 
-Before rendering every possible file type inline, the product must first make it
-easy to answer:
+- summary title
+- human status
+- key context
+- primary action or inline expand action
+- secondary actions that wrap inside the row
+- expanded region directly below the selected row
 
-- what artifact was involved?
-- which stage/task/run did it belong to?
-- where is it on disk?
-- can I open it, download it, or copy its path?
+Rows that do not expand or navigate must not look clickable.
 
-### 9. Shared workspace is the canonical substrate for workspace files
+### 2. Progressive Expansion Panel
 
-For `workspace_file` artifacts, the canonical bytes live in the shared
-workspace, not inside a registry-local store and not as a bot-private concept.
+Expanded panels use the same section order:
 
-The product model is:
+1. Outcome or current state
+2. Primary actions
+3. Produced or expected artifacts
+4. Lineage and related work
+5. Decisions, approvals, or issues
+6. Technical details
 
-- registry owns artifact metadata, lineage, and workflow state
-- bots and humans are peers operating on the same shared files
-- artifact access from the UI must resolve through that shared substrate
+Sections should be collapsed or summarized when they are not central to the
+current task.
 
-Tracked human provenance is a follow-on capability, not a blocker for this
-phase. The current phase must leave a clean slot for it without implementing a
-full provenance system yet.
+### 3. Execution Lineage
 
-## Decisions
+Execution views must present one story:
 
-### A. Selected stage becomes a focused working thread
+- protocol
+- run
+- stage
+- task
+- assigned agent or participant
+- conversation or activity
+- approval or decision
+- artifacts
 
-The selected stage row remains the local anchor.
+The user should be able to enter from any of these objects and understand the
+same hierarchy.
 
-It shows:
+### 4. Artifact Action Contract
 
-- stage name
-- compact summary
-- explicit `Done`
-- destructive action only where appropriate
-- local insertion affordance nearby, not as a repeated heavy command
+Every concrete artifact reference uses the same shared artifact row:
 
-### B. The stage editor becomes progressive
+- label
+- producing stage/task
+- path
+- verification or availability state
+- Preview when previewable
+- Open when browser-viewable
+- Download when bytes are available
+- Copy path
 
-The selected stage owns one active subpanel at a time:
+Declared artifacts that have not been produced must say `Not produced yet` or
+`Declared only`. They must not render broken Preview/Open/Download actions.
 
-- Step basics
-- Assignment
+### 5. Capability Contract
+
+Users see capabilities. Operators see routing internals.
+
+Default authoring and conversation surfaces should show:
+
+- capability name
+- plain-language description
+- available agents
+- where it can be used
+- setup state
+
+Default surfaces should not show selector resolution, advertised skill plumbing,
+generated timestamp skill spam, raw worker state, or raw capacity mutation.
+
+### 6. Density Contract
+
+Lower density is achieved by reducing simultaneous concepts, not by shrinking
+everything.
+
+Default UI should use:
+
+- fewer borders
+- calmer typography for inactive rows
+- more whitespace around major decisions
+- compact rows only for repeated scan lists
+- plain-language labels instead of raw IDs wherever possible
+- technical details behind explicit disclosure
+
+## Current Live Defects To Fix
+
+### Runs
+
+Observed problem:
+
+- Runs uses inline expansion now, but the expanded detail still has no single
+  product model.
+- `Outputs` presents artifacts as a flat list.
+- `Execution` presents stage outputs through a different stage card model.
+- `Participants` and `Decisions` expose raw operational records as peer tabs,
+  even though they are usually supporting evidence for a stage.
+- `Issues` hides critical state such as stuck leases behind a tab instead of
+  elevating it to the run row and header.
+- Stage order in Execution can be reverse-chronological instead of authored
+  workflow order, so Acceptance appears before Planning.
+- The detail region can show triage tabs, status chips, run-row expansion,
+  detail tabs, participant filters, stage tabs, metadata cards, action groups,
+  and artifact rows at the same time.
+- The visual language changes between subtabs, making users infer whether they
+  are looking at the same evidence, a different evidence set, or raw internals.
+
+Target behavior:
+
+- Runs list remains full-width within the work area.
+- Clicking a run expands the run detail inline under that run row.
+- The expanded run panel uses four progressive sections at most:
+  - `Overview`: state, outcome, active issue, next action, and root context
+  - `Stages`: workflow-ordered stage timeline with stage evidence inline
+  - `Artifacts`: the same artifact row grouped by producing stage
+  - `Audit`: decisions, participants, raw task links, and support diagnostics
+- Stage order follows the authored workflow, not reverse execution insertion
+  order.
+- Output artifacts and stage artifacts use the same renderer and same action
+  placement.
+- Participants and decisions are contextual inside Stages first, then available
+  in Audit for raw inspection.
+- Critical issues are elevated into the run row and Overview before the user
+  opens Audit.
+- Deep links select and expand the target run and open the most relevant
+  section without creating another route-specific model.
+- Long lineage uses contained scrolling or section pagination inside the
+  expanded run panel.
+- `Stages` uses one nested stage navigator and renders one active stage evidence
+  card at a time; the authored workflow remains visible without turning the run
+  into a vertical wall.
+
+### Conversations
+
+Observed problem:
+
+- Conversation list is calmer than Runs but still uses full-page vertical flow.
+- Selecting a conversation navigates away instead of first offering inline
+  context.
+- Conversation detail can become a long workspace where task boards, linked
+  runs, artifacts, and messages exceed the viewport.
+- Composer and primary actions can become detached from the current context.
+- Operational task threads can look empty when the useful content is activity.
+- Linked runs are visible, but not progressively inspectable in place.
+
+Target behavior:
+
+- Conversation rows can expand inline for preview, linked runs, recent tasks,
+  recent artifacts, and primary actions.
+- `Open full conversation` remains available for message-heavy work.
+- Full conversation detail is a viewport-bounded workspace.
+- Header/context remains stable.
+- Composer remains reachable.
+- Linked runs and tasks expand in place using the same run/task expansion
+  contract.
+- Operational task threads default to the activity/task view when that is the
+  useful content.
+- Long task/activity lists are paginated or internally scrolled within the
+  available work area.
+
+### Tasks
+
+Observed problem:
+
+- Task detail is closer to the target model, but still must be aligned with
+  Runs and Conversations.
+- Task artifacts and parent lineage must remain consistent everywhere a task
+  appears.
+
+Target behavior:
+
+- Task rows expand inline under the clicked task.
+- Expanded task content shows parent run, parent stage, assignment, expected
+  outputs, actual artifacts, and conversation/activity.
+- Task detail deep links select and expand the matching task.
+- Artifact actions are identical to Runs and Conversations.
+
+### Approvals
+
+Observed problem:
+
+- Approvals can read as isolated decisions rather than part of execution
+  lineage.
+
+Target behavior:
+
+- Approval rows expand inline.
+- Expanded approval content shows the run/stage/task context, artifact(s) under
+  review, decision state, reviewer, and links/actions.
+- Approval artifacts use the same artifact row contract.
+
+### Dashboard
+
+Observed problem:
+
+- Dashboard risks becoming another duplicate resource index.
+
+Target behavior:
+
+- Dashboard shows high-level entry points and attention items.
+- Dashboard cards expand inline only enough to orient the user.
+- Full details route to the canonical surface, where the selected row expands.
+- Recent artifacts use the same action contract.
+
+### Protocols And Stages
+
+Observed problem:
+
+- Protocol stages are closest to the desired inline model, but density and
+  screen movement can still disrupt work.
+- Stage authoring must not reintroduce side panels or disconnected drawers.
+
+Target behavior:
+
+- Stage editor remains inline under the selected stage.
+- Add-stage and remove-stage actions stay local to the stage.
+- Stage sub-sections are progressive and do not push the active work below the
+  screen unnecessarily.
+- Artifact expectations are clear before execution and become actionable after
+  a run produces bytes.
+- Standard authoring hides internal runtime selector and advanced plumbing.
+
+### Agents And Capabilities
+
+Observed problem:
+
+- Agents and capabilities still expose too many internal concepts as default
+  content.
+- Capabilities can become an intimidating wall of names.
+- There is still risk of duplicated skill/routing/advertised-skill concepts.
+
+Target behavior:
+
+- Agent list uses human status: Ready, Busy, Unavailable, Needs setup.
+- Agent detail has a stable header with Start conversation and Run protocol.
+- Capabilities are grouped, searchable, and summarized.
+- Generated timestamp names do not appear in default pickers.
+- Selector preview, raw routing, worker diagnostics, token rotation, trust
+  mutation, and capacity mutation live in Operations or technical details.
+
+## Target Information Architecture
+
+### Work
+
+Surfaces:
+
+- Dashboard
+- Conversations
+- Runs
+- Tasks
+- Approvals
+
+Purpose:
+
+- what is happening
+- what needs attention
+- where to resume
+- where to inspect outputs
+
+### Build
+
+Surfaces:
+
+- Protocols
+- Templates
+- Capabilities when authoring is user-facing
+
+Purpose:
+
+- create, edit, publish, reuse, and launch workflows
+
+### Team
+
+Surfaces:
+
+- Agents
+- Agent detail
+- Agent-related work
+
+Purpose:
+
+- understand who can do work
+- start work with an agent
+- inspect an agent's recent work
+
+### Operations
+
+Surfaces:
+
 - Routing
-- Instructions
-- Inputs and outputs
-
-Moving deeper into the stage swaps or focuses the local work area instead of
-expanding the page downward indefinitely.
-
-### C. `Done` stays explicit
-
-Do not replace `Done` with an icon-only affordance. The exit from stage editing
-should remain unmistakable.
-
-### D. Insertion becomes structural, not command-heavy
-
-The inline insertion affordance should feel like "insert here", not "invoke a
-builder command".
-
-Likely direction:
-
-- lightweight `+` insertion bar or slot between stages
-- visible label only when useful
-- no return to repeated large `Add below` buttons
-
-### E. Inactive rows recede by omission, not just compression
-
-Non-selected rows should show only the structural information needed to scan
-the workflow:
-
-- title
-- one short status/assignment line where useful
-- insertion affordance nearby
-
-They should not carry excessive summary or helper text.
-
-### F. Artifact editing is stage-contextual first
-
-Artifact attachment and artifact definition belong in the stage flow first.
-
-The user should be able to:
-
-- attach artifacts to a stage inline
-- create a new artifact from that stage
-- edit the selected artifact definition in local context
-- return directly to the same stage artifact panel
-
-The protocol-wide artifact catalog remains available as a management surface,
-not as the default editing destination from a stage.
-
-### G. Map and settings are focused secondary workspaces
-
-When opened intentionally:
-
-- workflow map must be properly sized and fully interactive
-- protocol settings must open as a focused secondary workspace
-- both must preserve context and return the user to the same stage/list state
-
-They should not extend the main page into a longer stacked document.
-
-### H. Density responds to workflow size, but never by compression alone
-
-More complex workflows should compress inactive structure more aggressively, but
-selected work should still retain breathing room. Do not answer complexity only
-by shrinking paddings and gaps.
-
-### I. Runs become the canonical operational container
-
-`Runs` should become the primary operational home for protocol execution.
-
-`Tasks`, `Approvals`, and artifact evidence should behave like focused views
-into that run lineage, not peer concepts with unclear relationship.
-
-### J. Artifact rendering is progressive, not universal
-
-Do not try to render every artifact type inline.
-
-Adopt a support ladder:
-
-- baseline: metadata + path + actions
-- lightweight preview for safe/common renderable formats
-- open/download for everything else
-
-### K. UX scenarios must create meaningful state through the product path
-
-For scenario tests that claim usability:
-
-- no database writes
-- no hidden data seeding for normal user journeys
-- no creating critical state through privileged back doors unless the scenario
-  is explicitly about an operator-only flow
-
-Public API calls are acceptable only when they are part of the intended product
-surface for that workflow.
-
-### L. Artifact access must follow artifact kind, not registry locality
-
-The system should not assume the registry is the conceptual owner of artifact
-bytes.
-
-For now:
-
-- `workspace_file` artifacts resolve through the shared workspace model
-- registry uses that shared substrate to provide preview/open/download actions
-- bots remain the primary writers for automated stage execution
-- humans must be able to participate against the same workspace files
-
-Later:
-
-- human edits, reviews, and approvals should be tracked explicitly in artifact
-  provenance and run history
-
-That future provenance model must be compatible with the current shared
-workspace approach, but it is not required to ship this phase.
-
-### M. Standard skill selection must be curated
-
-The standard skill picker should present a real catalog, not every raw skill
-object the system knows about.
-
-That means:
-
-- show only active, standard-path, user-relevant skills by default
-- hide or demote generated, archived, superseded, and operator-only entries
-- group by meaningful source/type where useful:
-  - Core
-  - Integrations
-  - Custom
-- collapse revisions/history under one canonical skill entry instead of
-  timestamp-suffixed peers
-- support search and short descriptions so the user can choose confidently
-
-The standard picker should help the user answer "which skill should I use
-here?" It should not ask them to interpret registry history or test residue.
-
-## Target UX
-
-### Default workflow view
-
-The default view is a quiet, scan-friendly stage stack.
-
-What is visible:
-
-- workflow header
-- lightweight top actions
-- stage stack
-- insertion slots
-
-What is not visible by default:
-
-- full map
-- full settings slab
-- full artifact catalog
-- full long-form stage editor
-
-### Selected stage view
-
-Selecting a stage should:
-
-- keep the selected row in place as the anchor
-- open a local focused work area directly beneath or attached to that row
-- keep the work header visible
-- expose one active subpanel by default
-
-The user should not need to scroll just to reach the thing they just opened.
-
-### Progressive subpanel flow
-
-Inside a selected stage:
-
-- opening Assignment focuses Assignment
-- opening Inputs and outputs focuses Inputs and outputs
-- deeper actions use local `Back` or `Done`
-- previously open panels do not remain equally expanded underneath
-
-### Skill selection flow
-
-From a stage, the author should be able to:
-
-- search or scan a curated set of usable skills
-- distinguish built-in skills from integrations and custom skills
-- avoid seeing generated/test residue in the standard picker
-- select one skill without guessing whether near-duplicate names are real
-  choices, history, or junk
-
-### Artifact flow
-
-From a stage, the author should be able to say:
-
-- this step reads these artifacts
-- this step writes these artifacts
-- add a new workflow file/output right here
-- edit this artifact definition right here
-
-This is especially important for:
-
-- code files
-- documents
-- datasets
-- generated reports
-- published outputs
-
-### Map flow
-
-`Show workflow map` should mean:
-
-- open the map properly
-- keep it interactive
-- use it intentionally
-- return cleanly to the stage flow
-
-It should not mean:
-
-- reveal another dense block in the main scroll
-
-### Operational flow
-
-When the user opens a run, task, or approval, the product should answer:
-
-- what workflow did this come from?
-- what stage is this part of?
-- what happened before and after?
-- what artifacts were read or produced?
-- where are those artifacts now?
-
-The user should not have to jump blindly between `Runs`, `Tasks`, and other
-screens to reconstruct a single execution.
-
-### Artifact flow after execution
-
-From a run or task detail surface, the user should be able to:
-
-- immediately identify the concrete outputs of the run
-- see stage-related artifact inputs and outputs
-- see whether they were declared, available, verified, reviewed, or approved
-- see the workspace-relative path
-- reveal the resolved disk path when the artifact is local
-- `Open`
-- `Download`
-- `Copy path`
-
-For `workspace_file` artifacts, these actions must work against the same shared
-workspace files that bots and humans use during execution. The UI should not
-depend on a second artifact-copy pipeline just to make preview/download work.
-
-Preview is conditional:
-
-- text/code/json/yaml/logs: syntax-highlighted preview
-- markdown: rendered preview with raw toggle
-- csv/tsv: bounded table preview
-- pdf: native embedded preview in a focused panel
-- images: thumbnail/lightbox
-- xlsx/docx/pptx and similar: metadata + open/download first, richer preview
-  only if a reliable rendering path exists
-
-## Scenario Assertion Contract
-
-Every major scenario must prove these categories through the standard UI path.
-
-### Structure
-
-- stage order remains readable
-- selected stage remains anchored
-- no reliance on the map for primary authoring
-- opening a stage does not push the active work area below the fold without
-  need
-
-### Progressive focus
-
-- one active subpanel is primary at a time
-- local `Done` and local back/close behavior are clear
-- settings, map, and artifact definition can open and close without breaking
-  stage context
-
-### Routing
-
-- transitions or outcomes are visible and correct
-- revise/approve or branch semantics remain understandable
-
-### Assignment
-
-- assignment uses the standard path only
-- skill/agent choices stay understandable
-- no internal selector escape hatches appear in the standard path
-
-### Skill catalog
-
-- the standard picker shows curated, user-relevant skills only
-- generated/archive/operator-only noise does not leak into the standard path
-- skills are grouped or labeled clearly enough that the user can tell what is
-  built-in, integration-backed, or custom
-- near-duplicate historical revisions do not appear as flat peer choices
-
-### Artifacts
-
-- stage reads/writes are visible and editable inline
-- artifact definitions can be created and edited from the stage flow
-- data/file/report chains remain understandable and correct
-- operational artifact actions must work against the deployed product path, not
-  only against seeded metadata
-
-### Rehearsal
-
-- ordered stage progression is visible
-- the workflow behaves as expected under revise/accept and other scenario
-  outcomes
-
-### Execution
-
-- terminal state is correct
-- artifact/outcome state is correct where the product defines it
-- the run/task lineage is understandable without cross-referencing unrelated
-  pages
-- outputs are discoverable in one obvious place from run detail
-- artifact location and access actions are available from the operational path
-
-## Target Workflow Specs
-
-### 1. Software Engineering
-
-The user can:
-
-- scan a multi-stage workflow without overload
-- open `Planning`, `Architecture`, or `Implementation` and stay anchored there
-- edit assignment, routing, and artifacts progressively
-- rehearse revise loops and acceptance flow
-- execute the workflow through the live registry
-
-Specific interaction bar:
-
-- editing `Architecture` artifacts must stay on `Architecture`
-- opening a stage must keep the selected work area in view
-- non-selected stages must remain quiet enough to scan
-
-### 2. Document Approval
-
-The user can:
-
-- scan the draft-review-approval flow quickly
-- edit one step at a time without page sprawl
-- rehearse revise and approve outcomes
-- execute the workflow through the live registry
-
-### 3. Data Analysis / Reporting
-
-The user can:
-
-- create or edit a flow like:
-  - load data
-  - filter rows
-  - analyze
-  - render report
-  - publish
-- define artifacts as real workflow files/outputs
-- attach them to each step in context
-- understand the artifact chain visually
-- rehearse and execute the workflow through the live registry
-
-### 4. Meta Protocol Assistant
-
-The user can:
-
-- create a custom skill draft through the UI/API path
-- keep it selected while editing
-- publish it
-- create a protocol that uses it
-- compose a protocol-driven assistant that helps create further protocols or
-  skills
-- prove this through rehearsal and execution, not database shortcuts
-
-## Operational Product Gap
-
-The next product gap is not primarily in authoring. It is in operational
-understanding.
-
-Today the product makes the user do too much joining across surfaces:
-
-- `Runs` looks like one concept
-- `Tasks` looks like another
-- `Approvals` looks like another
-- artifacts feel implicit or hidden
-- available skills read like raw registry inventory instead of a human-facing
-  catalog
-
-That prevents the user from understanding the real hierarchy:
-
-- this run executed this workflow
-- this stage created this task
-- this decision advanced or blocked it
-- these artifacts were involved
-- these files are the concrete outputs
-- these are the skills I can actually choose from
-
-The plan below addresses that by turning runs into the main operational
-container, making artifact evidence visible and actionable, and curating the
-standard skill catalog into something a human can actually scan.
-
-That operational gap now has an explicit architectural shape:
-
-- registry owns run/task/artifact lineage
-- shared workspace owns `workspace_file` bytes
-- bots and humans are peers against that shared substrate
-- preview/download/open must work through that model, not through registry-only
-  locality assumptions
-
-## Implementation Plan
-
-### Phase 0. Re-baseline with live findings
-
-Before implementation starts:
-
-- replace stale "green/complete" framing in tests and docs
-- codify the current regressions as named scenario expectations
-- capture representative before-state screenshots for:
-  - desktop overview
-  - selected stage
-  - artifact editing
-  - map open
-  - mobile selected stage
-
-### Phase 1. Stage anchor model
-
-Objective:
-
-- keep the selected stage header anchored
-- prevent the active work area from drifting out of view immediately after open
-
-Implementation direction:
-
-- reuse the existing selection model
-- restructure the selected row/editor composition so the working header and the
-  active panel live in one local shell
-- preserve scroll position intentionally instead of letting the page grow first
-  and relying on the user to chase the editor
+- Selector diagnostics
+- Worker/runtime diagnostics
+- Provider guidance
+- Capacity, trust, tokens, usage
+
+Purpose:
+
+- inspect and operate the system
+- not default authoring or execution flow
+
+## Implementation Guidance
+
+Do not add parallel UI layers. Extend existing shared primitives and page
+renderers in place.
+
+Before adding a new function, component, CSS class, or API projection:
+
+1. Search for the existing shared primitive.
+2. Extend the shared primitive if the concept is the same.
+3. Replace page-local behavior with the shared primitive when possible.
+4. Add a new helper only if there is no coherent existing owner.
+5. If a new helper is necessary, document its single responsibility and use it
+   from every relevant surface immediately.
+
+Known shared concepts that should have one owner:
+
+- object row
+- expandable detail panel
+- work-surface viewport container
+- action row
+- metadata grid
+- artifact row/actions
+- lineage projection
+- capability projection
+- status badge/status language
+- pagination/internal-scroll behavior
+
+## Implementation Phases
+
+### Phase 0: Inventory And Removal Map
+
+Goals:
+
+- identify every list/detail, side-panel, drawer, and full-document-scroll
+  pattern
+- map each to the target inline expansion grammar
+- find page-local duplicate row/artifact/action components
+
+Steps:
+
+1. Inventory Runs, Conversations, Tasks, Approvals, Dashboard, Protocols,
+   Agents, Capabilities, and Operations.
+2. Mark each current pattern:
+   - keep and extend
+   - replace with shared expandable row
+   - move to Operations
+   - delete as duplicate/dead code
+3. Identify old split-pane assumptions in CSS and JS.
+4. Identify tests that assert old side-panel behavior.
+5. Update this plan with any discovered blockers before implementation.
 
 Acceptance:
 
-- opening a stage keeps the active work surface visible without manual
-  corrective scrolling
-- clicking `Done` closes the local work surface cleanly
+- every affected surface has one target interaction model
+- no duplicate replacement components are proposed
+- old tests that encode broken UI are listed for rewrite or deletion
 
-### Phase 2. Progressive subpanel model
+### Phase 1: Shared Interaction Grammar
 
-Objective:
+Goals:
 
-- convert the open stage from a long document into a progressive work flow
+- create or extend one reusable object-row and expansion contract
+- create one viewport-bounded work-surface contract
 
-Implementation direction:
+Steps:
 
-- reuse the existing sections:
-  - basics
-  - assignment
-  - routing
-  - instructions
-  - inputs/outputs
-- add one active-subpanel state inside the existing editor pipeline
-- make opening one major subpanel demote the others
-- keep summary affordances for collapsed sections minimal
-
-Acceptance:
-
-- only one major subpanel reads as the active working area
-- opening a new subpanel does not keep the old one equally expanded below it
-
-### Phase 3. Local artifact editing
-
-Objective:
-
-- keep artifact definition inside stage context for normal authoring
-
-Implementation direction:
-
-- reuse the existing artifact editor implementation
-- move or host it as a local stage-owned subpanel or nested local workspace
-  rather than forcing a jump to the protocol-wide artifact surface
-- preserve the protocol-wide artifact catalog as a separate management view
+1. Extend the existing shared list/row primitive to support inline expansion.
+2. Extend the existing panel/section primitive for progressive expansion
+   content.
+3. Add a shared work-surface layout that bounds list and expansion content to
+   the viewport.
+4. Add a shared internal-scroll/pagination rule for long sections.
+5. Ensure action rows wrap inside their container, not based only on global
+   viewport breakpoints.
+6. Ensure passive rows do not advertise clickability.
 
 Acceptance:
 
-- from `Inputs and outputs`, the user can add/edit an artifact and return
-  directly to the same stage
-- no context-breaking jump is required for ordinary artifact work
+- one shared row expansion contract exists
+- one shared viewport work-surface contract exists
+- shared artifact rows fit inside the expansion panel
+- desktop and narrow use the same mental model
 
-### Phase 4. Focused secondary workspaces
+### Phase 2: Runs Evidence-Model Refactor
 
-Objective:
+Goals:
 
-- make map and settings helpful without disrupting the main authoring flow
+- keep inline run expansion
+- replace the current competing run sub-models with one evidence hierarchy
+- make Runs match the progressive stage/task model without hiding critical
+  state
 
-Implementation direction:
+Steps:
 
-- workflow map opens in a properly sized focused surface
-- protocol settings open in a focused secondary surface
-- both preserve the prior stage selection and viewport context
-- both close cleanly back to the same workflow state
-
-Acceptance:
-
-- map is fully interactive and usable when opened
-- map/settings do not lengthen the main editor into another stacked slab
-
-### Phase 5. Density and hierarchy correction
-
-Objective:
-
-- restore breathing room and visual lightness without reintroducing sprawl
-
-Implementation direction:
-
-- reduce simultaneous visible structure
-- reduce borders and repeated card framing where possible
-- keep more whitespace around the active panel
-- make inactive rows quieter through omission, not just smaller paddings
-- keep `Done` explicit
-- evolve insertion toward a cleaner structural affordance
-
-Acceptance:
-
-- the interface feels lighter, not merely smaller
-- larger workflows remain easier to scan than the current live build
-
-### Phase 6. Workflow-size responsiveness
-
-Objective:
-
-- make the same UI scale across small and large workflows
-
-Implementation direction:
-
-- for small workflows, allow slightly richer row summaries
-- for medium workflows, compress inactive rows more aggressively
-- for larger workflows or branched workflows, lean harder on quiet structure and
-  focused editing
+1. Keep the existing full-width inline run list and remove any remaining dead
+   side-detail assumptions.
+2. Replace the run detail sub-tabs with at most four sections: `Overview`,
+   `Stages`, `Artifacts`, and `Audit`.
+3. Make `Stages` the primary inspection model:
+   - sort stages by authored workflow order
+   - show current/completed/blocked state per stage
+   - show the assigned participant/agent as supporting context
+   - show stage tasks and stage artifacts inline
+   - show stage decisions or approvals as contextual evidence
+4. Make `Artifacts` a rollup of the same stage artifact rows:
+   - group by producing stage
+   - use the same Preview/Open/Download/Copy path action row
+   - show declared/missing outputs without broken actions
+5. Move raw `Participants` and `Decisions` into `Audit`:
+   - retain all operational data
+   - present it as support/debug evidence, not primary user workflow
+6. Elevate critical status:
+   - stuck lease, blocked, failed, timeout, or stale-running state appears in
+     the run row and Overview
+   - Issues remains available in Audit but is not the only discovery path
+7. Preserve deep links by selecting the target run and activating the relevant
+   section without creating a second route-specific renderer.
+8. Remove duplicate Outputs/Execution artifact row rendering and tests that
+   assert separate visual models.
 
 Acceptance:
 
-- Software Engineering remains scannable
-- Document Approval remains simple
-- Data Analysis remains readable despite richer artifact structure
+- Runs has no default disconnected side-detail panel.
+- Clicking a run expands detail inline under that run.
+- The expanded run has no more than two visible navigation layers at once.
+- Stage order is Planning to Acceptance for the Software Engineering protocol.
+- `Overview` surfaces stuck/blocked/stale status without opening Audit.
+- `Stages` and `Artifacts` use the same artifact component and action layout.
+- Artifacts can be previewed/opened/downloaded/copied from both stage context
+  and rollup context.
+- Participants and decisions remain inspectable but do not dominate the default
+  run understanding path.
+- Run detail does not create horizontal overflow on desktop.
+- Run detail does not push the whole page beyond the viewport for normal use.
 
-### Phase 7. Scenario tests first-class
+### Phase 3: Conversations Viewport Workspace
 
-Objective:
+Goals:
 
-- prove workflow usability, not only mechanics
+- make Conversations consistent without losing the conversation workspace
+  value
 
-Implementation direction:
+Steps:
 
-- update Playwright scenario specs so they assert:
-  - anchored stage selection
-  - active work panel visibility
-  - local `Done` / local return behavior
-  - stage-contextual artifact editing
-  - focused map/settings behavior
-- keep backend/runtime tests unchanged except where new UI/API flows require
-  additional proof
-
-Acceptance:
-
-- each target workflow has at least one primary owning scenario spec
-- scenario specs become the release bar
-
-### Phase 8. Skill catalog hygiene
-
-Objective:
-
-- make skill selection feel like a product catalog instead of a registry dump
-
-Implementation direction:
-
-- separate standard-path skill visibility from operator/history visibility
-- hide generated, superseded, archived, and test-residue skills from the
-  standard picker
-- collapse revision/history variants under one canonical selectable skill entry
-- group visible skills by meaningful type/source and add search/description
-  support using the existing catalog pipeline where possible
-- clean up existing polluted entries or ensure they are no longer rendered in
-  the standard path
+1. Add inline expansion to the conversation list for quick preview and linked
+   work.
+2. Keep `Open full conversation` as a secondary action.
+3. Refactor full conversation detail into a viewport-bounded workspace.
+4. Keep header/context and composer reachable.
+5. Make linked runs expand in place using the Run expansion contract.
+6. Make linked tasks expand in place using the Task expansion contract.
+7. Default operational task threads to activity/tasks when messages are empty.
+8. Add pagination or internal scrolling for long activity/task lists.
 
 Acceptance:
 
-- timestamp-suffixed generated skill residue does not appear in the standard
-  picker
-- a user can scan the standard skill picker and understand what the real
-  choices are without interpreting system history
+- Conversation list supports inline inspection.
+- Full conversation detail does not become an uncontrolled document scroll.
+- Composer remains reachable.
+- Linked runs/tasks are inspectable without context-jumping.
+- Empty-looking operational task threads are eliminated.
 
-### Phase 9. Operational lineage model
+### Phase 4: Tasks, Approvals, Dashboard Alignment
 
-Objective:
+Goals:
 
-- make the relationship between runs, tasks, approvals, stage executions, and
-  artifacts obvious
+- align adjacent Work surfaces with the same grammar
 
-Implementation direction:
+Steps:
 
-- treat `Runs` as the canonical operational container
-- add explicit lineage summaries to run detail:
-  - protocol
-  - current/completed stage executions
-  - decisions
-  - tasks/assignment attempts
-  - artifacts
-- make task and approval views show their parent run and stage context
-- reduce the feeling that these are unrelated modules
+1. Ensure task list/detail uses the same row expansion and viewport contract.
+2. Ensure approval list/detail uses the same row expansion and lineage sections.
+3. Ensure Dashboard cards link to canonical surfaces and only expand enough to
+   orient the user.
+4. Remove duplicate artifact/action rendering from these pages.
+5. Rewrite tests that assumed side panels or disconnected details.
 
 Acceptance:
 
-- a user can open a run and understand the execution story without jumping
-  across the product
-- a user can open a task and immediately see which run and stage it belongs to
+- tasks, approvals, and dashboard work cards follow the same interaction model
+- artifacts and lineage read the same across all Work surfaces
+- no duplicate page-local artifact row remains
 
-### Phase 10. Shared workspace artifact access model
+### Phase 5: Protocol, Agent, And Capability Cleanup
 
-Objective:
+Goals:
 
-- make `workspace_file` artifact access coherent with the real product model
+- keep the authoring and team surfaces aligned with the same product rules
 
-Implementation direction:
+Steps:
 
-- centralize artifact path/access resolution instead of scattering local-path
-  logic across task/run handlers
-- treat the shared workspace as the canonical byte substrate for
-  `workspace_file` artifacts
-- make the deployed registry access those shared workspace files through the
-  existing Octopus workspace configuration, without introducing a second
-  artifact storage path
-- keep the model compatible with human collaborators editing the same files
-  later
-
-Acceptance:
-
-- `Open`, `Download`, and `Copy path` work for `workspace_file` artifacts from
-  the deployed UI
-- the implementation does not depend on database-side artifact byte copies
-- the implementation does not introduce a parallel artifact-serving pipeline
-
-### Phase 11. Artifact observability in operational views
-
-Objective:
-
-- make artifact outputs first-class evidence on runs, tasks, and stage
-  executions
-
-Implementation direction:
-
-- move produced outputs near the top of run detail so a human can find them
-  without already knowing the product internals
-- split operational output rendering into:
-  - produced outputs
-  - declared but missing outputs
-  rather than mixing both states in one flat list
-- expose artifacts on run detail, stage execution detail, and task detail
-- show relationship type:
-  - reads
-  - writes
-  - verified output
-  - reviewed
-  - approved
-- show workspace-relative path prominently
-- support resolved local path as secondary detail when available
-- add actions:
-  - `Open`
-  - `Download`
-  - `Copy path`
-- make task detail show a clear `Outputs` section when a task produced
-  artifacts, rather than burying them as incidental summary metadata
-- show stage provenance directly on each output card
+1. Preserve inline protocol stage editing.
+2. Ensure stage sub-sections are progressive and viewport-aware.
+3. Keep internal runtime selector and advanced plumbing out of the standard
+   authoring path.
+4. Refactor agent detail around summary, actions, capabilities, related work,
+   technical details, and operations.
+5. Keep `Start conversation` and `Run protocol` reachable in agent context.
+6. Consolidate skills/routing/advertised skills into user-facing capabilities.
+7. Hide generated timestamp skill spam from default pickers.
 
 Acceptance:
 
-- users can locate real outputs from the operational UI without guessing
-- a human opening run detail can immediately tell which files were actually
-  produced
-- declared-but-missing items do not visually obscure produced outputs
-- users can move directly from an execution record to the underlying file
+- standard authors do not see operator plumbing
+- agents are usable without understanding internals
+- capabilities are scannable and reused across conversation/protocol/agent UI
 
-### Phase 12. Preview ladder
+### Phase 6: Visual Density And Desktop Polish
 
-Objective:
+Goals:
 
-- add useful preview only where it is reliable and low-friction
+- make the product feel calm and readable without hiding useful actions
 
-Implementation direction:
+Steps:
 
-- support focused preview for:
-  - text/code/json/yaml/logs
-  - markdown
-  - csv/tsv
-  - pdf
-  - images
-- do not force preview for office binaries or complex formats without a solid
-  rendering path
-- keep preview secondary to the artifact card and access actions
+1. Reduce borders where section hierarchy already communicates grouping.
+2. Use quieter typography for inactive rows.
+3. Increase internal padding where rows feel cramped.
+4. Reduce spacing between inactive repeated rows where the current rhythm feels
+   wasteful.
+5. Keep active expanded rows visually clear but not heavy.
+6. Audit action placement so users do not have to scan across the entire
+   screen for primary actions.
+7. Validate in real desktop Safari, not only a narrow automated viewport.
 
 Acceptance:
 
-- preview enhances understanding without turning the UI into a generic file
-  browser
-- unsupported formats still have strong open/download/path handling
+- inactive rows are easy to scan but not visually loud
+- active rows are clear without making the screen dense
+- desktop feels intentionally designed, not stretched mobile
+- narrow/mobile remains usable
 
-### Phase 13. UX scenario discipline
+### Phase 7: Tests And Product Scenarios
 
-Objective:
+Goals:
 
-- make "this workflow is usable" a trustworthy claim
+- make the UI behavior enforceable
+- stop relying on direct database setup as a substitute for human workflow
 
-Implementation direction:
+Required UI scenarios:
 
-- divide tests clearly:
-  - contract/integration tests may use direct API setup where appropriate
-  - UX scenario tests must create meaningful workflow state through the UI and
-    intended public API surfaces
-- remove hidden setup that bypasses ordinary authoring or operational flows for
-  the scenarios that claim product usability
-- add explicit checks for run/task/artifact lineage and artifact access from
-  the UI
-- add explicit checks that the standard skill picker does not expose generated
-  or historical skill noise
+1. Create a protocol from blank through UI.
+2. Create a protocol from template through UI.
+3. Add, remove, and reorder/inspect stages through UI.
+4. Select capability and optional agent through UI.
+5. Launch a protocol from conversation through UI.
+6. Execute a realistic software-engineering protocol and verify outputs.
+7. Open the run from conversation and inspect inline run expansion.
+8. Open the task from run and inspect inline task expansion.
+9. Preview/open/download/copy artifacts from run, task, conversation, and
+   dashboard references.
+10. Inspect a stale/running/problem run and verify the status language is
+    understandable.
+11. Use an agent from the agent page without seeing operator internals.
+12. Open Operations and verify routing/selector diagnostics remain available
+    for operator paths.
 
-Acceptance:
+Negative invariants:
 
-- UX scenarios no longer depend on database-style shortcuts
-- green scenario coverage means a user actually exercised the product path
+- no custom runtime selector in standard protocol authoring
+- no `Advanced` plumbing section in standard authoring
+- no selector preview on default agent detail
+- no raw token/trust/capacity mutation in normal user flow
+- no empty workers panel in default agent detail
+- no generated timestamp skill spam in default pickers
+- no disconnected Runs side-detail panel in the default Runs path
+- no page-level horizontal overflow on desktop or narrow widths
 
-### Phase 14. Exhaustive live audit
+Testing rules:
 
-Objective:
+- UI scenarios must create and mutate state through product UI or product APIs,
+  not direct database writes.
+- Database inspection is allowed only to diagnose or verify, never as the
+  primary way to create UI state.
+- Contract tests should cover shared primitives so fixes stay consolidated.
+- Old tests that assert broken split-pane or duplicate behavior must be removed
+  or rewritten.
 
-- validate breadth after the focused scenario specs are green
+### Phase 8: Visual Audit And Deployment
 
-Implementation direction:
+Goals:
 
-- rerun the live exhaustive audit on the deployed build
-- include desktop, tablet, and mobile
-- include add stage, remove stage, select skill, select agent, artifact edits,
-  map open/close, settings open/close, rehearsal, execution, run/task lineage,
-  artifact access actions, and standard skill picker hygiene
-- retain the 500+ screenshot breadth bar, but treat it as breadth validation,
-  not the primary correctness bar
+- verify breadth after scenario depth is green
+- deploy from the canonical flow only
 
-Acceptance:
+Visual audit must include:
 
-- live audit confirms no new interaction regressions
-- screenshots show the anchored, progressive model across surfaces
+- real desktop Safari Runs list and expanded run
+- real desktop Safari Runs Overview, Stages, Artifacts, and Audit sections
+- real desktop Safari comparison that the same artifact renders consistently
+  in stage context and artifact rollup context
+- real desktop Safari Conversations list and full conversation
+- narrow/mobile Runs and Conversations
+- Tasks inline expansion
+- Approvals inline expansion
+- Protocol stage editor
+- Agent list and agent detail
+- Capabilities picker/search
+- Dashboard recent work and artifacts
+- Operations routing/selector diagnostics
 
-### Phase 15. Cleanup
+The screenshot audit is breadth. Passing scenario specs are the release bar.
 
-Objective:
+Deployment rule:
 
-- remove dead assumptions and duplicate coverage
+1. Commit in `/Users/tinker/output/bots/telegram-agent-bot`.
+2. Push from that checkout.
+3. Pull in `/Users/tinker/octopus`.
+4. Redeploy from `/Users/tinker/octopus`.
 
-Implementation direction:
+Do not use source-to-target sync as the deployment mechanism.
 
-- remove or rewrite stale tests tied to the old sprawling layout contract
-- remove dead helper copy and duplicated summaries
-- remove any obsolete UI branches kept only for earlier transition states
-- remove stale test helpers that bypass the intended UX path for scenario
-  coverage
+## Definition Of Done
 
-Acceptance:
+This work is done only when:
 
-- one coherent authoring pipeline remains
-- no stale interaction models are left behind in code or tests
+- Runs uses inline expansion by default and no longer uses a disconnected
+  side-detail panel.
+- Runs uses one evidence hierarchy: Run -> Stages -> stage evidence ->
+  artifacts/tasks/decisions/participants/issues.
+- Runs does not render the same artifact or stage evidence through unrelated
+  visual models across subtabs.
+- Runs exposes no more than two visible navigation layers at once.
+- Runs shows critical stuck/blocked/stale status in the row and overview, not
+  only inside an Issues or Audit tab.
+- Runs stages are ordered by authored workflow order.
+- Conversations list supports inline inspection and full conversation detail is
+  viewport-bounded.
+- Runs and Conversations do not overflow horizontally on real desktop Safari.
+- Runs and Conversations do not rely on uncontrolled full-document vertical
+  scrolling for normal use.
+- Tasks, Approvals, Dashboard, Protocol stages, Agents, and Capabilities follow
+  the same object interaction grammar where applicable.
+- Artifacts use one preview/open/download/copy contract everywhere concrete
+  bytes exist.
+- Declared or missing artifacts never show broken file actions.
+- Users can trace protocol, run, stage, task, conversation, approval, and
+  artifact as one lineage.
+- Standard authoring paths hide operator internals.
+- Operator tools remain available in Operations.
+- UI scenario tests exercise real product flows instead of direct database
+  state creation.
+- Old duplicate/dead UI paths and tests are deleted as the new shared contract
+  replaces them.
+- Visual audit confirms desktop and narrow/mobile are both usable.
+- Deployment follows push here, pull there.
 
-## Standard-Path Restrictions That Must Remain
+## Risks And Mitigations
 
-These remain required:
+### Risk: Inline Runs Become A Dashboard Inside A Row
 
-- no custom runtime selector in the standard path
-- no standard-path `Advanced` section
-- no standard-path editing of:
-  - `stage_key`
-  - `max_rounds`
-  - `timeout_seconds`
+Mitigation:
 
-If an operator surface exists, it must remain clearly separate and not pollute
-the standard authoring path.
+- keep `Overview`, `Stages`, `Artifacts`, and `Audit` as the only default
+  sections
+- make `Stages` the primary path and demote raw records to `Audit`
+- avoid participant filters, stage tabs, and detail tabs being visible together
+- require the artifact rollup to reuse the same stage artifact renderer
 
-## Verification Matrix
+### Risk: Inline Expansion Becomes Too Tall
 
-The final verification bar for this plan is:
+Mitigation:
 
-- backend/runtime contract tests
-- primary scenario Playwright suite
-- negative standard-path invariants
-- live rehearsal and execution smoke
-- standard skill catalog hygiene coverage
-- operational lineage and artifact access scenario coverage
-- shared-workspace artifact access coverage on the deployed build
-- exhaustive live audit
+- allow one expanded row by default
+- make sections progressive
+- use internal scrolling/pagination inside long sections
+- keep full detail pages as secondary escape hatches
 
-The live audit remains a breadth requirement. The scenario specs are the depth
-and release requirement.
+### Risk: Removing Split Panes Hurts High-Volume Triage
 
-## Definition of Done
+Mitigation:
 
-This plan is complete only when all of the following are true on the deployed
-Octopus build:
+- preserve fast filters/search
+- keep keyboard-friendly row selection
+- keep compact summaries
+- use inline expansion for detail without losing list context
 
-1. Opening a stage keeps the working area anchored and in view.
-2. The selected stage uses a progressive subpanel model instead of a sprawling
-   long-form expansion.
-3. Artifact definition/editing is stage-contextual for ordinary authoring.
-4. Workflow map and protocol settings behave as focused secondary workspaces.
-5. The UI feels lighter and easier to scan than the current dense build,
-   especially on Software Engineering.
-6. Software Engineering passes end to end through the UI:
-   - author
-   - rehearse
-   - execute
-7. Document Approval passes end to end through the UI:
-   - author
-   - rehearse
-   - execute
-8. Data Analysis / Reporting passes end to end through the UI:
-   - author
-   - rehearse
-   - execute
-9. Meta Protocol Assistant passes end to end through the UI/API path:
-   - create skill
-   - create protocol
-   - rehearse
-   - execute
-10. The standard skill picker behaves like a curated catalog:
-    - generated/historical noise is hidden from the standard path
-    - real skill choices are understandable without interpreting timestamps or
-      residue
-11. Runs, tasks, approvals, and artifacts read as one coherent operational
-    hierarchy.
-12. Artifact outputs can be located from the operational UI:
-    - path visible
-    - open/download/copy-path available
-    - produced outputs are easy to distinguish from declared-but-missing items
-13. For `workspace_file` artifacts, those access actions resolve through the
-    shared workspace model used by bots and available to future human
-    collaborators.
-14. Preview is available for the supported artifact types without overwhelming
-    the operational surfaces.
-15. UX scenario coverage for product-usability claims is authored through the
-    UI/intended API path, not hidden setup.
-16. The current implementation leaves a clean path for tracked human artifact
-    provenance later without requiring that full provenance system to ship in
-    this phase.
-17. No duplicate authoring or operational pipeline was introduced.
+### Risk: Conversations Need A Different Model
+
+Mitigation:
+
+- use inline expansion for conversation list and linked objects
+- keep full conversation as a bounded workspace
+- do not force message-heavy work into a tiny row expansion
+
+### Risk: Shared Primitives Become Over-General
+
+Mitigation:
+
+- shared primitives own layout and interaction contracts
+- page renderers still own product-specific content
+- avoid new parallel run/task/conversation components
+
+### Risk: Visual Cleanup Only Shrinks The UI
+
+Mitigation:
+
+- reduce simultaneous concepts first
+- then tune spacing, borders, and typography
+- validate visually after each major surface
+
+### Risk: Tests Miss Human Workflow Again
+
+Mitigation:
+
+- require UI-created state for scenario tests
+- include artifact outcome assertions
+- include real desktop Safari visual checks
+- record discovered issues in this plan before continuing broad audit
+
+## Immediate Next Steps
+
+1. Refactor Runs expanded detail to the `Overview`, `Stages`, `Artifacts`,
+   `Audit` evidence model.
+2. Sort run stages by authored workflow order and verify Software Engineering
+   reads Planning through Acceptance.
+3. Consolidate Outputs and Execution artifact rendering into one shared row
+   contract grouped by producing stage.
+4. Move raw Participants and Decisions into Audit while surfacing their
+   stage-relevant summaries inside Stages.
+5. Elevate stuck/blocked/stale state into the run row and Overview.
+6. Convert Conversations linked runs to the same bounded run preview model.
+7. Continue aligning Tasks, Approvals, Dashboard, Protocol stages, Agents, and
+   Capabilities with the shared work-surface and artifact contracts.
+8. Run UI scenarios and real Safari visual audit after each major surface.
+
+## Open Findings Log
+
+New findings discovered during implementation or audit must be added here with:
+
+- surface
+- reproduction path
+- observed behavior
+- expected behavior
+- severity
+- fix owner or phase
+- verification method
+
+Current open findings:
+
+- Runs / real Safari: the expanded run detail is technically inline but still
+  uses competing sub-models. `Outputs` renders artifacts as a flat list,
+  `Execution` renders stage evidence with different navigation and row
+  treatment, `Participants` and `Decisions` expose raw records as peer tabs,
+  and `Issues` hides critical state. Expected behavior: one evidence hierarchy
+  with `Overview`, `Stages`, `Artifacts`, and `Audit`, where global views are
+  rollups of stage evidence rather than separate visual systems. Severity:
+  high. Fix owner: Runs evidence-model refactor. Verification method: real
+  Safari expanded run review plus automated assertions that stage order,
+  artifact actions, issue elevation, and section count match the Runs Product
+  Model.
+- Runs / real Safari: Execution can show Software Engineering stages in reverse
+  human order, with Acceptance before Planning. Expected behavior: stages
+  render in authored workflow order from Planning through Acceptance unless the
+  user explicitly chooses an audit chronology. Severity: high. Fix owner: Runs
+  evidence-model refactor. Verification method: open a Software Engineering
+  run and assert visible stage order starts with Planning and ends with
+  Acceptance.
+- Runs / real Safari: more than two navigation layers can be visible at once
+  in one expanded run: triage tabs, status chips, run-row expansion, run detail
+  tabs, participant filters, and execution stage tabs. Expected behavior: the
+  default run detail exposes at most one run-section control plus one local
+  progressive control inside the active section. Severity: high. Fix owner:
+  Runs evidence-model refactor. Verification method: visual audit and DOM
+  assertions for visible tab groups/navigation controls inside expanded run.
+- Runs / real Safari: a run can show the plain row/status value `running` even
+  when its write lease has expired and the detail Issues section reports
+  `stuck lease · lease_expired`. Expected behavior: stuck/problem state is
+  visible at row and status-summary level without requiring users to discover
+  the Issues tab. Severity: medium-high. Verification method: load
+  `/ui/runs?status=running`, expand a stuck run, and confirm the row/status
+  calls out the stuck lease condition before opening Issues.
+- Conversations / real Safari: linked runs inside conversation previews and
+  full conversation headers are still navigation links/chips only. They can
+  route users to Runs, but they cannot be inspected progressively from the
+  conversation context. Expected behavior: linked runs use the shared run
+  expansion contract or an equivalent bounded preview so users can inspect
+  state/artifacts without mentally jumping between disconnected pages.
+  Severity: medium. Fix owner: linked-object lineage pass. Verification method:
+  open `/ui/conversations`, expand a conversation with linked runs, and inspect
+  the run without leaving the conversation work surface.
+- Protocols / real Safari: one route transition from Templates to Protocols
+  briefly rendered the previous Templates content under the Protocols URL until
+  reload. This was not reproduced on a second attempt. Expected behavior:
+  route content and URL always reconcile without manual refresh. Severity: low
+  unless reproduced. Verification method: repeat top-nav transitions across
+  Templates, Protocols, Runs, Conversations, Tasks, Agents, and Capabilities in
+  real Safari with cache disabled/normal refresh.
+- Audit coverage: this pass exercised broad real Safari flows, but it has not
+  yet produced a literal 500+ screenshot corpus. Expected behavior: do not
+  claim the 500+ screenshot breadth gate until the harness records and indexes
+  that many distinct Safari screenshots. Severity: process. Verification
+  method: screenshot manifest with count, route, viewport, action, and result.
+- Deployment / real environment: M3 still fails to stay up after redeploy while
+  Registry, M1, and M2 are healthy. Expected behavior: either M3 is configured
+  and usable, or scenarios and UI copy clearly treat it as unavailable so users
+  do not route work to a dead agent. Severity: medium. Verification method:
+  redeploy from `/Users/tinker/octopus`, check container health, then validate
+  `/ui/agents` reports the same usable agent set.
+
+Resolved or verified in the latest implementation passes:
+
+- Runs: split-pane detail was replaced by inline expansion and
+  collapse-on-active-row behavior. The internal run evidence model remains open
+  and is tracked above.
+- Runs / real Safari: changing the status filter clears stale incompatible
+  selections and removes stale `run_id` values.
+- Runs / real Safari: completed participant rows prefer resolved outcomes over
+  raw running state.
+- Runs / real Safari: artifact Outputs expose the shared Preview/Open/Download/
+  Copy path action row when concrete bytes exist.
+- Conversations / real Safari: the list uses inline expansion, one expanded
+  conversation at a time, and click-to-collapse for the active row.
+- Conversations / real Safari: the full conversation page uses top-level tabs
+  rather than rendering all subsections simultaneously.
+- Tasks / real Safari: tasks now use the same single inline expansion contract
+  as Runs, Conversations, and protocol stages; clicking a different task
+  collapses the previous detail and clicking the active task collapses it.
+- Tasks / real Safari: the implementation task for run
+  `186e8080c07342e2943dd0fbf821c740` exposes produced output artifacts inline
+  with Preview/Open/Download/Copy path actions after redeploy and reload.
+- Protocol stages / real Safari: stage rows expand inline, Done collapses the
+  editor, Assignment hides Advanced/custom runtime internals, Files & outputs
+  stays on the selected stage, and the workflow map remains interactive on
+  demand.

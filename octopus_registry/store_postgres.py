@@ -1264,6 +1264,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         status: str = "",
         protocol_id: str = "",
         entry_agent_id: str = "",
+        root_conversation_id: str = "",
         origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
         return self._protocol_store.list_protocol_runs(
@@ -1273,6 +1274,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             status=status,
             protocol_id=protocol_id,
             entry_agent_id=entry_agent_id,
+            root_conversation_id=root_conversation_id,
             origin_channel=origin_channel,
         )
 

@@ -12,7 +12,9 @@ function renderConversationList(container) {
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
+        contentInner.classList.add('conversation-list-route-shell');
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+        cleanups.add(() => contentInner.classList.remove('conversation-list-route-shell'));
     }
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentQ = UI.readQueryParam('q', '');
@@ -22,6 +24,12 @@ function renderConversationList(container) {
     let hasLoaded = false;
     let quickStartLoaded = false;
     let openingConversationFor = '';
+    let currentConversationId = UI.readQueryParam('conversation_id', '');
+    let currentConversations = [];
+    let currentListData = null;
+    const conversationPreviews = new Map();
+    const conversationPreviewErrors = new Map();
+    const conversationPreviewLoading = new Set();
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -76,7 +84,7 @@ function renderConversationList(container) {
         currentStatus = value;
         paginator.reset();
         statusControl.setActive(currentStatus);
-        UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
+        _writeState();
         loadPage();
     }
 
@@ -84,8 +92,17 @@ function renderConversationList(container) {
         currentType = value;
         paginator.reset();
         typeControl.setActive(currentType);
-        UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
+        _writeState();
         loadPage();
+    }
+
+    function _writeState() {
+        UI.updateQueryParams({
+            q: currentQ,
+            status: currentStatus,
+            type: currentType,
+            conversation_id: currentConversationId || '',
+        });
     }
 
     const listShell = document.createElement('section');
@@ -108,7 +125,7 @@ function renderConversationList(container) {
         searchTimeout = setTimeout(() => {
             currentQ = searchInput.value.trim();
             paginator.reset();
-            UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
+            _writeState();
             loadPage();
         }, 250);
     });
@@ -166,7 +183,9 @@ function renderConversationList(container) {
                         const conversation = await API.openConversationForAgent(agent.agent_id, {
                             title: `Conversation with ${agent.display_name || agent.slug || agent.agent_id}`,
                         });
-                        Router.navigate('/ui/conversations/' + conversation.conversation_id);
+                        Router.navigate(UI.conversationHref(conversation.conversation_id, {
+                            conversationType: conversation.conversation_type,
+                        }));
                     } catch (err) {
                         openingConversationFor = '';
                         button.disabled = false;
@@ -222,7 +241,127 @@ function renderConversationList(container) {
         }
     }
 
+    function _conversationHref(item, view = '') {
+        return UI.conversationHref(item.conversation_id, {
+            view,
+            conversationType: item.conversation_type,
+            operational: item.conversation_type === 'task_thread',
+        });
+    }
+
+    function _conversationPreviewSignature(conversationId) {
+        const key = String(conversationId || '');
+        const preview = conversationPreviews.get(key);
+        const error = conversationPreviewErrors.get(key);
+        return {
+            loading: conversationPreviewLoading.has(key),
+            error: error ? String(error.message || error) : '',
+            meta: preview?.meta ? String(preview.meta.updated_at || preview.meta.status || '') : '',
+            runs: (preview?.runs || []).map((run) => [
+                String(run.protocol_run_id || ''),
+                String(run.status || ''),
+                String(run.current_stage_key || ''),
+            ].join(':')),
+        };
+    }
+
+    async function loadConversationPreview(conversationId) {
+        const key = String(conversationId || '').trim();
+        if (!key || conversationPreviewLoading.has(key) || conversationPreviews.has(key)) return;
+        conversationPreviewLoading.add(key);
+        conversationPreviewErrors.delete(key);
+        try {
+            const [meta, runData] = await Promise.all([
+                API.getConversation(key),
+                API.listProtocolRuns({ root_conversation_id: key, limit: 5 }),
+            ]);
+            conversationPreviews.set(key, {
+                meta,
+                runs: runData.runs || runData || [],
+            });
+        } catch (err) {
+            conversationPreviewErrors.set(key, err);
+            UI.reportError('Failed to load conversation context', err, {
+                context: 'Conversation list preview load failed',
+            });
+        } finally {
+            conversationPreviewLoading.delete(key);
+            renderRows(currentConversations, currentListData || {});
+        }
+    }
+
+    function _renderConversationInlineDetail(item) {
+        const conversationId = String(item.conversation_id || '');
+        const panel = document.createElement('section');
+        panel.className = 'conversation-inline-detail';
+
+        if (conversationPreviewLoading.has(conversationId) && !conversationPreviews.has(conversationId)) {
+            panel.appendChild(UI.renderEmptyState('Loading conversation context…', true));
+            return panel;
+        }
+
+        const error = conversationPreviewErrors.get(conversationId);
+        if (error) {
+            panel.appendChild(UI.createErrorCard('Failed to load conversation context.', () => {
+                conversationPreviews.delete(conversationId);
+                conversationPreviewErrors.delete(conversationId);
+                void loadConversationPreview(conversationId);
+            }));
+        }
+
+        const preview = conversationPreviews.get(conversationId) || {};
+        const meta = preview.meta || item;
+        const actions = document.createElement('div');
+        actions.className = 'task-action-row';
+        const openConversation = document.createElement('a');
+        openConversation.href = _conversationHref(item);
+        openConversation.className = 'btn btn-sm btn-primary';
+        openConversation.textContent = 'Open full conversation';
+        actions.appendChild(openConversation);
+        const openTasks = document.createElement('a');
+        openTasks.href = _conversationHref(item, 'tasks');
+        openTasks.className = 'btn btn-sm';
+        openTasks.textContent = 'Open tasks/activity';
+        actions.appendChild(openTasks);
+        panel.appendChild(actions);
+
+        const facts = UI.renderMetadataGrid([
+            { label: 'Status', value: meta.status || item.status || 'open' },
+            { label: 'Agent', value: UI.visibleLabel(meta.target_display_name, meta.target_agent_id, item.target_display_name, item.target_agent_id) || '—' },
+            { label: 'Origin', value: meta.origin_channel || item.origin_channel || 'registry' },
+            { label: 'Updated', value: UI.relativeTime(meta.updated_at || item.updated_at || item.created_at) || '—' },
+        ], { compact: true });
+        panel.appendChild(facts);
+
+        const linkedRuns = preview.runs || [];
+        const linkedLabel = document.createElement('div');
+        linkedLabel.className = 'detail-label';
+        linkedLabel.textContent = 'Linked runs';
+        panel.appendChild(linkedLabel);
+
+        const runList = document.createElement('div');
+        runList.className = 'task-artifact-list';
+        const runRows = linkedRuns.map((run) => UI.renderListRow({
+            href: `/ui/runs?run_id=${encodeURIComponent(run.protocol_run_id || '')}`,
+            label: [
+                run.protocol_display_name || run.protocol_name || 'Protocol run',
+                run.current_stage_key || '',
+            ].filter(Boolean).join(' · '),
+            sublabel: [
+                run.problem_statement || '',
+                run.protocol_run_id ? `run ${String(run.protocol_run_id).slice(0, 8)}` : '',
+            ].filter(Boolean).join(' · '),
+            badgeText: run.status || '',
+            badgeClass: `badge-${run.status || 'open'}`,
+        }));
+        UI.reconcileChildren(runList, runRows.length ? runRows : [UI.renderEmptyState('No protocol runs linked to this conversation yet.', true)]);
+        panel.appendChild(runList);
+        return panel;
+    }
+
     function renderRows(conversations, data) {
+        currentConversations = Array.isArray(conversations) ? conversations : [];
+        currentListData = data || {};
         if (!conversations.length) {
             const emptyMessage = currentQ || currentStatus || currentType ? 'No conversations match this view.' : 'Nothing here yet.';
             UI.clearMemoizedRender(listEl);
@@ -236,6 +375,8 @@ function renderConversationList(container) {
             status: currentStatus,
             type: currentType,
             cursor: paginator.cursor,
+            selectedId: currentConversationId,
+            previews: (conversations || []).map((item) => _conversationPreviewSignature(item.conversation_id)),
             conversations,
         }, (state) => state.conversations.map((item) => {
             const rowSignature = UI.dataSignature({
@@ -246,7 +387,10 @@ function renderConversationList(container) {
                 title: String(item.title || ''),
                 target: String(item.target_display_name || item.target_agent_id || ''),
                 origin: String(item.origin_channel || ''),
+                selected: String(item.conversation_id || '') === String(currentConversationId || ''),
+                preview: _conversationPreviewSignature(item.conversation_id),
             });
+            const selected = String(item.conversation_id || '') === String(currentConversationId || '');
             const sub = document.createElement('span');
             const parts = [];
             const targetLabel = UI.visibleLabel(item.target_display_name, item.target_agent_id);
@@ -256,18 +400,43 @@ function renderConversationList(container) {
             if (item.updated_at || item.created_at) parts.push(UI.relativeTime(item.updated_at || item.created_at));
             sub.textContent = parts.join(' · ');
 
+            const shell = document.createElement('article');
+            shell.className = 'conversation-list-entry';
+            if (selected) shell.classList.add('is-selected');
+            shell.dataset.key = item.conversation_id;
+            shell.dataset.signature = rowSignature;
+
             const row = UI.renderListRow({
-                href: '/ui/conversations/' + item.conversation_id,
                 label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : targetLabel) || 'Untitled conversation',
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
                 trailing: UI.buildConversationTypeBadge(item),
-                className: item.conversation_type === 'task_thread' ? 'list-row-task-thread' : '',
+                className: [
+                    item.conversation_type === 'task_thread' ? 'list-row-task-thread' : '',
+                    selected ? 'is-selected' : '',
+                ].filter(Boolean).join(' '),
                 signature: rowSignature,
+                onClick: () => {
+                    const conversationId = String(item.conversation_id || '');
+                    if (conversationId && String(currentConversationId || '') === conversationId) {
+                        currentConversationId = '';
+                        _writeState();
+                        renderRows(currentConversations, currentListData || {});
+                        return;
+                    }
+                    currentConversationId = conversationId;
+                    _writeState();
+                    renderRows(currentConversations, currentListData || {});
+                    void loadConversationPreview(currentConversationId);
+                },
             });
-            row.dataset.key = item.conversation_id;
-            return row;
+            row.setAttribute('aria-expanded', String(selected));
+            shell.appendChild(row);
+            if (selected) {
+                shell.appendChild(_renderConversationInlineDetail(item));
+            }
+            return shell;
         }), {
             signatureFn(state) {
                 return {
@@ -275,6 +444,8 @@ function renderConversationList(container) {
                     status: String(state.status || ''),
                     type: String(state.type || ''),
                     cursor: state.cursor,
+                    selectedId: String(state.selectedId || ''),
+                    previews: state.previews || [],
                     conversations: (state.conversations || []).map((item) => ({
                         id: String(item.conversation_id || ''),
                         type: String(item.conversation_type || 'conversation'),
@@ -290,6 +461,9 @@ function renderConversationList(container) {
 
         paginator.render({ hasMore: !!data.has_more, nextCursor: data.next_cursor });
         hasLoaded = true;
+        if (currentConversationId && conversations.some((item) => String(item.conversation_id || '') === String(currentConversationId || ''))) {
+            void loadConversationPreview(currentConversationId);
+        }
     }
 
     async function loadPage({ soft = false } = {}) {

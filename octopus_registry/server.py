@@ -132,6 +132,10 @@ from .http_support import (
     secure_html_response as _secure_html_response,
 )
 from .store_shared.usage import aggregate_usage_rows
+from .task_artifact_payloads import (
+    protocol_run_id_from_task_record as _protocol_run_id_from_task_record,
+    tasks_with_protocol_artifacts as _tasks_with_protocol_artifacts,
+)
 from .ui_http import register_ui_routes
 
 _REGISTRY_UI_SECURITY_HEADERS = {
@@ -261,17 +265,6 @@ def _event_invalidation_topics(kind: str) -> tuple[str, ...]:
     if kind in {"approval.requested", "approval.decided"}:
         topics.add("approvals")
     return tuple(sorted(topics))
-
-
-def _protocol_run_id_from_task_record(task: TaskRecord) -> str:
-    routed_task_id = str(task.routed_task_id or "").strip()
-    if not routed_task_id.startswith("protocol-stage:"):
-        return ""
-    request_payload = task.request.as_dict() if task.request is not None else {}
-    context = request_payload.get("context", {})
-    if not isinstance(context, dict):
-        return ""
-    return str(context.get("protocol_run_id", "") or "").strip()
 
 
 async def _broadcast_task_record_events(result: TaskRecord) -> None:
@@ -1237,6 +1230,7 @@ def resource_list_tasks(
         status=status,
         completed_since_iso=completed_since_iso,
     )
+    tasks = _tasks_with_protocol_artifacts(tasks, access=_protocol_access(auth), store=store)
     return _json_payload(_paginated_response("tasks", tasks, cursor, limit))
 
 
@@ -1257,6 +1251,7 @@ def resource_get_task(
             str(task.get("target_agent_id", "")),
         }:
             raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
+    task = _tasks_with_protocol_artifacts([task], access=_protocol_access(auth), store=store)[0]
     return _json_payload(task)
 
 

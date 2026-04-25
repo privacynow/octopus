@@ -1,5 +1,5 @@
 /**
- * Agent list — kit-driven presence roster with direct conversation entry.
+ * Agent list - kit-driven roster with direct conversation entry.
  *
  * Uses Kit.agentsList for the list + filter chrome so the agents surface
  * shares the same design language as runs/protocols (plan §7, Step 8).
@@ -21,7 +21,7 @@ function renderAgentList(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Agents</h2><p>Inspect presence, workload, skills, and admin actions for every enrolled agent.</p>';
+    header.innerHTML = '<h2>Agents</h2><p>Start work with a real enrolled agent, inspect its capabilities, or open recent activity.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');
@@ -88,6 +88,17 @@ function renderAgentList(container) {
             },
             onSelect: (agent) => {
                 Router.navigate('/ui/agents/' + encodeURIComponent(agent.id));
+            },
+            onStartConversation: async (agent) => {
+                try {
+                    const result = await API.openConversationForAgent(agent.id, {});
+                    const conversationId = String(result.conversation_id || result.id || '');
+                    if (conversationId) {
+                        Router.navigate('/ui/conversations/' + encodeURIComponent(conversationId));
+                    }
+                } catch (err) {
+                    UI.reportError('Failed to open conversation', err, { context: 'Agent conversation open failed' });
+                }
             },
         });
         UI.reconcileChildren(listHost, [node]);

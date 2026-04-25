@@ -109,8 +109,8 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "await loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" not in skill_catalog
     assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
     assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
-    assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
-    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
+    assert "renderLoadingState(message = 'Loading capabilities…')" in skill_catalog
+    assert "renderLoadingState(queryText.length >= 2 ? 'Searching capabilities…' : 'Loading capabilities…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
@@ -223,7 +223,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
 
     # Runs route (kept until Step 7)
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
-    assert "API.getProtocolRun(currentRunId)" in workspace
+    assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
@@ -304,6 +304,7 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
 
     # Router wiring
+    assert "Router.register('/ui/templates', renderGallery);" in app_js
     assert "Router.register('/ui/gallery', renderGallery);" in app_js
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
@@ -391,7 +392,7 @@ def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     assert "href: '/ui/protocols'" in dashboard
     assert "`/ui/runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`" in dashboard
     assert "'/ui/runs?issue_kind=all'" in dashboard
-    assert 'href="/ui/gallery"' in index_html
+    assert 'href="/ui/templates"' in index_html
     assert 'href="/ui/protocols"' in index_html
 
 
@@ -435,7 +436,7 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Manage a bot’s installed, custom, and store-backed skills here." in skill_catalog
+    assert "Manage what each bot can do." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
     assert "label: 'Studio'" not in skill_catalog
@@ -453,8 +454,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "'Custom'" in skill_catalog
     assert "'Installed on this bot'" in skill_catalog
     assert "'Store'" in skill_catalog
-    assert "'New custom skill'" in skill_catalog
-    assert "'No skills are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
+    assert "'New capability'" in skill_catalog
+    assert "'No capabilities are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
@@ -495,9 +496,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
 
 
 def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
-    """Plan §8: agents list + detail migrate to Kit primitives; detail surface
-    exposes admin actions (trust tier, capacity, token rotation, soft-delete)
-    and a selector resolution preview wired to /v1/selector/preview."""
+    """Plan §8: agents list + detail migrate to Kit primitives; operational
+    diagnostics remain available behind one disclosure instead of the default path."""
     repo_root = Path(__file__).resolve().parents[1]
     agent_list = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
@@ -518,6 +518,7 @@ def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
     # Detail surfaces
     assert "Kit.agentSummary(" in agent_detail
     assert "Kit.selectorResolutionPreview(" in agent_detail
+    assert "function buildOperationsCard(" in agent_detail
     assert "function buildAdminCard(" in agent_detail
     assert "function buildSelectorCard(" in agent_detail
     assert "API.updateAgentTrustTier(" in agent_detail
@@ -545,16 +546,23 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
     css = (
         repo_root / "octopus_registry" / "ui" / "css" / "main.css"
     ).read_text(encoding="utf-8")
+    kit = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
 
     assert "window.RegistrySkillHub = RegistrySkillHub;" in skill_catalog
+    assert "function _isGeneratedSkill(" in skill_catalog
+    assert "!_isGeneratedSkill(skill)" in skill_catalog
+    assert "!UI.isGeneratedTimestampName(skill)" in kit
     assert "function buildSkillsCard(agent) {" in agent_detail
-    assert "Manage skills" in agent_detail
-    assert "Open Skills page" in agent_detail
-    assert "Open in Skills" in agent_detail
+    assert "Manage capabilities" in agent_detail
+    assert "Open Capabilities page" in agent_detail
+    assert "Open in Capabilities" in agent_detail
     assert "Open conversation and activate" in agent_detail
     assert "Quick actions live here." in agent_detail
-    assert "Advertised for routing" in agent_detail
+    assert "Available capabilities" in agent_detail
     assert "buildSkillsCard(agent)," in agent_detail
+    assert "buildOperationsCard(agent, workers)," in agent_detail
     assert "quickstart-chip static" in agent_detail
     assert "skills-drawer-dialog" in css
     assert "skills-drawer-overlay" in css
@@ -784,8 +792,8 @@ def test_agent_surfaces_distinguish_transport_from_execution_and_offer_reset() -
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "transport " in agent_detail
-    assert "execution faulted" in agent_detail
+    assert "transport " not in agent_detail
+    assert "Execution faulted" in agent_detail
     assert "Reset execution" in agent_detail
     assert "resetAgentExecutionFault" in agent_detail
     # Agents list now renders through Kit.agentsList (plan §8), which surfaces
@@ -811,16 +819,146 @@ def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> No
     assert "function closeManagement(" in detail
     assert "function scheduleManagementIdleClose(" in detail
     assert "function scheduleManagementSuccessClose(" in detail
-    assert "skillsManageBtn.textContent = 'Skills';" in detail
+    assert "skillsManageBtn.textContent = 'Capabilities';" in detail
     assert "settingsManageBtn.textContent = 'Settings';" in detail
+    assert "protocolsManageBtn.textContent = 'Protocols';" in detail
     assert "textContent = '×';" in detail
     assert "managementPanel.hidden = !managementAgentId();" not in detail
     assert "openManagement('skills')" in detail
     assert "openManagement('settings'" in detail
+    assert "openManagement('protocols'" in detail
     assert "&& !pendingSkillSetup" in detail
     assert "clearRequestedActivationSkill();" in detail
     assert "requestConversationSkillActivation(" in detail
     assert ".conversation-management-close {" in css
+
+
+def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function renderProtocolsPanel()" in detail
+    assert "function conversationProtocolOptions(" in detail
+    assert "conversationProtocolLabel(" in detail
+    assert "Showing the latest version of each generated protocol family." in detail
+    assert "Protocol scope" in detail
+    assert "will not rewrite the workflow schema at launch time." in detail
+    assert "Conversation protocols" in detail
+    assert "Start a published protocol" in detail
+    assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
+    assert "API.listProtocolRuns({ root_conversation_id: convoId, limit: 25 })" in detail
+    assert "API.createProtocolRun({" in detail
+    assert "root_conversation_id: convoId" in detail
+    assert "entry_agent_id: agentId" in detail
+    assert "protocolProblemStatement = String(textarea.value || '').trim();" in detail
+    assert "requestedManagementMode === 'protocols'" in detail
+    assert "value === 'skills' || value === 'settings' || value === 'protocols'" in detail
+    assert "Started protocol run" in detail
+    assert "Open run" in detail
+    assert "function generatedTimestamp(" in helper
+    assert "function compactGeneratedName(" in helper
+    assert "compactGeneratedFamilies: true" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    assert "Latest of ${Number(record._catalogCollapsedCount || 0)} generated variants" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+
+
+def test_artifact_preview_actions_have_link_fallbacks() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+    protocol_workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+    task_board = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-board.js"
+    ).read_text(encoding="utf-8")
+    event_renderers = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function createArtifactActionRow({" in helper
+    assert "function createArtifactListRow({" in helper
+    assert "function compactMarkdownReferences(text)" in helper
+    assert "function _ensureArtifactPreviewDelegation()" in helper
+    assert "document.addEventListener('click', async (event)" in helper
+    assert "previewHref = ''" in helper
+    assert "const previewUrl = String(previewHref || openHref || '').trim();" in helper
+    assert "previewBtn.setAttribute('role', 'button');" in helper
+    assert "previewBtn.dataset.artifactPreviewUrl = previewUrl;" in helper
+    assert "className: ['artifact-list-row', className || ''].join(' ').trim()," in helper
+    assert "onClick: previewTarget" in helper
+    assert "event.preventDefault();" in helper
+    assert "openHref: missing ? '' : API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "UI.createArtifactListRow({" in protocol_workspace
+    assert "UI.compactMarkdownReferences(task.result_summary || task.result_text || task.summary || task.instructions || '')" in task_list
+    assert "const displaySummary = UI.compactMarkdownReferences(summary);" in task_board
+    assert "UI.esc(UI.compactMarkdownReferences(event.content))" in event_renderers
+    assert "getTaskArtifactText" not in api_js
+    assert "getProtocolRunArtifactText" not in api_js
+
+
+def test_task_expansion_rerenders_clicked_rows_before_showing_artifacts() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "expanded: expandedTaskIds.has(String(task.routed_task_id || ''))" in task_list
+    assert "function _taskDetailStateSignature(taskId)" in task_list
+    assert "detailState: _taskDetailStateSignature(String(task.routed_task_id || ''))" in task_list
+    assert "detailState: _taskDetailStateSignature(taskId)" in task_list
+    assert "if (!taskDetails.has(taskId) && !(task.request || task.result))" in task_list
+    assert "void loadTaskDetail(taskId);" in task_list
+    assert "renderList(currentTasks, currentListData);" in task_list
+    assert "const artifactEvidence = UI.taskArtifactEvidence(detailPayload);" in task_list
+    assert "outputsLabel.textContent = 'Outputs';" in task_list
+
+
+def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_safe() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
+
+    assert "isLink || isAction ? 'is-actionable' : 'is-passive'" in helper
+    assert "const usePressableContainer = isAction && hasTrailing;" in helper
+    assert "target.closest('a, button, input, textarea, select, summary, [role=\"button\"], [data-artifact-preview-url]')" in helper
+    assert "Busy: ${current} of ${max} work slots used" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    assert ".list-row.is-actionable {" in css
+    assert ".list-row-with-artifact-actions {" in css
+    assert "grid-template-columns: minmax(0, 1fr);" in css
+    assert ".list-row-with-artifact-actions .artifact-action-row" in css
+    assert ".protocol-runs-workbench" in css
+    assert "renderExpanded = null" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    assert "kit-run-status-attention" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    assert "renderExpanded: () => _buildRunDetailPanel()" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    assert "issuesByRunId" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

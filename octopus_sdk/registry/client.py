@@ -457,6 +457,7 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         status: str = "",
         protocol_id: str = "",
         entry_agent_id: str = "",
+        root_conversation_id: str = "",
         origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
         result = await self._request(
@@ -468,6 +469,7 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
                 "status": status,
                 "protocol_id": protocol_id,
                 "entry_agent_id": entry_agent_id,
+                "root_conversation_id": root_conversation_id,
                 "origin_channel": origin_channel,
             },
         )

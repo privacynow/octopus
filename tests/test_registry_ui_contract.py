@@ -676,6 +676,8 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "[-_]\\d{1,4}$" in helper
     assert "item.includes('e2e')" in helper
     assert "item.includes('spec')" in helper
+    assert "'compose-assistant-protocol'" in helper
+    assert "'publish-report'" in helper
 
     assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
     assert "let currentType = UI.readQueryParam('type', 'conversation');" in conversation_list

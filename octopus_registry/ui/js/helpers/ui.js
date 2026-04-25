@@ -663,6 +663,14 @@ window.UI = (() => {
     function isGeneratedOrRehearsalText(value) {
         const normalized = String(value || '').trim().toLowerCase();
         if (!normalized) return false;
+        const generatedWorkflowKey = [
+            'compose-assistant-protocol',
+            'compose assistant protocol',
+            'publish-report',
+            'publish report',
+            'live-authoring',
+            'live authoring',
+        ].includes(normalized);
         const looksLikeGeneratedVariant = (
             /^draft-[0-9a-f]{8}$/i.test(normalized)
             || (
@@ -676,6 +684,7 @@ window.UI = (() => {
             || normalized.includes(' rehearsal')
             || normalized.includes(' meta protocol composer ')
             || normalized.startsWith('meta protocol composer ')
+            || generatedWorkflowKey
             || looksLikeGeneratedVariant
             || isGeneratedTimestampName(normalized);
     }

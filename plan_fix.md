@@ -78,6 +78,9 @@ before broad audit or implementation claims continue.
 - `P3.14`: Usage rows now carry conversation lineage from the existing usage
   endpoint so protocol-stage task threads can be hidden from default usage
   without relying only on title heuristics.
+- `P3.14`: The shared generated/audit predicate now covers generated workflow
+  keys such as `compose-assistant-protocol` and `publish-report`, not only
+  timestamped names.
 - `P4.25`: Capability names now use the shared generated/rehearsal predicate, so
   generated/meta E2E capabilities do not appear in the default catalog.
 

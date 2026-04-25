@@ -1360,8 +1360,8 @@ test.describe('protocol authoring live', () => {
       ];
 
       for (const [stageKey, scenarioName, nextStage] of sequence) {
-        const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
-        await expect(session).toBeVisible({ timeout: 20000 });
+        await waitForRunStage(page, runId, stageKey);
+        const session = await waitForPendingRehearsalSession(page, runId, stageKey);
         const artifactBodies = stageKey === 'draft_document'
           ? {
               document: scenarioName === 'Draft v1'
@@ -1388,8 +1388,8 @@ test.describe('protocol authoring live', () => {
         await waitForRunStage(page, runId, nextStage);
       }
 
-      const acceptance = page.locator('.kit-rehearsal-session[data-stage-key="acceptance"]').first();
-      await expect(acceptance).toBeVisible({ timeout: 20000 });
+      await waitForRunStage(page, runId, 'acceptance');
+      const acceptance = await waitForPendingRehearsalSession(page, runId, 'acceptance');
       await applyScenarioAndSubmit(page, acceptance, 'Acceptance pass');
       await waitForRunStatus(page, runId, 'completed', 180000);
 

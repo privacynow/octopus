@@ -24,7 +24,9 @@ function renderTaskList(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Tasks</h2>';
+    header.innerHTML = currentProtocolRunId
+        ? '<h2>Run stage tasks</h2><p>Protocol-generated tasks are shown as children of this run.</p>'
+        : '<h2>Delegations</h2><p>Standalone work delegated from one agent or collaborator to another.</p>';
     container.appendChild(header);
 
     const summaryRail = document.createElement('section');
@@ -495,8 +497,8 @@ function renderTaskList(container) {
                 currentProtocolRunId
                     ? 'No tasks recorded for this run yet.'
                     : currentStatus
-                        ? 'No tasks in this state.'
-                        : 'No tasks yet.',
+                        ? 'No standalone delegations in this state.'
+                        : 'No standalone delegations yet.',
                 true,
             )]);
             paginator.clear();
@@ -538,7 +540,18 @@ function renderTaskList(container) {
         if (currentProtocolRunId) params.protocol_run_id = currentProtocolRunId;
         try {
             const data = await API.listTasks(params);
-            renderList(data.tasks || data || [], data);
+            const rawTasks = data.tasks || data || [];
+            const visibleTasks = rawTasks.filter((task) => {
+                if (currentProtocolRunId) {
+                    return String(task.protocol_run_id || '') === String(currentProtocolRunId || '');
+                }
+                return !task.protocol_run_id && !UI.isDefaultHiddenRecord(task);
+            });
+            if (currentTaskId && !visibleTasks.some((task) => String(task.routed_task_id || '') === String(currentTaskId || ''))) {
+                const selectedHidden = rawTasks.find((task) => String(task.routed_task_id || '') === String(currentTaskId || ''));
+                if (selectedHidden) visibleTasks.unshift(selectedHidden);
+            }
+            renderList(visibleTasks, { ...data, tasks: visibleTasks });
         } catch (err) {
             if (soft && listLoaded) {
                 UI.reportError('Failed to refresh tasks', err, { context: 'Task list soft refresh failed' });

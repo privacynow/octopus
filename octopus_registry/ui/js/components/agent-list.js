@@ -9,6 +9,7 @@ function renderAgentList(container) {
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let nameFilter = UI.readQueryParam('q', '');
     let presenceFilter = UI.readQueryParam('state', '');
+    let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let hasLoaded = false;
     let searchTimeout = null;
     let currentAgents = [];
@@ -32,6 +33,13 @@ function renderAgentList(container) {
     workbench.className = 'workbench-panel';
     shell.appendChild(workbench);
 
+    const controls = document.createElement('div');
+    controls.className = 'route-controls';
+    workbench.appendChild(controls);
+    const generatedToggle = document.createElement('a');
+    generatedToggle.className = 'section-link';
+    controls.appendChild(generatedToggle);
+
     const listHost = document.createElement('div');
     listHost.className = 'kit-agents-host';
     workbench.appendChild(listHost);
@@ -43,6 +51,17 @@ function renderAgentList(container) {
 
     function _executionFaulted(agent) {
         return String(agent.execution_state || 'healthy') === 'faulted';
+    }
+
+    function _updateGeneratedToggle() {
+        const url = new URL(window.location.href);
+        if (includeGenerated) {
+            url.searchParams.delete('include_generated');
+        } else {
+            url.searchParams.set('include_generated', '1');
+        }
+        generatedToggle.href = `${url.pathname}${url.search}${url.hash}`;
+        generatedToggle.textContent = includeGenerated ? 'Hide generated/audit agents' : 'Show generated/audit agents';
     }
 
     function _adaptAgent(agent) {
@@ -66,7 +85,8 @@ function renderAgentList(container) {
     }
 
     function _repaintList() {
-        const adapted = currentAgents.map(_adaptAgent);
+        _updateGeneratedToggle();
+        const adapted = UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated }).map(_adaptAgent);
         const node = Kit.agentsList({
             agents: adapted,
             search: nameFilter,
@@ -76,14 +96,14 @@ function renderAgentList(container) {
                 searchTimeout = setTimeout(() => {
                     nameFilter = value.trim();
                     paginator.reset();
-                    UI.updateQueryParams({ q: nameFilter, state: presenceFilter });
+                    UI.updateQueryParams({ q: nameFilter, state: presenceFilter, include_generated: includeGenerated ? '1' : '' });
                     loadPage();
                 }, 250);
             },
             onPresenceFilter: (value) => {
                 presenceFilter = value || '';
                 paginator.reset();
-                UI.updateQueryParams({ q: nameFilter, state: presenceFilter });
+                UI.updateQueryParams({ q: nameFilter, state: presenceFilter, include_generated: includeGenerated ? '1' : '' });
                 loadPage();
             },
             onSelect: (agent) => {

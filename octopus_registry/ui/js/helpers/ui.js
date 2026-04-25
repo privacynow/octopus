@@ -653,6 +653,71 @@ window.UI = (() => {
             && !isGeneratedTimestampName(normalized);
     }
 
+    function _recordFieldText(record, fields) {
+        return fields
+            .map((field) => String(record?.[field] || '').trim())
+            .filter(Boolean)
+            .join(' ');
+    }
+
+    function isGeneratedOrRehearsalText(value) {
+        const normalized = String(value || '').trim().toLowerCase();
+        if (!normalized) return false;
+        return normalized === 'rehearsal'
+            || normalized === 'registry.rehearsal'
+            || normalized.startsWith('rehearsal ')
+            || normalized.includes(' rehearsal')
+            || normalized.includes(' meta protocol composer ')
+            || normalized.startsWith('meta protocol composer ')
+            || isGeneratedTimestampName(normalized);
+    }
+
+    function isDefaultHiddenRecord(record) {
+        if (record == null) return false;
+        if (typeof record !== 'object') {
+            return isGeneratedOrRehearsalText(record);
+        }
+        if (record.is_rehearsal === true || record.rehearsal === true || record.is_generated === true) {
+            return true;
+        }
+        const tags = Array.isArray(record.tags)
+            ? record.tags.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+            : [];
+        if (tags.some((tag) => ['rehearsal', 'generated', 'test', 'system'].includes(tag))) {
+            return true;
+        }
+        const source = [
+            record.source_kind,
+            record.entry_authority_ref,
+            record.origin_channel,
+            record.run_mode,
+            record.bot_key,
+            record.role,
+        ].map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
+        if (source.some((item) => item === 'rehearsal' || item === 'registry.rehearsal' || item === 'generated')) {
+            return true;
+        }
+        return isGeneratedOrRehearsalText(_recordFieldText(record, [
+            'display_name',
+            'name',
+            'title',
+            'slug',
+            'protocol_display_name',
+            'protocol_name',
+            'conversation_title',
+            'target_display_name',
+            'target_agent_id',
+            'origin_display_name',
+            'origin_agent_id',
+            'skill_name',
+        ]));
+    }
+
+    function defaultVisibleRecords(records, { includeHidden = false } = {}) {
+        const list = Array.isArray(records) ? records : [];
+        return includeHidden ? list : list.filter((record) => !isDefaultHiddenRecord(record));
+    }
+
     function compactGeneratedName(value, { stripUiOnly = false } = {}) {
         const original = String(value || '').trim();
         if (!original) return '';
@@ -1393,6 +1458,9 @@ window.UI = (() => {
         generatedTimestamp,
         isGeneratedTimestampName,
         isHumanAssignableCapabilityName,
+        isGeneratedOrRehearsalText,
+        isDefaultHiddenRecord,
+        defaultVisibleRecords,
         compactGeneratedName,
         conversationHref,
         taskArtifactEvidence,

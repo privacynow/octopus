@@ -184,7 +184,7 @@ function renderDashboard(container) {
                 return false;
             }
             seen.add(taskId);
-            return true;
+            return !item.protocol_run_id && !UI.isDefaultHiddenRecord(item);
         });
         return { tasks };
     }
@@ -358,7 +358,9 @@ function renderDashboard(container) {
     }
 
     function renderConversationSection() {
-        const conversationsData = dashboardState.conversations;
+        const conversationsData = {
+            conversations: UI.defaultVisibleRecords(dashboardState.conversations.conversations || [], { includeHidden: false }),
+        };
         const rowsState = (conversationsData.conversations || []).slice(0, 6).map((item) => ({
             id: String(item.conversation_id || ''),
             title: String(item.title || ''),
@@ -392,9 +394,11 @@ function renderDashboard(container) {
     }
 
     function renderTaskSection() {
-        const activeTasks = coerceTaskList(dashboardState.activeTasks);
-        const followUpTasks = coerceTaskList(dashboardState.followUpTasks);
-        const recentCompletedTasks = coerceTaskList(dashboardState.recentCompletedTasks);
+        const visibleDelegations = (payload) => coerceTaskList(payload)
+            .filter((item) => !item.protocol_run_id && !UI.isDefaultHiddenRecord(item));
+        const activeTasks = visibleDelegations(dashboardState.activeTasks);
+        const followUpTasks = visibleDelegations(dashboardState.followUpTasks);
+        const recentCompletedTasks = visibleDelegations(dashboardState.recentCompletedTasks);
         const rowsState = {
             active: taskRowsState(activeTasks),
             followUp: taskRowsState(followUpTasks),
@@ -429,7 +433,9 @@ function renderDashboard(container) {
     }
 
     function renderAgentSection() {
-        const agentsData = dashboardState.agents;
+        const agentsData = {
+            agents: UI.defaultVisibleRecords(dashboardState.agents.agents || dashboardState.agents || [], { includeHidden: false }),
+        };
         const rowsState = (agentsData.agents || agentsData || []).slice(0, 6).map((item) => ({
             id: String(item.agent_id || ''),
             display: String(item.display_name || item.slug || ''),
@@ -466,7 +472,7 @@ function renderDashboard(container) {
     }
 
     function renderProtocolIssuesSection() {
-        const issues = (dashboardState.protocolIssues.issues || []).slice(0, 6);
+        const issues = UI.defaultVisibleRecords(dashboardState.protocolIssues.issues || [], { includeHidden: false }).slice(0, 6);
         const rowsState = issues.map((item) => ({
             runId: String(item.protocol_run_id || ''),
             kind: String(item.issue_kind || ''),

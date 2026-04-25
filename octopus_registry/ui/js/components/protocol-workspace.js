@@ -263,6 +263,7 @@ function renderProtocolWorkspace(container) {
     let protocols = [];
     let authoringManifest = null;
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
+    let includeGeneratedCatalog = UI.readQueryParam('include_generated', '') === '1';
     let currentProtocol = null;
     let protocolDetailLoading = false;
     let draftRevision = 0;
@@ -1388,6 +1389,7 @@ function renderProtocolWorkspace(container) {
             issue_kind: '',
             entry_agent_id: '',
             protocol_view: '',
+            include_generated: includeGeneratedCatalog ? '1' : '',
             ..._selectionQueryState(),
         }, { replace: !push });
     }
@@ -5709,8 +5711,9 @@ function renderProtocolWorkspace(container) {
     }
 
     function _catalogEl() {
-        return Kit.authoredCatalog({
-            records: protocols,
+        const records = UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog });
+        const catalog = Kit.authoredCatalog({
+            records,
             surfaceKey: 'protocol',
             onOpen: (record) => {
                 currentProtocolId = String(record.protocol_id || '');
@@ -5730,6 +5733,21 @@ function renderProtocolWorkspace(container) {
             },
             compactGeneratedFamilies: true,
         });
+        const controls = catalog.querySelector('.kit-catalog-controls');
+        if (controls) {
+            const toggle = document.createElement('a');
+            toggle.className = 'section-link';
+            const url = new URL(window.location.href);
+            if (includeGeneratedCatalog) {
+                url.searchParams.delete('include_generated');
+            } else {
+                url.searchParams.set('include_generated', '1');
+            }
+            toggle.href = `${url.pathname}${url.search}${url.hash}`;
+            toggle.textContent = includeGeneratedCatalog ? 'Hide generated drafts' : 'Show generated drafts';
+            controls.appendChild(toggle);
+        }
+        return catalog;
     }
 
     function render() {
@@ -5948,6 +5966,7 @@ function renderProtocolRuns(container) {
     let runSearch = '';
     let runStatusFilter = UI.readQueryParam('status', '');
     let issueKindFilter = _protocolIssueFilterValue(UI.readQueryParam('issue_kind', ''));
+    let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let activeRunDetailSection = '';
     let activeRunStageExecutionId = '';
     let currentRunSubscription = null;
@@ -5972,6 +5991,7 @@ function renderProtocolRuns(container) {
             run_id: currentRunId || '',
             status: runStatusFilter || '',
             issue_kind: issueKindFilter || '',
+            include_generated: includeGenerated ? '1' : '',
             entry_agent_id: '',
         }, { replace: !push });
     }
@@ -6020,7 +6040,7 @@ function renderProtocolRuns(container) {
     }
 
     function _filteredIssues() {
-        return (protocolIssues || []).filter((item) => {
+        return UI.defaultVisibleRecords(protocolIssues || [], { includeHidden: includeGenerated }).filter((item) => {
             const haystack = [
                 item.protocol_display_name || '',
                 item.protocol_id || '',
@@ -6275,6 +6295,18 @@ function renderProtocolRuns(container) {
         title.textContent = issueListActive ? 'Protocol issues' : Kit.dict.label('runs.list.title', 'Runs');
         panel.appendChild(title);
 
+        const generatedToggle = document.createElement('a');
+        generatedToggle.className = 'section-link';
+        const generatedUrl = new URL(window.location.href);
+        if (includeGenerated) {
+            generatedUrl.searchParams.delete('include_generated');
+        } else {
+            generatedUrl.searchParams.set('include_generated', '1');
+        }
+        generatedToggle.href = `${generatedUrl.pathname}${generatedUrl.search}${generatedUrl.hash}`;
+        generatedToggle.textContent = includeGenerated ? 'Hide generated/audit runs' : 'Show generated/audit runs';
+        panel.appendChild(generatedToggle);
+
         const issueFilterControl = UI.createSegmentedControl(
             PROTOCOL_ISSUE_FILTER_OPTIONS,
             (value) => {
@@ -6324,7 +6356,13 @@ function renderProtocolRuns(container) {
             issuesByRunId.set(runId, issue);
         });
 
-        const listRuns = (runs || []).filter((item) => {
+        const runSource = UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated });
+        if (currentRunId && !runSource.some((item) => String(item.protocol_run_id || item.id || item.run_id || '') === String(currentRunId || ''))) {
+            const selectedHiddenRun = (runs || []).find((item) =>
+                String(item.protocol_run_id || item.id || item.run_id || '') === String(currentRunId || ''));
+            if (selectedHiddenRun) runSource.unshift(selectedHiddenRun);
+        }
+        const listRuns = runSource.filter((item) => {
             if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
             if (!runSearch) return true;
             const haystack = [
@@ -6838,6 +6876,7 @@ function renderProtocolRuns(container) {
             issueKindFilter,
             runStatusFilter,
             runSearch,
+            includeGenerated,
             activeRunDetailSection,
             activeRunStageExecutionId,
         }, () => {

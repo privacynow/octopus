@@ -13,6 +13,7 @@ const RegistrySkillHub = (() => {
         return (agents || []).filter((agent) => {
             const connectivity = String(agent?.connectivity_state || '').trim();
             return ['connected', 'degraded'].includes(connectivity)
+                && !UI.isDefaultHiddenRecord(agent)
                 && (supportsCapability(agent, 'skill_catalog') || supportsCapability(agent, 'skill_lifecycle'));
         });
     }

@@ -909,18 +909,19 @@ window.Kit = (() => {
 
         function _compactGeneratedRecords(items) {
             const groups = new Map();
-            const output = [];
+            const visible = [];
+            const generated = [];
             (items || []).forEach((record) => {
                 const generatedSource = UI.generatedTimestamp(record.display_name || '')
                     ? record.display_name
                     : UI.generatedTimestamp(record.slug || '')
                         ? record.slug
                         : '';
-                if (!generatedSource) {
-                    output.push(record);
+                if (!generatedSource && !UI.isDefaultHiddenRecord(record)) {
+                    visible.push(record);
                     return;
                 }
-                const family = UI.compactGeneratedName(generatedSource, { stripUiOnly: true });
+                const family = UI.compactGeneratedName(generatedSource || record.display_name || record.slug || 'Generated drafts', { stripUiOnly: true });
                 const key = [
                     String(record.lifecycle_state || 'draft'),
                     family.toLowerCase(),
@@ -932,13 +933,13 @@ window.Kit = (() => {
                         _catalogCollapsedCount: 1,
                     };
                     groups.set(key, collapsedRecord);
-                    output.push(collapsedRecord);
+                    generated.push(collapsedRecord);
                     return;
                 }
                 const existing = groups.get(key);
                 existing._catalogCollapsedCount = Number(existing._catalogCollapsedCount || 1) + 1;
             });
-            return output;
+            return [...visible, ...generated];
         }
 
         function renderList() {

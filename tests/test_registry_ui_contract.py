@@ -635,6 +635,59 @@ def test_conversation_empty_state_avoids_repeating_route_title() -> None:
     assert "No conversations yet." not in conversation_list
 
 
+def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    kit = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    agent_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
+    ).read_text(encoding="utf-8")
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function isDefaultHiddenRecord(" in helper
+    assert "function defaultVisibleRecords(" in helper
+    assert "isGeneratedOrRehearsalText" in helper
+
+    assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
+    assert "&& !UI.isDefaultHiddenRecord(agent)" in conversation_list
+    assert "Show generated/audit work" in conversation_list
+    assert "approvalsLink" not in conversation_list
+
+    assert "!item.protocol_run_id && !UI.isDefaultHiddenRecord(item)" in dashboard
+    assert "UI.defaultVisibleRecords(dashboardState.conversations.conversations || [], { includeHidden: false })" in dashboard
+    assert "UI.defaultVisibleRecords(dashboardState.agents.agents || dashboardState.agents || [], { includeHidden: false })" in dashboard
+
+    assert "UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated })" in agent_list
+    assert "Show generated/audit agents" in agent_list
+    assert "!task.protocol_run_id && !UI.isDefaultHiddenRecord(task)" in task_list
+    assert "<h2>Delegations</h2>" in task_list
+
+    assert "UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog })" in workspace
+    assert "Show generated drafts" in workspace
+    assert "UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated })" in workspace
+    assert "Show generated/audit runs" in workspace
+    assert "return [...visible, ...generated];" in kit
+    assert "&& !UI.isDefaultHiddenRecord(agent)" in skill_catalog
+
+
 def test_dashboard_surfaces_recently_completed_tasks() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     dashboard = (

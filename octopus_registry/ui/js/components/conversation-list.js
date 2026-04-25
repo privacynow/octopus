@@ -20,6 +20,7 @@ function renderConversationList(container) {
     let currentQ = UI.readQueryParam('q', '');
     let currentStatus = UI.readQueryParam('status', '');
     let currentType = UI.readQueryParam('type', '');
+    let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     const initialCursor = Math.max(0, Number.parseInt(UI.readQueryParam('cursor', '0'), 10) || 0);
     const initialCursorStack = [];
     for (let value = 0; value < initialCursor; value += limit) {
@@ -85,6 +86,9 @@ function renderConversationList(container) {
     });
     const typeBar = typeControl.element;
     controls.appendChild(typeBar);
+    const generatedToggle = document.createElement('a');
+    generatedToggle.className = 'section-link';
+    controls.appendChild(generatedToggle);
 
     function applyStatus(value) {
         currentStatus = value;
@@ -107,10 +111,24 @@ function renderConversationList(container) {
             q: currentQ,
             status: currentStatus,
             type: currentType,
+            include_generated: includeGenerated ? '1' : '',
             cursor: paginator && Number(paginator.cursor) > 0 ? paginator.cursor : '',
             conversation_id: currentConversationId || '',
         });
+        _updateGeneratedToggle();
     }
+
+    function _updateGeneratedToggle() {
+        const url = new URL(window.location.href);
+        if (includeGenerated) {
+            url.searchParams.delete('include_generated');
+        } else {
+            url.searchParams.set('include_generated', '1');
+        }
+        generatedToggle.href = `${url.pathname}${url.search}${url.hash}`;
+        generatedToggle.textContent = includeGenerated ? 'Hide generated/audit work' : 'Show generated/audit work';
+    }
+    _updateGeneratedToggle();
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
@@ -164,12 +182,6 @@ function renderConversationList(container) {
         agentsLink.className = 'section-link';
         agentsLink.textContent = 'Agents';
         links.appendChild(agentsLink);
-
-        const approvalsLink = document.createElement('a');
-        approvalsLink.href = '/ui/approvals';
-        approvalsLink.className = 'section-link';
-        approvalsLink.textContent = 'Approvals';
-        links.appendChild(approvalsLink);
 
         head.appendChild(links);
         quickShell.appendChild(head);
@@ -239,7 +251,8 @@ function renderConversationList(container) {
         try {
             const data = await API.listAgents({ state: 'connected', limit: QUICK_START_INLINE_LIMIT + 1 });
             const agents = (data.agents || data || []).filter(
-                (agent) => String((agent && agent.execution_state) || 'healthy') !== 'faulted',
+                (agent) => String((agent && agent.execution_state) || 'healthy') !== 'faulted'
+                    && !UI.isDefaultHiddenRecord(agent),
             );
             renderQuickStart(agents.slice(0, QUICK_START_INLINE_LIMIT), {
                 hasOverflow: !!data.has_more || agents.length > QUICK_START_INLINE_LIMIT,
@@ -491,7 +504,13 @@ function renderConversationList(container) {
         if (currentType) params.conversation_type = currentType;
         try {
             const data = await API.listConversations(params);
-            renderRows(data.conversations || data || [], data);
+            const rawRows = data.conversations || data || [];
+            const rows = UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated });
+            if (currentConversationId && !rows.some((item) => String(item.conversation_id || '') === String(currentConversationId || ''))) {
+                const selectedHidden = rawRows.find((item) => String(item.conversation_id || '') === String(currentConversationId || ''));
+                if (selectedHidden) rows.unshift(selectedHidden);
+            }
+            renderRows(rows, { ...data, conversations: rows });
         } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh conversations', err, { context: 'Conversation list soft refresh failed' });

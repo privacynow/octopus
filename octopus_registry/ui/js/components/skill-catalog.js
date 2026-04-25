@@ -240,7 +240,9 @@ function renderSkillCatalog(container) {
     let availableAgents = [];
     let allSkills = [];
     let registrySkills = [];
+    let globalRoutingSkills = [];
     let registryError = '';
+    let globalRoutingError = '';
     let selectedLocalDetail = null;
     let selectedLifecycle = null;
     let selectionLoading = false;
@@ -255,7 +257,7 @@ function renderSkillCatalog(container) {
     header.innerHTML = [
         '<h2>Capabilities</h2>',
         '<p class="quiet-note">',
-        'Manage what each bot can do. Capabilities are installed skills that become active in conversations, protocol stages, and defaults for new conversations.',
+        'Find reusable capabilities for conversations and protocol stages. Choose a bot only when you need to manage installation or drafts.',
         '</p>',
     ].join('');
     container.appendChild(header);
@@ -632,6 +634,21 @@ function renderSkillCatalog(container) {
         return RegistrySkillHub.visibleStoreSkills(registrySkills, _queryText());
     }
 
+    function _visibleGlobalCapabilities() {
+        const normalized = _queryText();
+        return (Array.isArray(globalRoutingSkills) ? globalRoutingSkills : [])
+            .filter((item) => {
+                const name = String(item?.skill_name || '').trim();
+                if (!name || UI.isGeneratedTimestampName(name)) return false;
+                if (!normalized) return true;
+                return [name, ...(Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [])]
+                    .join(' ')
+                    .toLowerCase()
+                    .includes(normalized);
+            })
+            .sort((left, right) => String(left.skill_name || '').localeCompare(String(right.skill_name || '')));
+    }
+
     function _findSelectedSkill() {
         return RegistrySkillHub.findSelectedSkill(_visibleLocalSkills(), _visibleStoreSkills(), selectedSkillName);
     }
@@ -675,15 +692,24 @@ function renderSkillCatalog(container) {
     function renderList() {
         if (!currentAgentId) {
             UI.clearMemoizedRender(listEl);
-            const hasEligibleAgents = _eligibleAgents().length > 0;
-            UI.reconcileChildren(listEl, [
-                UI.renderEmptyState(
-                    hasEligibleAgents
-                        ? 'Choose a bot to manage its capabilities.'
-                        : 'No connected bot advertises capability management.',
-                    true,
-                ),
-            ]);
+            const capabilities = _visibleGlobalCapabilities();
+            if (capabilities.length) {
+                UI.reconcileChildren(listEl, [
+                    _sectionLabel('Available capabilities', 'skills-global-heading'),
+                    ...capabilities.map((item) => _renderGlobalCapabilityRow(item)),
+                    ...(globalRoutingError ? [UI.renderEmptyState(`Capability catalog is incomplete. ${globalRoutingError}`, true)] : []),
+                ]);
+            } else {
+                const hasEligibleAgents = _eligibleAgents().length > 0;
+                UI.reconcileChildren(listEl, [
+                    UI.renderEmptyState(
+                        hasEligibleAgents
+                            ? 'No capabilities match this search. Choose a bot to manage installation or drafts.'
+                            : 'No connected bot advertises capability management.',
+                        true,
+                    ),
+                ]);
+            }
             renderDetail();
             return;
         }
@@ -761,6 +787,19 @@ function renderSkillCatalog(container) {
 
     function _sourceBadgeText(skill) {
         return String(skill.source_label || skill.source_kind || 'Skill');
+    }
+
+    function _renderGlobalCapabilityRow(item) {
+        const name = String(item?.skill_name || '').trim();
+        const advertisers = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [];
+        return UI.renderListRow({
+            label: name.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+            sublabel: advertisers.length
+                ? `Available from ${advertisers.join(', ')}`
+                : 'Declared capability; choose a bot to manage installation or drafts.',
+            badgeText: item?.enabled === false ? 'Disabled' : 'Capability',
+            badgeClass: item?.enabled === false ? 'badge-warning' : '',
+        });
     }
 
     function _renderLocalSkillRow(skill, { selected = false } = {}) {
@@ -938,7 +977,22 @@ function renderSkillCatalog(container) {
     function renderDetail() {
         if (!currentAgentId) {
             UI.clearMemoizedRender(detailEl);
-            UI.reconcileChildren(detailEl, []);
+            const panel = document.createElement('section');
+            panel.className = 'editor-panel';
+            const title = document.createElement('h3');
+            title.textContent = 'Capability catalog';
+            panel.appendChild(title);
+            const note = document.createElement('p');
+            note.className = 'quiet-note';
+            note.textContent = 'This default view shows capabilities available for assignment. Choose a bot only when you need to install, draft, import, or review capability implementation.';
+            panel.appendChild(note);
+            if (_eligibleAgents().length) {
+                const manage = document.createElement('p');
+                manage.className = 'quiet-note';
+                manage.textContent = 'Bot management is available from the selector above.';
+                panel.appendChild(manage);
+            }
+            UI.reconcileChildren(detailEl, [panel]);
             return;
         }
         const selected = _findSelectedSkill();
@@ -2373,8 +2427,17 @@ function renderSkillCatalog(container) {
     async function loadAgents({ soft = false } = {}) {
         try {
             const previousAgentId = currentAgentId;
-            const data = await API.listAgents({ limit: 100 });
+            let routingError = '';
+            const [data, routingSkills] = await Promise.all([
+                API.listAgents({ limit: 100 }),
+                API.listRoutingSkills().catch((err) => {
+                    routingError = err.message || String(err);
+                    return [];
+                }),
+            ]);
+            globalRoutingError = routingError;
             availableAgents = Array.isArray(data) ? data : (data.agents || []);
+            globalRoutingSkills = Array.isArray(routingSkills) ? routingSkills : [];
             const requestedAgentId = UI.readQueryParam('agent_id', '');
             if (requestedAgentId) {
                 currentAgentId = requestedAgentId;

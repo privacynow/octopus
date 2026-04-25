@@ -37,6 +37,42 @@ function statusLabel(status) {
   return String(status || '').replace(/^\w/, (char) => char.toUpperCase());
 }
 
+function orderedStageExecutions(detail) {
+  const stageDefinitions = detail.version?.definition_json?.stages || [];
+  const stageOrder = new Map(stageDefinitions.map((stage, index) => [String(stage.stage_key || ''), index]));
+  return [...(detail.stage_executions || [])].sort((left, right) => {
+    const leftOrder = stageOrder.has(String(left.stage_key || ''))
+      ? stageOrder.get(String(left.stage_key || ''))
+      : Number.MAX_SAFE_INTEGER;
+    const rightOrder = stageOrder.has(String(right.stage_key || ''))
+      ? stageOrder.get(String(right.stage_key || ''))
+      : Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    const leftAttempt = Number(left.attempt || 0);
+    const rightAttempt = Number(right.attempt || 0);
+    if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt;
+    return String(left.started_at || '').localeCompare(String(right.started_at || ''));
+  });
+}
+
+test('main navigation swaps content immediately and keeps internal work queues out of default nav', async ({ page }) => {
+  await login(page);
+
+  await page.goto('/ui/approvals', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Protocols', exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/protocols/);
+  await expect(page.getByRole('heading', { name: 'Protocols', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Approvals', exact: true })).toHaveCount(0);
+
+  await page.getByRole('link', { name: 'Runs', exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/runs/);
+  await expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Tasks', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Approvals', exact: true })).toHaveCount(0);
+});
+
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {
   await login(page);
   const { id, detail } = await findRunWithLineage(page);
@@ -54,15 +90,20 @@ test('runs use inline expansion instead of the old split detail board', async ({
   await expect(page.getByRole('tablist', { name: 'Run stage evidence' })).toHaveCount(1);
   await expect(page.locator('.protocol-lineage-card')).toHaveCount(1);
 
-  const stageDefinitions = detail.version?.definition_json?.stages || [];
-  const firstDefinition = stageDefinitions[0] || {};
-  const lastDefinition = stageDefinitions[stageDefinitions.length - 1] || {};
+  const orderedStages = orderedStageExecutions(detail);
+  const stageDefinitions = new Map(
+    (detail.version?.definition_json?.stages || []).map((stage) => [String(stage.stage_key || ''), stage]),
+  );
+  const firstStage = orderedStages[0] || {};
+  const lastStage = orderedStages[orderedStages.length - 1] || {};
+  const firstDefinition = stageDefinitions.get(String(firstStage.stage_key || '')) || {};
+  const lastDefinition = stageDefinitions.get(String(lastStage.stage_key || '')) || {};
   const stageTabs = page.getByRole('tablist', { name: 'Run stage evidence' }).getByRole('tab');
   await expect(stageTabs).toHaveCount(detail.stage_executions.length);
   await stageTabs.first().click();
-  await expect(page.locator('.protocol-lineage-title').first()).toContainText(firstDefinition.display_name || firstDefinition.stage_key || '');
+  await expect(page.locator('.protocol-lineage-title').first()).toContainText(firstDefinition.display_name || firstStage.stage_key || '');
   await stageTabs.last().click();
-  await expect(page.locator('.protocol-lineage-title').first()).toContainText(lastDefinition.display_name || lastDefinition.stage_key || '');
+  await expect(page.locator('.protocol-lineage-title').first()).toContainText(lastDefinition.display_name || lastStage.stage_key || '');
 
   await sectionTabs.filter({ hasText: 'Artifacts' }).click();
   await expect(page.locator('.artifact-list-row').first()).toBeVisible();
@@ -103,8 +144,9 @@ test('runs clear stale selection when the status filter changes', async ({ page 
 test('run participants prefer resolved outcomes over raw running state', async ({ page }) => {
   await login(page);
   const { id, detail } = await findRunWithLineage(page);
-  const participant = (detail.participants || []).find((item) => item.resolution_outcome);
-  test.skip(!participant, 'Need a run participant with a resolved outcome.');
+  const participant = (detail.participants || []).find((item) =>
+    item.resolution_outcome && String(item.resolution_outcome || '') !== String(item.state || 'queued'));
+  test.skip(!participant, 'Need a run participant whose resolved outcome differs from raw state.');
 
   await page.goto(`/ui/runs?run_id=${id}`);
   const sectionTabs = page.getByRole('tablist', { name: 'Run evidence section' }).getByRole('tab');

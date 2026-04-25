@@ -122,14 +122,17 @@ async function applyScenarioAndSubmit(page, session, scenarioName, { artifactCon
     await expect(artifactEditor).toBeVisible();
     await artifactEditor.locator('textarea').fill(String(content || ''));
   }
-  await Promise.all([
-    page.waitForResponse((response) =>
-      response.request().method() === 'POST'
-        && response.url().includes('/rehearsal/respond')
-        && response.ok(),
+  const [response] = await Promise.all([
+    page.waitForResponse((item) =>
+      item.request().method() === 'POST'
+        && item.url().includes('/rehearsal/respond'),
+      { timeout: 30000 },
     ),
     session.getByRole('button', { name: 'Submit response', exact: true }).click(),
   ]);
+  if (!response.ok()) {
+    throw new Error(`Rehearsal response failed with HTTP ${response.status()}: ${await response.text()}`);
+  }
   if (routedTaskId) {
     await expect(page.locator(`.kit-rehearsal-session[data-routed-task-id="${routedTaskId}"]`)).toHaveCount(0, { timeout: 15000 });
   }
@@ -300,15 +303,17 @@ test.describe('protocol authoring live', () => {
     await expect(stageEditor.getByRole('tab', { name: 'Basics', exact: true })).toBeVisible();
     await expect(stageEditor.getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
     await expect(stageEditor.getByRole('heading', { name: 'Step basics' })).toBeVisible();
-    await expect(stageEditor.getByText('New owner role', { exact: true })).toBeVisible();
+    await expect(stageEditor.getByText('New owner role', { exact: true })).toHaveCount(0);
     const assignmentSection = await openStagePanel(page, stageEditor, {
       tab: 'Assignment',
       heading: 'Assignment',
     });
-    await expect(stageEditor.getByRole('tab', { name: 'By skill', exact: true })).toBeVisible();
+    await expect(stageEditor.getByRole('tab', { name: 'No assignment yet', exact: true })).toBeVisible();
+    await expect(stageEditor.getByRole('tab', { name: 'Existing capability', exact: true })).toBeVisible();
     await expect(stageEditor.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
-    await expect(assignmentSection.getByLabel('Required skill', { exact: true })).toBeVisible();
-    await expect(assignmentSection.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
+    await expect(assignmentSection).toContainText('Leave this step unassigned while shaping the workflow.');
+    await expect(assignmentSection.getByLabel('Required capability', { exact: true })).toHaveCount(0);
+    await expect(assignmentSection.getByLabel('Pin matching agent (optional)', { exact: true })).toHaveCount(0);
     await assertStandardAuthoringSurface(stageEditor, { expectDelete: false });
     await page.getByRole('button', { name: 'Cancel' }).click();
 
@@ -321,12 +326,13 @@ test.describe('protocol authoring live', () => {
       tab: 'Assignment',
       heading: 'Assignment',
     });
-    await expect(draftAssignment.getByLabel('Required skill', { exact: true }).first()).toBeVisible();
-    const availableSkillValues = await draftAssignment.getByLabel('Required skill', { exact: true }).first().locator('option').evaluateAll((options) =>
+    await draftAssignment.getByRole('tab', { name: 'Existing capability', exact: true }).click();
+    await expect(draftAssignment.getByLabel('Required capability', { exact: true }).first()).toBeVisible();
+    const availableSkillValues = await draftAssignment.getByLabel('Required capability', { exact: true }).first().locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     );
     if (!availableSkillValues.length) {
-      await expect(draftAssignment).toContainText('No available routing skills were loaded from the registry.');
+      await expect(draftAssignment).toContainText('No available capabilities were loaded from the registry.');
     }
     await page.getByRole('button', { name: 'Cancel' }).click();
 
@@ -410,6 +416,55 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
+  test('blank draft can capture a name-only unassigned step without losing draft state', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openBlankDraft(page);
+
+    const stageKey = await createStep(page, {
+      name: 'Discovery',
+      key: 'discovery',
+      instructions: 'Collect the problem statement before assigning execution.',
+    });
+
+    await selectStep(page, stageKey);
+    const stageEditor = page.locator('.kit-stage-editor').last();
+    const basics = await openStagePanel(page, stageEditor, {
+      tab: 'Basics',
+      heading: 'Step basics',
+    });
+    await expect(basics.getByLabel('Name').first()).toHaveValue('Discovery');
+    await expect(basics.getByLabel('Owner role').first()).toHaveValue('');
+    const assignment = await openStagePanel(page, stageEditor, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
+    await expect(assignment.getByRole('tab', { name: 'No assignment yet', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(assignment).toContainText('Leave this step unassigned while shaping the workflow.');
+
+    await page.getByRole('button', { name: 'Validate' }).click();
+    await expect(page.locator('.kit-validation-list')).toContainText('Assign a participant to discovery');
+    await expect(page.locator('.kit-validation-list')).toContainText('Add an assignment rule for discovery');
+
+    const neededAssignment = await openStagePanel(page, stageEditor, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
+    await neededAssignment.getByRole('tab', { name: 'New capability needed', exact: true }).click();
+    await neededAssignment.getByLabel('Needed capability', { exact: true }).fill('Risk modeling');
+    await neededAssignment.getByLabel('Needed capability', { exact: true }).blur();
+    await waitForSaved(page);
+    await expect(neededAssignment).toContainText('Current assignment: needs new capability Risk Modeling.');
+    await page.getByRole('button', { name: 'Validate' }).click();
+    await expect(page.locator('.kit-validation-list')).toContainText('Assign a participant to discovery');
+    await expect(page.locator('.kit-validation-list')).not.toContainText('Add an assignment rule for discovery');
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
   test('software engineering template opens into one progressive workflow editor', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
@@ -467,10 +522,10 @@ test.describe('protocol authoring live', () => {
       tab: 'Assignment',
       heading: 'Assignment',
     });
-    await expect.poll(async () => assignment.getByLabel('Required skill', { exact: true }).locator('option').evaluateAll((options) =>
+    await expect.poll(async () => assignment.getByLabel('Required capability', { exact: true }).locator('option').evaluateAll((options) =>
       options.map((option) => String(option.value || '')).filter(Boolean),
     )).toContain('product-definition');
-    await assignment.getByLabel('Required skill', { exact: true }).selectOption('architecture');
+    await assignment.getByLabel('Required capability', { exact: true }).selectOption('architecture');
     const pinAgentPillGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]');
     const pinAgentSelect = assignment.locator('select[aria-label="Pin matching agent (optional)"]');
     if (await pinAgentPillGroup.count()) {
@@ -491,7 +546,7 @@ test.describe('protocol authoring live', () => {
       await pinAgentSelect.selectOption(matchingAgentValues[0]);
       await expect(pinAgentSelect).toHaveValue(matchingAgentValues[0]);
     }
-    await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue('architecture');
+    await expect(assignment.getByLabel('Required capability', { exact: true })).toHaveValue('architecture');
     await assignment.getByRole('tab', { name: 'Specific agent', exact: true }).click();
     const agentControl = assignment.getByLabel('Agent', { exact: true });
     const initialPinnedAgentValue = await agentControl.inputValue();
@@ -506,7 +561,7 @@ test.describe('protocol authoring live', () => {
     } else {
       await expect(agentControl).toHaveValue(initialPinnedAgentValue);
     }
-    const optionalSkillControl = assignment.getByLabel('Limit to one of this agent\'s skills (optional)', { exact: true });
+    const optionalSkillControl = assignment.getByLabel('Limit to one of this agent\'s capabilities (optional)', { exact: true });
     const availableAgentSkillLabels = await optionalSkillControl.locator('option').evaluateAll((options) =>
       options.map((option) => String(option.textContent || '').trim()).filter(Boolean),
     );
@@ -520,8 +575,8 @@ test.describe('protocol authoring live', () => {
     if (availableAgentSkills.length) {
       const alternateSkill = availableAgentSkills.find((value) => value !== 'architecture') || availableAgentSkills[0];
       await optionalSkillControl.selectOption(alternateSkill);
-      await expect(assignment.getByRole('tab', { name: 'By skill', exact: true })).toHaveAttribute('aria-selected', 'true');
-      await expect(assignment.getByLabel('Required skill', { exact: true })).toHaveValue(alternateSkill);
+      await expect(assignment.getByRole('tab', { name: 'Existing capability', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(assignment.getByLabel('Required capability', { exact: true })).toHaveValue(alternateSkill);
       const nextPinAgentPillGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]');
       const nextPinAgentSelect = assignment.locator('select[aria-label="Pin matching agent (optional)"]');
       if (await nextPinAgentPillGroup.count()) {
@@ -533,7 +588,7 @@ test.describe('protocol authoring live', () => {
         await expect(nextPinAgentSelect).toHaveValue(alternateAgent || initialPinnedAgentValue);
       }
     } else {
-      await expect(assignment.getByText('Available skills', { exact: true })).toHaveCount(0);
+      await expect(assignment.getByText('Available capabilities', { exact: true })).toHaveCount(0);
     }
     const connectedAgent = await firstExecutionReadyAgent(page);
     expect(connectedAgent.slug).toBeTruthy();
@@ -767,9 +822,9 @@ test.describe('protocol authoring live', () => {
       tab: 'Assignment',
       heading: 'Assignment',
     });
-    await expect(details.getByRole('tab', { name: 'By skill', exact: true })).toBeVisible();
+    await expect(details.getByRole('tab', { name: 'Existing capability', exact: true })).toBeVisible();
     await expect(details.getByRole('tab', { name: 'Specific agent', exact: true })).toBeVisible();
-    await expect(documentAssignment.getByLabel('Required skill', { exact: true })).toBeVisible();
+    await expect(documentAssignment.getByLabel('Required capability', { exact: true })).toBeVisible();
     await expect(documentAssignment.getByLabel('Pin matching agent (optional)', { exact: true })).toBeVisible();
     await assertStandardAuthoringSurface(details);
     await expect(details).toContainText('Current assignment:');

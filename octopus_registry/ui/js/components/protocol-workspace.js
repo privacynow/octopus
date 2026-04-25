@@ -2886,9 +2886,11 @@ function renderProtocolWorkspace(container) {
         const primaryMode = requestedMode === 'advanced' ? 'skill' : requestedMode;
         if (normalizedKind === 'skill') {
             const skillValue = String(selectorValue || '').trim();
-            const skillMode = primaryMode === 'new_capability' || (skillValue && !_isKnownAuthoringSkill(skillValue))
+            const skillMode = primaryMode === 'new_capability'
                 ? 'new_capability'
-                : primaryMode;
+                : skillValue
+                    ? 'skill'
+                    : primaryMode;
             return {
                 mode: skillMode,
                 requiredSkill: skillMode === 'new_capability' ? '' : skillValue,

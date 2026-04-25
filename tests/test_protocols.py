@@ -1185,6 +1185,69 @@ def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres
     assert manifest.operator_surface_available is True
 
 
+def test_registry_store_publishes_protocol_template_as_snapshot(postgres_registry_truncated: str) -> None:
+    from app.db.postgres_init import run_init
+
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    with get_connection(postgres_registry_truncated) as conn:
+        assert run_init(conn) == []
+        conn.commit()
+
+    published = published_protocol(store, slug="template-source")
+    assert published.protocol is not None
+    template_result = store.publish_protocol_template(
+        published.protocol.protocol_id,
+        access=operator_access(),
+    )
+
+    assert template_result.ok is True
+    assert template_result.status == "template_published"
+    assert template_result.protocol is not None
+    assert template_result.protocol.visibility == "registry_template"
+    assert template_result.protocol.lifecycle_state == "published"
+
+    authored_protocols = store.list_protocols(access=operator_access(), limit=100)
+    assert all(item.protocol_id != template_result.protocol.protocol_id for item in authored_protocols)
+    templates = store.list_protocol_templates(access=operator_access())
+    assert any(item.slug == template_result.protocol.slug for item in templates)
+
+    template_document = store.get_protocol_template(template_result.protocol.slug, access=operator_access())
+    assert template_document.metadata.as_dict().get("display_name") == "Mini Protocol Template"
+    assert template_document.stages[0].instructions == "Write protocol/plan.md."
+
+    changed_document = protocol_document()
+    changed_document["metadata"]["slug"] = "template-source"
+    changed_document["metadata"]["display_name"] = "Changed Source"
+    changed_document["stages"][0]["instructions"] = "Changed after the template snapshot."
+    saved = store.save_protocol_draft(
+        access=operator_access(),
+        protocol_id=published.protocol.protocol_id,
+        slug="template-source",
+        display_name="Changed Source",
+        description="Changed after template publish.",
+        definition_json=RegistryJsonRecord.model_validate(changed_document),
+    )
+    assert saved.ok is True
+    republished = store.publish_protocol(published.protocol.protocol_id, access=operator_access())
+    assert republished.ok is True
+
+    reloaded_template = store.get_protocol_template(template_result.protocol.slug, access=operator_access())
+    assert reloaded_template.metadata.as_dict().get("display_name") == "Mini Protocol Template"
+    assert reloaded_template.stages[0].instructions == "Write protocol/plan.md."
+
+    draft_from_template = store.create_protocol_draft(
+        ProtocolDraftCreateRecord(
+            source_kind="template",
+            template_slug=template_result.protocol.slug,
+        ),
+        access=operator_access(),
+    )
+    assert draft_from_template.ok is True
+    assert draft_from_template.protocol is not None
+    assert draft_from_template.protocol.visibility == "org_private"
+    assert draft_from_template.protocol.lifecycle_state == "draft"
+
+
 def test_registry_store_standard_surface_rejects_new_operator_only_selector(
     postgres_registry_truncated: str,
 ) -> None:

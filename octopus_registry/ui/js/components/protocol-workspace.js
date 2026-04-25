@@ -263,6 +263,7 @@ function renderProtocolWorkspace(container) {
     let protocols = [];
     let authoringManifest = null;
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
+    let starterMode = String(UI.readQueryParam('new', '') || '').trim().toLowerCase() === 'template' ? 'template' : '';
     let includeGeneratedCatalog = UI.readQueryParam('include_generated', '') === '1';
     let currentProtocol = null;
     let protocolDetailLoading = false;
@@ -1384,6 +1385,7 @@ function renderProtocolWorkspace(container) {
     function _writeState({ push = false } = {}) {
         UI.updateQueryParams({
             protocol_id: currentProtocolId || '',
+            new: !currentProtocolId && starterMode === 'template' ? 'template' : '',
             run_id: '',
             status: '',
             issue_kind: '',
@@ -1593,6 +1595,7 @@ function renderProtocolWorkspace(container) {
         try {
             const result = await API.createProtocolDraft({ source_kind: 'blank' });
             currentProtocolId = result.protocol?.protocol_id || '';
+            starterMode = '';
             _applyServerDetail(result);
             _writeState({ push: true });
             await loadProtocols({ quiet: true });
@@ -1603,6 +1606,61 @@ function renderProtocolWorkspace(container) {
                 context: 'Protocol draft create failed',
             });
         }
+    }
+
+    async function _createTemplateDraft(template) {
+        const templateSlug = String(template?.slug || '').trim();
+        if (!templateSlug) return;
+        try {
+            const result = await API.createProtocolDraft({
+                source_kind: 'template',
+                template_slug: templateSlug,
+            });
+            currentProtocolId = result.protocol?.protocol_id || '';
+            starterMode = '';
+            _applyServerDetail(result);
+            _writeState({ push: true });
+            await loadProtocols({ quiet: true });
+            render();
+            UI.notify('Protocol draft created from template.', 'success');
+        } catch (err) {
+            UI.reportError('Failed to create a template-based protocol draft', err, {
+                context: 'Template protocol draft create failed',
+            });
+        }
+    }
+
+    function _openStarterChooser() {
+        currentProtocolId = '';
+        currentProtocol = null;
+        protocolDetailLoading = false;
+        starterMode = 'template';
+        _writeState({ push: true });
+        render();
+    }
+
+    function _closeStarterChooser() {
+        starterMode = '';
+        _writeState({ push: true });
+        render();
+    }
+
+    async function _publishTemplateNow() {
+        if (_blockConflictAction('Publish as template')) return;
+        if (!currentProtocolId) return;
+        if (saveState.state === 'editing' || saveState.state === 'saving') {
+            const saved = await _autosave();
+            if (!saved) return;
+        }
+        _clearAutosaveTimer();
+        saveState = { state: 'saving', lastSavedAt: saveState.lastSavedAt, error: '' };
+        _syncLifecycleChip();
+        const result = await API.publishProtocolTemplate(currentProtocolId);
+        await loadAuthoringManifest();
+        await loadProtocols({ quiet: true });
+        saveState = { state: 'saved', lastSavedAt: new Date().toISOString(), error: '' };
+        render();
+        UI.notify(`Template published: ${result?.protocol?.display_name || result?.protocol?.slug || 'Reusable template'}.`, 'success');
     }
 
     // -------------------------------------------------------------------
@@ -3820,6 +3878,20 @@ function renderProtocolWorkspace(container) {
             canRehearse: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
             canDiscard: Boolean(currentProtocolId) && !hasPublishedVersion && saveState.state !== 'conflict',
         };
+        const utilityActions = [{
+            label: 'Protocol settings',
+            onClick: () => _openProtocolSettings(),
+        }];
+        if (hasPublishedVersion && lifecycleState === 'published' && saveState.state !== 'conflict') {
+            utilityActions.push({
+                label: 'Publish as template',
+                onClick: () => UI.showConfirm(
+                    'Publish template',
+                    'Create a reusable starter snapshot from the currently published protocol version?',
+                    async () => { await _publishTemplateNow(); },
+                ),
+            });
+        }
         return Kit.lifecycleHeader({
             surfaceKey: 'protocol',
             record,
@@ -3828,10 +3900,7 @@ function renderProtocolWorkspace(container) {
             compact: true,
             primaryActions: ['validate', 'publish', 'rehearse'],
             secondaryActions: ['archive', 'discard'],
-            utilityActions: [{
-                label: 'Protocol settings',
-                onClick: () => _openProtocolSettings(),
-            }],
+            utilityActions,
             actions: {
                 validate: () => void _validateNow().catch((err) => UI.reportError('Validation failed', err)),
                 publish: () => void _publishNow().catch((err) => UI.reportError('Publish failed', err)),
@@ -3931,7 +4000,7 @@ function renderProtocolWorkspace(container) {
                     { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
                     { label: 'Define shared files', tone: '', onClick: () => _openArtifactCatalog() },
                     { label: 'Open skills catalog', tone: '', onClick: () => Router.navigate('/ui/skills') },
-                    { label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/gallery') },
+                    { label: Kit.dict.label('protocol.catalog.gallery'), tone: '', onClick: () => Router.navigate('/ui/protocols?new=template') },
                 ],
             }
             : null;
@@ -5710,13 +5779,115 @@ function renderProtocolWorkspace(container) {
             : ['workspace_file', 'control_plane_text'];
     }
 
+    function _starterChooserEl() {
+        const templates = Array.isArray(authoringManifest?.templates) ? authoringManifest.templates : [];
+        const shell = document.createElement('section');
+        shell.className = 'editor-panel protocol-panel';
+        shell.dataset.testid = 'protocol-starter';
+
+        const head = document.createElement('div');
+        head.className = 'kit-catalog-hero';
+        const copy = document.createElement('div');
+        copy.className = 'kit-catalog-hero-copy';
+        const title = document.createElement('h3');
+        title.className = 'kit-catalog-hero-title';
+        title.textContent = 'Start a protocol';
+        copy.appendChild(title);
+        const body = document.createElement('p');
+        body.className = 'kit-catalog-hero-body';
+        body.textContent = 'Create a blank workflow, or copy a published template into a separate draft you can edit without changing the template.';
+        copy.appendChild(body);
+        head.appendChild(copy);
+        shell.appendChild(head);
+
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        const blank = document.createElement('button');
+        blank.type = 'button';
+        blank.className = 'btn btn-primary';
+        blank.textContent = 'Start blank';
+        blank.addEventListener('click', () => void _createBlankDraft());
+        actions.appendChild(blank);
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'btn';
+        cancel.textContent = 'Close';
+        cancel.addEventListener('click', _closeStarterChooser);
+        actions.appendChild(cancel);
+        shell.appendChild(actions);
+
+        const list = document.createElement('div');
+        list.className = 'kit-catalog-list';
+        if (!templates.length) {
+            list.appendChild(UI.renderEmptyState('No starter templates are available in this registry.', true));
+            shell.appendChild(list);
+            return shell;
+        }
+        templates.forEach((template) => {
+            const card = document.createElement('section');
+            card.className = 'kit-catalog-card protocol-template-card';
+            const top = document.createElement('div');
+            top.className = 'kit-catalog-card-top';
+            const copyBlock = document.createElement('div');
+            copyBlock.className = 'kit-catalog-card-copy';
+            const cardTitle = document.createElement('div');
+            cardTitle.className = 'kit-catalog-card-title';
+            cardTitle.textContent = String(template.display_name || template.slug || 'Template');
+            copyBlock.appendChild(cardTitle);
+            const slug = document.createElement('div');
+            slug.className = 'kit-catalog-card-slug';
+            slug.textContent = String(template.slug || '');
+            copyBlock.appendChild(slug);
+            top.appendChild(copyBlock);
+            card.appendChild(top);
+
+            const description = document.createElement('p');
+            description.className = 'kit-catalog-card-body';
+            description.textContent = String(template.description || 'Reusable workflow starter.');
+            card.appendChild(description);
+
+            const meta = document.createElement('div');
+            meta.className = 'kit-catalog-card-meta';
+            [
+                `${Number(template.participant_count || 0)} roles`,
+                `${Number(template.stage_count || 0)} steps`,
+                `${Number(template.artifact_count || 0)} files`,
+            ].forEach((label) => {
+                const item = document.createElement('span');
+                item.className = 'kit-catalog-card-meta-item';
+                item.textContent = label;
+                meta.appendChild(item);
+            });
+            card.appendChild(meta);
+
+            const cardActions = document.createElement('div');
+            cardActions.className = 'editor-actions';
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'btn btn-primary';
+            use.textContent = 'Use template';
+            use.addEventListener('click', () => void _createTemplateDraft(template));
+            cardActions.appendChild(use);
+            card.appendChild(cardActions);
+            list.appendChild(card);
+        });
+        shell.appendChild(list);
+        return shell;
+    }
+
     function _catalogEl() {
         const records = UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog });
+        const wrapper = document.createElement('div');
+        wrapper.className = 'protocol-catalog-shell';
+        if (starterMode === 'template') {
+            wrapper.appendChild(_starterChooserEl());
+        }
         const catalog = Kit.authoredCatalog({
             records,
             surfaceKey: 'protocol',
             onOpen: (record) => {
                 currentProtocolId = String(record.protocol_id || '');
+                starterMode = '';
                 currentProtocol = null;
                 protocolDetailLoading = true;
                 _writeState({ push: true });
@@ -5725,11 +5896,7 @@ function renderProtocolWorkspace(container) {
             },
             createAction: {
                 label: 'New protocol',
-                onClick: () => void _createBlankDraft(),
-            },
-            secondaryAction: {
-                label: Kit.dict.label('protocol.catalog.gallery'),
-                onClick: () => Router.navigate('/ui/gallery'),
+                onClick: _openStarterChooser,
             },
             compactGeneratedFamilies: true,
         });
@@ -5745,7 +5912,8 @@ function renderProtocolWorkspace(container) {
             });
             controls.appendChild(toggle);
         }
-        return catalog;
+        wrapper.appendChild(catalog);
+        return wrapper;
     }
 
     function render() {

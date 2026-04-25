@@ -158,6 +158,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "created?.run?.protocol_run_id" in workspace
     assert "API.saveProtocolDraft(" in workspace
     assert "API.publishProtocol(" in workspace
+    assert "API.publishProtocolTemplate(" in workspace
     assert "API.archiveProtocol(" in workspace
     assert "API.deleteProtocol(" in workspace
     assert "API.validateProtocol(" in workspace
@@ -309,8 +310,10 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
 
     # Router wiring
-    assert "Router.register('/ui/templates', renderGallery);" in app_js
-    assert "Router.register('/ui/gallery', renderGallery);" in app_js
+    assert "function renderProtocolTemplateRedirect(" in app_js
+    assert "Router.register('/ui/templates', renderProtocolTemplateRedirect);" in app_js
+    assert "Router.register('/ui/gallery', renderProtocolTemplateRedirect);" in app_js
+    assert "renderGallery" not in app_js
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
     assert "path.startsWith('/ui/protocol-runs')" not in router_js
@@ -397,11 +400,11 @@ def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     assert "href: '/ui/protocols'" in dashboard
     assert "`/ui/runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`" in dashboard
     assert "'/ui/runs?issue_kind=all'" in dashboard
-    assert 'href="/ui/templates"' in index_html
+    assert 'href="/ui/templates"' not in index_html
     assert 'href="/ui/protocols"' in index_html
     assert '<li class="nav-group">Team</li>' not in index_html
-    assert index_html.index('<li class="nav-group">Work</li>') < index_html.index('href="/ui/conversations"') < index_html.index('href="/ui/runs"') < index_html.index('<li class="nav-group">Build</li>')
-    assert index_html.index('<li class="nav-group">Build</li>') < index_html.index('href="/ui/agents"') < index_html.index('<li class="nav-group">Operations</li>')
+    assert index_html.index('<li class="nav-group">Work</li>') < index_html.index('href="/ui/conversations"') < index_html.index('href="/ui/runs"') < index_html.index('href="/ui/agents"') < index_html.index('<li class="nav-group">Build</li>')
+    assert index_html.index('<li class="nav-group">Build</li>') < index_html.index('href="/ui/protocols"') < index_html.index('href="/ui/skills"') < index_html.index('<li class="nav-group">Operations</li>')
     assert index_html.index('<li class="nav-group">Operations</li>') < index_html.index('href="/ui/"')
 
 

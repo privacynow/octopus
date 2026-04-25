@@ -752,6 +752,17 @@ class AbstractRegistryStore(Protocol):
     def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Publish the current validated draft as a new immutable version."""
 
+    def publish_protocol_template(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        slug: str = "",
+        display_name: str = "",
+        description: str = "",
+    ) -> ProtocolMutationRecord:
+        """Publish the latest immutable version as a reusable template snapshot."""
+
     def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Archive one published protocol definition."""
 

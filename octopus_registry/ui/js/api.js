@@ -323,6 +323,8 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
         publishProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
+        publishProtocolTemplate: (id, body = {}) =>
+            request('POST', `/v1/protocols/${encodeURIComponent(id)}/template`, { body }),
         archiveProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
         exportProtocolDraft: (id, format = 'json') =>

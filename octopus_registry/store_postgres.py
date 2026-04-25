@@ -1252,6 +1252,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.publish_protocol(protocol_id, access=access)
 
+    def publish_protocol_template(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        slug: str = "",
+        display_name: str = "",
+        description: str = "",
+    ) -> ProtocolMutationRecord:
+        return self._protocol_store.publish_protocol_template(
+            protocol_id,
+            access=access,
+            slug=slug,
+            display_name=display_name,
+            description=description,
+        )
+
     def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.archive_protocol(protocol_id, access=access)
 

@@ -360,6 +360,25 @@ def build_protocol_router(
         await broadcast_invalidations(topics=("protocols",), reason="protocol.published")
         return _json_payload(result)
 
+    @router.post("/v1/protocols/{protocol_id}/template")
+    async def resource_publish_protocol_template(
+        protocol_id: str,
+        payload: dict[str, Any] = Body(default_factory=dict),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.publish_protocol_template(
+            protocol_id,
+            access=protocol_access(auth),
+            slug=str(payload.get("slug", "") or ""),
+            display_name=str(payload.get("display_name", "") or ""),
+            description=str(payload.get("description", "") or ""),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols",), reason="protocol.template.published")
+        return _json_payload(result)
+
     @router.post("/v1/protocols/{protocol_id}/archive")
     async def resource_archive_protocol(
         protocol_id: str,

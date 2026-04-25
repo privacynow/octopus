@@ -78,6 +78,7 @@ def test_registry_store_protocol_delegates_match_adapter_signatures() -> None:
         "delete_protocol",
         "validate_protocol",
         "publish_protocol",
+        "publish_protocol_template",
         "archive_protocol",
         "list_protocol_runs",
         "list_protocol_issues",

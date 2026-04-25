@@ -1242,6 +1242,7 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
     assert "/v1/protocols/parse" in paths
     assert "/v1/protocols/{protocol_id}/draft/export" in paths
     assert "/v1/protocols/{protocol_id}/diff" in paths
+    assert "/v1/protocols/{protocol_id}/template" in paths
     assert paths["/v1/protocol-drafts"]["post"]["requestBody"]
     run_list_parameters = {
         item["name"]

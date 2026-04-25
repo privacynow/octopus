@@ -188,26 +188,38 @@ async function createAndPublishCustomSkill(page, {
   description,
   body,
 } = {}) {
+  const displayName = skillName
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
   await page.goto('/ui/skills', { waitUntil: 'domcontentloaded' });
   const agentSelect = page.getByLabel('Managed bot', { exact: true });
   await expect.poll(async () => agentSelect.locator('option').evaluateAll((options) =>
     options.map((option) => String(option.value || '')).filter(Boolean),
   )).toContain(agentId);
   await agentSelect.selectOption(agentId);
-  await page.getByRole('button', { name: 'New capability', exact: true }).click();
+  const existingSkill = page.locator('button').filter({ hasText: displayName });
+  const newCapability = page.getByRole('button', { name: 'New capability', exact: true });
+  await expect.poll(async () => {
+    const existingCount = await existingSkill.count();
+    const newCapabilityCount = await newCapability.count();
+    return existingCount > 0 || newCapabilityCount > 0 ? 'ready' : '';
+  }, { timeout: 30000 }).toBe('ready');
+  if (await existingSkill.count()) {
+    await existingSkill.first().click();
+    await expect(page.locator('.capability-inline-detail').filter({ hasText: displayName }).first()).toContainText('published', { timeout: 30000 });
+    return;
+  }
+  await expect(newCapability).toBeVisible({ timeout: 15000 });
+  await newCapability.click();
   const dialog = page.getByRole('dialog', { name: 'Create custom draft' });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel('Capability slug', { exact: true }).fill(skillName);
   await dialog.getByLabel('Short description', { exact: true }).fill(description);
   await dialog.getByRole('button', { name: 'Create draft', exact: true }).click();
   await expect.poll(() => page.url(), { timeout: 20000 }).toContain(`skill=${encodeURIComponent(skillName)}`);
-  await page.getByPlaceholder('Display name').fill(
-      skillName
-      .split('-')
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' '),
-  );
+  await page.getByPlaceholder('Display name').fill(displayName);
   await page.getByPlaceholder('Short description').last().fill(description);
   await page.getByPlaceholder('Draft instructions').fill(body);
   await page.getByRole('tab', { name: 'Review', exact: true }).click();
@@ -848,6 +860,37 @@ test.describe('protocol authoring live', () => {
     await expect(details).toContainText('Current assignment:');
 
     await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
+  test('published protocol can be copied into the protocol starter chooser', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openTemplateDraft(page, 'Document Approval', { expectedStageKeys: DOCUMENT_APPROVAL_STAGE_KEYS });
+    const sourceName = `Reusable Source ${Date.now()}`;
+    const lifecycle = page.locator('.kit-lifecycle-header');
+    await lifecycle.getByLabel('Name').fill(sourceName);
+    await lifecycle.getByLabel('Name').blur();
+    await waitForSaved(page);
+    await page.getByRole('button', { name: 'Validate', exact: true }).click();
+    await page.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
+
+    await lifecycle.getByRole('button', { name: 'Protocol', exact: true }).click();
+    await expect(lifecycle.getByRole('button', { name: 'Publish as template', exact: true })).toBeVisible();
+    await lifecycle.getByRole('button', { name: 'Publish as template', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+    await expect(page.locator('.toast-message').filter({ hasText: 'Template published:' })).toBeVisible({ timeout: 15000 });
+
+    await page.goto('/ui/protocols?new=template', { waitUntil: 'domcontentloaded' });
+    const templateCard = page.locator('.protocol-template-card').filter({ hasText: sourceName });
+    await expect(templateCard).toBeVisible({ timeout: 15000 });
+    await templateCard.getByRole('button', { name: 'Use template', exact: true }).click();
+    await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
+    await expect(page.locator('.kit-lifecycle-header').getByLabel('Name')).toHaveValue(`${sourceName} Template Draft`, { timeout: 15000 });
+
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });

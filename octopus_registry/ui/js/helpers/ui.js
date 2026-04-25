@@ -225,10 +225,6 @@ window.UI = (() => {
         } else if (isAction && !usePressableContainer) {
             row.type = 'button';
         }
-        if (usePressableContainer) {
-            row.setAttribute('aria-label', [label, sublabel, badgeText].filter(Boolean).join(' · '));
-        }
-
         const main = document.createElement('div');
         main.className = 'list-row-main';
 
@@ -275,7 +271,9 @@ window.UI = (() => {
                 onClick(event);
             };
             if (usePressableContainer) {
-                makePressable(row, activate);
+                main.classList.add('list-row-pressable');
+                main.setAttribute('aria-label', [label, sublabel, badgeText].filter(Boolean).join(' · '));
+                makePressable(main, activate);
             } else {
                 row.addEventListener('click', activate);
             }

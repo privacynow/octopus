@@ -90,6 +90,9 @@ before broad audit or implementation claims continue.
   capability (`assistant-workflow-composer-demo`) instead of generating new
   hidden E2E capability names that pollute or disappear from the default
   catalog.
+- `P3.12` and `P6.4`: artifact rows with Preview/Open/Download/Copy actions no
+  longer expose the entire artifact card as a single accessibility button; the
+  row text remains the row action and artifact actions remain separate controls.
 
 Verified current state:
 
@@ -111,7 +114,8 @@ Verified current state:
   Work/Build/Operations nav, filtered Runs default, and conversation pagination
   Previous/Next/cursor behavior.
 - Real Safari on deployed commit `b086911` confirmed default Runs hide
-  generated/audit executions until the explicit toggle.
+  generated/audit executions until the explicit toggle and verified run
+  artifact drill-through to preview/copy actions before the accessibility patch.
 
 ### Pending Local Patch
 
@@ -315,7 +319,7 @@ Open IA decisions:
 | B2 | M3 cannot start. | Claude auth file is zero bytes; container exits. User explicitly excluded M3 from this execution. | Do not claim all-agent verification until M3 auth is restored. |
 | B3 | Generated/rehearsal/test data dominated default pages. | Patched through shared visibility predicate across default pages with audit/generated toggles; Runs, Conversations, Protocols, Dashboard, Delegations, Agents, Capabilities, and Usage are covered by automated checks; Runs filtering was rechecked in real Safari after deploy. | Keep as regression coverage and include the same forbidden-data checks in the broad audit. |
 | B4 | Protocol catalog was flooded by generated drafts. | Done for default catalog: real Safari shows only canonical drafts until `Show generated drafts`. | Keep regression coverage and revisit only if product needs a richer archive view. |
-| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Shared artifact action rows already exist in Runs, Tasks, and task-board conversation context; Runs Overview now links progressively into Stages and Artifacts; protocol E2E verifies run artifact preview/download and stage-task drill-through. | Complete real-Safari drill-through from Conversation -> linked work -> Run -> Stage task -> artifact actions. |
+| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Shared artifact action rows already exist in Runs, Tasks, and task-board conversation context; Runs Overview now links progressively into Stages and Artifacts; protocol E2E verifies run artifact preview/download and stage-task drill-through; real Safari verified run -> Artifacts -> Preview on a data-analysis run. | Complete real-Safari drill-through from Conversation -> linked work -> Run -> Stage task -> artifact actions. |
 
 ## Findings
 
@@ -351,7 +355,7 @@ Open IA decisions:
 | P3.1 | Active | Dashboard is an operational index, not a clean user Work surface. | Move/redesign Dashboard and assert nav placement. |
 | P3.5 | Partial | Approvals empty queue was a dead top-level destination. | Default nav hides it; contextual approval still tested. |
 | P3.8 | Partial | Expanded Runs now use Overview as a real entry point instead of rendering stage evidence by default; broad Safari verification still needed. | Progressive Overview/Stages/Artifacts/Audit tests. |
-| P3.12 | Active | Artifact actions must be invariant everywhere. | Shared artifact row tests in runs, stages, tasks, conversations. |
+| P3.12 | Partial | Artifact actions use shared Preview/Open/Download/Copy behavior and row/action accessibility is fixed; remaining work is exhaustive cross-surface verification. | Shared artifact row tests in runs, stages, tasks, conversations. |
 | P3.13 | Active | Stale leases can read as ordinary `running`. | Stuck-lease row and overview assertions. |
 | P3.14 | Done | Default filtering is patched for Runs, Dashboard, Conversations, Agents, Protocols, Delegations, Capabilities, and Usage. | Real Safari broad-audit regression checks. |
 
@@ -383,7 +387,7 @@ Open IA decisions:
 |----|--------|---------|--------------|
 | P6.1 | Planned | Breakpoints can create layout jumps. | Breakpoint review. |
 | P6.3 | Planned | Protocol full rerender can cause keyboard/AT focus loss. | Keyboard focus preservation test. |
-| P6.4 | Planned | Icon-only controls need ARIA verification. | Axe and manual keyboard pass. |
+| P6.4 | Partial | Artifact action buttons are no longer nested under a single row button; broader ARIA verification remains. | Axe and manual keyboard pass. |
 | P6.5 | Planned | Theme contrast is not systematically measured. | Light/dark contrast audit. |
 | P6.11 | Planned | Mobile matrix is incomplete. | Mobile route matrix. |
 | P6.12 | Planned | IA success metrics are undefined. | Define clicks/time-to-output measures. |

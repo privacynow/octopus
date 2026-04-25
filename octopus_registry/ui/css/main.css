@@ -903,6 +903,11 @@ select {
     flex: 1;
 }
 
+.list-row-pressable {
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+
 .list-row-label,
 .settings-row-label {
     font-weight: 600;

@@ -153,7 +153,7 @@ test('runs clear stale selection when the status filter changes', async ({ page 
   const target = runs.find((run) => run.protocol_run_id && run.status && run.status !== selected.status);
   test.skip(!target, 'Need at least two run statuses to verify stale selection clearing.');
 
-  await page.goto(`/ui/runs?run_id=${selected.protocol_run_id}`);
+  await page.goto(`/ui/runs?run_id=${selected.protocol_run_id}&include_generated=1`);
   await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(1);
   await page.locator('.kit-runs-filter-chip').filter({ hasText: statusLabel(target.status) }).click();
   await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(0);
@@ -183,7 +183,7 @@ test('run participants prefer resolved outcomes over raw running state', async (
 
 test('conversation list exposes inline context before opening the full workspace', async ({ page }) => {
   await login(page);
-  await page.goto('/ui/conversations');
+  await page.goto('/ui/conversations?type=task_thread&include_generated=1');
   await expect(page.locator('.conversation-list-route-shell')).toHaveCount(1);
   const rows = page.locator('.conversation-list-entry .list-row');
   await expect(rows.first()).toBeVisible();
@@ -207,7 +207,7 @@ test('conversation pagination is visible and addressable', async ({ page }) => {
   const payload = await listResponse.json();
   test.skip(!payload.has_more, 'Need more than one page of conversations to verify pagination.');
 
-  await page.goto('/ui/conversations');
+  await page.goto('/ui/conversations?include_generated=1');
   const pagination = page.locator('.conversation-list-route-shell .pagination');
   await expect(pagination).toBeVisible();
   await expect(pagination).toContainText('Page 1');
@@ -226,11 +226,12 @@ test('conversation pagination is visible and addressable', async ({ page }) => {
 
 test('tasks keep one inline detail open at a time', async ({ page }) => {
   await login(page);
-  await page.goto('/ui/tasks');
+  const { id } = await findRunWithLineage(page);
+  await page.goto(`/ui/tasks?protocol_run_id=${encodeURIComponent(id)}`);
   const rows = page.locator('.task-item-row');
-  await expect(rows.first()).toBeVisible();
   const rowCount = await rows.count();
   test.skip(rowCount < 2, 'Need at least two tasks to verify single-detail expansion.');
+  await expect(rows.first()).toBeVisible();
 
   await rows.nth(0).click();
   await expect(rows.nth(0)).toHaveAttribute('aria-expanded', 'true');

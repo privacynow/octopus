@@ -667,6 +667,7 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "isGeneratedOrRehearsalText" in helper
 
     assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
+    assert "let currentType = UI.readQueryParam('type', 'conversation');" in conversation_list
     assert "&& !UI.isDefaultHiddenRecord(agent)" in conversation_list
     assert "Show generated/audit work" in conversation_list
     assert "approvalsLink" not in conversation_list

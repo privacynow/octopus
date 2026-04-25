@@ -49,6 +49,9 @@ before broad audit or implementation claims continue.
   Dashboard, Capabilities agent eligibility, Delegations, and the Protocol
   catalog hide those records by default and expose explicit audit/generated
   toggles where a user may need to inspect them.
+- `P5.10`: Conversations now default to direct conversations instead of `All`;
+  protocol-generated delegation threads remain available through the
+  `Delegation threads`/`All` filters and generated/audit toggle.
 - `P1.5`: `/ui/tasks` is reframed as `Delegations` for standalone work. When
   opened with `protocol_run_id`, it becomes `Run stage tasks` and shows those
   tasks as children of that run instead of as peer work.
@@ -68,8 +71,9 @@ Verified current state:
 - `git diff --check` was clean.
 - `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed locally after the
   default-surface and rehearsal-session fixes.
-- `tests/e2e/playwright/registry-work-surface.spec.js`: 9 passed locally after
-  the default-surface fixes.
+- `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
+  locally after the default-surface fixes; the skipped task-detail test requires
+  a run with at least two routed stage tasks in the current data set.
 - `tests/test_registry_ui_contract.py`: 41 passed locally after contract updates.
 - Real Safari confirmed hard-refresh discipline, Capabilities filtering/detail,
   Work/Build/Operations nav, and conversation pagination Previous/Next/cursor
@@ -77,9 +81,10 @@ Verified current state:
 
 ### Pending Local Patch
 
-Default-surface filtering, generated protocol catalog cleanup, Delegations/Run
-stage task reframing, and rehearsal-session test hardening are implemented
-locally and awaiting commit/deploy/real-Safari verification.
+Default-surface filtering, generated protocol catalog cleanup, Conversations
+default-direct filtering, Delegations/Run stage task reframing, and
+rehearsal-session test hardening are implemented locally and awaiting
+commit/deploy/real-Safari verification.
 
 ### Deployment Blocker
 

@@ -19,7 +19,7 @@ function renderConversationList(container) {
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentQ = UI.readQueryParam('q', '');
     let currentStatus = UI.readQueryParam('status', '');
-    let currentType = UI.readQueryParam('type', '');
+    let currentType = UI.readQueryParam('type', 'conversation');
     let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     const initialCursor = Math.max(0, Number.parseInt(UI.readQueryParam('cursor', '0'), 10) || 0);
     const initialCursorStack = [];

@@ -246,6 +246,10 @@ function renderSkillCatalog(container) {
     let globalRoutingError = '';
     let selectedLocalDetail = null;
     let selectedLifecycle = null;
+    let selectedGlobalDetail = null;
+    let selectedGlobalDetailAgent = null;
+    let selectedGlobalDetailError = null;
+    let globalSelectionLoading = false;
     let selectionLoading = false;
     let draftBuffer = null;
     let draftDirty = false;
@@ -665,6 +669,26 @@ function renderSkillCatalog(container) {
             String(item?.skill_name || '').trim().toLowerCase() === normalized) || null;
     }
 
+    function _globalCapabilityAdvertisers(item) {
+        return Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [];
+    }
+
+    function _globalCapabilityAgents(item) {
+        const advertisers = _globalCapabilityAdvertisers(item)
+            .map((value) => String(value || '').trim().toLowerCase())
+            .filter(Boolean);
+        if (!advertisers.length) return [];
+        return _eligibleAgents().filter((agent) => {
+            const names = [
+                agent.agent_id,
+                agent.slug,
+                agent.display_name,
+                UI.visibleLabel(agent.display_name, agent.slug, agent.agent_id),
+            ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+            return names.some((value) => advertisers.includes(value));
+        });
+    }
+
     function _findSelectedSkill() {
         return RegistrySkillHub.findSelectedSkill(_visibleLocalSkills(), _visibleStoreSkills(), selectedSkillName);
     }
@@ -694,33 +718,44 @@ function renderSkillCatalog(container) {
         }
         selectedLocalDetail = null;
         selectedLifecycle = null;
+        selectedGlobalDetail = null;
+        selectedGlobalDetailAgent = null;
+        selectedGlobalDetailError = null;
+        globalSelectionLoading = selectedSkillOrigin === 'global' && Boolean(selectedSkillName);
         selectionLoading = selectedSkillOrigin === 'local' && Boolean(selectedSkillName);
         if (selectedSkillOrigin !== 'local') {
             _clearDraftState();
         }
         _writeState();
         renderList();
-        if (selectedSkillOrigin === 'local') {
+        if (selectedSkillOrigin === 'global' || selectedSkillOrigin === 'local') {
             await loadSelectionData();
         }
     }
 
     function renderList() {
+        _syncCatalogLayout();
         if (!currentAgentId) {
             UI.clearMemoizedRender(listEl);
             const capabilities = _visibleGlobalCapabilities();
             if (capabilities.length) {
                 UI.reconcileChildren(listEl, [
+                    _renderGlobalCatalogIntro(),
                     _sectionLabel('Available capabilities', 'skills-global-heading'),
                     ...capabilities.map((item) => _renderGlobalCapabilityRow(item, {
                         selected: String(selectedSkillOrigin || '') === 'global'
                             && String(selectedSkillName || '').trim().toLowerCase() === String(item?.skill_name || '').trim().toLowerCase(),
+                        detail: selectedGlobalDetail,
+                        detailAgent: selectedGlobalDetailAgent,
+                        detailError: selectedGlobalDetailError,
+                        loading: globalSelectionLoading,
                     })),
                     ...(globalRoutingError ? [UI.renderEmptyState(`Capability catalog is incomplete. ${globalRoutingError}`, true)] : []),
                 ]);
             } else {
                 const hasEligibleAgents = _eligibleAgents().length > 0;
                 UI.reconcileChildren(listEl, [
+                    _renderGlobalCatalogIntro(),
                     UI.renderEmptyState(
                         hasEligibleAgents
                             ? 'No capabilities match this search. Choose a bot to manage installation or drafts.'
@@ -796,6 +831,32 @@ function renderSkillCatalog(container) {
         renderDetail();
     }
 
+    function _syncCatalogLayout() {
+        const inlineCatalog = !currentAgentId;
+        workspace.classList.toggle('dashboard-board-stacked', inlineCatalog);
+        detailEl.hidden = inlineCatalog;
+    }
+
+    function _renderGlobalCatalogIntro() {
+        const panel = document.createElement('section');
+        panel.className = 'editor-panel';
+        panel.dataset.key = 'capability-catalog-intro';
+        const title = document.createElement('h3');
+        title.textContent = 'Capability catalog';
+        panel.appendChild(title);
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'This default view shows capabilities available for assignment. Choose a bot only when you need to install, draft, import, or review capability implementation.';
+        panel.appendChild(note);
+        if (_eligibleAgents().length) {
+            const manage = document.createElement('p');
+            manage.className = 'quiet-note';
+            manage.textContent = 'Bot management is available from the selector above.';
+            panel.appendChild(manage);
+        }
+        return panel;
+    }
+
     function _sectionLabel(text, key) {
         const el = document.createElement('div');
         el.className = 'list-section-label';
@@ -808,10 +869,20 @@ function renderSkillCatalog(container) {
         return String(skill.source_label || skill.source_kind || 'Skill');
     }
 
-    function _renderGlobalCapabilityRow(item, { selected = false } = {}) {
+    function _renderGlobalCapabilityRow(item, {
+        selected = false,
+        detail = null,
+        detailAgent = null,
+        detailError = null,
+        loading = false,
+    } = {}) {
         const name = String(item?.skill_name || '').trim();
-        const advertisers = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [];
-        return UI.renderListRow({
+        const shellRow = document.createElement('article');
+        shellRow.className = 'conversation-list-entry capability-list-entry';
+        shellRow.dataset.key = `global:${name}`;
+        if (selected) shellRow.classList.add('is-selected');
+        const advertisers = _globalCapabilityAdvertisers(item);
+        const row = UI.renderListRow({
             label: _globalCapabilityLabel(item),
             sublabel: advertisers.length
                 ? `Available from ${advertisers.join(', ')}`
@@ -820,11 +891,26 @@ function renderSkillCatalog(container) {
             badgeClass: item?.enabled === false ? 'badge-warning' : '',
             onClick: () => {
                 _runWithDraftGuard(async () => {
+                    if (selected) {
+                        await _selectSkill('', 'global');
+                        return;
+                    }
                     await _selectSkill(name, 'global');
                 });
             },
             className: selected ? 'is-selected' : '',
         });
+        row.setAttribute('aria-expanded', String(selected));
+        shellRow.appendChild(row);
+        if (selected) {
+            shellRow.appendChild(_renderGlobalCapabilityDetail(item, {
+                detail,
+                detailAgent,
+                detailError,
+                loading,
+            }));
+        }
+        return shellRow;
     }
 
     function _renderLocalSkillRow(skill, { selected = false } = {}) {
@@ -933,10 +1019,18 @@ function renderSkillCatalog(container) {
     }
 
     async function loadSelectionData({ soft = false } = {}) {
+        if (!currentAgentId && selectedSkillOrigin === 'global') {
+            await loadGlobalSelectionData({ soft });
+            return;
+        }
         const selected = _findSelectedSkill();
         if (!currentAgentId || !selected || selected.origin !== 'local') {
             selectedLocalDetail = null;
             selectedLifecycle = null;
+            selectedGlobalDetail = null;
+            selectedGlobalDetailAgent = null;
+            selectedGlobalDetailError = null;
+            globalSelectionLoading = false;
             selectionLoading = false;
             _clearDraftState();
             renderDetail();
@@ -999,30 +1093,70 @@ function renderSkillCatalog(container) {
         }
     }
 
+    async function loadGlobalSelectionData({ soft = false } = {}) {
+        const selectedGlobal = _findSelectedGlobalCapability();
+        if (!selectedGlobal) {
+            selectedGlobalDetail = null;
+            selectedGlobalDetailAgent = null;
+            selectedGlobalDetailError = null;
+            globalSelectionLoading = false;
+            renderList();
+            return;
+        }
+        const skillName = String(selectedGlobal.skill_name || '').trim();
+        const candidates = _globalCapabilityAgents(selectedGlobal);
+        if (!skillName || !candidates.length) {
+            selectedGlobalDetail = null;
+            selectedGlobalDetailAgent = null;
+            selectedGlobalDetailError = null;
+            globalSelectionLoading = false;
+            renderList();
+            return;
+        }
+        globalSelectionLoading = true;
+        selectedGlobalDetailError = null;
+        renderList();
+        let lastError = null;
+        for (const agent of candidates) {
+            try {
+                const detail = await UI.loadCachedData(
+                    RegistrySkillHub.detailCacheKey(agent.agent_id, skillName),
+                    () => API.getSkillDetail(agent.agent_id, skillName),
+                    {
+                        ttlMs: SKILL_DETAIL_CACHE_TTL_MS,
+                        errorTtlMs: CACHE_ERROR_TTL_MS,
+                        forceRefresh: false,
+                    },
+                );
+                if (String(selectedSkillName || '').trim().toLowerCase() !== skillName.toLowerCase()
+                    || selectedSkillOrigin !== 'global'
+                    || currentAgentId) {
+                    return;
+                }
+                selectedGlobalDetail = detail || null;
+                selectedGlobalDetailAgent = agent;
+                globalSelectionLoading = false;
+                renderList();
+                return;
+            } catch (err) {
+                lastError = err;
+            }
+        }
+        selectedGlobalDetail = null;
+        selectedGlobalDetailAgent = null;
+        selectedGlobalDetailError = lastError;
+        globalSelectionLoading = false;
+        if (lastError && !soft) {
+            UI.reportError('Failed to load capability instructions', lastError, {
+                context: 'Global capability detail load failed',
+            });
+        }
+        renderList();
+    }
+
     function renderDetail() {
         if (!currentAgentId) {
             UI.clearMemoizedRender(detailEl);
-            const selectedGlobal = _findSelectedGlobalCapability();
-            if (selectedGlobal) {
-                UI.reconcileChildren(detailEl, [_renderGlobalCapabilityDetail(selectedGlobal)]);
-                return;
-            }
-            const panel = document.createElement('section');
-            panel.className = 'editor-panel';
-            const title = document.createElement('h3');
-            title.textContent = 'Capability catalog';
-            panel.appendChild(title);
-            const note = document.createElement('p');
-            note.className = 'quiet-note';
-            note.textContent = 'This default view shows capabilities available for assignment. Choose a bot only when you need to install, draft, import, or review capability implementation.';
-            panel.appendChild(note);
-            if (_eligibleAgents().length) {
-                const manage = document.createElement('p');
-                manage.className = 'quiet-note';
-                manage.textContent = 'Bot management is available from the selector above.';
-                panel.appendChild(manage);
-            }
-            UI.reconcileChildren(detailEl, [panel]);
             return;
         }
         const selected = _findSelectedSkill();
@@ -1053,18 +1187,51 @@ function renderSkillCatalog(container) {
         });
     }
 
-    function _renderGlobalCapabilityDetail(item) {
+    function _renderGlobalCapabilityDetail(item, {
+        detail = null,
+        detailAgent = null,
+        detailError = null,
+        loading = false,
+    } = {}) {
         const panel = document.createElement('section');
-        panel.className = 'editor-panel';
+        panel.className = 'conversation-inline-detail capability-inline-detail';
+        panel.dataset.key = `global-detail:${item?.skill_name || ''}`;
         const title = document.createElement('h3');
         title.textContent = _globalCapabilityLabel(item) || 'Capability';
         panel.appendChild(title);
-        const advertisers = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [];
+        const advertisers = _globalCapabilityAdvertisers(item);
+        if (detail?.description) {
+            const desc = document.createElement('p');
+            desc.className = 'quiet-note';
+            desc.textContent = detail.description;
+            panel.appendChild(desc);
+        }
         panel.appendChild(UI.renderMetadataGrid([
             { label: 'Assignment slug', value: String(item?.skill_name || '') },
             { label: 'Available from', value: advertisers.length ? advertisers.join(', ') : 'No connected bot currently advertises this capability' },
+            detailAgent ? {
+                label: 'Instructions from',
+                value: UI.visibleLabel(detailAgent.display_name, detailAgent.slug, detailAgent.agent_id) || detailAgent.agent_id,
+            } : null,
             { label: 'Routing state', value: item?.enabled === false ? 'Disabled' : 'Enabled' },
-        ], { compact: true }));
+        ].filter(Boolean), { compact: true }));
+        const bodyText = String(detail?.body || '').trim();
+        if (loading && !bodyText) {
+            panel.appendChild(UI.renderEmptyState('Loading capability instructions…', true));
+        } else if (bodyText) {
+            const bodyLabel = document.createElement('div');
+            bodyLabel.className = 'detail-label';
+            bodyLabel.textContent = 'Instructions preview';
+            panel.appendChild(bodyLabel);
+            const preview = document.createElement('div');
+            preview.className = 'task-item-summary';
+            preview.innerHTML = UI.renderContent(bodyText);
+            panel.appendChild(preview);
+        } else if (detailError) {
+            panel.appendChild(UI.renderEmptyState('Capability metadata is available, but instructions could not be loaded from an advertising bot.', true));
+        } else {
+            panel.appendChild(UI.renderEmptyState('Capability metadata is available. Choose a bot to inspect implementation details.', true));
+        }
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = 'Use this in a protocol stage by choosing Assignment, then Existing capability. Choose a bot above only when you need to install, draft, import, or review implementation.';
@@ -2419,6 +2586,7 @@ function renderSkillCatalog(container) {
             selectedLocalDetail = null;
             selectedLifecycle = null;
             renderList();
+            void loadSelectionData({ soft: true });
             return;
         }
         const queryText = _queryText();

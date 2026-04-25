@@ -121,9 +121,16 @@ test('capabilities defaults to a human assignment catalog before bot management'
   await expect(architectureRow).toBeVisible();
   await architectureRow.click();
   await expect(architectureRow).toHaveClass(/is-selected/);
+  await expect(architectureRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.dashboard-board-stacked')).toHaveCount(1);
+  await expect(page.locator('.editor-shell')).toBeHidden();
+  await expect(page.locator('.capability-inline-detail')).toHaveCount(1);
   await expect(page.getByRole('heading', { name: 'Architecture', exact: true })).toBeVisible();
   await expect(page.getByText('Assignment slug')).toBeVisible();
+  await expect(page.getByText('Instructions preview')).toBeVisible();
   await expect(page.getByText('Use this in a protocol stage by choosing Assignment, then Existing capability.')).toBeVisible();
+  await architectureRow.click();
+  await expect(page.locator('.capability-inline-detail')).toHaveCount(0);
 });
 
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {

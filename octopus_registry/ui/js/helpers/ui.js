@@ -1032,7 +1032,8 @@ window.UI = (() => {
                 hasNext: !!hasMore,
                 info,
                 onPrev: () => {
-                    cursor = cursorStack.pop() || initialCursor;
+                    const previousCursor = cursorStack.pop();
+                    cursor = previousCursor === undefined ? initialCursor : previousCursor;
                     emitChange();
                     loadFn();
                 },

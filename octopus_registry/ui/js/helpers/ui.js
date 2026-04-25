@@ -663,14 +663,19 @@ window.UI = (() => {
     function isGeneratedOrRehearsalText(value) {
         const normalized = String(value || '').trim().toLowerCase();
         if (!normalized) return false;
-        const generatedWorkflowKey = [
+        const generatedWorkflowKeys = [
             'compose-assistant-protocol',
             'compose assistant protocol',
             'publish-report',
             'publish report',
             'live-authoring',
             'live authoring',
-        ].includes(normalized);
+        ];
+        const generatedWorkflowKey = generatedWorkflowKeys.some((item) =>
+            normalized === item
+            || normalized.startsWith(`${item} `)
+            || normalized.includes(` ${item} `)
+            || normalized.endsWith(` ${item}`));
         const looksLikeGeneratedVariant = (
             /^draft-[0-9a-f]{8}$/i.test(normalized)
             || (

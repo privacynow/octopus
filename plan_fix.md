@@ -34,6 +34,9 @@ Current execution pass:
 - Focused syntax checks are clean. Browser scenario verification must run
   after octopus pull/redeploy because the current local registry process serves
   previously deployed assets.
+- Deployment note: octopus redeploy restarted registry, M1, and M2, but M3 is
+  blocked by missing Claude provider auth. `/Users/tinker/octopus/.deploy/provider-auth/claude/.claude.json`
+  is zero bytes and the M3 container exits with `Claude auth not found`.
 
 ## Core Diagnosis
 

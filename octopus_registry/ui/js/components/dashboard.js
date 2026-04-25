@@ -269,7 +269,7 @@ function renderDashboard(container) {
                 value: String(summary.tasks?.pending || 0),
                 label: 'Queued backlog',
                 detail: `${summary.tasks?.running || 0} running now`,
-                href: '/ui/tasks?status=running',
+                href: '/ui/runs',
             },
             {
                 key: 'unhealthy-agents',
@@ -341,6 +341,11 @@ function renderDashboard(container) {
             badgeClass: 'badge-queued',
             href: '/ui/approvals',
         }));
+        if (!approvalRows.length) {
+            UI.clearMemoizedRender(approvalsHost);
+            UI.reconcileChildren(approvalsHost, []);
+            return;
+        }
         UI.memoizedRender(approvalsHost, approvals, () => [
             createSection(
                 'approvals',
@@ -415,8 +420,8 @@ function renderDashboard(container) {
         UI.memoizedRender(tasksHost, rowsState, () => [
             createGroupedSection(
                 'tasks',
-                'Tasks',
-                '/ui/tasks',
+                'Work needing attention',
+                '/ui/runs',
                 groups,
                 'No recent task activity.',
             ),

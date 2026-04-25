@@ -36,6 +36,10 @@ before broad audit or implementation claims continue.
   dead end.
 - `P4.25`: Capabilities hides `*`, `Rehearsal`, and generated timestamp variants
   from the default catalog; rows are clickable and show assignment details.
+- `P4.25`: default Capabilities now uses the same inline expand/collapse grammar
+  as the other work surfaces. Selecting a capability expands details under that
+  row, not in a side editor, and loads the real advertised instruction text from
+  the existing bot skill-detail API.
 - `P1.7`: default nav now uses Work, Build, Operations; `Agents` lives under
   Build; operational `Dashboard` lives under Operations; fake `Team` is gone.
 - `P5.12`: Conversations pagination is visible, URL-addressable, refresh-stable,
@@ -143,6 +147,13 @@ Verified current state:
   `conversation_id` route restores the selected row across pagination, resolves
   its linked protocol run after async task lookup, and preserves artifact
   Preview/Open/Download/Copy actions on both run and stage-task surfaces.
+- Real Safari on deployed commit `4d16b22c` confirmed the Capabilities default
+  catalog has no side-panel editor, expands Architecture inline with real
+  instruction text, collapses from the same row, and reopens with URL state
+  restored after `Option+Command+R`.
+- `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
+  against deployed registry commit `4d16b22c`, including the Capabilities
+  inline-detail, collapse, and instruction-preview regression.
 
 ### Pending Local Patch
 
@@ -395,7 +406,7 @@ Open IA decisions:
 | P4.16 | Partial | Standard/operator authoring split must omit internals from standard DOM and API. | Negative tests for Advanced/custom runtime/internal fields. |
 | P4.23 | Done | Blank stage required owner role. | Name-only stage creation test. |
 | P4.24 | Done | Protocol list hides generated drafts by default and exposes compact generated families through a toggle. | Real Safari catalog verification passed on deployed `d2ac48a`. |
-| P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list; generated/meta E2E capabilities are hidden by default. | Row click, internal-filter, selector consistency tests. |
+| P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list; generated/meta E2E capabilities are hidden by default; selected capabilities expand inline with real instruction content. | Row expand/collapse, instruction-preview, internal-filter, selector consistency tests, and real Safari pass on deployed `4d16b22c`. |
 | P4.26 | Done | Missing capability had no natural assignment path. | `New capability needed` UI-only scenario. |
 
 ### P5: Conversations, Agents, Collaboration
@@ -453,7 +464,8 @@ Acceptance:
 
 Scope:
 
-- Finish pending Capabilities row click/detail/internal-filter patch.
+- Keep the Capabilities row click/detail/internal-filter behavior as a
+  regression gate.
 - Hide internal/system capabilities from normal catalog.
 - Keep bot management secondary.
 - Make agent pages work-first, not operations-first.
@@ -462,7 +474,8 @@ Scope:
 Acceptance:
 
 - Capabilities opens to a usable catalog.
-- Clicking Architecture or another capability opens meaningful details.
+- Clicking Architecture or another capability expands meaningful details inline,
+  including real instruction text from an advertising bot.
 - No `*`, `Rehearsal`, or generated timestamp flood in default catalog.
 - Agent pages do not dump capabilities twice.
 
@@ -552,7 +565,7 @@ Acceptance:
 | `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/protocol-ui.spec.js` | Protocol authoring, rehearsal, execution, conversations, and artifacts still work. |
 | `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/registry-work-surface.spec.js` | Work/nav/runs/conversations/tasks/capabilities desktop behavior. |
 | Real Safari nav pass | Deployed assets, cache, and actual browser behavior match tests. |
-| Real Safari Capabilities pass | Human catalog is clickable and filters internals. |
+| Real Safari Capabilities pass | Human catalog is clickable, filters internals, expands/collapses inline, and shows real instruction text without a side editor. |
 | Real Safari Conversations pass | Pagination and linked work behavior are usable. |
 | Full audit | Breadth after known blockers are fixed, not a substitute for scenario depth. |
 

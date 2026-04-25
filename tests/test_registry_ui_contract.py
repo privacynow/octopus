@@ -678,6 +678,7 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "item.includes('spec')" in helper
     assert "'compose-assistant-protocol'" in helper
     assert "'publish-report'" in helper
+    assert "'current_stage_key'" in helper
 
     assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
     assert "let currentType = UI.readQueryParam('type', 'conversation');" in conversation_list

@@ -113,6 +113,22 @@ async function waitForRunStatus(page, runId, status, timeout = 60000) {
   }, { timeout }).toBe(status);
 }
 
+async function waitForPendingRehearsalSession(page, runId, stageKey) {
+  const expectedStage = String(stageKey || '');
+  let routedTaskId = '';
+  await expect.poll(async () => {
+    const response = await apiJson(page, 'GET', `/v1/protocol-runs/${encodeURIComponent(runId)}/rehearsal/sessions`);
+    if (!response.ok) return '';
+    const sessions = Array.isArray(response.payload?.sessions) ? response.payload.sessions : [];
+    const session = sessions.find((item) => String(item.stage_key || '') === expectedStage);
+    routedTaskId = String(session?.routed_task_id || '');
+    return routedTaskId;
+  }, { timeout: 30000 }).not.toBe('');
+  const session = page.locator(`.kit-rehearsal-session[data-routed-task-id="${routedTaskId}"]`).first();
+  await expect(session).toBeVisible({ timeout: 15000 });
+  return session;
+}
+
 async function applyScenarioAndSubmit(page, session, scenarioName, { artifactContents = {} } = {}) {
   const routedTaskId = String(await session.getAttribute('data-routed-task-id') || '');
   await session.getByRole('button', { name: scenarioName, exact: true }).click();
@@ -1007,7 +1023,7 @@ test.describe('protocol authoring live', () => {
       ];
       for (const [stageKey, scenarioName, nextState] of rehearsalSequence) {
         await waitForRunStage(page, rehearsalRunId, stageKey);
-        const session = page.locator('.kit-rehearsal-session').first();
+        const session = await waitForPendingRehearsalSession(page, rehearsalRunId, stageKey);
         await expect(session).toContainText(stageKey);
         const artifactBodies = stageKey === loadKey
           ? {

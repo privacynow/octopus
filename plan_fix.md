@@ -81,13 +81,15 @@ Verified current state:
 - Real Safari confirmed hard-refresh discipline, Capabilities filtering/detail,
   Work/Build/Operations nav, and conversation pagination Previous/Next/cursor
   behavior.
+- Real Safari on deployed `d2ac48a` confirmed Conversations defaults to direct
+  conversations, generated/audit work is restored only through the explicit
+  toggle, Protocols defaults to the two canonical drafts, and generated protocol
+  variants are hidden until `Show generated drafts`.
 
 ### Pending Local Patch
 
-Default-surface filtering, generated protocol catalog cleanup, Conversations
-default-direct filtering, Delegations/Run stage task reframing, and
-rehearsal-session test hardening are implemented locally and awaiting
-commit/deploy/real-Safari verification.
+None at this point. The only untracked local item is `.cursor/`, which is not
+part of this plan.
 
 ### Deployment Blocker
 
@@ -284,8 +286,8 @@ Open IA decisions:
 |----|---------|------------------|------------------|
 | B1 | Tasks vs Runs needed lineage separation. | Patched: standalone `/ui/tasks` is Delegations; `protocol_run_id` deep links are Run stage tasks; Dashboard excludes protocol stage tasks from standalone groups. | Deploy and Safari-audit the route from Conversation -> linked work -> run -> artifact. |
 | B2 | M3 cannot start. | Claude auth file is zero bytes; container exits. User explicitly excluded M3 from this execution. | Do not claim all-agent verification until M3 auth is restored. |
-| B3 | Generated/rehearsal/test data dominated default pages. | Patched through shared visibility predicate across default pages with audit/generated toggles. | Deploy and verify in real Safari that default pages are clean and audit toggles restore access. |
-| B4 | Protocol catalog was flooded by generated drafts. | Patched: default Protocols hides generated drafts; `Show generated drafts` restores compact generated families. | Deploy and verify canonical protocols are first in real Safari. |
+| B3 | Generated/rehearsal/test data dominated default pages. | Patched through shared visibility predicate across default pages with audit/generated toggles; Conversations and Protocols verified in real Safari. | Finish real Safari checks for Runs, Dashboard, Delegations, and Capabilities after the next broad audit pass. |
+| B4 | Protocol catalog was flooded by generated drafts. | Done for default catalog: real Safari shows only canonical drafts until `Show generated drafts`. | Keep regression coverage and revisit only if product needs a richer archive view. |
 | B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Shared artifact action rows already exist in Runs, Tasks, and task-board conversation context; lineage has improved but needs broad audit. | Complete run/conversation/delegation artifact drill-through audit after deploy. |
 
 ## Findings
@@ -299,7 +301,7 @@ Open IA decisions:
 | P1.3 | Active | Terminology drifts between Capabilities, skills, Templates, gallery, protocols, tasks, and runs. | User-facing string inventory. |
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
 | P1.5 | Partial | Standalone delegations are real, and protocol-generated stage tasks now have run-context copy, but conversation drill-through still needs audit. | Safari route from conversation linked work to run/stage task. |
-| P1.6 | Partial | Shared default visibility filtering is patched; real Safari verification remains. | Default pages hide/group test and rehearsal records unless operator/audit mode is active. |
+| P1.6 | Partial | Shared default visibility filtering is patched; Conversations and Protocols are Safari-verified. | Finish remaining default page checks in broad audit. |
 | P1.7 | Done | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test plus real Safari pass after deploy. |
 
 ### P2: Platform Shell And Resilience
@@ -334,7 +336,7 @@ Open IA decisions:
 | P4.15 | Done | Create-stage flow blocked on assignment and could clobber draft data. | UI-only unassigned stage and draft-preservation tests. |
 | P4.16 | Partial | Standard/operator authoring split must omit internals from standard DOM and API. | Negative tests for Advanced/custom runtime/internal fields. |
 | P4.23 | Done | Blank stage required owner role. | Name-only stage creation test. |
-| P4.24 | Partial | Protocol list hides generated drafts by default and exposes compact generated families through a toggle. | Real Safari catalog verification. |
+| P4.24 | Done | Protocol list hides generated drafts by default and exposes compact generated families through a toggle. | Real Safari catalog verification passed on deployed `d2ac48a`. |
 | P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list. | Row click, internal-filter, selector consistency tests. |
 | P4.26 | Done | Missing capability had no natural assignment path. | `New capability needed` UI-only scenario. |
 

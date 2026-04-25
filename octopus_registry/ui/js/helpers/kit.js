@@ -2497,6 +2497,7 @@ window.Kit = (() => {
         onPresenceFilter = null,
         onSelect = null,
         onStartConversation = null,
+        renderExpanded = null,
         emptyHint = '',
     } = {}) {
         const root = document.createElement('div');
@@ -2542,12 +2543,14 @@ window.Kit = (() => {
             ));
         } else {
             entries.forEach((agent) => {
+                const selected = String(agent.id || '') === String(selectedId || '');
                 const row = document.createElement('article');
                 row.className = 'kit-agents-list-row';
-                if (String(agent.id || '') === String(selectedId || '')) {
+                if (selected) {
                     row.classList.add('is-selected');
                 }
                 row.dataset.agentId = String(agent.id || '');
+                row.setAttribute('aria-expanded', String(selected));
 
                 const head = document.createElement('div');
                 head.className = 'kit-agents-list-row-head';
@@ -2607,11 +2610,19 @@ window.Kit = (() => {
                     const detailsBtn = document.createElement('button');
                     detailsBtn.type = 'button';
                     detailsBtn.className = 'btn btn-sm';
-                    detailsBtn.textContent = 'Details';
+                    detailsBtn.textContent = selected ? 'Hide details' : 'Details';
+                    detailsBtn.setAttribute('aria-expanded', String(selected));
                     detailsBtn.addEventListener('click', () => onSelect(agent));
                     actions.appendChild(detailsBtn);
                 }
                 if (actions.childElementCount) row.appendChild(actions);
+                if (selected && typeof renderExpanded === 'function') {
+                    const expanded = renderExpanded(agent);
+                    if (expanded instanceof Node) {
+                        expanded.classList.add('agent-inline-detail');
+                        row.appendChild(expanded);
+                    }
+                }
                 list.appendChild(row);
             });
         }

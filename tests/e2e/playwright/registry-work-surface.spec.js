@@ -133,6 +133,36 @@ test('capabilities defaults to a human assignment catalog before bot management'
   await expect(page.locator('.capability-inline-detail')).toHaveCount(0);
 });
 
+test('agents use inline details and share the capabilities workspace', async ({ page }) => {
+  await login(page);
+  await page.goto('/ui/agents');
+
+  await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
+  const agentRow = page.locator('.kit-agents-list-row').filter({ hasText: 'M1' }).first();
+  await expect(agentRow).toBeVisible();
+  await expect(agentRow.getByRole('button', { name: 'Details', exact: true })).toBeVisible();
+
+  await agentRow.getByRole('button', { name: 'Details', exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/agents\?agent_id=/);
+  await expect(agentRow).toHaveClass(/is-selected/);
+  await expect(agentRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(agentRow.locator('.agent-inline-detail')).toHaveCount(1);
+  await expect(agentRow.locator('.agent-inline-detail')).toContainText('Open agent workspace');
+  await expect(agentRow.locator('.agent-inline-detail')).toContainText('Open capabilities');
+
+  const agentWorkspaceHref = await agentRow.getByRole('link', { name: 'Open agent workspace', exact: true }).getAttribute('href');
+  expect(agentWorkspaceHref).toMatch(/\/ui\/agents\//);
+  await agentRow.getByRole('button', { name: 'Hide details', exact: true }).click();
+  await expect(page.locator('.agent-inline-detail')).toHaveCount(0);
+
+  await page.goto(agentWorkspaceHref);
+  await expect(page.getByRole('heading', { name: 'M1', exact: true })).toBeVisible();
+  await expect(page.locator('.skills-drawer-dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open Capabilities workspace', exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/skills\?agent_id=/);
+  await expect(page.locator('.skills-drawer-dialog')).toHaveCount(0);
+});
+
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {
   await login(page);
   const { id, detail } = await findRunWithLineage(page);

@@ -531,6 +531,11 @@ def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
 
     # List
     assert "Kit.agentsList(" in agent_list
+    assert "selectedAgentId = UI.readQueryParam('agent_id', '')" in agent_list
+    assert "selectedId: selectedAgentId" in agent_list
+    assert "renderExpanded: _renderAgentInlineDetail" in agent_list
+    assert "Open agent workspace" in agent_list
+    assert "Open capabilities" in agent_list
     assert "trustTier: String(agent.trust_tier" in agent_list
     assert "currentCapacity: Number(agent.current_capacity" in agent_list
     assert "softDeletedAt: String(agent.soft_deleted_at" in agent_list
@@ -575,17 +580,20 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
     assert "!_isGeneratedSkill(skill)" in skill_catalog
     assert "!UI.isGeneratedTimestampName(skill)" in kit
     assert "function buildSkillsCard(agent) {" in agent_detail
-    assert "Manage capabilities" in agent_detail
-    assert "Open Capabilities page" in agent_detail
-    assert "Open in Capabilities" in agent_detail
-    assert "Open conversation and activate" in agent_detail
-    assert "Quick actions live here." in agent_detail
+    assert "Open Capabilities workspace" in agent_detail
+    assert "Router.navigate(skillsWorkspaceHref())" in agent_detail
+    assert "Open a conversation with ${label}" in skill_catalog
+    assert "function openSkillsDrawer(" not in agent_detail
+    assert "Open Capabilities page" not in agent_detail
+    assert "Quick actions live here." not in agent_detail
     assert "Available capabilities" in agent_detail
     assert "buildSkillsCard(agent)," in agent_detail
     assert "buildOperationsCard(agent, workers)," in agent_detail
     assert "quickstart-chip static" in agent_detail
-    assert "skills-drawer-dialog" in css
-    assert "skills-drawer-overlay" in css
+    assert "skills-drawer-dialog" not in css
+    assert "skills-drawer-overlay" not in css
+    assert "renderExpanded = null" in kit
+    assert "agent-inline-detail" in kit
 
 
 def test_guidance_editor_exposes_progressive_draft_and_review_workspace() -> None:

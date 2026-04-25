@@ -48,8 +48,9 @@ before broad audit or implementation claims continue.
 - `P5.11`: the Agents list now expands agent details inline under the selected
   row, exposes `Open agent workspace` and `Open capabilities`, and removes the
   old detail-navigation/split-panel expectation from the default path.
-- `P1.7`: default nav now uses Work, Build, Operations; `Agents` lives under
-  Build; operational `Dashboard` lives under Operations; fake `Team` is gone.
+- `P1.7`: default nav now uses Work, Build, Operations; operational
+  `Dashboard` lives under Operations; fake `Team` is gone. Agents are moving
+  into Work as collaborators/workers rather than remaining a Build resource.
 - `P5.12`: Conversations pagination is visible, URL-addressable, refresh-stable,
   and verified in real Safari.
 - Conversation task-thread copy now uses delegation/linked-work language while
@@ -203,6 +204,7 @@ Work should include:
 
 - Conversations
 - Runs / Executions
+- Agents, as collaborators/workers users can start work with and inspect
 - Delegations, if standalone delegated work remains a normal user destination
 
 Work should not include:
@@ -221,10 +223,13 @@ Build should include:
 
 - Protocols
 - Capabilities
-- Agents, because users combine agents with capabilities and protocols
 
 `Team` is not currently a real product category. Agents are not a team model in
-this product; they are author/runtime resources.
+this product. The normal Agents entry point belongs in Work because users talk
+to agents, assign work to them, and inspect what they are doing. Agent
+configuration, capability installation, provider setup, routing, and diagnostic
+details should remain progressively disclosed inside the agent page or
+Operations, not as the primary navigation model.
 
 Templates are not a separate Build destination. They are protocol utilities:
 users create a new protocol from a reusable starter or publish an existing
@@ -364,13 +369,13 @@ This is the target structure. It is not fully implemented yet.
 
 - Conversations
 - Runs / Executions
+- Agents
 - Delegations, if standalone delegated work remains a normal user destination
 
 ### Build
 
 - Protocols
 - Capabilities
-- Agents
 
 ### Operations
 
@@ -411,7 +416,7 @@ Open IA decisions:
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
 | P1.5 | Done | Standalone delegations are real, protocol-generated stage tasks now have run-context copy, and direct task-thread `conversation_id` links stay visible across pagination. | Keep Safari and Playwright regression coverage for conversation linked work to run/stage task. |
 | P1.6 | Done | Shared default visibility filtering is patched and covered across normal work/build/operations surfaces. | Keep broad-audit regression checks. |
-| P1.7 | Done | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test plus real Safari pass after deploy. |
+| P1.7 | Planned | Dashboard is operational, Team is fake, and Agents belongs in Work as a collaborator/work entry point, with technical configuration progressively disclosed. | Nav grouping test plus real Safari pass after deploy. |
 
 ### P2: Platform Shell And Resilience
 
@@ -487,7 +492,9 @@ Open IA decisions:
 Scope:
 
 - Remove fake `Team`.
-- Move `Agents` into Build unless redesigned as Operations-only.
+- Move `Agents` into Work as the normal collaborator/work entry point.
+- Keep agent technical configuration and operations controls progressively
+  disclosed inside agent detail or Operations.
 - Move current Dashboard into Operations or split it into Home plus Operations
   Dashboard.
 - Decide if default nav exposes `Delegations`.
@@ -496,6 +503,8 @@ Scope:
 Acceptance:
 
 - Default nav expresses Work, Build, Operations.
+- Work includes Agents; Build does not list Agents as a peer to Protocols and
+  Capabilities.
 - No normal user has to infer whether Tasks or Runs is the right place for a
   protocol execution.
 - No important direct delegation workflow is lost.
@@ -508,7 +517,8 @@ Scope:
   regression gate.
 - Hide internal/system capabilities from normal catalog.
 - Keep bot management secondary.
-- Make agent pages work-first, not operations-first.
+- Make agent pages work-first: start conversation, run protocol, current/recent
+  work, availability, then capabilities/configuration as secondary detail.
 - Group or hide Rehearsal/test agents from default normal views.
 
 Acceptance:

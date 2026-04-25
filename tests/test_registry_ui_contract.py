@@ -410,6 +410,9 @@ def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -
     helper = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
     ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
     ).read_text(encoding="utf-8")
@@ -662,6 +665,9 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     helper = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
     ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
     kit = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
@@ -700,11 +706,14 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "'compose-assistant-protocol'" in helper
     assert "'publish-report'" in helper
     assert "'current_stage_key'" in helper
+    assert "function updateQueryToggleLink(" in helper
+    assert "function updateGeneratedAuditToggleLink(" in helper
+    assert "filter-toggle-link" in css
 
     assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
     assert "let currentType = UI.readQueryParam('type', 'conversation');" in conversation_list
     assert "&& !UI.isDefaultHiddenRecord(agent)" in conversation_list
-    assert "Show generated/audit work" in conversation_list
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'work')" in conversation_list
     assert "approvalsLink" not in conversation_list
 
     assert "!item.protocol_run_id && !UI.isDefaultHiddenRecord(item)" in dashboard
@@ -717,7 +726,7 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "Filtered by default · generated/audit totals inside" in dashboard
 
     assert "UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated })" in agent_list
-    assert "Show generated/audit agents" in agent_list
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'agents')" in agent_list
     assert "!task.protocol_run_id && !UI.isDefaultHiddenRecord(task)" in task_list
     assert "function _visibleTask(task)" in task_list
     assert "renderSummary({ tasks: Object.fromEntries(entries) });" in task_list
@@ -725,13 +734,13 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "<h2>Delegations</h2>" in task_list
 
     assert "UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog })" in workspace
-    assert "Show generated drafts" in workspace
+    assert "label: 'Generated drafts'" in workspace
     assert "UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated })" in workspace
-    assert "Show generated/audit runs" in workspace
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs')" in workspace
     assert "No normal runs match this filter." in workspace
     assert "String(item?.conversation_type || 'conversation') !== 'task_thread'" in usage_view
     assert "UI.defaultVisibleRecords(candidates, { includeHidden: includeGenerated })" in usage_view
-    assert "Show generated/audit usage" in usage_view
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'usage')" in usage_view
     assert "return [...visible, ...generated];" in kit
     assert "&& !UI.isDefaultHiddenRecord(agent)" in skill_catalog
 

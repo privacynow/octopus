@@ -38,7 +38,6 @@ function renderAgentList(container) {
     controls.className = 'route-controls';
     workbench.appendChild(controls);
     const generatedToggle = document.createElement('a');
-    generatedToggle.className = 'section-link';
     controls.appendChild(generatedToggle);
 
     const listHost = document.createElement('div');
@@ -55,14 +54,7 @@ function renderAgentList(container) {
     }
 
     function _updateGeneratedToggle() {
-        const url = new URL(window.location.href);
-        if (includeGenerated) {
-            url.searchParams.delete('include_generated');
-        } else {
-            url.searchParams.set('include_generated', '1');
-        }
-        generatedToggle.href = `${url.pathname}${url.search}${url.hash}`;
-        generatedToggle.textContent = includeGenerated ? 'Hide generated/audit agents' : 'Show generated/audit agents';
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'agents');
     }
 
     function _adaptAgent(agent) {

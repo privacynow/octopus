@@ -1121,6 +1121,47 @@ window.UI = (() => {
         return { element: group, setActive, buttons };
     }
 
+    function updateQueryToggleLink(link, active, {
+        param = 'include_generated',
+        value = '1',
+        label = 'Generated/audit',
+        activeState = 'included',
+        inactiveState = 'hidden',
+        showLabel = '',
+        hideLabel = '',
+    } = {}) {
+        if (!link) return;
+        const enabled = Boolean(active);
+        const url = new URL(window.location.href);
+        if (enabled) {
+            url.searchParams.delete(param);
+        } else {
+            url.searchParams.set(param, value);
+        }
+        link.href = `${url.pathname}${url.search}${url.hash}`;
+        link.className = 'btn btn-sm filter-toggle-link';
+        link.classList.toggle('is-active', enabled);
+        link.setAttribute('role', 'button');
+        link.setAttribute('aria-pressed', String(enabled));
+        link.dataset.state = enabled ? 'included' : 'hidden';
+        link.textContent = `${label}: ${enabled ? activeState : inactiveState}`;
+        const actionLabel = enabled
+            ? (hideLabel || `Hide ${label.toLowerCase()}`)
+            : (showLabel || `Show ${label.toLowerCase()}`);
+        link.setAttribute('aria-label', actionLabel);
+        link.title = actionLabel;
+    }
+
+    function updateGeneratedAuditToggleLink(link, includeGenerated, noun = 'work') {
+        updateQueryToggleLink(link, includeGenerated, {
+            label: 'Generated/audit',
+            activeState: 'included',
+            inactiveState: 'hidden',
+            showLabel: `Show generated/audit ${noun}`,
+            hideLabel: `Hide generated/audit ${noun}`,
+        });
+    }
+
     function createCursorPaginator(container, loadFn, { initialCursor = 0, initialStack = [], onChange = null } = {}) {
         let cursor = initialCursor;
         let cursorStack = Array.isArray(initialStack) ? initialStack.slice() : [];
@@ -1544,6 +1585,8 @@ window.UI = (() => {
         invalidateCachedData,
         subscribeWithRefresh,
         createSegmentedControl,
+        updateQueryToggleLink,
+        updateGeneratedAuditToggleLink,
         createCursorPaginator,
         memoizedRender,
         clearMemoizedRender,

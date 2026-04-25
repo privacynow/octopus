@@ -5736,15 +5736,13 @@ function renderProtocolWorkspace(container) {
         const controls = catalog.querySelector('.kit-catalog-controls');
         if (controls) {
             const toggle = document.createElement('a');
-            toggle.className = 'section-link';
-            const url = new URL(window.location.href);
-            if (includeGeneratedCatalog) {
-                url.searchParams.delete('include_generated');
-            } else {
-                url.searchParams.set('include_generated', '1');
-            }
-            toggle.href = `${url.pathname}${url.search}${url.hash}`;
-            toggle.textContent = includeGeneratedCatalog ? 'Hide generated drafts' : 'Show generated drafts';
+            UI.updateQueryToggleLink(toggle, includeGeneratedCatalog, {
+                label: 'Generated drafts',
+                activeState: 'shown',
+                inactiveState: 'hidden',
+                showLabel: 'Show generated drafts',
+                hideLabel: 'Hide generated drafts',
+            });
             controls.appendChild(toggle);
         }
         return catalog;
@@ -6325,15 +6323,7 @@ function renderProtocolRuns(container) {
         panel.appendChild(title);
 
         const generatedToggle = document.createElement('a');
-        generatedToggle.className = 'section-link';
-        const generatedUrl = new URL(window.location.href);
-        if (includeGenerated) {
-            generatedUrl.searchParams.delete('include_generated');
-        } else {
-            generatedUrl.searchParams.set('include_generated', '1');
-        }
-        generatedToggle.href = `${generatedUrl.pathname}${generatedUrl.search}${generatedUrl.hash}`;
-        generatedToggle.textContent = includeGenerated ? 'Hide generated/audit runs' : 'Show generated/audit runs';
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs');
         panel.appendChild(generatedToggle);
 
         const issueFilterControl = UI.createSegmentedControl(

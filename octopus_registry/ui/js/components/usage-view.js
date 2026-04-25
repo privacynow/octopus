@@ -37,7 +37,6 @@ function renderUsageView(container) {
     controls.appendChild(rangeBar);
 
     const generatedToggle = document.createElement('a');
-    generatedToggle.className = 'section-link';
     controls.appendChild(generatedToggle);
 
     const summaryEl = document.createElement('section');
@@ -124,14 +123,7 @@ function renderUsageView(container) {
     }
 
     function updateGeneratedToggle() {
-        const url = new URL(window.location.href);
-        if (includeGenerated) {
-            url.searchParams.delete('include_generated');
-        } else {
-            url.searchParams.set('include_generated', '1');
-        }
-        generatedToggle.href = `${url.pathname}${url.search}${url.hash}`;
-        generatedToggle.textContent = includeGenerated ? 'Hide generated/audit usage' : 'Show generated/audit usage';
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'usage');
     }
 
     function visibleUsageRows(rows) {

@@ -715,6 +715,17 @@ select {
     font-size: 0.82rem;
 }
 
+.filter-toggle-link {
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.filter-toggle-link.is-active {
+    background: color-mix(in srgb, var(--accent, #954c2f) 12%, var(--bg));
+    border-color: rgba(149, 76, 47, 0.45);
+    color: var(--text);
+}
+
 .btn-primary {
     background: var(--accent);
     border-color: transparent;

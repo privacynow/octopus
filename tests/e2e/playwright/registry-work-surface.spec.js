@@ -114,6 +114,27 @@ test('main navigation swaps content immediately and keeps internal work queues o
   await expect(page.getByRole('link', { name: 'Approvals', exact: true })).toHaveCount(0);
 });
 
+test('generated visibility controls use an obvious shared filter toggle', async ({ page }) => {
+  await login(page);
+
+  const routes = [
+    ['/ui/conversations', 'Show generated/audit work', 'Generated/audit: hidden'],
+    ['/ui/agents', 'Show generated/audit agents', 'Generated/audit: hidden'],
+    ['/ui/runs', 'Show generated/audit runs', 'Generated/audit: hidden'],
+    ['/ui/usage', 'Show generated/audit usage', 'Generated/audit: hidden'],
+    ['/ui/protocols', 'Show generated drafts', 'Generated drafts: hidden'],
+  ];
+
+  for (const [route, accessibleName, visibleLabel] of routes) {
+    await page.goto(route);
+    const toggle = page.getByRole('button', { name: accessibleName, exact: true });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveClass(/filter-toggle-link/);
+    await expect(toggle).toHaveText(visibleLabel);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  }
+});
+
 test('capabilities defaults to a human assignment catalog before bot management', async ({ page }) => {
   await login(page);
   await page.goto('/ui/skills');

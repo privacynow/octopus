@@ -87,7 +87,6 @@ function renderConversationList(container) {
     const typeBar = typeControl.element;
     controls.appendChild(typeBar);
     const generatedToggle = document.createElement('a');
-    generatedToggle.className = 'section-link';
     controls.appendChild(generatedToggle);
 
     function applyStatus(value) {
@@ -119,14 +118,7 @@ function renderConversationList(container) {
     }
 
     function _updateGeneratedToggle() {
-        const url = new URL(window.location.href);
-        if (includeGenerated) {
-            url.searchParams.delete('include_generated');
-        } else {
-            url.searchParams.set('include_generated', '1');
-        }
-        generatedToggle.href = `${url.pathname}${url.search}${url.hash}`;
-        generatedToggle.textContent = includeGenerated ? 'Hide generated/audit work' : 'Show generated/audit work';
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'work');
     }
     _updateGeneratedToggle();
 

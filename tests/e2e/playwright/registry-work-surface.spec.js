@@ -215,17 +215,18 @@ test('run participants prefer resolved outcomes over raw running state', async (
 test('conversation list exposes inline context before opening the full workspace', async ({ page }) => {
   await login(page);
   const linked = await findTaskThreadWithProtocolRun(page);
-  const linkedTitle = linked ? String(linked.conversation.title || linked.task.title || '').trim() : '';
   await page.goto(linked
-    ? `/ui/conversations?type=task_thread&include_generated=1&q=${encodeURIComponent(linkedTitle)}`
+    ? `/ui/conversations?type=task_thread&include_generated=1&conversation_id=${encodeURIComponent(linked.conversation.conversation_id)}`
     : '/ui/conversations?type=task_thread&include_generated=1');
   await expect(page.locator('.conversation-list-route-shell')).toHaveCount(1);
   const rows = page.locator('.conversation-list-entry .list-row');
   await expect(rows.first()).toBeVisible();
   const targetRow = linked
-    ? rows.filter({ hasText: linkedTitle }).first()
+    ? rows.filter({ hasText: String(linked.conversation.title || linked.task.title || '').trim() }).first()
     : rows.first();
-  await targetRow.click();
+  if (!linked) {
+    await targetRow.click();
+  }
   await expect(page.locator('.conversation-inline-detail')).toHaveCount(1);
   await expect(page.getByText('Linked runs')).toBeVisible();
   if (linked) {

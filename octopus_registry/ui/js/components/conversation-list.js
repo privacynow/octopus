@@ -505,7 +505,14 @@ function renderConversationList(container) {
             const rawRows = data.conversations || data || [];
             const rows = UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated });
             if (currentConversationId && !rows.some((item) => String(item.conversation_id || '') === String(currentConversationId || ''))) {
-                const selectedHidden = rawRows.find((item) => String(item.conversation_id || '') === String(currentConversationId || ''));
+                let selectedHidden = rawRows.find((item) => String(item.conversation_id || '') === String(currentConversationId || ''));
+                if (!selectedHidden) {
+                    try {
+                        selectedHidden = await API.getConversation(currentConversationId);
+                    } catch (err) {
+                        void err;
+                    }
+                }
                 if (selectedHidden) rows.unshift(selectedHidden);
             }
             renderRows(rows, { ...data, conversations: rows });

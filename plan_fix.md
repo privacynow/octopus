@@ -31,6 +31,8 @@ Current execution pass:
 - `P4.26`: existing template capabilities that are not currently advertised by
   a live agent remain `Existing capability`; `New capability needed` is explicit
   author intent, not an inferred catalog-miss state.
+- `P4.26`: Assignment mode changes remain explicit too; a skill assignment can
+  still be viewed as `Specific agent` when the author chooses that mode.
 - `P4.25`: Capabilities now defaults to a human catalog from existing routing
   capability data; bot-scoped management remains available through the bot
   selector.

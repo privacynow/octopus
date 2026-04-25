@@ -441,6 +441,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "Capability catalog" in skill_catalog
     assert "Choose a bot only when you need to manage installation or drafts." in skill_catalog
     assert "UI.isHumanAssignableCapabilityName(name)" in skill_catalog
+    assert "String(selectedSkillOrigin || '') === 'global'" in skill_catalog
+    assert "Use this in a protocol stage by choosing Assignment, then Existing capability." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
     assert "label: 'Studio'" not in skill_catalog

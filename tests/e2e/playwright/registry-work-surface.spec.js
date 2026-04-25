@@ -85,6 +85,14 @@ test('capabilities defaults to a human assignment catalog before bot management'
   await expect(page.getByText('Rehearsal', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Meta Protocol Composer \d{10,}/)).toHaveCount(0);
   await expect(page.getByText('No connected bot advertises capability management.', { exact: true })).toHaveCount(0);
+
+  const architectureRow = page.locator('.list-row').filter({ hasText: 'Architecture' }).first();
+  await expect(architectureRow).toBeVisible();
+  await architectureRow.click();
+  await expect(architectureRow).toHaveClass(/is-selected/);
+  await expect(page.getByRole('heading', { name: 'Architecture', exact: true })).toBeVisible();
+  await expect(page.getByText('Assignment slug')).toBeVisible();
+  await expect(page.getByText('Use this in a protocol stage by choosing Assignment, then Existing capability.')).toBeVisible();
 });
 
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {

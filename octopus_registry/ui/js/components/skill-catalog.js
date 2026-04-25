@@ -335,7 +335,8 @@ function renderSkillCatalog(container) {
 
     function _readSkillOrigin() {
         const value = UI.readQueryParam('skill_source', 'local');
-        return value === 'store' ? 'store' : 'local';
+        if (value === 'store' || value === 'global') return value;
+        return 'local';
     }
 
     function _readStudioTab() {
@@ -348,7 +349,7 @@ function renderSkillCatalog(container) {
             agent_id: currentAgentId || '',
             skills_view: '',
             skill: selectedSkillName || '',
-            skill_source: selectedSkillName && selectedSkillOrigin === 'store' ? 'store' : '',
+            skill_source: selectedSkillName && ['store', 'global'].includes(selectedSkillOrigin) ? selectedSkillOrigin : '',
             skill_tab: selectedSkillName && selectedSkillOrigin === 'local' && RegistrySkillHub.isCustomSkill(_findSelectedSkill()?.skill)
                 ? currentStudioTab
                 : '',
@@ -649,6 +650,20 @@ function renderSkillCatalog(container) {
             .sort((left, right) => String(left.skill_name || '').localeCompare(String(right.skill_name || '')));
     }
 
+    function _globalCapabilityLabel(item) {
+        return String(item?.skill_name || '')
+            .trim()
+            .replace(/[-_]+/g, ' ')
+            .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+
+    function _findSelectedGlobalCapability() {
+        const normalized = String(selectedSkillName || '').trim().toLowerCase();
+        if (!normalized || selectedSkillOrigin !== 'global') return null;
+        return _visibleGlobalCapabilities().find((item) =>
+            String(item?.skill_name || '').trim().toLowerCase() === normalized) || null;
+    }
+
     function _findSelectedSkill() {
         return RegistrySkillHub.findSelectedSkill(_visibleLocalSkills(), _visibleStoreSkills(), selectedSkillName);
     }
@@ -671,7 +686,7 @@ function renderSkillCatalog(container) {
 
     async function _selectSkill(skillName, origin) {
         selectedSkillName = String(skillName || '').trim();
-        selectedSkillOrigin = origin === 'store' ? 'store' : 'local';
+        selectedSkillOrigin = origin === 'store' || origin === 'global' ? origin : 'local';
         const selected = _findSelectedSkill();
         if (selectedSkillOrigin === 'local' && RegistrySkillHub.isCustomSkill(selected?.skill)) {
             currentStudioTab = 'write';
@@ -696,7 +711,10 @@ function renderSkillCatalog(container) {
             if (capabilities.length) {
                 UI.reconcileChildren(listEl, [
                     _sectionLabel('Available capabilities', 'skills-global-heading'),
-                    ...capabilities.map((item) => _renderGlobalCapabilityRow(item)),
+                    ...capabilities.map((item) => _renderGlobalCapabilityRow(item, {
+                        selected: String(selectedSkillOrigin || '') === 'global'
+                            && String(selectedSkillName || '').trim().toLowerCase() === String(item?.skill_name || '').trim().toLowerCase(),
+                    })),
                     ...(globalRoutingError ? [UI.renderEmptyState(`Capability catalog is incomplete. ${globalRoutingError}`, true)] : []),
                 ]);
             } else {
@@ -789,16 +807,22 @@ function renderSkillCatalog(container) {
         return String(skill.source_label || skill.source_kind || 'Skill');
     }
 
-    function _renderGlobalCapabilityRow(item) {
+    function _renderGlobalCapabilityRow(item, { selected = false } = {}) {
         const name = String(item?.skill_name || '').trim();
         const advertisers = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [];
         return UI.renderListRow({
-            label: name.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+            label: _globalCapabilityLabel(item),
             sublabel: advertisers.length
                 ? `Available from ${advertisers.join(', ')}`
                 : 'Declared capability; choose a bot to manage installation or drafts.',
             badgeText: item?.enabled === false ? 'Disabled' : 'Capability',
             badgeClass: item?.enabled === false ? 'badge-warning' : '',
+            onClick: () => {
+                _runWithDraftGuard(async () => {
+                    await _selectSkill(name, 'global');
+                });
+            },
+            className: selected ? 'is-selected' : '',
         });
     }
 
@@ -977,6 +1001,11 @@ function renderSkillCatalog(container) {
     function renderDetail() {
         if (!currentAgentId) {
             UI.clearMemoizedRender(detailEl);
+            const selectedGlobal = _findSelectedGlobalCapability();
+            if (selectedGlobal) {
+                UI.reconcileChildren(detailEl, [_renderGlobalCapabilityDetail(selectedGlobal)]);
+                return;
+            }
             const panel = document.createElement('section');
             panel.className = 'editor-panel';
             const title = document.createElement('h3');
@@ -1021,6 +1050,25 @@ function renderSkillCatalog(container) {
             loading: selectionLoading,
             detailLoaded: Boolean(selectedLocalDetail && selectedLocalDetail.name === selected.skill.name),
         });
+    }
+
+    function _renderGlobalCapabilityDetail(item) {
+        const panel = document.createElement('section');
+        panel.className = 'editor-panel';
+        const title = document.createElement('h3');
+        title.textContent = _globalCapabilityLabel(item) || 'Capability';
+        panel.appendChild(title);
+        const advertisers = Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [];
+        panel.appendChild(UI.renderMetadataGrid([
+            { label: 'Assignment slug', value: String(item?.skill_name || '') },
+            { label: 'Available from', value: advertisers.length ? advertisers.join(', ') : 'No connected bot currently advertises this capability' },
+            { label: 'Routing state', value: item?.enabled === false ? 'Disabled' : 'Enabled' },
+        ], { compact: true }));
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'Use this in a protocol stage by choosing Assignment, then Existing capability. Choose a bot above only when you need to install, draft, import, or review implementation.';
+        panel.appendChild(note);
+        return panel;
     }
 
     function renderStoreDetail(skill) {

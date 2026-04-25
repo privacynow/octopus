@@ -161,6 +161,16 @@ test('agents use inline details and share the capabilities workspace', async ({ 
   await page.getByRole('button', { name: 'Open Capabilities workspace', exact: true }).click();
   await expect(page).toHaveURL(/\/ui\/skills\?agent_id=/);
   await expect(page.locator('.skills-drawer-dialog')).toHaveCount(0);
+  await expect(page.locator('.dashboard-board-stacked')).toHaveCount(1);
+  await expect(page.locator('.editor-shell')).toBeHidden();
+
+  const architectureCapability = page.locator('.list-row').filter({ hasText: 'Architecture' }).first();
+  await architectureCapability.click();
+  await expect(architectureCapability).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.capability-inline-detail')).toHaveCount(1);
+  await expect(page.getByText('Instructions preview')).toBeVisible();
+  await architectureCapability.click();
+  await expect(page.locator('.capability-inline-detail')).toHaveCount(0);
 });
 
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {

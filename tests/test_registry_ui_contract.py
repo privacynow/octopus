@@ -452,9 +452,13 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "String(selectedSkillOrigin || '') === 'global'" in skill_catalog
     assert "Use this in a protocol stage by choosing Assignment, then Existing capability." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
-    assert "workspace.classList.toggle('dashboard-board-stacked', inlineCatalog);" in skill_catalog
-    assert "detailEl.hidden = inlineCatalog;" in skill_catalog
+    assert "workspace.classList.add('dashboard-board-stacked');" in skill_catalog
+    assert "detailEl.hidden = true;" in skill_catalog
     assert "capability-inline-detail" in skill_catalog
+    assert "function _renderSelectedSkillInlineDetail(selected)" in skill_catalog
+    assert "function _buildSelectedSkillDetailNodes(selected)" in skill_catalog
+    assert "function _renderAgentCapabilityIntro(agentLabel)" in skill_catalog
+    assert "agent-capability-intro" in skill_catalog
     assert "Loading capability instructions…" in skill_catalog
     assert "Instructions preview" in skill_catalog
     assert "API.getSkillDetail(agent.agent_id, skillName)" in skill_catalog

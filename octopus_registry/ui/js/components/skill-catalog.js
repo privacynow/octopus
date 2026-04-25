@@ -764,7 +764,6 @@ function renderSkillCatalog(container) {
                     ),
                 ]);
             }
-            renderDetail();
             return;
         }
         const visibleLocal = _visibleLocalSkills();
@@ -778,17 +777,20 @@ function renderSkillCatalog(container) {
                 ? 'No installed or store capabilities match this search.'
                 : 'No capabilities are available on this bot yet. Create a custom skill or import one to get started.';
             UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
-            renderDetail();
             return;
         }
 
         UI.memoizedRender(listEl, {
             selectedSkillName,
             selectedSkillOrigin,
+            detailSignature: _selectedSkillDetailSignature(),
             sections,
             registryError,
         }, (state) => {
             const nodes = [];
+            if (!state.selectedSkillName) {
+                nodes.push(_renderAgentCapabilityIntro(_currentAgentLabel()));
+            }
             (state.sections || []).forEach((section) => {
                 nodes.push(_sectionLabel(section.label, `skills-${section.key}-heading`));
                 nodes.push(...section.items.map((skill) => (
@@ -825,16 +827,15 @@ function renderSkillCatalog(container) {
                         })),
                     })),
                     registryError: String(state.registryError || ''),
+                    detailSignature: String(state.detailSignature || ''),
                 };
             },
         });
-        renderDetail();
     }
 
     function _syncCatalogLayout() {
-        const inlineCatalog = !currentAgentId;
-        workspace.classList.toggle('dashboard-board-stacked', inlineCatalog);
-        detailEl.hidden = inlineCatalog;
+        workspace.classList.add('dashboard-board-stacked');
+        detailEl.hidden = true;
     }
 
     function _renderGlobalCatalogIntro() {
@@ -854,6 +855,20 @@ function renderSkillCatalog(container) {
             manage.textContent = 'Bot management is available from the selector above.';
             panel.appendChild(manage);
         }
+        return panel;
+    }
+
+    function _renderAgentCapabilityIntro(agentLabel) {
+        const panel = document.createElement('section');
+        panel.className = 'editor-panel';
+        panel.dataset.key = 'agent-capability-intro';
+        const title = document.createElement('h3');
+        title.textContent = 'Capabilities';
+        panel.appendChild(title);
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = `Select a capability for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
+        panel.appendChild(note);
         return panel;
     }
 
@@ -916,7 +931,7 @@ function renderSkillCatalog(container) {
     function _renderLocalSkillRow(skill, { selected = false } = {}) {
         const shellRow = document.createElement('div');
         shellRow.className = 'list-row-shell';
-        shellRow.dataset.key = `local:${skill.name || ''}`;
+        shellRow.dataset.key = `local:${skill.name || ''}:${selected ? 'open' : 'closed'}`;
         const meta = RegistrySkillHub.localRowMeta(skill);
         const row = UI.renderListRow({
             label: meta.label,
@@ -924,11 +939,16 @@ function renderSkillCatalog(container) {
             badgeText: meta.badgeText,
             onClick: () => {
                 _runWithDraftGuard(async () => {
+                    if (selected) {
+                        await _selectSkill('', 'local');
+                        return;
+                    }
                     await _selectSkill(skill.name || '', 'local');
                 });
             },
             className: selected ? 'is-selected' : '',
         });
+        row.setAttribute('aria-expanded', String(selected));
         shellRow.appendChild(row);
         const actions = document.createElement('div');
         actions.className = 'list-row-actions';
@@ -953,13 +973,19 @@ function renderSkillCatalog(container) {
         if (actions.childElementCount) {
             shellRow.appendChild(actions);
         }
+        if (selected) {
+            shellRow.appendChild(_renderSelectedSkillInlineDetail({
+                origin: 'local',
+                skill,
+            }));
+        }
         return shellRow;
     }
 
     function _renderRegistrySkillRow(skill, { selected = false } = {}) {
         const shellRow = document.createElement('div');
         shellRow.className = 'list-row-shell';
-        shellRow.dataset.key = `store:${skill.name || ''}`;
+        shellRow.dataset.key = `store:${skill.name || ''}:${selected ? 'open' : 'closed'}`;
         const meta = RegistrySkillHub.storeRowMeta(skill);
         const row = UI.renderListRow({
             label: meta.label,
@@ -967,11 +993,16 @@ function renderSkillCatalog(container) {
             badgeText: meta.badgeText,
             onClick: () => {
                 _runWithDraftGuard(async () => {
+                    if (selected) {
+                        await _selectSkill('', 'store');
+                        return;
+                    }
                     await _selectSkill(skill.name || '', 'store');
                 });
             },
             className: selected ? 'is-selected' : '',
         });
+        row.setAttribute('aria-expanded', String(selected));
         shellRow.appendChild(row);
         const actions = document.createElement('div');
         actions.className = 'list-row-actions';
@@ -987,6 +1018,12 @@ function renderSkillCatalog(container) {
         }
         if (actions.childElementCount) {
             shellRow.appendChild(actions);
+        }
+        if (selected) {
+            shellRow.appendChild(_renderSelectedSkillInlineDetail({
+                origin: 'store',
+                skill,
+            }));
         }
         return shellRow;
     }
@@ -1154,26 +1191,15 @@ function renderSkillCatalog(container) {
         renderList();
     }
 
-    function renderDetail() {
-        if (!currentAgentId) {
-            UI.clearMemoizedRender(detailEl);
-            return;
-        }
+    function _selectedSkillDetailSignature() {
         const selected = _findSelectedSkill();
-        if (!selected) {
-            UI.clearMemoizedRender(detailEl);
-            UI.reconcileChildren(detailEl, [
-                ..._buildStudioHome(_currentAgentLabel()),
-            ]);
-            return;
-        }
+        if (!selected) return '';
         if (selected.origin === 'store') {
-            renderStoreDetail(selected.skill);
-            return;
-        }
-        if (RegistrySkillHub.isCustomSkill(selected.skill)) {
-            renderStudioDetail(selected);
-            return;
+            return UI.dataSignature({
+                origin: 'store',
+                name: String(selected.skill?.name || ''),
+                version: String(selected.skill?.version || ''),
+            });
         }
         const detail = selectedLocalDetail && selectedLocalDetail.name === selected.skill.name
             ? selectedLocalDetail
@@ -1181,10 +1207,55 @@ function renderSkillCatalog(container) {
         const lifecycle = selectedLifecycle && selectedLifecycle.name === selected.skill.name
             ? selectedLifecycle
             : null;
-        renderLocalDetail(selected.skill, detail, lifecycle, {
+        return UI.dataSignature({
+            origin: selected.origin,
+            name: String(selected.skill?.name || ''),
+            loading: Boolean(selectionLoading),
+            detailLoaded: Boolean(selectedLocalDetail && selectedLocalDetail.name === selected.skill.name),
+            detailSnapshot: _draftSnapshot(detail, lifecycle),
+            studioTab: currentStudioTab,
+            draftStatus,
+            draftDirty,
+        });
+    }
+
+    function _buildSelectedSkillDetailNodes(selected) {
+        if (!currentAgentId || !selected) {
+            return _buildStudioHome(_currentAgentLabel());
+        }
+        if (selected.origin === 'store') {
+            return _buildStoreDetailNodes(selected.skill);
+        }
+        if (RegistrySkillHub.isCustomSkill(selected.skill)) {
+            return _buildStudioDetailNodes(selected);
+        }
+        const detail = selectedLocalDetail && selectedLocalDetail.name === selected.skill.name
+            ? selectedLocalDetail
+            : selected.skill;
+        const lifecycle = selectedLifecycle && selectedLifecycle.name === selected.skill.name
+            ? selectedLifecycle
+            : null;
+        return _buildLocalDetailNodes(selected.skill, detail, lifecycle, {
             loading: selectionLoading,
             detailLoaded: Boolean(selectedLocalDetail && selectedLocalDetail.name === selected.skill.name),
         });
+    }
+
+    function _renderSelectedSkillInlineDetail(selected) {
+        const panel = document.createElement('section');
+        panel.className = 'conversation-inline-detail capability-inline-detail';
+        panel.dataset.key = `skill-inline-detail:${selected?.origin || ''}:${selected?.skill?.name || ''}`;
+        _buildSelectedSkillDetailNodes(selected).forEach((node) => {
+            if (node instanceof Node) panel.appendChild(node);
+        });
+        return panel;
+    }
+
+    function renderDetail() {
+        UI.clearMemoizedRender(detailEl);
+        UI.reconcileChildren(detailEl, []);
+        if (!currentAgentId) return;
+        renderList();
     }
 
     function _renderGlobalCapabilityDetail(item, {
@@ -1244,61 +1315,7 @@ function renderSkillCatalog(container) {
             origin: 'store',
             skill,
         }, (state) => {
-            const nodes = [];
-            const overview = document.createElement('section');
-            overview.className = 'editor-panel';
-            overview.dataset.key = 'store-overview';
-            const headerRow = document.createElement('div');
-            headerRow.className = 'workspace-header-main';
-            const titleWrap = document.createElement('div');
-            titleWrap.className = 'workspace-title-group';
-            const title = document.createElement('h3');
-            title.className = 'editor-section-title';
-            title.textContent = state.skill.display_name || state.skill.name || 'Skill';
-            titleWrap.appendChild(title);
-            if (state.skill.description) {
-                const description = document.createElement('p');
-                description.className = 'quiet-note';
-                description.textContent = state.skill.description;
-                titleWrap.appendChild(description);
-            }
-            headerRow.appendChild(titleWrap);
-            const badge = document.createElement('span');
-            badge.className = 'badge';
-            badge.textContent = state.skill.source_label || 'Store';
-            headerRow.appendChild(badge);
-            overview.appendChild(headerRow);
-            overview.appendChild(UI.renderMetadataGrid([
-                { label: 'State', value: 'Available from the skill store' },
-                { label: 'Publisher', value: state.skill.publisher || 'Unknown' },
-                { label: 'Version', value: state.skill.version || 'Unknown' },
-            ], { compact: true }));
-            const actions = document.createElement('div');
-            actions.className = 'editor-actions';
-            if (state.skill.can_import) {
-                actions.appendChild(_actionButton('Install on bot', async () => {
-                    await API.installSkill(currentAgentId, state.skill.name);
-                    _invalidateSkillCaches(currentAgentId, state.skill.name);
-                    selectedSkillOrigin = 'local';
-                    selectedSkillName = state.skill.name;
-                    _writeState();
-                    await loadSkills({ soft: true, forceCatalog: true });
-                }, 'Installing…'));
-            }
-            overview.appendChild(actions);
-            nodes.push(overview);
-
-            const help = document.createElement('section');
-            help.className = 'editor-panel';
-            help.dataset.key = 'store-help';
-            help.innerHTML = [
-                '<div class="editor-section-title">How to use this capability</div>',
-                '<p class="quiet-note">',
-                'Install this capability on the bot first. Then open a conversation and use the conversation Capabilities panel to activate it in that chat.',
-                '</p>',
-            ].join('');
-            nodes.push(help);
-            return nodes;
+            return _buildStoreDetailNodes(state.skill);
         }, {
             signatureFn(state) {
                 return {
@@ -1308,6 +1325,64 @@ function renderSkillCatalog(container) {
                 };
             },
         });
+    }
+
+    function _buildStoreDetailNodes(skill) {
+        const nodes = [];
+        const overview = document.createElement('section');
+        overview.className = 'editor-panel';
+        overview.dataset.key = 'store-overview';
+        const headerRow = document.createElement('div');
+        headerRow.className = 'workspace-header-main';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'workspace-title-group';
+        const title = document.createElement('h3');
+        title.className = 'editor-section-title';
+        title.textContent = skill.display_name || skill.name || 'Skill';
+        titleWrap.appendChild(title);
+        if (skill.description) {
+            const description = document.createElement('p');
+            description.className = 'quiet-note';
+            description.textContent = skill.description;
+            titleWrap.appendChild(description);
+        }
+        headerRow.appendChild(titleWrap);
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = skill.source_label || 'Store';
+        headerRow.appendChild(badge);
+        overview.appendChild(headerRow);
+        overview.appendChild(UI.renderMetadataGrid([
+            { label: 'State', value: 'Available from the skill store' },
+            { label: 'Publisher', value: skill.publisher || 'Unknown' },
+            { label: 'Version', value: skill.version || 'Unknown' },
+        ], { compact: true }));
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        if (skill.can_import) {
+            actions.appendChild(_actionButton('Install on bot', async () => {
+                await API.installSkill(currentAgentId, skill.name);
+                _invalidateSkillCaches(currentAgentId, skill.name);
+                selectedSkillOrigin = 'local';
+                selectedSkillName = skill.name;
+                _writeState();
+                await loadSkills({ soft: true, forceCatalog: true });
+            }, 'Installing…'));
+        }
+        overview.appendChild(actions);
+        nodes.push(overview);
+
+        const help = document.createElement('section');
+        help.className = 'editor-panel';
+        help.dataset.key = 'store-help';
+        help.innerHTML = [
+            '<div class="editor-section-title">How to use this capability</div>',
+            '<p class="quiet-note">',
+            'Install this capability on the bot first. Then open a conversation and use the conversation Capabilities panel to activate it in that chat.',
+            '</p>',
+        ].join('');
+        nodes.push(help);
+        return nodes;
     }
 
     function renderStudioDetail(selected) {
@@ -1336,17 +1411,28 @@ function renderSkillCatalog(container) {
             draftDirty,
             studioTab: currentStudioTab,
         }, (state) => {
-            if (!state.skillName) {
-                return _buildStudioHome(state.agentLabel);
-            }
-            if (state.selectedOrigin === 'store' || !_isSelectedCustom(summary, detail)) {
-                return _buildStudioHome(state.agentLabel, selected);
-            }
-            if (state.loading && !state.detailLoaded) {
-                return _buildStudioLoading(detail);
-            }
-            return _buildStudioWorkspace(summary, detail, lifecycle, { loading: Boolean(state.loading) });
+            return _buildStudioDetailNodes(selected);
         });
+    }
+
+    function _buildStudioDetailNodes(selected) {
+        const summary = selected && selected.origin === 'local' ? selected.skill : {};
+        const detail = selectedLocalDetail && selected && selectedLocalDetail.name === selected.skill.name
+            ? selectedLocalDetail
+            : summary;
+        const lifecycle = selectedLifecycle && selected && selectedLifecycle.name === selected.skill.name
+            ? selectedLifecycle
+            : null;
+        if (!selected?.skill?.name) {
+            return _buildStudioHome(_currentAgentLabel());
+        }
+        if (selected.origin === 'store' || !_isSelectedCustom(summary, detail)) {
+            return _buildStudioHome(_currentAgentLabel(), selected);
+        }
+        if (selectionLoading && !selectedLocalDetail) {
+            return _buildStudioLoading(detail);
+        }
+        return _buildStudioWorkspace(summary, detail, lifecycle, { loading: Boolean(selectionLoading) });
     }
 
     function renderLocalDetail(summary, detail, lifecycle, { loading = false, detailLoaded = false } = {}) {
@@ -1360,16 +1446,11 @@ function renderSkillCatalog(container) {
             detailLoaded,
             detailSnapshot: _draftSnapshot(detail, lifecycle),
         }, (state) => {
-            if (state.loading && !state.detailLoaded) {
-                return _buildLoadingPanel(state.detail, {
-                    keyPrefix: 'skill-loading',
-                    message: 'Loading skill details…',
-                });
-            }
-            const nodes = [];
-            nodes.push(_buildOverviewPanel(state.summary, state.detail, state.lifecycle));
-            nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
-            return nodes;
+            return _buildLocalDetailNodes(state.summary, state.detail, state.lifecycle, {
+                loading: state.loading,
+                detailLoaded: state.detailLoaded,
+                agentLabel: state.agentLabel,
+            });
         }, {
             signatureFn(state) {
                 return {
@@ -1387,6 +1468,19 @@ function renderSkillCatalog(container) {
                 };
             },
         });
+    }
+
+    function _buildLocalDetailNodes(summary, detail, lifecycle, { loading = false, detailLoaded = false, agentLabel = '' } = {}) {
+        if (loading && !detailLoaded) {
+            return _buildLoadingPanel(detail, {
+                keyPrefix: 'skill-loading',
+                message: 'Loading skill details…',
+            });
+        }
+        return [
+            _buildOverviewPanel(summary, detail, lifecycle),
+            _buildCatalogHelpPanel(summary, detail, agentLabel || _currentAgentLabel()),
+        ];
     }
 
     function _buildOverviewPanel(summary, detail, lifecycle) {

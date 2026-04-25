@@ -1352,6 +1352,19 @@ select {
     overflow-y: auto;
 }
 
+#content > .content-inner.conversation-list-route-shell .pagination-shell {
+    flex: 0 0 auto;
+    padding-top: var(--space-2);
+}
+
+#content > .content-inner.conversation-list-route-shell .pagination {
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-card);
+}
+
 .workbench-row {
     display: flex;
     align-items: center;

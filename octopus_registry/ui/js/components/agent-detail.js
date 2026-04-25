@@ -948,7 +948,7 @@ function renderAgentDetail(container, params) {
         taskThreadGroupEl = taskThreadsGroup;
         const taskThreadsLabel = document.createElement('div');
         taskThreadsLabel.className = 'agent-detail-conversation-group-title';
-        taskThreadsLabel.textContent = 'Task threads';
+        taskThreadsLabel.textContent = 'Delegation threads';
         taskThreadsGroup.appendChild(taskThreadsLabel);
         const taskList = document.createElement('div');
         taskList.className = 'list-container';
@@ -993,7 +993,7 @@ function renderAgentDetail(container, params) {
             });
             const sub = document.createElement('span');
             sub.textContent = [
-                item.conversation_type === 'task_thread' ? 'operational task thread' : '',
+                item.conversation_type === 'task_thread' ? 'delegation thread' : '',
                 item.origin_channel || 'registry',
                 UI.relativeTime(item.updated_at || item.created_at),
             ].filter(Boolean).join(' · ');
@@ -1001,7 +1001,7 @@ function renderAgentDetail(container, params) {
                 href: UI.conversationHref(item.conversation_id, {
                     conversationType: item.conversation_type,
                 }),
-                label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : 'Conversation'),
+                label: item.title || (item.conversation_type === 'task_thread' ? 'Delegation thread' : 'Conversation'),
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),

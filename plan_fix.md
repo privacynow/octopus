@@ -34,6 +34,8 @@ before broad audit or implementation claims continue.
   can still be viewed through `Specific agent` mode when the author chooses it.
 - `P4.25`: Capabilities defaults to a human catalog rather than a bot-management
   dead end.
+- `P4.25`: Capabilities hides `*`, `Rehearsal`, and generated timestamp variants
+  from the default catalog; rows are clickable and show assignment details.
 - `P3`: Dashboard empty approvals collapse; the main backlog card routes to
   Runs; default dashboard language uses `Work needing attention`.
 
@@ -43,34 +45,41 @@ Verified before this refactor:
 - `git diff --check` was clean.
 - `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed against deployed
   registry after fixes.
-- `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed before the
-  latest pending Capabilities hardening.
-- `tests/test_registry_ui_contract.py`: 39 passed locally after contract updates.
+- Targeted Capabilities Playwright test passed against deployed registry after
+  hard-refreshing real Safari.
+- `tests/test_registry_ui_contract.py`: 40 passed locally after contract updates.
 - Real Safari confirmed hard-refresh discipline and default nav without
   `Tasks`/`Approvals`.
 
 ### Pending Local Patch
 
-The working tree currently includes an unfinished patch for `P4.25`:
+The working tree currently includes a local patch for `P5.12`, `P1.7`, and the
+conversation task/delegation copy cleanup:
 
-- `octopus_registry/ui/js/components/skill-catalog.js`
+- `octopus_registry/ui/index.html`
+- `octopus_registry/ui/css/main.css`
+- `octopus_registry/ui/js/helpers/ui.js`
+- `octopus_registry/ui/js/components/conversation-list.js`
+- `octopus_registry/ui/js/components/conversation-detail.js`
+- `octopus_registry/ui/js/components/agent-detail.js`
 - `tests/e2e/playwright/registry-work-surface.spec.js`
 - `tests/test_registry_ui_contract.py`
 
 Intent:
 
-- Filter internal/system capabilities such as `*` and `Rehearsal` from the
-  normal Capabilities catalog.
-- Make default Capabilities rows clickable and inspectable.
-- Preserve bot-scoped management as a secondary selector mode.
+- Make Conversations pagination visible, URL-addressable, and refresh-stable.
+- Reframe task-thread copy as delegation/linked-work language without removing
+  the underlying task/delegation route.
+- Remove fake `Team`, move `Agents` under Build, and move the operational
+  Dashboard under Operations.
 
 Known verification state:
 
-- The strengthened Playwright Capabilities test intentionally failed against
-  the currently deployed assets because deployed Safari still shows `*` and
-  `Rehearsal`.
-- The code patch must be tested locally, committed, pushed, pulled into
-  `/Users/tinker/octopus`, redeployed, hard-refreshed in Safari, and retested.
+- `node --check`, `git diff --check`, and `tests/test_registry_ui_contract.py`
+  are clean locally.
+- The patch must be committed, pushed, pulled into `/Users/tinker/octopus`,
+  redeployed, hard-refreshed in Safari, and retested with Playwright and real
+  Safari.
 
 ### Deployment Blocker
 
@@ -264,9 +273,9 @@ Open IA decisions:
 
 | ID | Blocker | Current Evidence | Required Outcome |
 |----|---------|------------------|------------------|
-| B1 | Capabilities rows are passive and internal selectors show in default catalog. | Real Safari shows `*` and `Rehearsal`; row click did not expose detail. | Human capabilities only; rows clickable; detail explains assignment and management path. |
-| B2 | Conversations pagination is broken or unclear. | User observed pagination failure in real Safari. | Reliable pagination controls, preserved filters/selection, bounded desktop viewport. |
-| B3 | Navigation IA is still confusing. | Dashboard under Work, fake Team section, Agents separated from Build. | Work/Build/Operations grouping matches product model. |
+| B1 | Conversations pagination is broken or unclear. | User observed pagination failure in real Safari; current deployed controls are weak and state-only. | Reliable pagination controls, preserved filters/selection, bounded desktop viewport. |
+| B2 | Navigation IA is still confusing. | Dashboard under Work, fake Team section, Agents separated from Build. | Work/Build/Operations grouping matches product model. |
+| B3 | Deployment and Safari verification still pending for the current IA patch. | Local tests are clean; deployed app still has old nav/pagination until the next push/pull/redeploy/hard-refresh. | Deployed Safari matches local contracts. |
 | B4 | Tasks vs Runs is conceptually unresolved. | Standalone delegations are real, but protocol stage tasks duplicate Runs. | Delegations preserved; protocol tasks contextualized under run/stage/conversation lineage. |
 | B5 | M3 cannot start. | Claude auth file is zero bytes; container exits. | M3 auth restored or M3 excluded from claims requiring all real agents. |
 | B6 | Generated/rehearsal/test data dominates default pages. | Dashboard/Conversations/Protocols/Agents show rehearsal and generated variants. | Default pages show canonical human work; operator/audit filters expose test data. |
@@ -283,7 +292,7 @@ Open IA decisions:
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
 | P1.5 | Active | Standalone delegations are real, but protocol-generated stage tasks leak into Tasks as peer work beside Runs. | Delegation surface separates standalone work from protocol-owned stage tasks. |
 | P1.6 | Active | Generated, rehearsal, and test-created data dominates default user surfaces. | Default pages hide/group test and rehearsal records unless operator/audit mode is active. |
-| P1.7 | Active | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test and real Safari pass. |
+| P1.7 | Partial | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test is local; real Safari pass after deploy. |
 
 ### P2: Platform Shell And Resilience
 
@@ -318,7 +327,7 @@ Open IA decisions:
 | P4.16 | Partial | Standard/operator authoring split must omit internals from standard DOM and API. | Negative tests for Advanced/custom runtime/internal fields. |
 | P4.23 | Done | Blank stage required owner role. | Name-only stage creation test. |
 | P4.24 | Active | Protocol list is flooded by near-duplicate/generated drafts. | Canonical protocols first; generated variants grouped/hidden. |
-| P4.25 | Active | Capabilities must be a human catalog, not passive bot admin or internal selector list. | Row click, internal-filter, selector consistency tests. |
+| P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list. | Row click, internal-filter, selector consistency tests. |
 | P4.26 | Done | Missing capability had no natural assignment path. | `New capability needed` UI-only scenario. |
 
 ### P5: Conversations, Agents, Collaboration
@@ -329,7 +338,7 @@ Open IA decisions:
 | P5.3 | Active | Conversation detail needs dedicated audit for composer, timeline, linked work, settings, focus, scroll, send/WS, markdown. | Dedicated conversation detail audit. |
 | P5.10 | Active | Conversations default list is dominated by rehearsal task threads and weak `Open` states. | Human conversations prioritized; operational threads grouped. |
 | P5.11 | Active | Agent detail duplicates capabilities and treats Rehearsal as a normal default agent. | Agent work-first audit and tests. |
-| P5.12 | Active | Conversations pagination is broken or unclear. | Real Safari pagination plus Playwright cursor test. |
+| P5.12 | Partial | Conversations pagination is broken or unclear. | URL-addressable local patch and contracts are clean; Playwright and Safari pass after deploy. |
 
 ### P6: Presentation, Accessibility, Responsive
 
@@ -454,17 +463,17 @@ Acceptance:
 
 ## Immediate Execution Order
 
-1. Finish `P4.25` pending Capabilities patch.
-2. Run syntax and contract checks.
-3. Commit/push/pull/redeploy, hard-refresh Safari with `Option+Command+R`.
-4. Verify Capabilities in real Safari: no `*`, no `Rehearsal`, row click opens
-   detail.
-5. Fix `P5.12` conversation pagination.
-6. Reframe conversation `Tasks` UI copy into linked work/delegations without
-   deleting the route or task/delegation concept.
-7. Apply `P1.7` nav grouping pass.
-8. Rerun Playwright work-surface and protocol suites.
-9. Only then resume broad 500+ screenshot audit.
+1. Commit the local `P5.12` / `P1.7` / delegation-copy patch.
+2. Push, pull into `/Users/tinker/octopus`, redeploy, and hard-refresh Safari
+   with `Option+Command+R`.
+3. Verify Conversations pagination in real Safari: Page label, Next, Previous,
+   refresh-stable `cursor`, and visible footer.
+4. Verify nav grouping in real Safari: Work, Build, Operations only; Agents
+   under Build; Dashboard under Operations.
+5. Rerun Playwright work-surface and protocol suites.
+6. Continue with generated/rehearsal data cleanup, protocol catalog flood, and
+   Runs/Delegations/Artifacts lineage.
+7. Only then resume broad 500+ screenshot audit.
 
 ## Verification Matrix
 

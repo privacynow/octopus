@@ -1005,13 +1005,20 @@ window.UI = (() => {
         return { element: group, setActive, buttons };
     }
 
-    function createCursorPaginator(container, loadFn, { initialCursor = 0 } = {}) {
+    function createCursorPaginator(container, loadFn, { initialCursor = 0, initialStack = [], onChange = null } = {}) {
         let cursor = initialCursor;
-        let cursorStack = [];
+        let cursorStack = Array.isArray(initialStack) ? initialStack.slice() : [];
+
+        function emitChange() {
+            if (typeof onChange === 'function') {
+                onChange({ cursor, hasPrev: cursorStack.length > 0, stackLength: cursorStack.length });
+            }
+        }
 
         function reset(nextCursor = initialCursor) {
             cursor = nextCursor;
             cursorStack = [];
+            emitChange();
         }
 
         function clear() {
@@ -1026,11 +1033,13 @@ window.UI = (() => {
                 info,
                 onPrev: () => {
                     cursor = cursorStack.pop() || initialCursor;
+                    emitChange();
                     loadFn();
                 },
                 onNext: () => {
                     cursorStack.push(cursor);
                     cursor = nextCursor;
+                    emitChange();
                     loadFn();
                 },
             });
@@ -1250,7 +1259,7 @@ window.UI = (() => {
         }
         const badge = document.createElement('span');
         badge.className = 'badge badge-task-thread';
-        badge.textContent = 'Task thread';
+        badge.textContent = 'Delegation thread';
         return badge;
     }
 

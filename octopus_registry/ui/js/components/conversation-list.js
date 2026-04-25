@@ -7,7 +7,7 @@ function renderConversationList(container) {
     const CONVERSATION_TYPES = [
         { key: 'all', value: '', label: 'All' },
         { key: 'conversation', value: 'conversation', label: 'Conversations' },
-        { key: 'task_thread', value: 'task_thread', label: 'Task threads' },
+        { key: 'task_thread', value: 'task_thread', label: 'Delegation threads' },
     ];
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
@@ -20,6 +20,11 @@ function renderConversationList(container) {
     let currentQ = UI.readQueryParam('q', '');
     let currentStatus = UI.readQueryParam('status', '');
     let currentType = UI.readQueryParam('type', '');
+    const initialCursor = Math.max(0, Number.parseInt(UI.readQueryParam('cursor', '0'), 10) || 0);
+    const initialCursorStack = [];
+    for (let value = 0; value < initialCursor; value += limit) {
+        initialCursorStack.push(value);
+    }
     let searchTimeout = null;
     let hasLoaded = false;
     let quickStartLoaded = false;
@@ -30,6 +35,7 @@ function renderConversationList(container) {
     const conversationPreviews = new Map();
     const conversationPreviewErrors = new Map();
     const conversationPreviewLoading = new Set();
+    let paginator = null;
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -82,7 +88,7 @@ function renderConversationList(container) {
 
     function applyStatus(value) {
         currentStatus = value;
-        paginator.reset();
+        paginator.reset(0);
         statusControl.setActive(currentStatus);
         _writeState();
         loadPage();
@@ -90,7 +96,7 @@ function renderConversationList(container) {
 
     function applyType(value) {
         currentType = value;
-        paginator.reset();
+        paginator.reset(0);
         typeControl.setActive(currentType);
         _writeState();
         loadPage();
@@ -101,6 +107,7 @@ function renderConversationList(container) {
             q: currentQ,
             status: currentStatus,
             type: currentType,
+            cursor: paginator && Number(paginator.cursor) > 0 ? paginator.cursor : '',
             conversation_id: currentConversationId || '',
         });
     }
@@ -116,7 +123,14 @@ function renderConversationList(container) {
     const pagEl = document.createElement('div');
     pagEl.className = 'pagination-shell';
     listShell.appendChild(pagEl);
-    const paginator = UI.createCursorPaginator(pagEl, () => loadPage());
+    paginator = UI.createCursorPaginator(pagEl, () => loadPage(), {
+        initialCursor,
+        initialStack: initialCursorStack,
+        onChange: () => {
+            currentConversationId = '';
+            _writeState();
+        },
+    });
 
     searchInput.value = currentQ;
 
@@ -124,7 +138,7 @@ function renderConversationList(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             currentQ = searchInput.value.trim();
-            paginator.reset();
+            paginator.reset(0);
             _writeState();
             loadPage();
         }, 250);
@@ -321,7 +335,7 @@ function renderConversationList(container) {
         const openTasks = document.createElement('a');
         openTasks.href = _conversationHref(item, 'tasks');
         openTasks.className = 'btn btn-sm';
-        openTasks.textContent = 'Open tasks/activity';
+        openTasks.textContent = 'Open linked work';
         actions.appendChild(openTasks);
         panel.appendChild(actions);
 
@@ -395,7 +409,7 @@ function renderConversationList(container) {
             const parts = [];
             const targetLabel = UI.visibleLabel(item.target_display_name, item.target_agent_id);
             if (targetLabel) parts.push(targetLabel);
-            if (item.conversation_type === 'task_thread') parts.push('operational task thread');
+            if (item.conversation_type === 'task_thread') parts.push('delegation thread');
             if (item.origin_channel) parts.push(item.origin_channel);
             if (item.updated_at || item.created_at) parts.push(UI.relativeTime(item.updated_at || item.created_at));
             sub.textContent = parts.join(' · ');
@@ -407,7 +421,7 @@ function renderConversationList(container) {
             shell.dataset.signature = rowSignature;
 
             const row = UI.renderListRow({
-                label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : targetLabel) || 'Untitled conversation',
+                label: item.title || (item.conversation_type === 'task_thread' ? 'Delegation thread' : targetLabel) || 'Untitled conversation',
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
@@ -459,7 +473,11 @@ function renderConversationList(container) {
             },
         });
 
-        paginator.render({ hasMore: !!data.has_more, nextCursor: data.next_cursor });
+        paginator.render({
+            hasMore: !!data.has_more,
+            nextCursor: data.next_cursor,
+            info: `Page ${paginator.stackLength + 1}`,
+        });
         hasLoaded = true;
         if (currentConversationId && conversations.some((item) => String(item.conversation_id || '') === String(currentConversationId || ''))) {
             void loadConversationPreview(currentConversationId);

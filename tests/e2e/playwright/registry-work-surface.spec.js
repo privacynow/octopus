@@ -60,6 +60,9 @@ test('main navigation swaps content immediately and keeps internal work queues o
 
   await page.goto('/ui/approvals', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible();
+  await expect(page.locator('.nav-group')).toHaveText(['Work', 'Build', 'Operations']);
+  await expect(page.getByRole('link', { name: 'Agents', exact: true })).toBeVisible();
+  await expect(page.locator('.nav-links').getByText('Team', { exact: true })).toHaveCount(0);
 
   await page.getByRole('link', { name: 'Protocols', exact: true }).click();
   await expect(page).toHaveURL(/\/ui\/protocols/);
@@ -195,6 +198,30 @@ test('conversation list exposes inline context before opening the full workspace
   const metrics = await layoutMetrics(page);
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
   await page.screenshot({ path: '.tmp/visual-registry/conversations-inline-desktop.png', fullPage: false });
+});
+
+test('conversation pagination is visible and addressable', async ({ page }) => {
+  await login(page);
+  const listResponse = await page.request.get('/v1/conversations?limit=26');
+  expect(listResponse.ok()).toBeTruthy();
+  const payload = await listResponse.json();
+  test.skip(!payload.has_more, 'Need more than one page of conversations to verify pagination.');
+
+  await page.goto('/ui/conversations');
+  const pagination = page.locator('.conversation-list-route-shell .pagination');
+  await expect(pagination).toBeVisible();
+  await expect(pagination).toContainText('Page 1');
+
+  await pagination.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(pagination).toContainText('Page 2');
+  expect(Number(new URL(page.url()).searchParams.get('cursor'))).toBeGreaterThan(0);
+  await expect(pagination.getByRole('button', { name: 'Previous', exact: true })).toBeEnabled();
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.conversation-list-route-shell .pagination')).toContainText('Page 2');
+  await page.locator('.conversation-list-route-shell .pagination').getByRole('button', { name: 'Previous', exact: true }).click();
+  await expect(page.locator('.conversation-list-route-shell .pagination')).toContainText('Page 1');
+  expect(new URL(page.url()).searchParams.get('cursor')).toBeFalsy();
 });
 
 test('tasks keep one inline detail open at a time', async ({ page }) => {

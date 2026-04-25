@@ -395,6 +395,10 @@ def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     assert "'/ui/runs?issue_kind=all'" in dashboard
     assert 'href="/ui/templates"' in index_html
     assert 'href="/ui/protocols"' in index_html
+    assert '<li class="nav-group">Team</li>' not in index_html
+    assert index_html.index('<li class="nav-group">Work</li>') < index_html.index('href="/ui/conversations"') < index_html.index('href="/ui/runs"') < index_html.index('<li class="nav-group">Build</li>')
+    assert index_html.index('<li class="nav-group">Build</li>') < index_html.index('href="/ui/agents"') < index_html.index('<li class="nav-group">Operations</li>')
+    assert index_html.index('<li class="nav-group">Operations</li>') < index_html.index('href="/ui/"')
 
 
 def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:
@@ -712,7 +716,7 @@ def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
     assert "Reply uncached" in event_renderers
 
 
-def test_conversation_views_distinguish_task_threads() -> None:
+def test_conversation_views_distinguish_delegation_threads() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_list = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
@@ -722,11 +726,12 @@ def test_conversation_views_distinguish_task_threads() -> None:
     ).read_text(encoding="utf-8")
 
     assert "conversation_type" in conversation_list
-    assert "operational task thread" in conversation_list
-    assert "Task thread" in conversation_list
+    assert "delegation thread" in conversation_list
+    assert "Delegation thread" in conversation_list
+    assert "Open linked work" in conversation_list
     assert "conversation_type" in agent_detail
-    assert "operational task thread" in agent_detail
-    assert "Task thread" in agent_detail
+    assert "delegation thread" in agent_detail
+    assert "Delegation thread" in agent_detail
     assert "No direct conversations." in agent_detail
     assert "taskThreadsGroup.hidden = false" in agent_detail
     detail = (
@@ -751,6 +756,8 @@ def test_conversation_tab_keeps_the_parent_view_conversational() -> None:
     assert "'delegation.submitted'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
     assert "'delegation.completed'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
     assert "'task.status'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
+    assert "label: 'Linked work'" in detail
+    assert "label: 'Tasks'" not in detail
     assert "return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');" in detail
     assert "@role:' + role" not in detail
     assert "@skill:' + value" not in detail
@@ -780,6 +787,22 @@ def test_conversation_route_owns_scroll_on_wide_viewports() -> None:
     assert ".conversation-page {" in css
     assert ".conversation-shell {" in css
     assert ".conversation-layout {" in css
+
+
+def test_conversation_pagination_is_addressable_and_visible() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    ui_helpers = (repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js").read_text(encoding="utf-8")
+    css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
+
+    assert "UI.readQueryParam('cursor', '0')" in conversation_list
+    assert "initialStack: initialCursorStack" in conversation_list
+    assert "cursor: paginator && Number(paginator.cursor) > 0 ? paginator.cursor : ''" in conversation_list
+    assert "info: `Page ${paginator.stackLength + 1}`" in conversation_list
+    assert "onChange({ cursor, hasPrev: cursorStack.length > 0, stackLength: cursorStack.length });" in ui_helpers
+    assert "#content > .content-inner.conversation-list-route-shell .pagination {" in css
     assert "overflow: hidden;" in css
     assert "flex: 1 1 auto;" in css
 

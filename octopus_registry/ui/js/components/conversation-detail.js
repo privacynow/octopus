@@ -88,7 +88,7 @@ function renderConversationDetail(container, params) {
         {
             key: 'tasks',
             value: 'tasks',
-            label: 'Tasks',
+            label: 'Linked work',
             id: 'task-view-tab',
             controls: 'conversation-timeline-panel',
         },

@@ -73,6 +73,18 @@ test('main navigation swaps content immediately and keeps internal work queues o
   await expect(page.getByRole('link', { name: 'Approvals', exact: true })).toHaveCount(0);
 });
 
+test('capabilities defaults to a human assignment catalog before bot management', async ({ page }) => {
+  await login(page);
+  await page.goto('/ui/skills');
+
+  await expect(page.getByRole('heading', { name: 'Capabilities', exact: true })).toBeVisible();
+  await expect(page.getByText('Capability catalog', { exact: true })).toBeVisible();
+  await expect(page.getByText('Available capabilities', { exact: true })).toBeVisible();
+  await expect(page.getByText('Architecture', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/Meta Protocol Composer \d{10,}/)).toHaveCount(0);
+  await expect(page.getByText('No connected bot advertises capability management.', { exact: true })).toHaveCount(0);
+});
+
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {
   await login(page);
   const { id, detail } = await findRunWithLineage(page);

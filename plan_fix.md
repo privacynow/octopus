@@ -220,12 +220,15 @@ Build is where users define things that can be reused.
 Build should include:
 
 - Protocols
-- Templates, only if they stay as a focused starter surface
 - Capabilities
 - Agents, because users combine agents with capabilities and protocols
 
 `Team` is not currently a real product category. Agents are not a team model in
 this product; they are author/runtime resources.
+
+Templates are not a separate Build destination. They are protocol utilities:
+users create a new protocol from a reusable starter or publish an existing
+protocol as a reusable starter from inside the Protocols workflow.
 
 ### Operations
 
@@ -273,6 +276,26 @@ Runs are protocol executions. A run owns:
 - Issues and audit trail
 
 Runs are the canonical surface for protocol execution.
+
+### Protocols And Templates
+
+Protocols are the canonical home for authoring, publishing, running, and
+reusing workflows.
+
+Templates are separate reusable starter objects, but they are managed through
+Protocols rather than through a standalone gallery destination:
+
+- `New protocol` offers `Blank protocol` and `From template`.
+- `From template` shows built-in starters and team-published templates inline
+  inside the Protocols creation flow.
+- `Publish as template` copies a stable protocol snapshot into a separate
+  template record.
+- Templates do not live-reference mutable protocol drafts or silently change
+  when the source protocol is edited later.
+- Updating an existing template is explicit: `Update template from this version`
+  or equivalent.
+- `/ui/templates` and `/ui/gallery` may remain as compatibility redirects, but
+  they must not remain visible or behave as a second product surface.
 
 ### Conversations
 
@@ -346,7 +369,6 @@ This is the target structure. It is not fully implemented yet.
 ### Build
 
 - Protocols
-- Templates
 - Capabilities
 - Agents
 
@@ -364,7 +386,8 @@ Open IA decisions:
 - Whether standalone delegated work is visible as `Delegations` in default nav.
 - Whether Dashboard moves to Operations or is split into `Home` plus
   `Operations Dashboard`.
-- Whether `/ui/templates` remains separate or becomes a Protocols starter view.
+- Exact wording for protocol starters: `Templates`, `Starters`, or
+  `Reusable starters` inside the Protocols creation flow.
 
 ## Active Blockers
 
@@ -383,7 +406,7 @@ Open IA decisions:
 | ID | Status | Finding | Verification |
 |----|--------|---------|--------------|
 | P1.1 | Active | Sidebar exposes too many implementation nouns as peer destinations. | Real Safari nav review and DOM assertions. |
-| P1.2 | Planned | `/ui/templates` and `/ui/gallery` duplicate the same gallery concept. | Canonical URL or explicit alias/redirect test. |
+| P1.2 | Planned | `/ui/templates` and `/ui/gallery` duplicate the same gallery concept and should stop being standalone destinations. | Templates removed from default nav; `/ui/templates` and `/ui/gallery` redirect or alias into Protocols creation; route smoke test. |
 | P1.3 | Active | Terminology drifts between Capabilities, skills, Templates, gallery, protocols, tasks, and runs. | User-facing string inventory. |
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
 | P1.5 | Done | Standalone delegations are real, protocol-generated stage tasks now have run-context copy, and direct task-thread `conversation_id` links stay visible across pagination. | Keep Safari and Playwright regression coverage for conversation linked work to run/stage task. |
@@ -539,11 +562,35 @@ Scope:
 - Keep completed unassigned-stage and missing-capability flows green.
 - Preserve interactive workflow map on demand.
 - Group/hide generated protocol variants.
-- Keep Templates as a starter surface only if it does not duplicate Protocols.
+- Remove Templates/Gallery as a standalone product surface.
+- Move template selection into the existing Protocols creation flow.
+- Add `Publish as template` from a protocol as a snapshot-copy operation, not a
+  live reference to a mutable draft.
+- Add explicit template update semantics for future edits.
+
+Implementation guidance:
+
+- Reuse the existing protocol editor and draft creation pipeline.
+- Extend the current `source_kind: "template"` creation path instead of adding a
+  parallel template editor.
+- Add one backend template object/snapshot path for user-published templates
+  while preserving built-in starters as system-provided template records.
+- The template list API should return built-in starters plus user/team-published
+  templates for the current authoring context.
+- Publishing a template should copy from a published protocol version by
+  default. Draft-to-template, if allowed, must be explicit and validated.
+- Do not let source protocol edits mutate existing templates silently.
+- Keep `/ui/templates` and `/ui/gallery` as route compatibility only; normal nav
+  and CTAs should point at `/ui/protocols` creation.
 
 Acceptance:
 
 - Blank-to-published protocol authoring is possible through UI only.
+- Protocol-to-template publishing is possible through UI only.
+- Creating from a template is available inside Protocols, not a separate gallery.
+- A template created from a protocol remains stable after later source protocol
+  edits.
+- Updating a template from a protocol is explicit and auditable.
 - Stage add/remove/assignment/routing/artifact flows are verified.
 - Protocol list prioritizes canonical workflows.
 
@@ -602,8 +649,8 @@ Acceptance:
 | `/ui/conversations/:id` | `components/conversation-detail.js` |
 | `/ui/tasks` | `components/task-list.js` |
 | `/ui/protocols` | `components/protocol-workspace.js` |
-| `/ui/templates` | `components/gallery.js` |
-| `/ui/gallery` | `components/gallery.js` |
+| `/ui/templates` | compatibility redirect/alias into Protocols creation |
+| `/ui/gallery` | compatibility redirect/alias into Protocols creation |
 | `/ui/runs` | `components/protocol-workspace.js`, `renderProtocolRuns` |
 | `/ui/routing` | `components/routing-policy-list.js` |
 | `/ui/skills` | `components/skill-catalog.js` |

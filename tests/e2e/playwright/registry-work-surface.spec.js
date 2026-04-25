@@ -81,6 +81,8 @@ test('capabilities defaults to a human assignment catalog before bot management'
   await expect(page.getByText('Capability catalog', { exact: true })).toBeVisible();
   await expect(page.getByText('Available capabilities', { exact: true })).toBeVisible();
   await expect(page.getByText('Architecture', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('*', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Rehearsal', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Meta Protocol Composer \d{10,}/)).toHaveCount(0);
   await expect(page.getByText('No connected bot advertises capability management.', { exact: true })).toHaveCount(0);
 });

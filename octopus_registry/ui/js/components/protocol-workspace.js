@@ -2502,11 +2502,7 @@ function renderProtocolWorkspace(container) {
     }
 
     function _isAuthoringRoutingSkill(item) {
-        const skillName = String(item?.skill_name || item || '').trim().toLowerCase();
-        return Boolean(skillName)
-            && skillName !== '*'
-            && skillName !== 'rehearsal'
-            && !UI.isGeneratedTimestampName(skillName);
+        return UI.isHumanAssignableCapabilityName(item?.skill_name || item);
     }
 
     function _supportsSkillCatalog(agent) {

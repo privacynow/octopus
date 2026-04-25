@@ -639,7 +639,7 @@ function renderSkillCatalog(container) {
         return (Array.isArray(globalRoutingSkills) ? globalRoutingSkills : [])
             .filter((item) => {
                 const name = String(item?.skill_name || '').trim();
-                if (!name || UI.isGeneratedTimestampName(name)) return false;
+                if (!UI.isHumanAssignableCapabilityName(name)) return false;
                 if (!normalized) return true;
                 return [name, ...(Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [])]
                     .join(' ')

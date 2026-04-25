@@ -139,6 +139,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
+    assert "return UI.isHumanAssignableCapabilityName(item?.skill_name || item);" in workspace
     assert "Available capabilities" in workspace
     assert "preferred_agent_id" in workspace
 
@@ -439,6 +440,7 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "Find reusable capabilities for conversations and protocol stages." in skill_catalog
     assert "Capability catalog" in skill_catalog
     assert "Choose a bot only when you need to manage installation or drafts." in skill_catalog
+    assert "UI.isHumanAssignableCapabilityName(name)" in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
     assert "label: 'Studio'" not in skill_catalog
@@ -896,6 +898,7 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
 
     assert "function createArtifactActionRow({" in helper
     assert "function createArtifactListRow({" in helper
+    assert "function isHumanAssignableCapabilityName(value)" in helper
     assert "function compactMarkdownReferences(text)" in helper
     assert "function _ensureArtifactPreviewDelegation()" in helper
     assert "document.addEventListener('click', async (event)" in helper

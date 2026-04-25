@@ -645,6 +645,14 @@ window.UI = (() => {
         return Boolean(generatedTimestamp(value));
     }
 
+    function isHumanAssignableCapabilityName(value) {
+        const normalized = String(value || '').trim().toLowerCase();
+        return Boolean(normalized)
+            && normalized !== '*'
+            && normalized !== 'rehearsal'
+            && !isGeneratedTimestampName(normalized);
+    }
+
     function compactGeneratedName(value, { stripUiOnly = false } = {}) {
         const original = String(value || '').trim();
         if (!original) return '';
@@ -1374,6 +1382,7 @@ window.UI = (() => {
         isPreviewableFilePath,
         generatedTimestamp,
         isGeneratedTimestampName,
+        isHumanAssignableCapabilityName,
         compactGeneratedName,
         conversationHref,
         taskArtifactEvidence,

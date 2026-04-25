@@ -1680,10 +1680,10 @@ test.describe('protocol authoring live', () => {
     expect(connectedAgent.agentId).toBeTruthy();
 
     await openConversationForAgentFromUi(page, connectedAgent.agentId);
-    const tasksTab = page.getByRole('tab', { name: 'Tasks', exact: true });
-    await expect(tasksTab).toBeVisible({ timeout: 15000 });
-    await tasksTab.click();
-    await expect(tasksTab).toHaveAttribute('aria-selected', 'true');
+    const linkedWorkTab = page.getByRole('tab', { name: 'Linked work', exact: true });
+    await expect(linkedWorkTab).toBeVisible({ timeout: 15000 });
+    await linkedWorkTab.click();
+    await expect(linkedWorkTab).toHaveAttribute('aria-selected', 'true');
 
     const token = `LIVE_CONVERSATION_OK_${Date.now()}`;
     await page.getByLabel('Message text', { exact: true }).fill(

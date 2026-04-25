@@ -663,12 +663,20 @@ window.UI = (() => {
     function isGeneratedOrRehearsalText(value) {
         const normalized = String(value || '').trim().toLowerCase();
         if (!normalized) return false;
+        const looksLikeGeneratedVariant = (
+            /^draft-[0-9a-f]{8}$/i.test(normalized)
+            || (
+                /[-_]\d{1,4}$/.test(normalized)
+                && /\b(?:draft|protocol|analysis|approval|engineering|authoring|assistant|document|software)\b/.test(normalized.replace(/[-_]+/g, ' '))
+            )
+        );
         return normalized === 'rehearsal'
             || normalized === 'registry.rehearsal'
             || normalized.startsWith('rehearsal ')
             || normalized.includes(' rehearsal')
             || normalized.includes(' meta protocol composer ')
             || normalized.startsWith('meta protocol composer ')
+            || looksLikeGeneratedVariant
             || isGeneratedTimestampName(normalized);
     }
 
@@ -723,6 +731,8 @@ window.UI = (() => {
         if (!original) return '';
         let label = original
             .replace(/(?:[\s_-]+)\d{10,}(?:\b|$)/g, '')
+            .replace(/[-_\s]+\d{1,4}$/g, '')
+            .replace(/^draft-[0-9a-f]{8}$/i, 'Generated draft')
             .replace(/[-_]+/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();

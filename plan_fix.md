@@ -58,6 +58,9 @@ before broad audit or implementation claims continue.
 - `P4.24`: Protocols default to canonical human-authored definitions; generated
   drafts are available through `Show generated drafts` and remain compacted in
   generated families when shown.
+- `P4.24`: Default generated-record detection now covers timestamped protocol
+  names, numeric template-derived variants such as `software-engineering-draft-69`,
+  and anonymous `draft-<hash>` records.
 - `P3.14`: Dashboard work groups exclude protocol-generated stage tasks from
   standalone work needing attention; protocol issues and runs remain the
   canonical protocol-execution surfaces.

@@ -665,6 +665,8 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "function isDefaultHiddenRecord(" in helper
     assert "function defaultVisibleRecords(" in helper
     assert "isGeneratedOrRehearsalText" in helper
+    assert "draft-[0-9a-f]{8}" in helper
+    assert "[-_]\\d{1,4}$" in helper
 
     assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
     assert "let currentType = UI.readQueryParam('type', 'conversation');" in conversation_list

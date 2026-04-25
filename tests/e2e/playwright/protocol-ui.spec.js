@@ -195,9 +195,11 @@ async function createAndPublishCustomSkill(page, {
   )).toContain(agentId);
   await agentSelect.selectOption(agentId);
   await page.getByRole('button', { name: 'New capability', exact: true }).click();
-  await page.getByPlaceholder('skill-slug').fill(skillName);
-  await page.getByPlaceholder('Short description').first().fill(description);
-  await page.getByRole('button', { name: 'Create draft', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create custom draft' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Capability slug', { exact: true }).fill(skillName);
+  await dialog.getByLabel('Short description', { exact: true }).fill(description);
+  await dialog.getByRole('button', { name: 'Create draft', exact: true }).click();
   await expect.poll(() => page.url(), { timeout: 20000 }).toContain(`skill=${encodeURIComponent(skillName)}`);
   await page.getByPlaceholder('Display name').fill(
       skillName
@@ -1145,7 +1147,7 @@ test.describe('protocol authoring live', () => {
     const lifecycleAgent = await firstSkillLifecycleAgent(page);
     expect(lifecycleAgent.agentId).toBeTruthy();
 
-    const skillName = 'meta-protocol-composer-e2e';
+    const skillName = `meta-protocol-composer-e2e-${Date.now()}`;
     await createAndPublishCustomSkill(page, {
       agentId: lifecycleAgent.agentId,
       skillName,
@@ -1504,8 +1506,7 @@ test.describe('protocol authoring live', () => {
         ['review_document', 'Review accept', 'approve_document'],
       ];
       for (const [stageKey, scenarioName, nextStage] of sequence) {
-        const session = page.locator(`.kit-rehearsal-session[data-stage-key="${stageKey}"]`).first();
-        await expect(session).toBeVisible({ timeout: 20000 });
+        const session = await waitForPendingRehearsalSession(page, runId, stageKey);
         const artifactContents = scenarioName === 'Draft v1'
           ? { 'document.md': draftV1Document }
           : scenarioName === 'Draft v2'
@@ -1515,8 +1516,7 @@ test.describe('protocol authoring live', () => {
         await waitForRunStage(page, runId, nextStage);
       }
 
-      const approval = page.locator('.kit-rehearsal-session[data-stage-key="approve_document"]').first();
-      await expect(approval).toBeVisible({ timeout: 20000 });
+      const approval = await waitForPendingRehearsalSession(page, runId, 'approve_document');
       await applyScenarioAndSubmit(page, approval, 'Approve accept');
       await waitForRunStatus(page, runId, 'completed');
 

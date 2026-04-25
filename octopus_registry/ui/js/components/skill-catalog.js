@@ -1514,13 +1514,31 @@ function renderSkillCatalog(container) {
     function _openCreateDraftDialog() {
         const form = document.createElement('div');
         form.className = 'studio-dialog-form';
+        const slugId = `skill-draft-slug-${Date.now()}`;
+        const descriptionId = `skill-draft-description-${Date.now()}`;
+
+        const nameLabel = document.createElement('label');
+        nameLabel.className = 'detail-label';
+        nameLabel.htmlFor = slugId;
+        nameLabel.textContent = 'Capability slug';
+        form.appendChild(nameLabel);
         const nameInput = document.createElement('input');
+        nameInput.id = slugId;
         nameInput.className = 'input';
         nameInput.placeholder = 'skill-slug';
+        nameInput.autocomplete = 'off';
         form.appendChild(nameInput);
+
+        const descriptionLabel = document.createElement('label');
+        descriptionLabel.className = 'detail-label';
+        descriptionLabel.htmlFor = descriptionId;
+        descriptionLabel.textContent = 'Short description';
+        form.appendChild(descriptionLabel);
         const descriptionInput = document.createElement('input');
+        descriptionInput.id = descriptionId;
         descriptionInput.className = 'input';
         descriptionInput.placeholder = 'Short description';
+        descriptionInput.autocomplete = 'off';
         form.appendChild(descriptionInput);
         const createBtn = document.createElement('button');
         createBtn.type = 'button';
@@ -1533,6 +1551,7 @@ function renderSkillCatalog(container) {
         const view = UI.showDialog('Create custom draft', form, {
             actions: [cancelBtn, createBtn],
             maxWidth: '520px',
+            initialFocus: nameInput,
         });
         cancelBtn.addEventListener('click', () => view.close());
         createBtn.addEventListener('click', async () => {

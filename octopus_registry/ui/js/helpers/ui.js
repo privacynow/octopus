@@ -735,7 +735,7 @@ window.UI = (() => {
         ))) {
             return true;
         }
-        return isGeneratedOrRehearsalText(_recordFieldText(record, [
+        const hiddenFields = [
             'display_name',
             'name',
             'title',
@@ -753,7 +753,11 @@ window.UI = (() => {
             'origin_display_name',
             'origin_agent_id',
             'skill_name',
-        ]));
+        ];
+        if (hiddenFields.some((field) => isGeneratedOrRehearsalText(record?.[field]))) {
+            return true;
+        }
+        return isGeneratedOrRehearsalText(_recordFieldText(record, hiddenFields));
     }
 
     function defaultVisibleRecords(records, { includeHidden = false } = {}) {

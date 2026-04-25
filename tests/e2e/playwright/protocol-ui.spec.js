@@ -1147,7 +1147,7 @@ test.describe('protocol authoring live', () => {
     const lifecycleAgent = await firstSkillLifecycleAgent(page);
     expect(lifecycleAgent.agentId).toBeTruthy();
 
-    const skillName = `meta-protocol-composer-e2e-${Date.now()}`;
+    const skillName = 'assistant-workflow-composer-demo';
     await createAndPublishCustomSkill(page, {
       agentId: lifecycleAgent.agentId,
       skillName,

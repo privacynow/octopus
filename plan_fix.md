@@ -83,32 +83,40 @@ before broad audit or implementation claims continue.
   timestamped names.
 - `P4.25`: Capability names now use the shared generated/rehearsal predicate, so
   generated/meta E2E capabilities do not appear in the default catalog.
+- `P4.25`: the custom capability create dialog now uses labeled fields and
+  initial focus instead of placeholder-only inputs, so UI automation and real
+  users target the slug and description fields unambiguously.
+- `P4`: the meta-assistant scenario now creates one stable human-facing
+  capability (`assistant-workflow-composer-demo`) instead of generating new
+  hidden E2E capability names that pollute or disappear from the default
+  catalog.
 
 Verified current state:
 
 - `node --check` on edited JS files was clean.
 - `git diff --check` was clean.
-- `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed locally after the
-  default-surface, rehearsal-session, Runs, Usage, and capability-filter fixes.
+- `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed against deployed
+  registry commit `b086911` after the default-surface, rehearsal-session, Runs,
+  Usage, and capability create/filter fixes.
 - `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
-  locally after the Runs pagination/detail fixes; the skipped task-detail test
+  against deployed registry commit `b086911`; the skipped task-detail test
   requires a run with at least two routed stage tasks in the current data set.
 - `tests/test_registry_ui_contract.py`: 41 passed locally after contract updates.
 - `tests/test_registry_usage.py` plus
   `tests/test_registry_service.py::test_usage_endpoint_rolls_up_delegated_child_usage`
   passed locally after usage lineage updates.
+- `tests/test_protocol_rehearsal.py`: passed locally after the rehearsal
+  session and explicit artifact-content checks.
 - Real Safari confirmed hard-refresh discipline, Capabilities filtering/detail,
-  Work/Build/Operations nav, and conversation pagination Previous/Next/cursor
-  behavior.
-- Real Safari on deployed `d2ac48a` confirmed Conversations defaults to direct
-  conversations, generated/audit work is restored only through the explicit
-  toggle, Protocols defaults to the two canonical drafts, and generated protocol
-  variants are hidden until `Show generated drafts`.
+  Work/Build/Operations nav, filtered Runs default, and conversation pagination
+  Previous/Next/cursor behavior.
+- Real Safari on deployed commit `b086911` confirmed default Runs hide
+  generated/audit executions until the explicit toggle.
 
 ### Pending Local Patch
 
-None at this point. The only untracked local item is `.cursor/`, which is not
-part of this plan.
+None after the current test/plan follow-up is committed. The only untracked
+local item is `.cursor/`, which is not part of this plan.
 
 ### Deployment Blocker
 
@@ -305,9 +313,9 @@ Open IA decisions:
 |----|---------|------------------|------------------|
 | B1 | Tasks vs Runs needed lineage separation. | Patched: standalone `/ui/tasks` is Delegations; `protocol_run_id` deep links are Run stage tasks; Dashboard excludes protocol stage tasks from standalone groups. | Deploy and Safari-audit the route from Conversation -> linked work -> run -> artifact. |
 | B2 | M3 cannot start. | Claude auth file is zero bytes; container exits. User explicitly excluded M3 from this execution. | Do not claim all-agent verification until M3 auth is restored. |
-| B3 | Generated/rehearsal/test data dominated default pages. | Patched through shared visibility predicate across default pages with audit/generated toggles; Conversations and Protocols verified in real Safari. | Finish real Safari checks for Runs, Dashboard, Delegations, and Capabilities after the next broad audit pass. |
+| B3 | Generated/rehearsal/test data dominated default pages. | Patched through shared visibility predicate across default pages with audit/generated toggles; Runs, Conversations, Protocols, Dashboard, Delegations, Agents, Capabilities, and Usage are covered by automated checks; Runs filtering was rechecked in real Safari after deploy. | Keep as regression coverage and include the same forbidden-data checks in the broad audit. |
 | B4 | Protocol catalog was flooded by generated drafts. | Done for default catalog: real Safari shows only canonical drafts until `Show generated drafts`. | Keep regression coverage and revisit only if product needs a richer archive view. |
-| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Shared artifact action rows already exist in Runs, Tasks, and task-board conversation context; Runs Overview now links progressively into Stages and Artifacts. | Complete run/conversation/delegation artifact drill-through audit after deploy. |
+| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Shared artifact action rows already exist in Runs, Tasks, and task-board conversation context; Runs Overview now links progressively into Stages and Artifacts; protocol E2E verifies run artifact preview/download and stage-task drill-through. | Complete real-Safari drill-through from Conversation -> linked work -> Run -> Stage task -> artifact actions. |
 
 ## Findings
 
@@ -320,7 +328,7 @@ Open IA decisions:
 | P1.3 | Active | Terminology drifts between Capabilities, skills, Templates, gallery, protocols, tasks, and runs. | User-facing string inventory. |
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
 | P1.5 | Partial | Standalone delegations are real, and protocol-generated stage tasks now have run-context copy, but conversation drill-through still needs audit. | Safari route from conversation linked work to run/stage task. |
-| P1.6 | Partial | Shared default visibility filtering is patched; Conversations and Protocols are Safari-verified. | Finish remaining default page checks in broad audit. |
+| P1.6 | Done | Shared default visibility filtering is patched and covered across normal work/build/operations surfaces. | Keep broad-audit regression checks. |
 | P1.7 | Done | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test plus real Safari pass after deploy. |
 
 ### P2: Platform Shell And Resilience
@@ -345,7 +353,7 @@ Open IA decisions:
 | P3.8 | Partial | Expanded Runs now use Overview as a real entry point instead of rendering stage evidence by default; broad Safari verification still needed. | Progressive Overview/Stages/Artifacts/Audit tests. |
 | P3.12 | Active | Artifact actions must be invariant everywhere. | Shared artifact row tests in runs, stages, tasks, conversations. |
 | P3.13 | Active | Stale leases can read as ordinary `running`. | Stuck-lease row and overview assertions. |
-| P3.14 | Partial | Default filtering is patched for Runs, Dashboard, Conversations, Agents, Protocols, Delegations, and Usage. | Real Safari default/audit toggle verification. |
+| P3.14 | Done | Default filtering is patched for Runs, Dashboard, Conversations, Agents, Protocols, Delegations, Capabilities, and Usage. | Real Safari broad-audit regression checks. |
 
 ### P4: Protocol Authoring, Protocol Catalog, Capabilities
 
@@ -365,7 +373,7 @@ Open IA decisions:
 |----|--------|---------|--------------|
 | P5.1 | Active | Conversation list filters and quick starts are busy, especially on mobile. | Filter-collapse/mobile smoke test. |
 | P5.3 | Active | Conversation detail needs dedicated audit for composer, timeline, linked work, settings, focus, scroll, send/WS, markdown. | Dedicated conversation detail audit. |
-| P5.10 | Partial | Conversation list filters generated/rehearsal records by default and keeps audit access explicit. | Human conversations prioritized in real Safari. |
+| P5.10 | Done | Conversation list filters generated/rehearsal records by default and keeps audit access explicit. | Human conversations prioritized in real Safari. |
 | P5.11 | Partial | Agent list and Capabilities agent eligibility hide generated/rehearsal agents by default; detail still needs a work-first audit. | Agent work-first audit and tests. |
 | P5.12 | Done | Conversations pagination is broken or unclear. | URL-addressable pagination, Playwright pass, and real Safari pass after deploy. |
 
@@ -492,14 +500,15 @@ Acceptance:
 
 ## Immediate Execution Order
 
-1. Commit, push, pull on octopus, redeploy, and hard-refresh real Safari.
-2. Verify default generated/rehearsal/test filtering and audit toggles in real
-   Safari across Conversations, Runs, Protocols, Agents, Capabilities, Dashboard,
-   and Delegations.
+1. Commit and push the final test/plan follow-up, then pull it into octopus.
+2. If runtime files changed, redeploy and hard-refresh real Safari; if only
+   tests/plan changed, keep deployed runtime commit `b086911` as the verified
+   product code.
 3. Verify the lineage drill-through from Conversation -> linked work -> Run ->
-   Stage task -> artifact actions.
+   Stage task -> artifact actions in real Safari.
 4. Keep M3 excluded from current claims; do not block UI cleanup on M3 auth.
-5. Run accessibility, keyboard, mobile, theme-contrast, and resilience checks.
+5. Run accessibility, keyboard, mobile/narrow Safari, theme-contrast, and
+   resilience checks.
 6. Only then resume broad 500+ screenshot audit.
 
 ## Verification Matrix

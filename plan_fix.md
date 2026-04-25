@@ -93,6 +93,10 @@ before broad audit or implementation claims continue.
 - `P3.12` and `P6.4`: artifact rows with Preview/Open/Download/Copy actions no
   longer expose the entire artifact card as a single accessibility button; the
   row text remains the row action and artifact actions remain separate controls.
+- `P5.1` and `P6.4`: the artifact-row accessibility fix exposed a follow-up
+  regression where normal list rows with static trailing badges only responded
+  on the text column. The shared row helper now reserves split pressable/action
+  behavior only for rows whose trailing content actually contains controls.
 
 Verified current state:
 
@@ -119,8 +123,10 @@ Verified current state:
 
 ### Pending Local Patch
 
-None after the current test/plan follow-up is committed. The only untracked
-local item is `.cursor/`, which is not part of this plan.
+The row-helper follow-up above is being validated and redeployed after deployed
+work-surface testing found the conversation inline drawer no longer opened from
+the full row. The only unrelated untracked local item is `.cursor/`, which is
+not part of this plan.
 
 ### Deployment Blocker
 

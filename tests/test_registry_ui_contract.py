@@ -1050,11 +1050,12 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
 
     assert "isLink || isAction ? 'is-actionable' : 'is-passive'" in helper
-    assert "const usePressableContainer = isAction && hasTrailing;" in helper
+    assert "const hasInteractiveTrailing = hasTrailing && trailing instanceof Element" in helper
+    assert "const usePressableContainer = isAction && hasInteractiveTrailing;" in helper
     assert "main.classList.add('list-row-pressable');" in helper
     assert "makePressable(main, activate);" in helper
     assert "makePressable(row, activate);" not in helper
-    assert "target.closest('a, button, input, textarea, select, summary, [role=\"button\"], [data-artifact-preview-url]')" in helper
+    assert "target.closest(interactiveSelector)" in helper
     assert "Busy: ${current} of ${max} work slots used" in (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")

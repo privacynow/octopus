@@ -210,7 +210,11 @@ window.UI = (() => {
         const isLink = !!href;
         const isAction = !href && typeof onClick === 'function';
         const hasTrailing = trailing instanceof Node;
-        const usePressableContainer = isAction && hasTrailing;
+        const interactiveSelector = 'a, button, input, textarea, select, summary, [role="button"], [data-artifact-preview-url], [data-artifact-preview-action]';
+        const hasInteractiveTrailing = hasTrailing && trailing instanceof Element && (
+            trailing.matches(interactiveSelector) || !!trailing.querySelector(interactiveSelector)
+        );
+        const usePressableContainer = isAction && hasInteractiveTrailing;
         const row = document.createElement(isLink ? 'a' : isAction && !usePressableContainer ? 'button' : 'div');
         row.className = [
             'list-row',
@@ -265,7 +269,7 @@ window.UI = (() => {
             const activate = (event) => {
                 const target = event && event.target instanceof Element ? event.target : null;
                 if (target && target !== row) {
-                    const nestedInteractive = target.closest('a, button, input, textarea, select, summary, [role="button"], [data-artifact-preview-url]');
+                    const nestedInteractive = target.closest(interactiveSelector);
                     if (nestedInteractive && nestedInteractive !== row) return;
                 }
                 onClick(event);

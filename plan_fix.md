@@ -108,19 +108,19 @@ before broad audit or implementation claims continue.
   conversation outside the current cursor page, leaving the URL selected but no
   row expanded. The conversation list now restores the selected conversation
   through the existing conversation API before rendering the page.
+- `B5` and `P1.5`: real Safari on deployed commit `56af5bc` verified the
+  full drill-through route: direct delegation-thread conversation link ->
+  linked run -> run artifact preview -> stage evidence -> stage task -> task
+  artifact preview.
 
 Verified current state:
 
 - `node --check` on edited JS files was clean.
 - `git diff --check` was clean.
 - `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed against deployed
-  registry commit `54dd3cb` after the default-surface, rehearsal-session, Runs,
-  Usage, capability create/filter, and row-action fixes.
+  registry commit `56af5bc`.
 - `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
-  against deployed registry commit `54dd3cb`; the skipped task-detail test
-  requires a run with at least two routed stage tasks in the current data set.
-- `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
-  against deployed registry commit `b6c9723`; the skipped task-detail test
+  against deployed registry commit `56af5bc`; the skipped task-detail test
   still requires a run with at least two routed stage tasks in the current data
   set.
 - `tests/test_registry_ui_contract.py`: 41 passed locally after contract updates.
@@ -139,13 +139,15 @@ Verified current state:
   rows expose Preview/Open/Download/Copy as separate controls, Preview renders
   real CSV artifact content, and delegation-thread conversation rows expand and
   collapse from the full row after the static-trailing-badge regression fix.
+- Real Safari on deployed commit `56af5bc` confirmed the direct
+  `conversation_id` route restores the selected row across pagination, resolves
+  its linked protocol run after async task lookup, and preserves artifact
+  Preview/Open/Download/Copy actions on both run and stage-task surfaces.
 
 ### Pending Local Patch
 
-The direct `conversation_id` pagination restore above is local and must be
-deployed before the real Safari conversation -> linked work -> run -> artifact
-route can be rechecked. The only unrelated untracked local item is `.cursor/`,
-which is not part of this plan.
+None. The only unrelated untracked local item is `.cursor/`, which is not part
+of this plan.
 
 ### Deployment Blocker
 
@@ -340,11 +342,11 @@ Open IA decisions:
 
 | ID | Blocker | Current Evidence | Required Outcome |
 |----|---------|------------------|------------------|
-| B1 | Tasks vs Runs needed lineage separation. | Patched: standalone `/ui/tasks` is Delegations; `protocol_run_id` deep links are Run stage tasks; Dashboard excludes protocol stage tasks from standalone groups. | Deploy and Safari-audit the route from Conversation -> linked work -> run -> artifact. |
+| B1 | Tasks vs Runs needed lineage separation. | Done: standalone `/ui/tasks` is Delegations; `protocol_run_id` deep links are Run stage tasks; Dashboard excludes protocol stage tasks from standalone groups; real Safari verified Conversation -> linked run -> stage task -> artifact preview on deployed commit `56af5bc`. | Keep regression coverage in work-surface and protocol UI suites. |
 | B2 | M3 cannot start. | Claude auth file is zero bytes; container exits. User explicitly excluded M3 from this execution. | Do not claim all-agent verification until M3 auth is restored. |
 | B3 | Generated/rehearsal/test data dominated default pages. | Patched through shared visibility predicate across default pages with audit/generated toggles; Runs, Conversations, Protocols, Dashboard, Delegations, Agents, Capabilities, and Usage are covered by automated checks; Runs filtering was rechecked in real Safari after deploy. | Keep as regression coverage and include the same forbidden-data checks in the broad audit. |
 | B4 | Protocol catalog was flooded by generated drafts. | Done for default catalog: real Safari shows only canonical drafts until `Show generated drafts`. | Keep regression coverage and revisit only if product needs a richer archive view. |
-| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Shared artifact action rows already exist in Runs, Tasks, and task-board conversation context; Runs Overview now links progressively into Stages and Artifacts; protocol E2E verifies run artifact preview/download and stage-task drill-through; real Safari verified run -> Artifacts -> Preview on a data-analysis run; local patch restores direct task-thread `conversation_id` links outside the current cursor page. | Deploy direct-link restore and complete real-Safari drill-through from Conversation -> linked work -> Run -> Stage task -> artifact actions. |
+| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Done for the current product route: shared artifact action rows exist in Runs, Tasks, and task-board conversation context; Runs Overview links progressively into Stages and Artifacts; protocol E2E verifies run artifact preview/download and stage-task drill-through; real Safari verified direct conversation -> linked run -> run artifacts -> stage task -> task artifact preview on deployed commit `56af5bc`. | Keep as a regression gate and continue broader audit for other lineage surfaces. |
 
 ## Findings
 
@@ -356,7 +358,7 @@ Open IA decisions:
 | P1.2 | Planned | `/ui/templates` and `/ui/gallery` duplicate the same gallery concept. | Canonical URL or explicit alias/redirect test. |
 | P1.3 | Active | Terminology drifts between Capabilities, skills, Templates, gallery, protocols, tasks, and runs. | User-facing string inventory. |
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
-| P1.5 | Partial | Standalone delegations are real, protocol-generated stage tasks now have run-context copy, and local direct-link restore keeps task-thread `conversation_id` links visible across pagination. | Deploy restore and Safari-audit conversation linked work to run/stage task. |
+| P1.5 | Done | Standalone delegations are real, protocol-generated stage tasks now have run-context copy, and direct task-thread `conversation_id` links stay visible across pagination. | Keep Safari and Playwright regression coverage for conversation linked work to run/stage task. |
 | P1.6 | Done | Shared default visibility filtering is patched and covered across normal work/build/operations surfaces. | Keep broad-audit regression checks. |
 | P1.7 | Done | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test plus real Safari pass after deploy. |
 

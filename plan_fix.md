@@ -40,6 +40,14 @@ before broad audit or implementation claims continue.
   as the other work surfaces. Selecting a capability expands details under that
   row, not in a side editor, and loads the real advertised instruction text from
   the existing bot skill-detail API.
+- `P4.25` and `P5.11`: agent-scoped Capabilities now follows the same inline
+  expansion grammar as the default catalog. The agent detail page routes into
+  the shared Capabilities workspace instead of opening a duplicate drawer, and
+  selected capability details render full-width below the clicked row rather
+  than as a desktop side card.
+- `P5.11`: the Agents list now expands agent details inline under the selected
+  row, exposes `Open agent workspace` and `Open capabilities`, and removes the
+  old detail-navigation/split-panel expectation from the default path.
 - `P1.7`: default nav now uses Work, Build, Operations; `Agents` lives under
   Build; operational `Dashboard` lives under Operations; fake `Team` is gone.
 - `P5.12`: Conversations pagination is visible, URL-addressable, refresh-stable,
@@ -154,6 +162,15 @@ Verified current state:
 - `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
   against deployed registry commit `4d16b22c`, including the Capabilities
   inline-detail, collapse, and instruction-preview regression.
+- Real Safari on deployed commit `15e08eb6` confirmed the agent-specific
+  Capabilities page hard-refreshes into a stacked catalog, expands Architecture
+  as a full-width panel below the row with real instruction text, and collapses
+  from the same row. This closes the follow-up miss where the DOM was inline but
+  desktop CSS still placed the detail as a right-side card.
+- `tests/e2e/playwright/registry-work-surface.spec.js`: 9 passed and 1 skipped
+  against deployed registry commit `15e08eb6`. The suite now asserts selected
+  capability details are geometrically below the clicked row and nearly
+  full-width, so the right-side card regression fails automatically.
 
 ### Pending Local Patch
 
@@ -406,7 +423,7 @@ Open IA decisions:
 | P4.16 | Partial | Standard/operator authoring split must omit internals from standard DOM and API. | Negative tests for Advanced/custom runtime/internal fields. |
 | P4.23 | Done | Blank stage required owner role. | Name-only stage creation test. |
 | P4.24 | Done | Protocol list hides generated drafts by default and exposes compact generated families through a toggle. | Real Safari catalog verification passed on deployed `d2ac48a`. |
-| P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list; generated/meta E2E capabilities are hidden by default; selected capabilities expand inline with real instruction content. | Row expand/collapse, instruction-preview, internal-filter, selector consistency tests, and real Safari pass on deployed `4d16b22c`. |
+| P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list; generated/meta E2E capabilities are hidden by default; selected capabilities expand inline with real instruction content on both default and agent-scoped pages. | Row expand/collapse, geometry-below-row, instruction-preview, internal-filter, selector consistency tests, and real Safari pass on deployed `15e08eb6`. |
 | P4.26 | Done | Missing capability had no natural assignment path. | `New capability needed` UI-only scenario. |
 
 ### P5: Conversations, Agents, Collaboration
@@ -416,7 +433,7 @@ Open IA decisions:
 | P5.1 | Active | Conversation list filters and quick starts are busy, especially on mobile. | Filter-collapse/mobile smoke test. |
 | P5.3 | Active | Conversation detail needs dedicated audit for composer, timeline, linked work, settings, focus, scroll, send/WS, markdown. | Dedicated conversation detail audit. |
 | P5.10 | Done | Conversation list filters generated/rehearsal records by default and keeps audit access explicit. | Human conversations prioritized in real Safari. |
-| P5.11 | Partial | Agent list and Capabilities agent eligibility hide generated/rehearsal agents by default; detail still needs a work-first audit. | Agent work-first audit and tests. |
+| P5.11 | Partial | Agent list and Capabilities agent eligibility hide generated/rehearsal agents by default; list details now expand inline and route to the shared Capabilities workspace; the remaining work is the broader agent-detail work-first audit. | Agent inline-detail tests, shared Capabilities route tests, and remaining work-first audit. |
 | P5.12 | Done | Conversations pagination is broken or unclear. | URL-addressable pagination, Playwright pass, and real Safari pass after deploy. |
 
 ### P6: Presentation, Accessibility, Responsive
@@ -476,6 +493,9 @@ Acceptance:
 - Capabilities opens to a usable catalog.
 - Clicking Architecture or another capability expands meaningful details inline,
   including real instruction text from an advertising bot.
+- Agent-specific Capabilities uses the same full-width row expansion and
+  collapse behavior; it must not reintroduce a side drawer or desktop split
+  editor for capability details.
 - No `*`, `Rehearsal`, or generated timestamp flood in default catalog.
 - Agent pages do not dump capabilities twice.
 

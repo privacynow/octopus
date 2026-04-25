@@ -1662,15 +1662,16 @@ function renderConversationDetail(container, params) {
             return;
         }
         try {
+            const conversationData = meta || await API.getConversation(convoId);
             const [protocolData, runData] = await Promise.all([
                 API.listProtocols({ lifecycle_state: 'published', limit: 100 }),
-                API.listProtocolRuns({ root_conversation_id: convoId, limit: 25 }),
+                API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 }),
             ]);
             availableConversationProtocols = (protocolData.protocols || protocolData || []).filter((item) =>
                 String(item.lifecycle_state || '') === 'published'
                 && String(item.current_version_id || '').trim(),
             );
-            linkedProtocolRuns = runData.runs || runData || [];
+            linkedProtocolRuns = runData || [];
             managementSupport.protocols = true;
             renderProtocolsPanel();
             if (meta) {
@@ -2384,22 +2385,10 @@ function renderConversationDetail(container, params) {
         });
     }
 
-    function taskThreadTaskId(data) {
-        const conversation = data || meta;
-        if (!conversation || String(conversation.conversation_type || 'conversation') !== 'task_thread') {
-            return '';
-        }
-        const externalRef = String(conversation.external_conversation_ref || '').trim();
-        if (!externalRef.startsWith('routed-task:')) {
-            return '';
-        }
-        return externalRef.slice('routed-task:'.length).trim();
-    }
-
     async function loadRelatedTasks({ soft = false, silent = false } = {}) {
         try {
             const conversationData = meta || await API.getConversation(convoId);
-            const taskId = taskThreadTaskId(conversationData);
+            const taskId = API.routedTaskIdFromConversation(conversationData);
             if (taskId) {
                 const task = await API.getTask(taskId);
                 relatedTasks = task ? [task] : [];

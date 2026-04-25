@@ -818,7 +818,11 @@ def test_conversation_views_distinguish_delegation_threads() -> None:
     detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
     ).read_text(encoding="utf-8")
-    assert "externalRef.startsWith('routed-task:')" in detail
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+    assert "externalRef.startsWith('routed-task:')" in api_js
+    assert "API.routedTaskIdFromConversation(conversationData)" in detail
     assert "API.getTask(taskId)" in detail
     assert "conversationsLoaded = false" in agent_detail
     assert "document.getElementById('agent-conversations-list')" not in agent_detail
@@ -949,6 +953,12 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
     ).read_text(encoding="utf-8")
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
     helper = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
     ).read_text(encoding="utf-8")
@@ -962,7 +972,12 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Conversation protocols" in detail
     assert "Start a published protocol" in detail
     assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
-    assert "API.listProtocolRuns({ root_conversation_id: convoId, limit: 25 })" in detail
+    assert "API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 })" in detail
+    assert "API.listConversationProtocolRuns(key, meta, { limit: 5 })" in conversation_list
+    assert "function routedTaskIdFromConversation(conversation)" in api_js
+    assert "externalRef.startsWith('routed-task:')" in api_js
+    assert "request('GET', `/v1/tasks/${encodeURIComponent(taskId)}`)" in api_js
+    assert "request('GET', `/v1/protocol-runs/${encodeURIComponent(runId)}`)" in api_js
     assert "API.createProtocolRun({" in detail
     assert "root_conversation_id: convoId" in detail
     assert "entry_agent_id: agentId" in detail

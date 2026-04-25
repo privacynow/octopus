@@ -33,6 +33,34 @@ async function findRunWithLineage(page) {
   throw new Error('Expected at least one protocol run with multiple stage executions.');
 }
 
+function routedTaskIdFromConversation(conversation) {
+  const externalRef = String(conversation?.external_conversation_ref || '').trim();
+  return String(conversation?.conversation_type || '') === 'task_thread' && externalRef.startsWith('routed-task:')
+    ? externalRef.slice('routed-task:'.length).trim()
+    : '';
+}
+
+async function findTaskThreadWithProtocolRun(page) {
+  const listResponse = await page.request.get('/v1/conversations?type=task_thread&include_generated=1&limit=100');
+  expect(listResponse.ok()).toBeTruthy();
+  const payload = await listResponse.json();
+  const conversations = Array.isArray(payload?.conversations) ? payload.conversations : (Array.isArray(payload) ? payload : []);
+
+  for (const conversation of conversations) {
+    const taskId = routedTaskIdFromConversation(conversation);
+    if (!taskId) continue;
+    const taskResponse = await page.request.get(`/v1/tasks/${encodeURIComponent(taskId)}`);
+    if (!taskResponse.ok()) continue;
+    const task = await taskResponse.json();
+    const runId = String(task?.protocol_run_id || '').trim();
+    if (runId) {
+      return { conversation, task, runId };
+    }
+  }
+
+  return null;
+}
+
 function statusLabel(status) {
   return String(status || '').replace(/^\w/, (char) => char.toUpperCase());
 }
@@ -186,15 +214,25 @@ test('run participants prefer resolved outcomes over raw running state', async (
 
 test('conversation list exposes inline context before opening the full workspace', async ({ page }) => {
   await login(page);
-  await page.goto('/ui/conversations?type=task_thread&include_generated=1');
+  const linked = await findTaskThreadWithProtocolRun(page);
+  const linkedTitle = linked ? String(linked.conversation.title || linked.task.title || '').trim() : '';
+  await page.goto(linked
+    ? `/ui/conversations?type=task_thread&include_generated=1&q=${encodeURIComponent(linkedTitle)}`
+    : '/ui/conversations?type=task_thread&include_generated=1');
   await expect(page.locator('.conversation-list-route-shell')).toHaveCount(1);
   const rows = page.locator('.conversation-list-entry .list-row');
   await expect(rows.first()).toBeVisible();
-  await rows.first().click();
+  const targetRow = linked
+    ? rows.filter({ hasText: linkedTitle }).first()
+    : rows.first();
+  await targetRow.click();
   await expect(page.locator('.conversation-inline-detail')).toHaveCount(1);
   await expect(page.getByText('Linked runs')).toBeVisible();
-  await expect(rows.first()).toHaveAttribute('aria-expanded', 'true');
-  await rows.first().click();
+  if (linked) {
+    await expect(page.getByRole('link', { name: new RegExp(linked.runId.slice(0, 8)) })).toBeVisible();
+  }
+  await expect(targetRow).toHaveAttribute('aria-expanded', 'true');
+  await targetRow.click();
   await expect(page.locator('.conversation-inline-detail')).toHaveCount(0);
   expect(new URL(page.url()).searchParams.get('conversation_id')).toBeFalsy();
 

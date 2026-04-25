@@ -97,6 +97,12 @@ before broad audit or implementation claims continue.
   regression where normal list rows with static trailing badges only responded
   on the text column. The shared row helper now reserves split pressable/action
   behavior only for rows whose trailing content actually contains controls.
+- `B5` and `P1.5`: real Safari found that stage-task conversation rows expanded
+  but showed `No protocol runs linked to this conversation yet` because the
+  preview only queried `root_conversation_id`. The shared API client now
+  resolves task-thread conversations through `external_conversation_ref` ->
+  routed task -> `protocol_run_id`, and both conversation list and detail use
+  that same path.
 
 Verified current state:
 
@@ -127,8 +133,9 @@ Verified current state:
 
 ### Pending Local Patch
 
-None. The only unrelated untracked local item is `.cursor/`, which is not part
-of this plan.
+The B5 lineage fix above is local and must be deployed before the real Safari
+conversation -> linked work -> run -> artifact route can be rechecked. The only
+unrelated untracked local item is `.cursor/`, which is not part of this plan.
 
 ### Deployment Blocker
 

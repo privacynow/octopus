@@ -298,13 +298,11 @@ function renderConversationList(container) {
         conversationPreviewLoading.add(key);
         conversationPreviewErrors.delete(key);
         try {
-            const [meta, runData] = await Promise.all([
-                API.getConversation(key),
-                API.listProtocolRuns({ root_conversation_id: key, limit: 5 }),
-            ]);
+            const meta = await API.getConversation(key);
+            const runs = await API.listConversationProtocolRuns(key, meta, { limit: 5 });
             conversationPreviews.set(key, {
                 meta,
-                runs: runData.runs || runData || [],
+                runs,
             });
         } catch (err) {
             conversationPreviewErrors.set(key, err);

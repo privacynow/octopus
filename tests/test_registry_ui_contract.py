@@ -701,6 +701,9 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated })" in agent_list
     assert "Show generated/audit agents" in agent_list
     assert "!task.protocol_run_id && !UI.isDefaultHiddenRecord(task)" in task_list
+    assert "function _visibleTask(task)" in task_list
+    assert "renderSummary({ tasks: Object.fromEntries(entries) });" in task_list
+    assert "API.getSummary()" not in task_list
     assert "<h2>Delegations</h2>" in task_list
 
     assert "UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog })" in workspace
@@ -768,8 +771,9 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "buildNeedsAttention" not in dashboard
     assert "label: 'Queued backlog'" in dashboard
     assert "label: 'Unhealthy agents'" in dashboard
-    assert "label: 'Tokens · 24h'" in dashboard
-    assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" in dashboard
+    assert "label: 'Usage review'" in dashboard
+    assert "label: 'Tokens · 24h'" not in dashboard
+    assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" not in dashboard
     assert "value: String(summary.conversations?.open || 0)" not in dashboard
     assert "value: String(summary.tasks?.running || 0)" not in dashboard
     assert "value: String(summary.tasks?.failed_24h || 0)" not in dashboard

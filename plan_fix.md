@@ -36,50 +36,32 @@ before broad audit or implementation claims continue.
   dead end.
 - `P4.25`: Capabilities hides `*`, `Rehearsal`, and generated timestamp variants
   from the default catalog; rows are clickable and show assignment details.
+- `P1.7`: default nav now uses Work, Build, Operations; `Agents` lives under
+  Build; operational `Dashboard` lives under Operations; fake `Team` is gone.
+- `P5.12`: Conversations pagination is visible, URL-addressable, refresh-stable,
+  and verified in real Safari.
+- Conversation task-thread copy now uses delegation/linked-work language while
+  preserving the underlying task/delegation route.
 - `P3`: Dashboard empty approvals collapse; the main backlog card routes to
   Runs; default dashboard language uses `Work needing attention`.
 
-Verified before this refactor:
+Verified current state:
 
 - `node --check` on edited JS files was clean.
 - `git diff --check` was clean.
 - `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed against deployed
   registry after fixes.
-- Targeted Capabilities Playwright test passed against deployed registry after
-  hard-refreshing real Safari.
+- `tests/e2e/playwright/registry-work-surface.spec.js`: 9 passed against
+  deployed registry after fixes.
 - `tests/test_registry_ui_contract.py`: 40 passed locally after contract updates.
-- Real Safari confirmed hard-refresh discipline and default nav without
-  `Tasks`/`Approvals`.
+- Real Safari confirmed hard-refresh discipline, Capabilities filtering/detail,
+  Work/Build/Operations nav, and conversation pagination Previous/Next/cursor
+  behavior.
 
 ### Pending Local Patch
 
-The working tree currently includes a local patch for `P5.12`, `P1.7`, and the
-conversation task/delegation copy cleanup:
-
-- `octopus_registry/ui/index.html`
-- `octopus_registry/ui/css/main.css`
-- `octopus_registry/ui/js/helpers/ui.js`
-- `octopus_registry/ui/js/components/conversation-list.js`
-- `octopus_registry/ui/js/components/conversation-detail.js`
-- `octopus_registry/ui/js/components/agent-detail.js`
-- `tests/e2e/playwright/registry-work-surface.spec.js`
-- `tests/test_registry_ui_contract.py`
-
-Intent:
-
-- Make Conversations pagination visible, URL-addressable, and refresh-stable.
-- Reframe task-thread copy as delegation/linked-work language without removing
-  the underlying task/delegation route.
-- Remove fake `Team`, move `Agents` under Build, and move the operational
-  Dashboard under Operations.
-
-Known verification state:
-
-- `node --check`, `git diff --check`, and `tests/test_registry_ui_contract.py`
-  are clean locally.
-- The patch must be committed, pushed, pulled into `/Users/tinker/octopus`,
-  redeployed, hard-refreshed in Safari, and retested with Playwright and real
-  Safari.
+None at this point. The only untracked local item is `.cursor/`, which is not
+part of this plan.
 
 ### Deployment Blocker
 
@@ -273,12 +255,11 @@ Open IA decisions:
 
 | ID | Blocker | Current Evidence | Required Outcome |
 |----|---------|------------------|------------------|
-| B1 | Conversations pagination is broken or unclear. | User observed pagination failure in real Safari; current deployed controls are weak and state-only. | Reliable pagination controls, preserved filters/selection, bounded desktop viewport. |
-| B2 | Navigation IA is still confusing. | Dashboard under Work, fake Team section, Agents separated from Build. | Work/Build/Operations grouping matches product model. |
-| B3 | Deployment and Safari verification still pending for the current IA patch. | Local tests are clean; deployed app still has old nav/pagination until the next push/pull/redeploy/hard-refresh. | Deployed Safari matches local contracts. |
-| B4 | Tasks vs Runs is conceptually unresolved. | Standalone delegations are real, but protocol stage tasks duplicate Runs. | Delegations preserved; protocol tasks contextualized under run/stage/conversation lineage. |
-| B5 | M3 cannot start. | Claude auth file is zero bytes; container exits. | M3 auth restored or M3 excluded from claims requiring all real agents. |
-| B6 | Generated/rehearsal/test data dominates default pages. | Dashboard/Conversations/Protocols/Agents show rehearsal and generated variants. | Default pages show canonical human work; operator/audit filters expose test data. |
+| B1 | Tasks vs Runs is conceptually unresolved. | Standalone delegations are real, but protocol stage tasks duplicate Runs. | Delegations preserved; protocol tasks contextualized under run/stage/conversation lineage. |
+| B2 | M3 cannot start. | Claude auth file is zero bytes; container exits. | M3 auth restored or M3 excluded from claims requiring all real agents. |
+| B3 | Generated/rehearsal/test data dominates default pages. | Dashboard/Conversations/Protocols/Agents show rehearsal and generated variants. | Default pages show canonical human work; operator/audit filters expose test data. |
+| B4 | Protocol catalog is flooded by generated drafts. | User-facing protocol lists still contain near-duplicate generated variants. | Canonical protocols first; generated variants grouped or hidden by default. |
+| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Work surfaces still require too much inference to move from run to task to artifact. | One shared lineage model and artifact action contract across Runs, Conversations, Delegations, and Dashboard references. |
 
 ## Findings
 
@@ -290,9 +271,9 @@ Open IA decisions:
 | P1.2 | Planned | `/ui/templates` and `/ui/gallery` duplicate the same gallery concept. | Canonical URL or explicit alias/redirect test. |
 | P1.3 | Active | Terminology drifts between Capabilities, skills, Templates, gallery, protocols, tasks, and runs. | User-facing string inventory. |
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
-| P1.5 | Active | Standalone delegations are real, but protocol-generated stage tasks leak into Tasks as peer work beside Runs. | Delegation surface separates standalone work from protocol-owned stage tasks. |
+| P1.5 | Partial | Standalone delegations are real, but protocol-generated stage tasks leak into Tasks as peer work beside Runs. | Copy is delegation-oriented; remaining work is lineage separation. |
 | P1.6 | Active | Generated, rehearsal, and test-created data dominates default user surfaces. | Default pages hide/group test and rehearsal records unless operator/audit mode is active. |
-| P1.7 | Partial | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test is local; real Safari pass after deploy. |
+| P1.7 | Done | Dashboard is operational, Team is fake, and Agents belongs with Build resources. | Nav grouping test plus real Safari pass after deploy. |
 
 ### P2: Platform Shell And Resilience
 
@@ -338,7 +319,7 @@ Open IA decisions:
 | P5.3 | Active | Conversation detail needs dedicated audit for composer, timeline, linked work, settings, focus, scroll, send/WS, markdown. | Dedicated conversation detail audit. |
 | P5.10 | Active | Conversations default list is dominated by rehearsal task threads and weak `Open` states. | Human conversations prioritized; operational threads grouped. |
 | P5.11 | Active | Agent detail duplicates capabilities and treats Rehearsal as a normal default agent. | Agent work-first audit and tests. |
-| P5.12 | Partial | Conversations pagination is broken or unclear. | URL-addressable local patch and contracts are clean; Playwright and Safari pass after deploy. |
+| P5.12 | Done | Conversations pagination is broken or unclear. | URL-addressable pagination, Playwright pass, and real Safari pass after deploy. |
 
 ### P6: Presentation, Accessibility, Responsive
 
@@ -463,17 +444,15 @@ Acceptance:
 
 ## Immediate Execution Order
 
-1. Commit the local `P5.12` / `P1.7` / delegation-copy patch.
-2. Push, pull into `/Users/tinker/octopus`, redeploy, and hard-refresh Safari
-   with `Option+Command+R`.
-3. Verify Conversations pagination in real Safari: Page label, Next, Previous,
-   refresh-stable `cursor`, and visible footer.
-4. Verify nav grouping in real Safari: Work, Build, Operations only; Agents
-   under Build; Dashboard under Operations.
-5. Rerun Playwright work-surface and protocol suites.
-6. Continue with generated/rehearsal data cleanup, protocol catalog flood, and
-   Runs/Delegations/Artifacts lineage.
-7. Only then resume broad 500+ screenshot audit.
+1. Clean default surfaces of generated/rehearsal/test data without deleting
+   operator/audit access.
+2. Group or hide generated protocol drafts so canonical protocols are first.
+3. Consolidate Runs, Delegations, Conversations, and Artifacts around one
+   lineage model and one artifact action contract.
+4. Decide whether M3 auth is restored or M3 is excluded from claims requiring
+   all real agents.
+5. Run accessibility, keyboard, mobile, theme-contrast, and resilience checks.
+6. Only then resume broad 500+ screenshot audit.
 
 ## Verification Matrix
 

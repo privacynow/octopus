@@ -103,10 +103,10 @@ Verified current state:
 - `node --check` on edited JS files was clean.
 - `git diff --check` was clean.
 - `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed against deployed
-  registry commit `b086911` after the default-surface, rehearsal-session, Runs,
-  Usage, and capability create/filter fixes.
+  registry commit `54dd3cb` after the default-surface, rehearsal-session, Runs,
+  Usage, capability create/filter, and row-action fixes.
 - `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
-  against deployed registry commit `b086911`; the skipped task-detail test
+  against deployed registry commit `54dd3cb`; the skipped task-detail test
   requires a run with at least two routed stage tasks in the current data set.
 - `tests/test_registry_ui_contract.py`: 41 passed locally after contract updates.
 - `tests/test_registry_usage.py` plus
@@ -120,13 +120,15 @@ Verified current state:
 - Real Safari on deployed commit `b086911` confirmed default Runs hide
   generated/audit executions until the explicit toggle and verified run
   artifact drill-through to preview/copy actions before the accessibility patch.
+- Real Safari on deployed commit `54dd3cb` confirmed hard refresh, run artifact
+  rows expose Preview/Open/Download/Copy as separate controls, Preview renders
+  real CSV artifact content, and delegation-thread conversation rows expand and
+  collapse from the full row after the static-trailing-badge regression fix.
 
 ### Pending Local Patch
 
-The row-helper follow-up above is being validated and redeployed after deployed
-work-surface testing found the conversation inline drawer no longer opened from
-the full row. The only unrelated untracked local item is `.cursor/`, which is
-not part of this plan.
+None. The only unrelated untracked local item is `.cursor/`, which is not part
+of this plan.
 
 ### Deployment Blocker
 

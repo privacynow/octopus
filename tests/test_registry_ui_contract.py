@@ -676,6 +676,8 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "[-_]\\d{1,4}$" in helper
     assert "item.includes('e2e')" in helper
     assert "item.includes('spec')" in helper
+    assert "const canonical = normalized.replace(/[-_]+/g, ' ');" in helper
+    assert "canonical.startsWith('meta protocol composer ')" in helper
     assert "'compose-assistant-protocol'" in helper
     assert "'publish-report'" in helper
     assert "'current_stage_key'" in helper

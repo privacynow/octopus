@@ -663,6 +663,7 @@ window.UI = (() => {
     function isGeneratedOrRehearsalText(value) {
         const normalized = String(value || '').trim().toLowerCase();
         if (!normalized) return false;
+        const canonical = normalized.replace(/[-_]+/g, ' ');
         const generatedWorkflowKeys = [
             'compose-assistant-protocol',
             'compose assistant protocol',
@@ -675,12 +676,16 @@ window.UI = (() => {
             normalized === item
             || normalized.startsWith(`${item} `)
             || normalized.includes(` ${item} `)
-            || normalized.endsWith(` ${item}`));
+            || normalized.endsWith(` ${item}`)
+            || canonical === item
+            || canonical.startsWith(`${item} `)
+            || canonical.includes(` ${item} `)
+            || canonical.endsWith(` ${item}`));
         const looksLikeGeneratedVariant = (
             /^draft-[0-9a-f]{8}$/i.test(normalized)
             || (
                 /[-_]\d{1,4}$/.test(normalized)
-                && /\b(?:draft|protocol|analysis|approval|engineering|authoring|assistant|document|software)\b/.test(normalized.replace(/[-_]+/g, ' '))
+                && /\b(?:draft|protocol|analysis|approval|engineering|authoring|assistant|document|software)\b/.test(canonical)
             )
         );
         return normalized === 'rehearsal'
@@ -689,6 +694,8 @@ window.UI = (() => {
             || normalized.includes(' rehearsal')
             || normalized.includes(' meta protocol composer ')
             || normalized.startsWith('meta protocol composer ')
+            || canonical.includes(' meta protocol composer ')
+            || canonical.startsWith('meta protocol composer ')
             || generatedWorkflowKey
             || looksLikeGeneratedVariant
             || isGeneratedTimestampName(normalized);

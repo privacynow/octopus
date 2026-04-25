@@ -697,7 +697,8 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated })" in workspace
     assert "Show generated/audit runs" in workspace
     assert "No normal runs match this filter." in workspace
-    assert "UI.defaultVisibleRecords(rows || [], { includeHidden: includeGenerated })" in usage_view
+    assert "String(item?.conversation_type || 'conversation') !== 'task_thread'" in usage_view
+    assert "UI.defaultVisibleRecords(candidates, { includeHidden: includeGenerated })" in usage_view
     assert "Show generated/audit usage" in usage_view
     assert "return [...visible, ...generated];" in kit
     assert "&& !UI.isDefaultHiddenRecord(agent)" in skill_catalog

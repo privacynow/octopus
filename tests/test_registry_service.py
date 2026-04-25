@@ -2794,6 +2794,8 @@ def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Pa
     assert row == {
         "conversation_id": conversation_id,
         "title": "Usage rollup conversation",
+        "conversation_type": "conversation",
+        "origin_channel": "registry",
         "prompt_tokens": 13,
         "completion_tokens": 5,
         "cached_prompt_tokens": 8,

@@ -75,6 +75,9 @@ before broad audit or implementation claims continue.
 - `P3.14`: Usage now uses the shared generated/audit visibility predicate and
   exposes `Show generated/audit usage`; default usage totals/table are computed
   from visible human rows.
+- `P3.14`: Usage rows now carry conversation lineage from the existing usage
+  endpoint so protocol-stage task threads can be hidden from default usage
+  without relying only on title heuristics.
 - `P4.25`: Capability names now use the shared generated/rehearsal predicate, so
   generated/meta E2E capabilities do not appear in the default catalog.
 
@@ -88,6 +91,9 @@ Verified current state:
   locally after the Runs pagination/detail fixes; the skipped task-detail test
   requires a run with at least two routed stage tasks in the current data set.
 - `tests/test_registry_ui_contract.py`: 41 passed locally after contract updates.
+- `tests/test_registry_usage.py` plus
+  `tests/test_registry_service.py::test_usage_endpoint_rolls_up_delegated_child_usage`
+  passed locally after usage lineage updates.
 - Real Safari confirmed hard-refresh discipline, Capabilities filtering/detail,
   Work/Build/Operations nav, and conversation pagination Previous/Next/cursor
   behavior.

@@ -135,7 +135,10 @@ function renderUsageView(container) {
     }
 
     function visibleUsageRows(rows) {
-        return UI.defaultVisibleRecords(rows || [], { includeHidden: includeGenerated });
+        const candidates = includeGenerated
+            ? (rows || [])
+            : (rows || []).filter((item) => String(item?.conversation_type || 'conversation') !== 'task_thread');
+        return UI.defaultVisibleRecords(candidates, { includeHidden: includeGenerated });
     }
 
     function summarizeUsageRows(rows, fallback) {

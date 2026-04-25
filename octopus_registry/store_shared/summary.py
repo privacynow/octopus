@@ -35,7 +35,13 @@ def get_usage_summary(
     params: list[object] = [since_iso]
     usage_predicate = dialect.usage_token_predicate("e.metadata_json")
     sql = f"""
-        SELECT e.conversation_id, e.metadata_json, e.created_at, c.title
+        SELECT
+            e.conversation_id,
+            e.metadata_json,
+            e.created_at,
+            c.title,
+            c.conversation_type,
+            c.origin_channel
         FROM {dialect.qualify("events")} e
         LEFT JOIN {dialect.qualify("conversations")} c ON c.conversation_id = e.conversation_id
         WHERE (
@@ -52,7 +58,11 @@ def get_usage_summary(
         {
             "conversation_id": row["conversation_id"],
             "title": row["title"] or "",
-            "metadata": decode_json_field(row["metadata_json"], {}),
+            "metadata": {
+                **decode_json_field(row["metadata_json"], {}),
+                "conversation_type": row["conversation_type"] or "conversation",
+                "origin_channel": row["origin_channel"] or "",
+            },
             "created_at": _stringify_timestamp(row["created_at"]),
         }
         for row in rows
@@ -382,7 +392,7 @@ def get_usage(
 ) -> list[UsageSummaryRecord]:
     usage_predicate = dialect.usage_token_predicate("e.metadata_json")
     sql = (
-        f"SELECT e.*, c.title AS conversation_title "
+        f"SELECT e.*, c.title AS conversation_title, c.conversation_type, c.origin_channel "
         f"FROM {dialect.qualify('events')} e "
         f"LEFT JOIN {dialect.qualify('conversations')} c ON c.conversation_id = e.conversation_id "
         f"WHERE (e.kind = 'provider.response' OR (e.kind = 'task.status' AND {usage_predicate}))"
@@ -408,7 +418,11 @@ def get_usage(
             "conversation_id": row["conversation_id"],
             "title": row["conversation_title"] or "",
             "agent_id": row["agent_id"],
-            "metadata": decode_json_field(row["metadata_json"], {}),
+            "metadata": {
+                **decode_json_field(row["metadata_json"], {}),
+                "conversation_type": row["conversation_type"] or "conversation",
+                "origin_channel": row["origin_channel"] or "",
+            },
             "created_at": _stringify_timestamp(row["created_at"]),
         }
         for row in rows

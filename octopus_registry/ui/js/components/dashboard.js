@@ -160,8 +160,20 @@ function renderDashboard(container) {
     }
 
     function coerceTaskList(payload) {
-        return payload && Array.isArray(payload.tasks)
-            ? payload.tasks
+        return coerceList(payload, 'tasks');
+    }
+
+    function coerceRunList(payload) {
+        return coerceList(payload, 'runs');
+    }
+
+    function coerceProtocolList(payload) {
+        return coerceList(payload, 'protocols');
+    }
+
+    function coerceList(payload, key) {
+        return payload && Array.isArray(payload[key])
+            ? payload[key]
             : Array.isArray(payload)
                 ? payload
                 : [];
@@ -233,6 +245,8 @@ function renderDashboard(container) {
         activeTasks: { tasks: [] },
         recentCompletedTasks: { tasks: [] },
         agents: { agents: [] },
+        protocols: [],
+        protocolRuns: { runs: [] },
         protocolIssues: { issues: [] },
     };
 
@@ -240,35 +254,36 @@ function renderDashboard(container) {
         return new Date(Date.now() - RECENT_COMPLETED_WINDOW_MS).toISOString();
     }
 
+    function visibleDashboardTasks(payload) {
+        return coerceTaskList(payload).filter((item) => !item.protocol_run_id && !UI.isDefaultHiddenRecord(item));
+    }
+
+    function visibleDashboardRuns() {
+        return UI.defaultVisibleRecords(coerceRunList(dashboardState.protocolRuns), { includeHidden: false });
+    }
+
+    function visibleDashboardProtocols() {
+        return UI.defaultVisibleRecords(coerceProtocolList(dashboardState.protocols), { includeHidden: false });
+    }
+
     function renderSummaryRail(summary) {
-        const promptTokens = Number(summary.usage_24h?.prompt_tokens || 0);
-        const completionTokens = Number(summary.usage_24h?.completion_tokens || 0);
-        const cachedPromptTokens = Number(summary.usage_24h?.cached_prompt_tokens || 0);
-        const cachedCompletionTokens = Number(summary.usage_24h?.cached_completion_tokens || 0);
-        const cachedPromptAvailable = summary.usage_24h?.cached_prompt_tokens_available === true;
-        const cachedCompletionAvailable = summary.usage_24h?.cached_completion_tokens_available === true;
-        const totalTokens = promptTokens + completionTokens;
         const unhealthyAgents = Number(summary.agents?.degraded || 0)
             + Number(summary.agents?.disconnected || 0)
             + Number(summary.agents?.execution_faulted || 0);
-        const costAvailable = summary.usage_24h?.cost_available !== false;
-        let tokenDetail = `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
-        if (cachedPromptAvailable || cachedCompletionAvailable) {
-            const detailParts = [tokenDetail];
-            if (cachedPromptAvailable) {
-                detailParts.push(`${cachedPromptTokens.toLocaleString()} cached in`);
-            }
-            if (cachedCompletionAvailable) {
-                detailParts.push(`${cachedCompletionTokens.toLocaleString()} cached out`);
-            }
-            tokenDetail = detailParts.join(' · ');
-        }
+        const visibleActiveTasks = visibleDashboardTasks(dashboardState.activeTasks);
+        const visibleRuns = visibleDashboardRuns();
+        const visibleProtocols = visibleDashboardProtocols();
+        const activeRuns = visibleRuns.filter((run) =>
+            ['queued', 'running', 'blocked'].includes(String(run.status || '').trim().toLowerCase()));
+        const blockedRuns = visibleRuns.filter((run) => String(run.status || '').trim().toLowerCase() === 'blocked');
+        const publishedProtocols = visibleProtocols.filter((item) =>
+            String(item.lifecycle_state || '').trim().toLowerCase() === 'published');
         const items = [
             {
                 key: 'queued-backlog',
-                value: String(summary.tasks?.pending || 0),
+                value: String(visibleActiveTasks.length),
                 label: 'Queued backlog',
-                detail: `${summary.tasks?.running || 0} running now`,
+                detail: `${visibleActiveTasks.filter((item) => String(item.status || '') === 'running').length} running now`,
                 href: '/ui/runs',
             },
             {
@@ -280,38 +295,26 @@ function renderDashboard(container) {
             },
             {
                 key: 'protocol-runs',
-                value: String(summary.protocols?.runs_active || 0),
+                value: String(activeRuns.length),
                 label: 'Active protocol runs',
                 detail: [
-                    `${summary.protocols?.runs_blocked || 0} blocked`,
-                    `${summary.protocols?.runs_contract_invalid || 0} invalid contracts`,
-                    `${summary.protocols?.overdue_timeouts || 0} overdue timeouts`,
-                    `${Math.round(Number(summary.protocols?.completion_rate_24h || 0) * 100)}% completion · 24h`,
-                    `${summary.protocols?.operator_interventions_24h || 0} interventions · 24h`,
+                    `${blockedRuns.length} blocked`,
+                    `${visibleRuns.length} visible recent runs`,
                 ].join(' · '),
                 href: '/ui/runs',
             },
             {
                 key: 'protocol-definitions',
-                value: String(summary.protocols?.definitions_published || 0),
-                label: 'Published protocols',
-                detail: `${summary.protocols?.definitions_total || 0} total definitions`,
+                value: String(publishedProtocols.length || visibleProtocols.length),
+                label: publishedProtocols.length ? 'Published protocols' : 'Visible protocols',
+                detail: `${visibleProtocols.length} visible definitions`,
                 href: '/ui/protocols',
             },
             {
-                key: 'tokens-24h',
-                value: totalTokens.toLocaleString(),
-                label: 'Tokens · 24h',
-                detail: tokenDetail,
-                href: '/ui/usage',
-            },
-            {
-                key: 'cost-24h',
-                value: costAvailable ? ('$' + Number(summary.usage_24h?.cost_usd || 0).toFixed(4)) : '—',
-                label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable',
-                detail: costAvailable
-                    ? `${summary.conversations?.active || 0} active conversations`
-                    : 'Codex does not report execution cost',
+                key: 'usage-review',
+                value: 'Open',
+                label: 'Usage review',
+                detail: 'Filtered by default · generated/audit totals inside',
                 href: '/ui/usage',
             },
         ];
@@ -394,11 +397,9 @@ function renderDashboard(container) {
     }
 
     function renderTaskSection() {
-        const visibleDelegations = (payload) => coerceTaskList(payload)
-            .filter((item) => !item.protocol_run_id && !UI.isDefaultHiddenRecord(item));
-        const activeTasks = visibleDelegations(dashboardState.activeTasks);
-        const followUpTasks = visibleDelegations(dashboardState.followUpTasks);
-        const recentCompletedTasks = visibleDelegations(dashboardState.recentCompletedTasks);
+        const activeTasks = visibleDashboardTasks(dashboardState.activeTasks);
+        const followUpTasks = visibleDashboardTasks(dashboardState.followUpTasks);
+        const recentCompletedTasks = visibleDashboardTasks(dashboardState.recentCompletedTasks);
         const rowsState = {
             active: taskRowsState(activeTasks),
             followUp: taskRowsState(followUpTasks),
@@ -514,7 +515,7 @@ function renderDashboard(container) {
         renderProtocolIssuesSection();
     }
 
-    function applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocolIssues }) {
+    function applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocols, protocolRuns, protocolIssues }) {
         if (!dashboardGrid.isConnected) {
             UI.reconcileChildren(content, [dashboardGrid]);
         }
@@ -525,13 +526,15 @@ function renderDashboard(container) {
         dashboardState.activeTasks = { tasks: activeTasks.tasks || activeTasks || [] };
         dashboardState.recentCompletedTasks = { tasks: recentCompletedTasks.tasks || recentCompletedTasks || [] };
         dashboardState.agents = agents;
+        dashboardState.protocols = coerceProtocolList(protocols);
+        dashboardState.protocolRuns = { runs: coerceRunList(protocolRuns) };
         dashboardState.protocolIssues = { issues: protocolIssues.issues || protocolIssues || [] };
         renderDashboardView();
     }
 
     async function loadSnapshot({ soft = false } = {}) {
         try {
-            const [summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocolIssues] = await Promise.all([
+            const [summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocols, protocolRuns, protocolIssues] = await Promise.all([
                 API.getSummary(),
                 API.listApprovals({ limit: 4 }),
                 API.listConversations({ limit: 6, status: 'open' }),
@@ -539,9 +542,11 @@ function renderDashboard(container) {
                 loadActiveTasks(),
                 API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
                 API.listAgents({ limit: 8 }),
+                API.listProtocols({ limit: 200 }).catch(() => []),
+                API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }).catch(() => ({ runs: [] })),
                 API.listProtocolIssues({ limit: 6 }).catch(() => ({ issues: [] })),
             ]);
-            applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocolIssues });
+            applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocols, protocolRuns, protocolIssues });
             hasLoaded = true;
         } catch (err) {
             if (soft && hasLoaded) {

@@ -691,6 +691,11 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "!item.protocol_run_id && !UI.isDefaultHiddenRecord(item)" in dashboard
     assert "UI.defaultVisibleRecords(dashboardState.conversations.conversations || [], { includeHidden: false })" in dashboard
     assert "UI.defaultVisibleRecords(dashboardState.agents.agents || dashboardState.agents || [], { includeHidden: false })" in dashboard
+    assert "function visibleDashboardRuns()" in dashboard
+    assert "function visibleDashboardProtocols()" in dashboard
+    assert "API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT })" in dashboard
+    assert "API.listProtocols({ limit: 200 })" in dashboard
+    assert "Filtered by default · generated/audit totals inside" in dashboard
 
     assert "UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated })" in agent_list
     assert "Show generated/audit agents" in agent_list

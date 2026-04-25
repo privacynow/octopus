@@ -950,6 +950,27 @@ select {
     border-bottom: 0;
 }
 
+.capability-list-entry {
+    display: grid;
+    align-items: stretch;
+    gap: 0;
+}
+
+.capability-list-entry > .list-row {
+    grid-column: 1 / -1;
+    border-bottom: 0;
+}
+
+.capability-list-entry > .list-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    padding: 0 var(--space-3) var(--space-3);
+}
+
+.capability-list-entry > .capability-inline-detail {
+    grid-column: 1 / -1;
+}
+
 .conversation-list-entry {
     display: grid;
     min-width: 0;

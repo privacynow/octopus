@@ -13,6 +13,16 @@ async function layoutMetrics(page) {
   });
 }
 
+async function expectDetailBelowRow(row, detail) {
+  const rowBox = await row.boundingBox();
+  const detailBox = await detail.boundingBox();
+  expect(rowBox).toBeTruthy();
+  expect(detailBox).toBeTruthy();
+  expect(detailBox.y).toBeGreaterThan(rowBox.y + rowBox.height - 2);
+  expect(Math.abs(detailBox.x - rowBox.x)).toBeLessThan(4);
+  expect(detailBox.width).toBeGreaterThan(rowBox.width * 0.9);
+}
+
 async function findRunWithLineage(page) {
   const listResponse = await page.request.get('/v1/protocol-runs?limit=50');
   expect(listResponse.ok()).toBeTruthy();
@@ -125,6 +135,7 @@ test('capabilities defaults to a human assignment catalog before bot management'
   await expect(page.locator('.dashboard-board-stacked')).toHaveCount(1);
   await expect(page.locator('.editor-shell')).toBeHidden();
   await expect(page.locator('.capability-inline-detail')).toHaveCount(1);
+  await expectDetailBelowRow(architectureRow, page.locator('.capability-inline-detail').first());
   await expect(page.getByRole('heading', { name: 'Architecture', exact: true })).toBeVisible();
   await expect(page.getByText('Assignment slug')).toBeVisible();
   await expect(page.getByText('Instructions preview')).toBeVisible();
@@ -168,6 +179,7 @@ test('agents use inline details and share the capabilities workspace', async ({ 
   await architectureCapability.click();
   await expect(architectureCapability).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('.capability-inline-detail')).toHaveCount(1);
+  await expectDetailBelowRow(architectureCapability, page.locator('.capability-inline-detail').first());
   await expect(page.getByText('Instructions preview')).toBeVisible();
   await architectureCapability.click();
   await expect(page.locator('.capability-inline-detail')).toHaveCount(0);

@@ -930,7 +930,7 @@ function renderSkillCatalog(container) {
 
     function _renderLocalSkillRow(skill, { selected = false } = {}) {
         const shellRow = document.createElement('div');
-        shellRow.className = 'list-row-shell';
+        shellRow.className = 'list-row-shell capability-list-entry';
         shellRow.dataset.key = `local:${skill.name || ''}:${selected ? 'open' : 'closed'}`;
         const meta = RegistrySkillHub.localRowMeta(skill);
         const row = UI.renderListRow({
@@ -984,7 +984,7 @@ function renderSkillCatalog(container) {
 
     function _renderRegistrySkillRow(skill, { selected = false } = {}) {
         const shellRow = document.createElement('div');
-        shellRow.className = 'list-row-shell';
+        shellRow.className = 'list-row-shell capability-list-entry';
         shellRow.dataset.key = `store:${skill.name || ''}:${selected ? 'open' : 'closed'}`;
         const meta = RegistrySkillHub.storeRowMeta(skill);
         const row = UI.renderListRow({

@@ -879,7 +879,7 @@ function renderSkillCatalog(container) {
         const name = String(item?.skill_name || '').trim();
         const shellRow = document.createElement('article');
         shellRow.className = 'conversation-list-entry capability-list-entry';
-        shellRow.dataset.key = `global:${name}`;
+        shellRow.dataset.key = `global:${name}:${selected ? 'open' : 'closed'}`;
         if (selected) shellRow.classList.add('is-selected');
         const advertisers = _globalCapabilityAdvertisers(item);
         const row = UI.renderListRow({

@@ -2313,6 +2313,25 @@ select {
     overflow: hidden;
 }
 
+#content > .content-inner.protocol-runs-route-shell .protocol-runs-workbench .protocol-panel {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 10rem);
+}
+
+#content > .content-inner.protocol-runs-route-shell .kit-runs-list {
+    flex: 1 1 auto;
+}
+
+#content > .content-inner.protocol-runs-route-shell .kit-runs-list-body {
+    max-height: calc(100dvh - 24rem);
+}
+
+#content > .content-inner.protocol-runs-route-shell .kit-runs-inline-detail {
+    max-height: calc(100dvh - 18rem);
+    overflow: auto;
+}
+
 #content > .content-inner.protocol-runs-route-shell .protocol-surface-shell {
     min-height: 0;
     overflow: hidden;

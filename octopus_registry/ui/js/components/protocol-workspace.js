@@ -5956,7 +5956,14 @@ function renderProtocolRuns(container) {
         cleanups.add(() => contentInner.classList.remove('protocol-runs-route-shell'));
     }
 
+    const limit = UI.DEFAULT_PAGE_LIMIT;
+    const initialCursor = Math.max(0, Number.parseInt(UI.readQueryParam('cursor', '0'), 10) || 0);
+    const initialCursorStack = [];
+    for (let value = 0; value < initialCursor; value += limit) {
+        initialCursorStack.push(value);
+    }
     let runs = [];
+    let runsListData = null;
     let protocolIssues = [];
     let currentRunId = UI.readQueryParam('run_id', '');
     let currentRun = null;
@@ -5971,6 +5978,10 @@ function renderProtocolRuns(container) {
     let activeRunStageExecutionId = '';
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
+    let runPaginator = null;
+
+    const runPaginationEl = document.createElement('div');
+    runPaginationEl.className = 'pagination-shell';
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -5993,8 +6004,26 @@ function renderProtocolRuns(container) {
             issue_kind: issueKindFilter || '',
             include_generated: includeGenerated ? '1' : '',
             entry_agent_id: '',
+            cursor: runPaginator && Number(runPaginator.cursor) > 0 ? runPaginator.cursor : '',
         }, { replace: !push });
     }
+
+    runPaginator = UI.createCursorPaginator(runPaginationEl, () => loadRuns(), {
+        initialCursor,
+        initialStack: initialCursorStack,
+        onChange: () => {
+            currentRunId = '';
+            currentRun = null;
+            currentIssues = [];
+            lastRunEvent = null;
+            activeRunDetailSection = '';
+            activeRunStageExecutionId = '';
+            runDetailLoading = false;
+            runDetailRequestToken += 1;
+            _bindRunSubscription();
+            _writeState();
+        },
+    });
 
     function _bindRunSubscription() {
         if (currentRunSubscription) {
@@ -6311,6 +6340,7 @@ function renderProtocolRuns(container) {
             PROTOCOL_ISSUE_FILTER_OPTIONS,
             (value) => {
                 issueKindFilter = _protocolIssueFilterValue(value);
+                if (runPaginator) runPaginator.reset(0);
                 _writeState({ push: true });
                 if (issueKindFilter) {
                     void loadIssues({ rerender: true });
@@ -6323,6 +6353,7 @@ function renderProtocolRuns(container) {
         panel.appendChild(issueFilterControl.element);
 
         if (issueListActive) {
+            if (runPaginator) runPaginator.clear();
             const searchInput = document.createElement('input');
             searchInput.className = 'search-input';
             searchInput.placeholder = 'Search issues';
@@ -6401,6 +6432,7 @@ function renderProtocolRuns(container) {
             },
             onStatusFilter: (value) => {
                 runStatusFilter = value || '';
+                if (runPaginator) runPaginator.reset(0);
                 currentRunId = '';
                 currentRun = null;
                 currentIssues = [];
@@ -6415,7 +6447,18 @@ function renderProtocolRuns(container) {
             },
             onSelect: (run) => _setRunSelection(run.id),
             renderExpanded: () => _buildRunDetailPanel(),
+            emptyHint: includeGenerated
+                ? 'No generated or normal runs match this filter.'
+                : 'No normal runs match this filter. Use Show generated/audit runs to inspect test, rehearsal, and generated executions.',
         }));
+        panel.appendChild(runPaginationEl);
+        if (runPaginator) {
+            runPaginator.render({
+                hasMore: !!runsListData?.has_more,
+                nextCursor: runsListData?.next_cursor || 0,
+                info: `${listRuns.length} shown`,
+            });
+        }
         return panel;
     }
 
@@ -6718,15 +6761,48 @@ function renderProtocolRuns(container) {
                 section.appendChild(issueSummary);
             }
             const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')) || stageRows[stageRows.length - 1] || null;
+            if (currentStage) {
+                const currentStageIndex = Math.max(stageRows.indexOf(currentStage), 0);
+                const currentStageDef = stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {};
+                section.appendChild(UI.renderListRow({
+                    label: `Current step: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`,
+                    sublabel: [
+                        String(currentStage.status || ''),
+                        currentStage.decision_summary || currentStage.failure_detail || '',
+                        'Open Stages for task, decision, and output evidence',
+                    ].filter(Boolean).join(' · '),
+                    badgeText: currentStage.decision || currentStage.status || '',
+                    onClick: () => {
+                        activeRunDetailSection = 'stages';
+                        activeRunStageExecutionId = String(
+                            currentStage.protocol_stage_execution_id
+                            || currentStage.stage_key
+                            || `stage-${currentStageIndex}`,
+                        );
+                        renderRunsRoute();
+                    },
+                }));
+            }
+            if (artifactRows.length || pendingArtifactRows.length) {
+                section.appendChild(UI.renderListRow({
+                    label: `${artifactRows.length} output${artifactRows.length === 1 ? '' : 's'} available`,
+                    sublabel: pendingArtifactRows.length
+                        ? `${pendingArtifactRows.length} declared output${pendingArtifactRows.length === 1 ? '' : 's'} not produced yet`
+                        : 'Open Artifacts for preview, download, and path actions',
+                    badgeText: pendingArtifactRows.length ? 'partial' : 'available',
+                    badgeClass: pendingArtifactRows.length ? 'badge-blocked' : 'badge-connected',
+                    onClick: () => {
+                        activeRunDetailSection = 'artifacts';
+                        renderRunsRoute();
+                    },
+                }));
+            }
             appendSectionTitle(
                 section,
-                'Run controls',
+                'Available actions',
                 'These are operator interventions for the current run state. They only appear when the current stage can actually accept that intervention; export is always available for audit.',
             );
             section.appendChild(_buildRunActionBar());
-            if (currentStage) {
-                section.appendChild(buildStageEvidenceCard(currentStage, Math.max(stageRows.indexOf(currentStage), 0)));
-            }
             return section;
         };
 
@@ -6890,7 +6966,11 @@ function renderProtocolRuns(container) {
     }
 
     async function loadRuns() {
-        const response = await API.listProtocolRuns({ limit: 50 });
+        const response = await API.listProtocolRuns({
+            limit,
+            cursor: runPaginator ? runPaginator.cursor : 0,
+        });
+        runsListData = response || null;
         runs = response.runs || response || [];
         _writeState();
         renderRunsRoute();

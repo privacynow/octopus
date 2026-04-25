@@ -70,6 +70,9 @@ def test_management_views_request_agent_pages_with_supported_limit() -> None:
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
     ).read_text(encoding="utf-8")
+    usage_view = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
+    ).read_text(encoding="utf-8")
     guidance_editor = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
     ).read_text(encoding="utf-8")
@@ -223,7 +226,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "'Workflow overview'" not in workspace
 
     # Runs route (kept until Step 7)
-    assert "API.listProtocolRuns({ limit: 50 })" in workspace
+    assert "API.listProtocolRuns({" in workspace
+    assert "cursor: runPaginator ? runPaginator.cursor : 0" in workspace
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
@@ -661,12 +665,17 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
     ).read_text(encoding="utf-8")
+    usage_view = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
+    ).read_text(encoding="utf-8")
 
     assert "function isDefaultHiddenRecord(" in helper
     assert "function defaultVisibleRecords(" in helper
     assert "isGeneratedOrRehearsalText" in helper
     assert "draft-[0-9a-f]{8}" in helper
     assert "[-_]\\d{1,4}$" in helper
+    assert "item.includes('e2e')" in helper
+    assert "item.includes('spec')" in helper
 
     assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
     assert "let currentType = UI.readQueryParam('type', 'conversation');" in conversation_list
@@ -687,6 +696,9 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "Show generated drafts" in workspace
     assert "UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated })" in workspace
     assert "Show generated/audit runs" in workspace
+    assert "No normal runs match this filter." in workspace
+    assert "UI.defaultVisibleRecords(rows || [], { includeHidden: includeGenerated })" in usage_view
+    assert "Show generated/audit usage" in usage_view
     assert "return [...visible, ...generated];" in kit
     assert "&& !UI.isDefaultHiddenRecord(agent)" in skill_catalog
 
@@ -980,6 +992,7 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "function createArtifactActionRow({" in helper
     assert "function createArtifactListRow({" in helper
     assert "function isHumanAssignableCapabilityName(value)" in helper
+    assert "&& !isGeneratedOrRehearsalText(normalized)" in helper
     assert "function compactMarkdownReferences(text)" in helper
     assert "function _ensureArtifactPreviewDelegation()" in helper
     assert "document.addEventListener('click', async (event)" in helper

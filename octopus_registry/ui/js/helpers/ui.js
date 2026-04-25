@@ -650,7 +650,7 @@ window.UI = (() => {
         return Boolean(normalized)
             && normalized !== '*'
             && normalized !== 'rehearsal'
-            && !isGeneratedTimestampName(normalized);
+            && !isGeneratedOrRehearsalText(normalized);
     }
 
     function _recordFieldText(record, fields) {
@@ -702,7 +702,16 @@ window.UI = (() => {
             record.bot_key,
             record.role,
         ].map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
-        if (source.some((item) => item === 'rehearsal' || item === 'registry.rehearsal' || item === 'generated')) {
+        if (source.some((item) => (
+            item === 'rehearsal'
+            || item === 'registry.rehearsal'
+            || item === 'generated'
+            || item.includes('e2e')
+            || item.includes('spec')
+            || item.includes('test')
+            || item.includes('audit')
+            || item.endsWith('-ui')
+        ))) {
             return true;
         }
         return isGeneratedOrRehearsalText(_recordFieldText(record, [
@@ -710,6 +719,8 @@ window.UI = (() => {
             'name',
             'title',
             'slug',
+            'protocol_id',
+            'protocol_key',
             'protocol_display_name',
             'protocol_name',
             'conversation_title',

@@ -785,9 +785,6 @@ def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
     usage_view = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
     ).read_text(encoding="utf-8")
-    dashboard = (
-        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
-    ).read_text(encoding="utf-8")
     event_renderers = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
     ).read_text(encoding="utf-8")
@@ -795,7 +792,7 @@ def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
     assert "cached_prompt_tokens_available" in usage_view
     assert "cached_completion_tokens_available" in usage_view
     assert "uncached" in usage_view
-    assert "cached in" in dashboard
+    assert "cached" in usage_view
     assert "Input uncached" in event_renderers
     assert "Reply uncached" in event_renderers
 

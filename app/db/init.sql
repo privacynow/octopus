@@ -390,6 +390,19 @@ CREATE INDEX IF NOT EXISTS idx_protocol_runs_org
     ON agent_registry.protocol_runs (run_org_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_rehearsal
     ON agent_registry.protocol_runs (is_rehearsal, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_protocol_updated
+    ON agent_registry.protocol_runs (protocol_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_entry_agent_updated
+    ON agent_registry.protocol_runs (entry_agent_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_root_conversation_updated
+    ON agent_registry.protocol_runs (root_conversation_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_origin_channel_updated
+    ON agent_registry.protocol_runs (origin_channel, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_org_status_updated
+    ON agent_registry.protocol_runs (run_org_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_blocked_code_updated
+    ON agent_registry.protocol_runs (blocked_code, updated_at DESC)
+    WHERE blocked_code <> '';
 
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_scenarios (
     protocol_scenario_id TEXT PRIMARY KEY,
@@ -509,6 +522,15 @@ ALTER TABLE agent_registry.protocol_stage_executions
     ADD COLUMN IF NOT EXISTS timeout_at TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS lease_owner TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS lease_expires_at TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_protocol_stage_executions_running_lease
+    ON agent_registry.protocol_stage_executions (lease_expires_at)
+    WHERE status = 'running' AND lease_expires_at <> '';
+CREATE INDEX IF NOT EXISTS idx_protocol_stage_executions_running_timeout
+    ON agent_registry.protocol_stage_executions (timeout_at)
+    WHERE status = 'running' AND timeout_at <> '';
+CREATE INDEX IF NOT EXISTS idx_protocol_stage_executions_failure_code
+    ON agent_registry.protocol_stage_executions (failure_code)
+    WHERE failure_code <> '';
 
 ALTER TABLE agent_registry.protocol_artifacts
     ADD COLUMN IF NOT EXISTS size_bytes BIGINT NOT NULL DEFAULT 0,

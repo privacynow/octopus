@@ -515,39 +515,60 @@ function renderDashboard(container) {
         renderProtocolIssuesSection();
     }
 
-    function applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocols, protocolRuns, protocolIssues }) {
+    function hasPatchKey(patch, key) {
+        return Object.prototype.hasOwnProperty.call(patch || {}, key);
+    }
+
+    function applySnapshotPatch(patch = {}) {
         if (!dashboardGrid.isConnected) {
             UI.reconcileChildren(content, [dashboardGrid]);
         }
-        dashboardState.summary = summary;
-        dashboardState.approvals = approvals;
-        dashboardState.conversations = conversations;
-        dashboardState.followUpTasks = { tasks: followUpTasks.tasks || followUpTasks || [] };
-        dashboardState.activeTasks = { tasks: activeTasks.tasks || activeTasks || [] };
-        dashboardState.recentCompletedTasks = { tasks: recentCompletedTasks.tasks || recentCompletedTasks || [] };
-        dashboardState.agents = agents;
-        dashboardState.protocols = coerceProtocolList(protocols);
-        dashboardState.protocolRuns = { runs: coerceRunList(protocolRuns) };
-        dashboardState.protocolIssues = { issues: protocolIssues.issues || protocolIssues || [] };
+        if (hasPatchKey(patch, 'summary')) dashboardState.summary = patch.summary;
+        if (hasPatchKey(patch, 'approvals')) dashboardState.approvals = patch.approvals;
+        if (hasPatchKey(patch, 'conversations')) dashboardState.conversations = patch.conversations;
+        if (hasPatchKey(patch, 'followUpTasks')) dashboardState.followUpTasks = { tasks: patch.followUpTasks.tasks || patch.followUpTasks || [] };
+        if (hasPatchKey(patch, 'activeTasks')) dashboardState.activeTasks = { tasks: patch.activeTasks.tasks || patch.activeTasks || [] };
+        if (hasPatchKey(patch, 'recentCompletedTasks')) dashboardState.recentCompletedTasks = { tasks: patch.recentCompletedTasks.tasks || patch.recentCompletedTasks || [] };
+        if (hasPatchKey(patch, 'agents')) dashboardState.agents = patch.agents;
+        if (hasPatchKey(patch, 'protocols')) dashboardState.protocols = coerceProtocolList(patch.protocols);
+        if (hasPatchKey(patch, 'protocolRuns')) dashboardState.protocolRuns = { runs: coerceRunList(patch.protocolRuns) };
+        if (hasPatchKey(patch, 'protocolIssues')) dashboardState.protocolIssues = { issues: patch.protocolIssues.issues || patch.protocolIssues || [] };
         renderDashboardView();
+    }
+
+    let secondarySnapshotInflight = null;
+    function loadSecondarySnapshot({ soft = false } = {}) {
+        if (secondarySnapshotInflight) return secondarySnapshotInflight;
+        secondarySnapshotInflight = Promise.all([
+            API.listApprovals({ limit: 4 }),
+            loadFollowUpTasks(),
+            loadActiveTasks(),
+            API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
+            API.listProtocols({ limit: 50 }).catch(() => []),
+            API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }).catch(() => ({ runs: [] })),
+            API.listProtocolIssues({ limit: 6 }).catch(() => ({ issues: [] })),
+        ]).then(([approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues]) => {
+            applySnapshotPatch({ approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues });
+        }).catch((err) => {
+            if (!soft || !hasLoaded) {
+                UI.reportError('Failed to load dashboard details', err, { context: 'Dashboard secondary snapshot failed' });
+            }
+        }).finally(() => {
+            secondarySnapshotInflight = null;
+        });
+        return secondarySnapshotInflight;
     }
 
     async function loadSnapshot({ soft = false } = {}) {
         try {
-            const [summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocols, protocolRuns, protocolIssues] = await Promise.all([
+            const [summary, conversations, agents] = await Promise.all([
                 API.getSummary(),
-                API.listApprovals({ limit: 4 }),
                 API.listConversations({ limit: 6, status: 'open' }),
-                loadFollowUpTasks(),
-                loadActiveTasks(),
-                API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
                 API.listAgents({ limit: 8 }),
-                API.listProtocols({ limit: 200 }).catch(() => []),
-                API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }).catch(() => ({ runs: [] })),
-                API.listProtocolIssues({ limit: 6 }).catch(() => ({ issues: [] })),
             ]);
-            applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocols, protocolRuns, protocolIssues });
+            applySnapshotPatch({ summary, conversations, agents });
             hasLoaded = true;
+            void loadSecondarySnapshot({ soft });
         } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh dashboard', err, { context: 'Dashboard soft refresh failed' });

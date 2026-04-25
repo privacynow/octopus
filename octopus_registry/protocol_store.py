@@ -2312,8 +2312,13 @@ class ProtocolPostgresAdapter:
         root_conversation_id: str = "",
         origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
+        page_limit = max(1, int(limit or 25))
+        page_cursor = max(0, int(cursor or 0))
         params: list[object] = []
         clauses: list[str] = []
+        if not self._access_has_role(access, "admin"):
+            params.append(self._access_org_id(access))
+            clauses.append("pr.run_org_id = %s")
         if status:
             params.append(status)
             clauses.append("pr.status = %s")
@@ -2340,15 +2345,16 @@ class ProtocolPostgresAdapter:
                   ON c.conversation_id = pr.root_conversation_id
                 {where}
                 ORDER BY pr.updated_at DESC, pr.created_at DESC
+                LIMIT %s OFFSET %s
                 """,
-                tuple(params),
+                tuple([*params, page_limit + 1, page_cursor]),
             )
             visible: list[ProtocolRunRecord] = []
             for row in rows:
                 if self._assert_protocol_run_visible(row, access=access) is None:
                     continue
                 visible.append(self._protocol_run_from_row(self._decorate_protocol_run_row_with_review_state(conn, row)))
-        return visible[cursor : cursor + limit]
+        return visible
 
     def _protocol_issues_for_row(
         self,
@@ -2471,7 +2477,46 @@ class ProtocolPostgresAdapter:
         normalized_kind = str(issue_kind or "").strip().lower()
         normalized_run_id = str(protocol_run_id or "").strip()
         normalized_protocol_id = str(protocol_id or "").strip()
+        known_issue_kinds = {"blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"}
+        if normalized_kind and normalized_kind not in known_issue_kinds:
+            return []
         now = utcnow_iso()
+        page_limit = max(1, int(limit or 25))
+        page_cursor = max(0, int(cursor or 0))
+        clauses: list[str] = []
+        params: list[object] = []
+        if not self._access_has_role(access, "admin"):
+            params.append(self._access_org_id(access))
+            clauses.append("pr.run_org_id = %s")
+        if normalized_run_id:
+            params.append(normalized_run_id)
+            clauses.append("pr.protocol_run_id = %s")
+        if normalized_protocol_id:
+            params.append(normalized_protocol_id)
+            clauses.append("pr.protocol_id = %s")
+        if normalized_kind == "blocked_run":
+            clauses.append("pr.status = 'blocked'")
+        elif normalized_kind == "invalid_contract":
+            clauses.append("(pr.blocked_code = 'protocol_contract_invalid' OR pse.failure_code = 'protocol_contract_invalid')")
+        elif normalized_kind == "stuck_lease":
+            params.append(now)
+            clauses.append("(pse.status = 'running' AND pse.lease_expires_at <> '' AND pse.lease_expires_at <= %s)")
+        elif normalized_kind == "expired_timeout":
+            params.append(now)
+            clauses.append("(pse.status = 'running' AND pse.timeout_at <> '' AND pse.timeout_at <= %s)")
+        else:
+            params.extend([now, now])
+            clauses.append(
+                """(
+                    pr.status = 'blocked'
+                    OR pr.blocked_code = 'protocol_contract_invalid'
+                    OR pse.failure_code = 'protocol_contract_invalid'
+                    OR (pse.status = 'running' AND pse.lease_expires_at <> '' AND pse.lease_expires_at <= %s)
+                    OR (pse.status = 'running' AND pse.timeout_at <> '' AND pse.timeout_at <= %s)
+                )"""
+            )
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        candidate_limit = page_cursor + page_limit + 1
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
@@ -2498,8 +2543,11 @@ class ProtocolPostgresAdapter:
                   ON pse.protocol_stage_execution_id = pr.current_stage_execution_id
                 LEFT JOIN {SCHEMA}.protocol_definitions pd
                   ON pd.protocol_id = pr.protocol_id
+                {where}
                 ORDER BY pr.updated_at DESC, pr.protocol_run_id DESC
+                LIMIT %s
                 """,
+                tuple([*params, candidate_limit]),
             )
             issues: list[ProtocolIssueRecord] = []
             for row in rows:
@@ -2512,14 +2560,8 @@ class ProtocolPostgresAdapter:
                 if self._assert_protocol_run_visible(run_row, access=access) is None:
                     continue
                 for issue in self._protocol_issues_for_row(row, now=now):
-                    if normalized_kind and issue.issue_kind != normalized_kind:
-                        continue
-                    if normalized_run_id and issue.protocol_run_id != normalized_run_id:
-                        continue
-                    if normalized_protocol_id and issue.protocol_id != normalized_protocol_id:
-                        continue
                     issues.append(issue)
-        return issues[cursor : cursor + limit]
+        return issues[page_cursor : page_cursor + page_limit + 1]
 
     def create_protocol_run(
         self,

@@ -726,8 +726,10 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "UI.defaultVisibleRecords(dashboardState.agents.agents || dashboardState.agents || [], { includeHidden: false })" in dashboard
     assert "function visibleDashboardRuns()" in dashboard
     assert "function visibleDashboardProtocols()" in dashboard
+    assert "function loadSecondarySnapshot(" in dashboard
+    assert "void loadSecondarySnapshot({ soft });" in dashboard
     assert "API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT })" in dashboard
-    assert "API.listProtocols({ limit: 200 })" in dashboard
+    assert "API.listProtocols({ limit: 50 })" in dashboard
     assert "Filtered by default · generated/audit totals inside" in dashboard
 
     assert "UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated })" in agent_list
@@ -1005,6 +1007,8 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Start a published protocol" in detail
     assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
     assert "API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 })" in detail
+    assert "function loadConversationLinkedRuns(" in detail
+    assert "requestedManagementMode !== 'protocols'" in detail
     assert "API.listConversationProtocolRuns(key, meta, { limit: 5 })" in conversation_list
     assert "function routedTaskIdFromConversation(conversation)" in api_js
     assert "externalRef.startsWith('routed-task:')" in api_js

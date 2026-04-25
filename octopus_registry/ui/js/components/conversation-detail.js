@@ -1687,6 +1687,23 @@ function renderConversationDetail(container, params) {
         }
     }
 
+    async function loadConversationLinkedRuns({ soft = false } = {}) {
+        try {
+            const conversationData = meta || await API.getConversation(convoId);
+            linkedProtocolRuns = await API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 });
+            if (meta) renderMetaCard(meta);
+            if (managementMode === 'protocols') {
+                renderProtocolsPanel();
+            }
+        } catch (err) {
+            if (!soft) {
+                UI.reportError('Failed to load linked protocol runs', err, {
+                    context: 'Conversation linked protocol runs failed',
+                });
+            }
+        }
+    }
+
     function scheduleConversationManagementRefresh() {
         if (UI.isBackgrounded()) return;
         clearTimeout(managementReloadDebounce);
@@ -2467,7 +2484,9 @@ function renderConversationDetail(container, params) {
             }
             void loadConversationSkills({ soft: true });
             void loadConversationSettings({ soft: true });
-            void loadConversationProtocols({ soft: true });
+            if (requestedManagementMode !== 'protocols') {
+                void loadConversationLinkedRuns({ soft: true });
+            }
         } catch (err) {
             UI.reconcileChildren(metaCard, [UI.createErrorCard('Failed to load conversation metadata', loadConversation)]);
         }

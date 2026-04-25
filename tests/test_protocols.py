@@ -1138,6 +1138,7 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
     )
     assert filtered_issues
     assert all(item.protocol_run_id == blocked_created.run.protocol_run_id for item in filtered_issues)
+    assert store.list_protocol_issues(access=operator_access(), issue_kind="not-a-real-issue-kind") == []
 
 
 def test_registry_store_sources_builtin_protocol_templates_from_code_not_authored_rows(postgres_registry_truncated: str) -> None:
@@ -1670,6 +1671,8 @@ def test_registry_store_list_protocol_runs_filters_by_entry_agent_and_origin_cha
 
     assert registry_run.ok is True
     assert telegram_run.ok is True
+    paged = store.list_protocol_runs(access=operator_access(), limit=1)
+    assert len(paged) == 2
 
     filtered = store.list_protocol_runs(
         access=operator_access(),

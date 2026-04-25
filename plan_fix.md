@@ -85,6 +85,14 @@ before broad audit or implementation claims continue.
   full stage evidence under Overview.
 - `P3.14`: Runs use the existing cursor paginator instead of dumping the first
   50 executions into a single page.
+- `P3.15`: Protocols first paint no longer blocks on the assignment catalog;
+  template discovery now uses `GET /v1/protocol-templates`, authoring options
+  use `GET /v1/protocol-authoring/options`, and the protocol catalog filters
+  and paginates in SQL with catalog/template indexes.
+- `P3.16`: Runs now filter/page in SQL before review-state decoration, protocol
+  issues only scan candidate runs/stages, Dashboard renders a primary snapshot
+  before secondary panels, and Conversation detail loads linked runs separately
+  from the full protocol-launch catalog.
 - `P3.14`: Usage now uses the shared generated/audit visibility predicate and
   exposes `Show generated/audit usage`; default usage totals/table are computed
   from visible human rows.
@@ -175,8 +183,8 @@ Verified current state:
 
 ### Pending Local Patch
 
-None. The only unrelated untracked local item is `.cursor/`, which is not part
-of this plan.
+None after the current `P3.16` commit/deploy cycle. The only unrelated
+untracked local item is `.cursor/`, which is not part of this plan.
 
 ### Deployment Blocker
 
@@ -299,8 +307,9 @@ Protocols rather than through a standalone gallery destination:
   when the source protocol is edited later.
 - Updating an existing template is explicit: `Update template from this version`
   or equivalent.
-- `/ui/templates` and `/ui/gallery` may remain as compatibility redirects, but
-  they must not remain visible or behave as a second product surface.
+- `/ui/templates` and `/ui/gallery` are not product routes. Users enter
+  templates from Protocols, and old template/gallery URLs should fall through
+  to normal route recovery rather than acting as a second product surface.
 
 ### Conversations
 
@@ -411,7 +420,7 @@ Open IA decisions:
 | ID | Status | Finding | Verification |
 |----|--------|---------|--------------|
 | P1.1 | Active | Sidebar exposes too many implementation nouns as peer destinations. | Real Safari nav review and DOM assertions. |
-| P1.2 | Planned | `/ui/templates` and `/ui/gallery` duplicate the same gallery concept and should stop being standalone destinations. | Templates removed from default nav; `/ui/templates` and `/ui/gallery` redirect or alias into Protocols creation; route smoke test. |
+| P1.2 | Done | `/ui/templates` and `/ui/gallery` no longer exist as standalone destinations. | Templates removed from default nav; route contract asserts both route registrations are gone. |
 | P1.3 | Active | Terminology drifts between Capabilities, skills, Templates, gallery, protocols, tasks, and runs. | User-facing string inventory. |
 | P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
 | P1.5 | Done | Standalone delegations are real, protocol-generated stage tasks now have run-context copy, and direct task-thread `conversation_id` links stay visible across pagination. | Keep Safari and Playwright regression coverage for conversation linked work to run/stage task. |
@@ -441,6 +450,8 @@ Open IA decisions:
 | P3.12 | Partial | Artifact actions use shared Preview/Open/Download/Copy behavior and row/action accessibility is fixed; remaining work is exhaustive cross-surface verification. | Shared artifact row tests in runs, stages, tasks, conversations. |
 | P3.13 | Active | Stale leases can read as ordinary `running`. | Stuck-lease row and overview assertions. |
 | P3.14 | Done | Default filtering is patched for Runs, Dashboard, Conversations, Agents, Protocols, Delegations, Capabilities, and Usage. | Real Safari broad-audit regression checks. |
+| P3.15 | Done | Protocols render was blocked by full assignment/catalog loading and broad protocol scans. | Authoring options/templates API contract, SQL catalog indexes, protocol template Playwright flow. |
+| P3.16 | Done | Runs and protocol issues fetch/page candidate rows before expensive decoration; Dashboard and conversation detail have progressive first-paint/lazy-loading paths. | SQL pagination/index tests, dashboard/nav Playwright, conversation linked-runs/protocol-panel smoke. |
 
 ### P4: Protocol Authoring, Protocol Catalog, Capabilities
 
@@ -558,12 +569,19 @@ Scope:
 - Clearly mark stale leases and blocked states.
 - Show protocol-generated tasks under run/stage lineage.
 - Preserve standalone delegations separately.
+- Push run list filtering, pagination, and common UI filters into SQL before
+  decorating rows with review state.
+- Push protocol-issue filters into SQL and only scan candidate runs/stages.
+- Add indexes for run filters used by Runs, Conversations, Dashboard, and
+  protocol launch drill-through.
 
 Acceptance:
 
 - A user can explain a run state from row and Overview.
 - A user can preview/download artifacts from every context where they appear.
 - Protocol stage task evidence does not require choosing a separate peer app.
+- Run and issue pages stay responsive with large history because they page
+  before expensive decoration.
 
 ### W5: Protocol Authoring And Catalog
 
@@ -590,8 +608,8 @@ Implementation guidance:
 - Publishing a template should copy from a published protocol version by
   default. Draft-to-template, if allowed, must be explicit and validated.
 - Do not let source protocol edits mutate existing templates silently.
-- Keep `/ui/templates` and `/ui/gallery` as route compatibility only; normal nav
-  and CTAs should point at `/ui/protocols` creation.
+- Do not reintroduce `/ui/templates` or `/ui/gallery`; normal nav and CTAs
+  should point at `/ui/protocols` creation.
 
 Acceptance:
 
@@ -619,14 +637,36 @@ Acceptance:
 - Browser resilience does not create stale or misleading UI.
 - UI is usable in keyboard, mobile, and light/dark modes.
 
+### W7: Responsiveness And Loading Model
+
+Scope:
+
+- First paint should render useful shell/primary rows without waiting for
+  secondary catalog, preview, or management data.
+- Heavy list endpoints should filter and paginate in SQL before Python
+  decoration or access-safe post-processing.
+- Secondary panels should use lazy loading and cache/stale-while-revalidate
+  behavior where the data is not needed for the initial user decision.
+- Do not add duplicate endpoints for the same product concept; rename or extend
+  existing resources with clear nouns.
+
+Acceptance:
+
+- Protocols, Runs, Dashboard, and Conversation detail show useful content before
+  enrichment data finishes.
+- Dashboard first paint is not blocked by protocol catalog, run issue, or agent
+  management calls.
+- Conversation detail does not fetch the full published protocol catalog unless
+  the protocol management panel is opened.
+- Query plans have matching indexes for run filters and issue candidates.
+
 ## Immediate Execution Order
 
-1. Commit and push the final test/plan follow-up, then pull it into octopus.
-2. If runtime files changed, redeploy and hard-refresh real Safari; if only
-   tests/plan changed, keep deployed runtime commit `b086911` as the verified
-   product code.
-3. Verify the lineage drill-through from Conversation -> linked work -> Run ->
-   Stage task -> artifact actions in real Safari.
+1. Run dashboard, run, and protocol Playwright smoke against the deployed
+   registry after the `P3.16` deploy.
+2. Hard-refresh real Safari.
+3. Verify Protocols, Runs, Dashboard, and Conversation detail first-paint and
+   drill-through behavior.
 4. Keep M3 excluded from current claims; do not block UI cleanup on M3 auth.
 5. Run accessibility, keyboard, mobile/narrow Safari, theme-contrast, and
    resilience checks.
@@ -639,6 +679,7 @@ Acceptance:
 | `node --check` on edited JS | No syntax regressions in changed UI code. |
 | `git diff --check` | No whitespace/patch hygiene issues. |
 | `.venv/bin/python -m pytest tests/test_registry_ui_contract.py` | Static UI contracts match product terminology and shared primitives. |
+| `.venv/bin/python -m pytest tests/test_protocols.py tests/test_db_postgres.py` | Protocol run/issue query behavior and DB indexes remain valid. |
 | `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/protocol-ui.spec.js` | Protocol authoring, rehearsal, execution, conversations, and artifacts still work. |
 | `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/registry-work-surface.spec.js` | Work/nav/runs/conversations/tasks/capabilities desktop behavior. |
 | Real Safari nav pass | Deployed assets, cache, and actual browser behavior match tests. |
@@ -659,8 +700,6 @@ Acceptance:
 | `/ui/conversations/:id` | `components/conversation-detail.js` |
 | `/ui/tasks` | `components/task-list.js` |
 | `/ui/protocols` | `components/protocol-workspace.js` |
-| `/ui/templates` | compatibility redirect/alias into Protocols creation |
-| `/ui/gallery` | compatibility redirect/alias into Protocols creation |
 | `/ui/runs` | `components/protocol-workspace.js`, `renderProtocolRuns` |
 | `/ui/routing` | `components/routing-policy-list.js` |
 | `/ui/skills` | `components/skill-catalog.js` |

@@ -80,6 +80,10 @@ before broad audit or implementation claims continue.
 - `P4`: software-engineering rehearsal testing now waits for the backend's
   pending rehearsal session before each UI response, preventing stale DOM
   session submissions.
+- `P4.28`: rehearsal pending sessions are recoverable from persisted protocol
+  run and routed-task state. The UI no longer depends only on the rehearsal
+  manager's in-memory `_pending` map, so a leased rehearsal stage can still be
+  answered after a poll/session race or process-state loss.
 - `P3.8`: Runs Overview is progressive again. It now shows run summary,
   current-step/artifact entry points, and available actions without rendering
   full stage evidence under Overview.
@@ -194,8 +198,10 @@ Verified current state:
 
 ### Pending Local Patch
 
-SDK/Telegram protocol-interface implementation is in the local patch and is
-awaiting deploy/audit before `P8` items can be marked done. The only unrelated
+The local patch now includes the deployed SDK/Telegram protocol-interface work
+plus a rehearsal-session recovery fix found by the full deployed UI suite. It is
+awaiting redeploy and rerun of the failing data-analysis rehearsal scenario
+before `P8` and `P4.28` can be marked fully verified. The only unrelated
 untracked local item is `.cursor/`, which is not part of this plan.
 
 ### Deployment Blocker
@@ -511,6 +517,7 @@ Open IA decisions:
 | P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list; generated/meta E2E capabilities are hidden by default; selected capabilities expand inline with real instruction content on both default and agent-scoped pages. | Row expand/collapse, geometry-below-row, instruction-preview, internal-filter, selector consistency tests, and real Safari pass on deployed `15e08eb6`. |
 | P4.26 | Done | Missing capability had no natural assignment path. | `New capability needed` UI-only scenario. |
 | P4.27 | Done | Conversation protocol management could show capabilities copy in a protocols-mode shell if linked runs were already loaded but the published protocol catalog was still lazy. | Deployed conversation protocol launch E2E opens the protocols body, lists published protocols, and launches a run. |
+| P4.28 | Active | Data-analysis rehearsal found that an in-memory rehearsal pending session can disappear while the persisted stage task remains leased/running, making the UI show a stage the server rejects with `PROTOCOL_REHEARSAL_SESSION_NOT_FOUND`. | Rehydrate pending rehearsal sessions from persisted run/task state; rerun focused rehearsal regression and deployed data-analysis Playwright scenario. |
 
 ### P5: Conversations, Agents, Collaboration
 

@@ -26,6 +26,7 @@ import asyncio
 import hashlib
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,6 +34,7 @@ from octopus_sdk.protocols import ProtocolArtifactObservationRecord, REHEARSAL_A
 from octopus_sdk.registry.models import AgentCard, utcnow_iso
 
 from .artifact_paths import resolve_workspace_artifact_target
+from .protocol_runtime import internal_protocol_access
 from .store_base import AbstractRegistryStore
 
 log = logging.getLogger(__name__)
@@ -43,6 +45,8 @@ REHEARSAL_AGENT_BOT_KEY = "registry.rehearsal"
 REHEARSAL_AGENT_DISPLAY_NAME = "Rehearsal"
 REHEARSAL_POLL_INTERVAL_SECONDS = 1.5
 REHEARSAL_POLL_LIMIT = 32
+_PENDING_STAGE_STATUSES = {"queued", "running"}
+_PENDING_TASK_STATUSES = {"queued", "leased", "running"}
 
 
 @dataclass(slots=True)
@@ -248,10 +252,132 @@ class RehearsalSessionManager:
             routed_task_id,
         )
 
+    @staticmethod
+    def _as_mapping(value: object) -> dict[str, Any]:
+        if hasattr(value, "as_dict"):
+            mapped = value.as_dict()
+            return dict(mapped) if isinstance(mapped, Mapping) else {}
+        if hasattr(value, "model_dump"):
+            dumped = value.model_dump(mode="json")
+            return dict(dumped) if isinstance(dumped, Mapping) else {}
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    def _session_from_task_record(self, task: object) -> RehearsalPendingSession | None:
+        status = str(getattr(task, "status", "") or "").strip().lower()
+        if status and status not in _PENDING_TASK_STATUSES:
+            return None
+        routed_task_id = str(getattr(task, "routed_task_id", "") or "").strip()
+        if not routed_task_id or not routed_task_id.startswith("protocol-stage:"):
+            return None
+        agent_id, _token = self.ensure_agent()
+        target_agent_id = str(getattr(task, "target_agent_id", "") or "").strip()
+        if target_agent_id and agent_id and target_agent_id != agent_id:
+            return None
+        request = self._as_mapping(getattr(task, "request", None))
+        context = self._as_mapping(request.get("context"))
+        internal_context = self._as_mapping(request.get("internal_context"))
+        contract = self._as_mapping(internal_context.get("protocol_stage_contract"))
+        output_artifacts: list[dict[str, Any]] = []
+        raw_output_artifacts = contract.get("output_artifacts")
+        if isinstance(raw_output_artifacts, list):
+            for item in raw_output_artifacts:
+                mapped = self._as_mapping(item)
+                if mapped:
+                    output_artifacts.append(mapped)
+        protocol_run_id = str(
+            context.get("protocol_run_id")
+            or contract.get("protocol_run_id")
+            or getattr(task, "protocol_run_id", "")
+            or ""
+        ).strip()
+        stage_execution_id = str(
+            context.get("protocol_stage_execution_id")
+            or contract.get("protocol_stage_execution_id")
+            or getattr(task, "protocol_stage_execution_id", "")
+            or ""
+        ).strip()
+        stage_key = str(
+            context.get("stage_key")
+            or contract.get("stage_key")
+            or getattr(task, "stage_key", "")
+            or ""
+        ).strip()
+        participant_key = str(
+            context.get("participant_key")
+            or contract.get("participant_key")
+            or getattr(task, "participant_key", "")
+            or ""
+        ).strip()
+        if not protocol_run_id or not stage_key:
+            return None
+        return RehearsalPendingSession(
+            protocol_run_id=protocol_run_id,
+            stage_execution_id=stage_execution_id,
+            routed_task_id=routed_task_id,
+            stage_key=stage_key,
+            participant_key=participant_key,
+            stage_kind=str(contract.get("stage_kind", "") or "work"),
+            instructions=str(request.get("instructions") or getattr(task, "instructions", "") or ""),
+            workspace_ref=str(request.get("project_id_override") or getattr(task, "project_id_override", "") or ""),
+            require_output_verification=bool(contract.get("require_output_verification", False)),
+            output_artifacts=output_artifacts,
+            created_at=str(request.get("created_at") or getattr(task, "created_at", "") or ""),
+        )
+
+    def _rehydrate_pending_task(
+        self,
+        routed_task_id: str,
+        *,
+        expected_protocol_run_id: str = "",
+    ) -> RehearsalPendingSession | None:
+        token = str(routed_task_id or "").strip()
+        if not token or token in self._pending:
+            return self._pending.get(token)
+        try:
+            task = self.store.get_task(token)
+        except Exception:
+            log.debug("Unable to rehydrate rehearsal task %s", token, exc_info=True)
+            return None
+        session = self._session_from_task_record(task)
+        if session is None:
+            return None
+        expected = str(expected_protocol_run_id or "").strip()
+        if expected and session.protocol_run_id != expected:
+            return None
+        self._pending[token] = session
+        log.info(
+            "Rehearsal bot rehydrated pending stage run=%s stage=%s task=%s",
+            session.protocol_run_id,
+            session.stage_key,
+            token,
+        )
+        return session
+
+    def _rehydrate_pending_for_run(self, protocol_run_id: str) -> None:
+        token = str(protocol_run_id or "").strip()
+        if not token:
+            return
+        try:
+            detail = self.store.get_protocol_run(token, access=internal_protocol_access())
+        except Exception:
+            log.debug("Unable to rehydrate rehearsal run %s", token, exc_info=True)
+            return
+        if not bool(getattr(detail.run, "is_rehearsal", False)):
+            return
+        if str(getattr(detail.run, "status", "") or "").strip().lower() not in {"queued", "running"}:
+            return
+        for stage in detail.stage_executions:
+            if str(getattr(stage, "status", "") or "").strip().lower() not in _PENDING_STAGE_STATUSES:
+                continue
+            routed_task_id = str(getattr(stage, "routed_task_id", "") or "").strip()
+            if routed_task_id:
+                self._rehydrate_pending_task(routed_task_id, expected_protocol_run_id=token)
+
     def list_pending(self, *, protocol_run_id: str = "") -> list[RehearsalPendingSession]:
         target = str(protocol_run_id or "").strip()
         if not target:
             return list(self._pending.values())
+        self._rehydrate_pending_for_run(target)
         return [
             session
             for session in self._pending.values()
@@ -277,6 +403,8 @@ class RehearsalSessionManager:
         """
         token = str(routed_task_id or "").strip()
         session = self._pending.get(token)
+        if session is None:
+            session = self._rehydrate_pending_task(token)
         if session is None:
             return False
         if not self._agent_token:

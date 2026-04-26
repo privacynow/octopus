@@ -2010,6 +2010,7 @@ window.Kit = (() => {
             card.dataset.routedTaskId = String(session.routed_task_id || '');
             card.dataset.stageKey = String(session.stage_key || '');
             const routedTaskId = String(session.routed_task_id || '');
+            card.dataset.key = `rehearsal-session:${routedTaskId || String(session.stage_key || '')}`;
             const sessionDraft = drafts && typeof drafts === 'object' && drafts[routedTaskId]
                 ? drafts[routedTaskId]
                 : {};
@@ -2053,6 +2054,9 @@ window.Kit = (() => {
 
             const form = document.createElement('form');
             form.className = 'kit-rehearsal-session-form';
+            form.dataset.routedTaskId = routedTaskId;
+            form.dataset.stageKey = String(session.stage_key || '');
+            form.dataset.participantKey = String(session.participant_key || '');
 
             const textarea = document.createElement('textarea');
             textarea.className = 'kit-rehearsal-session-response';
@@ -2180,6 +2184,7 @@ window.Kit = (() => {
                     btn.type = 'button';
                     btn.className = 'kit-rehearsal-scenario-btn';
                     btn.textContent = scenario.display_name || dictValue('protocol.rehearsal.scenarios.unnamed', 'Untitled');
+                    btn.dataset.key = `rehearsal-scenario:${routedTaskId}:${String(scenario.protocol_scenario_id || scenario.display_name || '')}`;
                     btn.setAttribute('aria-pressed', String(sessionDraft.scenarioId || '') === String(scenario.protocol_scenario_id || '') ? 'true' : 'false');
                     btn.addEventListener('click', () => {
                         textarea.value = String(scenario.response_text || '');
@@ -2207,8 +2212,9 @@ window.Kit = (() => {
             form.addEventListener('submit', (e) => {
                 e.preventDefault();
                 if (typeof onRespond === 'function') {
+                    const currentRoutedTaskId = String(form.dataset.routedTaskId || card.dataset.routedTaskId || '').trim();
                     onRespond({
-                        routedTaskId: session.routed_task_id,
+                        routedTaskId: currentRoutedTaskId,
                         responseText: textarea.value,
                         decision: form.__decisionSelect instanceof HTMLSelectElement
                             ? String(form.__decisionSelect.value || '')
@@ -2229,8 +2235,8 @@ window.Kit = (() => {
                                 };
                             })
                             .filter(Boolean),
-                        stageKey: session.stage_key,
-                        participantKey: session.participant_key,
+                        stageKey: String(form.dataset.stageKey || card.dataset.stageKey || ''),
+                        participantKey: String(form.dataset.participantKey || ''),
                     });
                 }
             });

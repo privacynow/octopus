@@ -149,6 +149,13 @@ async function applyScenarioAndSubmit(page, session, scenarioName, { artifactCon
   if (!response.ok()) {
     throw new Error(`Rehearsal response failed with HTTP ${response.status()}: ${await response.text()}`);
   }
+  let postedPayload = {};
+  try {
+    postedPayload = response.request().postDataJSON();
+  } catch (_err) {
+    postedPayload = {};
+  }
+  expect(String(postedPayload?.routed_task_id || '')).toBe(routedTaskId);
   if (routedTaskId) {
     await expect(page.locator(`.kit-rehearsal-session[data-routed-task-id="${routedTaskId}"]`)).toHaveCount(0, { timeout: 15000 });
   }

@@ -688,6 +688,7 @@ def build_protocol_router(
             decision=decision,
             decision_summary=decision_summary,
             artifact_contents=artifact_contents,
+            expected_protocol_run_id=run_id,
         )
         if not accepted:
             raise _protocol_http_error(

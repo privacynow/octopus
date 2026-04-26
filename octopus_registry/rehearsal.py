@@ -393,6 +393,7 @@ class RehearsalSessionManager:
         decision_summary: str = "",
         artifacts: list[dict[str, Any]] | None = None,
         artifact_contents: list[dict[str, Any]] | None = None,
+        expected_protocol_run_id: str = "",
     ) -> bool:
         """Submit an author response, closing the pending stage task.
 
@@ -404,7 +405,10 @@ class RehearsalSessionManager:
         token = str(routed_task_id or "").strip()
         session = self._pending.get(token)
         if session is None:
-            session = self._rehydrate_pending_task(token)
+            session = self._rehydrate_pending_task(
+                token,
+                expected_protocol_run_id=expected_protocol_run_id,
+            )
         if session is None:
             return False
         if not self._agent_token:

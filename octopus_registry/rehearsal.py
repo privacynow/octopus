@@ -454,11 +454,21 @@ class RehearsalSessionManager:
             "artifacts": artifact_observations,
             "artifact_contents": inline_artifact_contents,
         }
-        try:
-            self.store.update_routed_task_result(self._agent_token, token, payload)
-        except Exception:
-            log.warning("Rehearsal bot failed to submit task result %s", token, exc_info=True)
-            return False
+        for attempt in range(2):
+            try:
+                self.store.update_routed_task_result(self._agent_token, token, payload)
+                break
+            except PermissionError:
+                if attempt:
+                    log.warning("Rehearsal bot token rejected while submitting task result %s", token, exc_info=True)
+                    return False
+                log.info("Rehearsal bot token rejected while submitting task result %s; re-enrolling", token)
+                self._agent_id = ""
+                self._agent_token = ""
+                self.ensure_agent()
+            except Exception:
+                log.warning("Rehearsal bot failed to submit task result %s", token, exc_info=True)
+                return False
         self._pending.pop(token, None)
         return True
 

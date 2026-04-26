@@ -237,6 +237,56 @@ def test_rehearsal_manager_recovers_pending_session_from_persisted_task(
     assert advanced.run.current_stage_key == "review"
 
 
+def test_rehearsal_submit_recovers_after_reserved_agent_token_rotation(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
+    published = published_protocol(store, document=_simple_rehearsable_document())
+
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": rehearsal_agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Rehearse across a token rotation.",
+            "constraints_json": {},
+            "is_rehearsal": True,
+        },
+        access=operator_access(),
+    )
+    assert created.ok is True
+    run_id = created.run.protocol_run_id
+
+    manager._poll_once_sync()
+    first_session = manager.list_pending(protocol_run_id=run_id)[0]
+    assert manager.respond(
+        routed_task_id=first_session.routed_task_id,
+        response_text="Planning completed before token rotation.",
+        decision="completed",
+    ) is True
+
+    second_session = manager.list_pending(protocol_run_id=run_id)[0]
+    assert second_session.stage_key == "review"
+
+    # A second manager instance represents a restart or competing registry
+    # process. Enrollment intentionally rotates the plaintext token stored in
+    # Postgres; the live manager must recover on submit, not strand the UI.
+    rotating_manager = RehearsalSessionManager(store=store)
+    rotated_agent_id, _rotated_token = rotating_manager.ensure_agent()
+    assert rotated_agent_id == rehearsal_agent_id
+
+    assert manager.respond(
+        routed_task_id=second_session.routed_task_id,
+        response_text="PROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Review accepted.",
+        decision="accept",
+        decision_summary="Review accepted.",
+    ) is True
+    advanced = store.get_protocol_run(run_id, access=operator_access())
+    assert advanced.run.status == "completed"
+
+
 def test_rehearsal_poll_refreshes_reserved_agent_heartbeat(
     postgres_registry_truncated: str,
 ) -> None:

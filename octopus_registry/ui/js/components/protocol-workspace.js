@@ -1646,6 +1646,31 @@ function renderProtocolWorkspace(container) {
         render();
     }
 
+    function _bindStarterChooserControls(root) {
+        const starter = root?.querySelector?.('[data-testid="protocol-starter"]');
+        if (!(starter instanceof Element)) return;
+
+        const blank = starter.querySelector('[data-protocol-starter-action="blank"]');
+        if (blank instanceof HTMLButtonElement) {
+            blank.onclick = () => void _createBlankDraft();
+        }
+
+        const close = starter.querySelector('[data-protocol-starter-action="close"]');
+        if (close instanceof HTMLButtonElement) {
+            close.onclick = _closeStarterChooser;
+        }
+
+        starter.querySelectorAll('[data-protocol-template-slug]').forEach((button) => {
+            if (!(button instanceof HTMLButtonElement)) return;
+            const templateSlug = String(button.dataset.protocolTemplateSlug || '').trim();
+            button.onclick = () => {
+                const template = (Array.isArray(protocolTemplates) ? protocolTemplates : [])
+                    .find((item) => String(item?.slug || '').trim() === templateSlug);
+                void _createTemplateDraft(template || { slug: templateSlug });
+            };
+        });
+    }
+
     async function _publishTemplateNow() {
         if (_blockConflictAction('Publish as template')) return;
         if (!currentProtocolId) return;
@@ -5807,13 +5832,13 @@ function renderProtocolWorkspace(container) {
         blank.type = 'button';
         blank.className = 'btn btn-primary';
         blank.textContent = 'Start blank';
-        blank.addEventListener('click', () => void _createBlankDraft());
+        blank.dataset.protocolStarterAction = 'blank';
         actions.appendChild(blank);
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'btn';
         cancel.textContent = 'Close';
-        cancel.addEventListener('click', _closeStarterChooser);
+        cancel.dataset.protocolStarterAction = 'close';
         actions.appendChild(cancel);
         shell.appendChild(actions);
 
@@ -5867,7 +5892,7 @@ function renderProtocolWorkspace(container) {
             use.type = 'button';
             use.className = 'btn btn-primary';
             use.textContent = 'Use template';
-            use.addEventListener('click', () => void _createTemplateDraft(template));
+            use.dataset.protocolTemplateSlug = String(template.slug || '');
             cardActions.appendChild(use);
             card.appendChild(cardActions);
             list.appendChild(card);
@@ -5929,6 +5954,7 @@ function renderProtocolWorkspace(container) {
             header.hidden = false;
             _writeState();
             UI.reconcileChildren(contentEl, [_catalogEl()]);
+            _bindStarterChooserControls(contentEl);
             _lifecycleHeaderRef = null;
             return;
         }

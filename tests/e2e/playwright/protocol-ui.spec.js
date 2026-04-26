@@ -502,6 +502,21 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
+  test('starter deep link can create a blank draft after generated catalog render', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await page.goto('/ui/protocols?workflow_map=auto&include_generated=1&new=template', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('[data-testid="protocol-starter"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Start blank', exact: true }).click();
+    await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
+    await expect(page.locator('.kit-authoring-primary-column')).toBeVisible({ timeout: 15000 });
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
   test('software engineering template opens into one progressive workflow editor', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 

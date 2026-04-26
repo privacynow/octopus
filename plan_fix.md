@@ -93,6 +93,17 @@ before broad audit or implementation claims continue.
   issues only scan candidate runs/stages, Dashboard renders a primary snapshot
   before secondary panels, and Conversation detail loads linked runs separately
   from the full protocol-launch catalog.
+- `P3.17`: Dashboard secondary loading now degrades with per-call fallbacks and
+  warning-level diagnostics instead of turning route/test teardown races into
+  user-visible errors.
+- `P3.18`: The data-analysis UI scenario now matches deployed five-stage agent
+  execution time and verifies final run artifacts plus stage-task artifact
+  preview after completion.
+- `P4.27`: Conversation protocol management now renders the protocols panel and
+  loads the published protocol catalog when Protocols is selected, even if
+  linked protocol runs were already lazy-loaded.
+- `P5.13`: Browser conversation message-send timeline verification is green
+  after background dashboard work was made non-disruptive.
 - `P3.14`: Usage now uses the shared generated/audit visibility predicate and
   exposes `Show generated/audit usage`; default usage totals/table are computed
   from visible human rows.
@@ -183,23 +194,8 @@ Verified current state:
 
 ### Pending Local Patch
 
-Deployed `P3.16` smoke found four follow-up regressions that must be fixed
-before any broad audit claim:
-
-- Dashboard secondary loading can report a console error during route/test
-  teardown when a background request is aborted.
-- Conversation protocol management can open in `protocols` mode but render the
-  capabilities body when linked runs are already loaded and the published
-  protocol catalog has not been loaded yet.
-- The data-analysis UI execution scenario completed successfully on the deployed
-  stack, but the real five-stage agent run exceeded the current test-level
-  timeout budget before final artifact assertions could run.
-- Conversation send and software-engineering rehearsal failures are currently
-  downstream of the dashboard background console error and must be rechecked
-  after that fix.
-
-The only unrelated untracked local item is `.cursor/`, which is not part of
-this plan.
+None after the deployed `P3.17`/`P3.18`/`P4.27`/`P5.13` fix. The only unrelated
+untracked local item is `.cursor/`, which is not part of this plan.
 
 ### Deployment Blocker
 
@@ -467,8 +463,8 @@ Open IA decisions:
 | P3.14 | Done | Default filtering is patched for Runs, Dashboard, Conversations, Agents, Protocols, Delegations, Capabilities, and Usage. | Real Safari broad-audit regression checks. |
 | P3.15 | Done | Protocols render was blocked by full assignment/catalog loading and broad protocol scans. | Authoring options/templates API contract, SQL catalog indexes, protocol template Playwright flow. |
 | P3.16 | Done | Runs and protocol issues fetch/page candidate rows before expensive decoration; Dashboard and conversation detail have progressive first-paint/lazy-loading paths. | SQL pagination/index tests, dashboard/nav Playwright, conversation linked-runs/protocol-panel smoke. |
-| P3.17 | Active | Dashboard secondary loading must not turn background navigation/teardown races into user-visible errors or failing console-error assertions. | Deployed Playwright protocol suite with zero dashboard secondary snapshot console errors. |
-| P3.18 | Active | Real multi-stage protocol execution can outlive the current UI scenario test budget even when it completes correctly and produces artifacts. | Data-analysis scenario waits long enough for the deployed five-stage run and then verifies run artifacts and task artifact preview. |
+| P3.17 | Done | Dashboard secondary loading no longer turns background navigation/teardown races into user-visible errors or failing console-error assertions. | Deployed Playwright rerun has zero dashboard secondary snapshot console errors. |
+| P3.18 | Done | Real multi-stage protocol execution can outlive a short UI scenario budget even when it completes correctly and produces artifacts. | Deployed data-analysis scenario passed, including five-stage execution, run artifacts, and task artifact preview. |
 
 ### P4: Protocol Authoring, Protocol Catalog, Capabilities
 
@@ -481,7 +477,7 @@ Open IA decisions:
 | P4.24 | Done | Protocol list hides generated drafts by default and exposes compact generated families through a toggle. | Real Safari catalog verification passed on deployed `d2ac48a`. |
 | P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list; generated/meta E2E capabilities are hidden by default; selected capabilities expand inline with real instruction content on both default and agent-scoped pages. | Row expand/collapse, geometry-below-row, instruction-preview, internal-filter, selector consistency tests, and real Safari pass on deployed `15e08eb6`. |
 | P4.26 | Done | Missing capability had no natural assignment path. | `New capability needed` UI-only scenario. |
-| P4.27 | Active | Conversation protocol management can show capabilities copy in a protocols-mode shell if linked runs are already loaded but the published protocol catalog is still lazy. | Conversation protocol launch E2E opens the protocols body, lists published protocols, and launches a run. |
+| P4.27 | Done | Conversation protocol management could show capabilities copy in a protocols-mode shell if linked runs were already loaded but the published protocol catalog was still lazy. | Deployed conversation protocol launch E2E opens the protocols body, lists published protocols, and launches a run. |
 
 ### P5: Conversations, Agents, Collaboration
 
@@ -492,7 +488,7 @@ Open IA decisions:
 | P5.10 | Done | Conversation list filters generated/rehearsal records by default and keeps audit access explicit. | Human conversations prioritized in real Safari. |
 | P5.11 | Partial | Agent list and Capabilities agent eligibility hide generated/rehearsal agents by default; list details now expand inline and route to the shared Capabilities workspace; the remaining work is the broader agent-detail work-first audit. | Agent inline-detail tests, shared Capabilities route tests, and remaining work-first audit. |
 | P5.12 | Done | Conversations pagination is broken or unclear. | URL-addressable pagination, Playwright pass, and real Safari pass after deploy. |
-| P5.13 | Active | Conversation message-send timeline verification must stay green after background dashboard work is made non-disruptive. | Browser conversation send E2E returns to the visible chat timeline without console errors. |
+| P5.13 | Done | Conversation message-send timeline verification stays green after background dashboard work is made non-disruptive. | Deployed browser conversation send E2E returns to the visible chat timeline without console errors. |
 
 ### P6: Presentation, Accessibility, Responsive
 

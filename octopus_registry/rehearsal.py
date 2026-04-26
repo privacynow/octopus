@@ -331,26 +331,30 @@ class RehearsalSessionManager:
         expected_protocol_run_id: str = "",
     ) -> RehearsalPendingSession | None:
         token = str(routed_task_id or "").strip()
-        if not token or token in self._pending:
-            return self._pending.get(token)
+        if not token:
+            return None
+        was_pending = token in self._pending
         try:
             task = self.store.get_task(token)
         except Exception:
             log.debug("Unable to rehydrate rehearsal task %s", token, exc_info=True)
-            return None
+            return self._pending.get(token)
         session = self._session_from_task_record(task)
         if session is None:
+            self._pending.pop(token, None)
             return None
         expected = str(expected_protocol_run_id or "").strip()
         if expected and session.protocol_run_id != expected:
+            self._pending.pop(token, None)
             return None
         self._pending[token] = session
-        log.info(
-            "Rehearsal bot rehydrated pending stage run=%s stage=%s task=%s",
-            session.protocol_run_id,
-            session.stage_key,
-            token,
-        )
+        if not was_pending:
+            log.info(
+                "Rehearsal bot rehydrated pending stage run=%s stage=%s task=%s",
+                session.protocol_run_id,
+                session.stage_key,
+                token,
+            )
         return session
 
     def _rehydrate_pending_for_run(self, protocol_run_id: str) -> None:
@@ -376,12 +380,23 @@ class RehearsalSessionManager:
     def list_pending(self, *, protocol_run_id: str = "") -> list[RehearsalPendingSession]:
         target = str(protocol_run_id or "").strip()
         if not target:
-            return list(self._pending.values())
+            return [
+                session
+                for session in (
+                    self._rehydrate_pending_task(item.routed_task_id)
+                    for item in list(self._pending.values())
+                )
+                if session is not None
+            ]
         self._rehydrate_pending_for_run(target)
         return [
             session
-            for session in self._pending.values()
-            if session.protocol_run_id == target
+            for session in (
+                self._rehydrate_pending_task(item.routed_task_id, expected_protocol_run_id=target)
+                for item in list(self._pending.values())
+                if item.protocol_run_id == target
+            )
+            if session is not None
         ]
 
     def respond(
@@ -403,12 +418,10 @@ class RehearsalSessionManager:
         require an explicit decision.
         """
         token = str(routed_task_id or "").strip()
-        session = self._pending.get(token)
-        if session is None:
-            session = self._rehydrate_pending_task(
-                token,
-                expected_protocol_run_id=expected_protocol_run_id,
-            )
+        session = self._rehydrate_pending_task(
+            token,
+            expected_protocol_run_id=expected_protocol_run_id,
+        )
         if session is None:
             return False
         if not self._agent_token:

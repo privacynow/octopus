@@ -175,6 +175,12 @@ def test_rehearsal_manager_queues_and_completes_stage_without_external_egress(
         decision="completed",
     )
     assert accepted is True
+    manager._pending[first_session.routed_task_id] = first_session
+    assert manager.respond(
+        routed_task_id=first_session.routed_task_id,
+        response_text="Duplicate stale response.",
+        decision="completed",
+    ) is False
     next_pending = manager.list_pending(protocol_run_id=run_id)
     assert first_session.routed_task_id not in {item.routed_task_id for item in next_pending}
     assert [item.stage_key for item in next_pending] == ["review"], (

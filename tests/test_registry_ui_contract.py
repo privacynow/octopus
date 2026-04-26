@@ -150,7 +150,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRehearsalSessions(" in workspace
     assert "API.respondRehearsalSession(" in workspace
     assert "API.listProtocolScenarios(" in workspace
-    assert "API.getProtocolRun(rehearsal.runId)" in workspace
+    assert "const refreshRunId = rehearsal.runId;" in workspace
+    assert "API.getProtocolRun(refreshRunId)" in workspace
 
     # Authoring API the kit surface drives
     assert "API.getProtocolAuthoringOptions()" in workspace

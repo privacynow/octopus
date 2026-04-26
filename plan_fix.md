@@ -89,6 +89,10 @@ before broad audit or implementation claims continue.
   button could become visible/focusable without activating after catalog
   reconciliation. Starter actions now bind after morphdom reconciliation using
   one starter-control path, and the deep-link starter scenario is covered.
+- `P4.30`: full scenario E2E found stale rehearsal cards could remain after a
+  response and make repeated stages look duplicated. Rehearsal sessions are now
+  revalidated against persisted task state before listing/responding, and the
+  UI discards out-of-order rehearsal refreshes.
 - `P3.8`: Runs Overview is progressive again. It now shows run summary,
   current-step/artifact entry points, and available actions without rendering
   full stage evidence under Overview.
@@ -526,6 +530,7 @@ Open IA decisions:
 | P4.27 | Done | Conversation protocol management could show capabilities copy in a protocols-mode shell if linked runs were already loaded but the published protocol catalog was still lazy. | Deployed conversation protocol launch E2E opens the protocols body, lists published protocols, and launches a run. |
 | P4.28 | Done | Data-analysis rehearsal found two coupled failures: a valid persisted stage task can be rejected after manager/session recovery edges, and the visible second-stage rehearsal card can post the previous stage payload when morphdom preserves old form listeners. | Keyed rehearsal cards/forms by routed task id, posted the current form identity, kept run-scoped backend rehydration, asserted posted payload identity in Playwright, and reran the deployed data-analysis scenario successfully on `5049e0f5`. |
 | P4.29 | Done | Real Safari starter panel exposed a visible/focusable `Start blank` button that did not activate after catalog reconciliation. | Starter controls bind after reconciliation; deep-link starter test clicks `Start blank` from `?new=template&include_generated=1`; real Safari rerun required after deploy. |
+| P4.30 | Done | Full scenario suite exposed stale/duplicated rehearsal session cards after submit. | Manager prunes stale pending sessions against task state; UI ignores out-of-order rehearsal refreshes; rehearsal regression tests rerun. |
 
 ### P5: Conversations, Agents, Collaboration
 

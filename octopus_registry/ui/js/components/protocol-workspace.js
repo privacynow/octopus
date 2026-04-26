@@ -479,6 +479,7 @@ function renderProtocolWorkspace(container) {
         scenarios: [],
         runDetail: null,
         pollTimer: 0,
+        refreshSeq: 0,
         drafts: {},
     };
 
@@ -1204,6 +1205,7 @@ function renderProtocolWorkspace(container) {
             rehearsal.sessions = [];
             rehearsal.scenarios = [];
             rehearsal.runDetail = null;
+            rehearsal.refreshSeq += 1;
             rehearsal.drafts = {};
         }
         const docFromServer = (detail && detail.draft_definition_json && Object.keys(detail.draft_definition_json).length)
@@ -1582,6 +1584,7 @@ function renderProtocolWorkspace(container) {
         rehearsal.sessions = [];
         rehearsal.scenarios = [];
         rehearsal.runDetail = null;
+        rehearsal.refreshSeq += 1;
         documentHistory = { undo: [], redo: [] };
         draft = { slug: '', display_name: '', description: '', document: _blankDocument() };
         selection = { sectionKey: 'overview', nodeKey: '' };
@@ -1701,12 +1704,16 @@ function renderProtocolWorkspace(container) {
 
     async function _refreshRehearsalSessions() {
         if (!rehearsal.runId) return;
+        const refreshRunId = rehearsal.runId;
+        const refreshSeq = (rehearsal.refreshSeq || 0) + 1;
+        rehearsal.refreshSeq = refreshSeq;
         try {
             const [sessionsResp, scenariosResp, runDetail] = await Promise.all([
-                API.listRehearsalSessions(rehearsal.runId),
+                API.listRehearsalSessions(refreshRunId),
                 API.listProtocolScenarios({ protocol_id: currentProtocolId || '' }),
-                API.getProtocolRun(rehearsal.runId),
+                API.getProtocolRun(refreshRunId),
             ]);
+            if (refreshSeq !== rehearsal.refreshSeq || refreshRunId !== rehearsal.runId) return;
             rehearsal.sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : [];
             rehearsal.scenarios = Array.isArray(scenariosResp?.scenarios) ? scenariosResp.scenarios : [];
             rehearsal.runDetail = runDetail || null;
@@ -1720,9 +1727,11 @@ function renderProtocolWorkspace(container) {
             rehearsal.drafts = activeDrafts;
             render();
         } catch (err) {
-            UI.reportError('Failed to refresh rehearsal state', err);
+            if (refreshSeq === rehearsal.refreshSeq && refreshRunId === rehearsal.runId) {
+                UI.reportError('Failed to refresh rehearsal state', err);
+            }
         } finally {
-            if (rehearsal.runId) {
+            if (refreshSeq === rehearsal.refreshSeq && refreshRunId === rehearsal.runId && rehearsal.runId) {
                 _stopRehearsalPolling();
                 rehearsal.pollTimer = setTimeout(() => { void _refreshRehearsalSessions(); }, 1500);
             }
@@ -1741,6 +1750,7 @@ function renderProtocolWorkspace(container) {
         rehearsal.sessions = [];
         rehearsal.scenarios = [];
         rehearsal.runDetail = null;
+        rehearsal.refreshSeq += 1;
         rehearsal.drafts = {};
         if (!rehearsal.runId) {
             UI.notify('Rehearsal could not be started.', 'error');

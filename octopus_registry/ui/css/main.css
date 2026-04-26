@@ -4112,10 +4112,10 @@ select {
 
 .kit-stage-workspace-panel {
     padding: var(--space-5);
-    border: 1px solid rgba(17, 24, 39, 0.05);
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 10px 22px rgba(17, 24, 39, 0.03);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-card);
 }
 
 .kit-stage-workspace-body {
@@ -4139,19 +4139,19 @@ select {
 }
 
 .kit-stage-workspace-panel .kit-details-control {
-    background: rgba(255, 255, 255, 0.84);
-    border-color: rgba(17, 24, 39, 0.05);
+    background: var(--bg);
+    border-color: var(--border);
 }
 
 .kit-stage-workspace-nav.segmented-control,
 .kit-selector-editor > .segmented-control {
-    border-color: rgba(17, 24, 39, 0.045);
-    background: rgba(255, 255, 255, 0.68);
+    border-color: var(--border);
+    background: var(--bg-tertiary);
 }
 
 .kit-stage-workspace-nav .segmented-control-btn:not(.active),
 .kit-selector-editor > .segmented-control .segmented-control-btn:not(.active) {
-    color: rgba(45, 31, 24, 0.72);
+    color: var(--text-secondary);
 }
 
 .kit-stage-workspace-subsection {

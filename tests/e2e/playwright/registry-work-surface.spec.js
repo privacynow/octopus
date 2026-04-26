@@ -132,6 +132,9 @@ test('generated visibility controls use an obvious shared filter toggle', async 
     await expect(toggle).toHaveClass(/filter-toggle-link/);
     await expect(toggle).toHaveText(visibleLabel);
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    const box = await toggle.boundingBox();
+    expect(box?.width || 0).toBeGreaterThan(0);
+    expect(box?.width || 0).toBeLessThan(360);
   }
 });
 

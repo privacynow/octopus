@@ -6533,10 +6533,8 @@ function renderProtocolRuns(container) {
         title.textContent = issueListActive ? 'Protocol issues' : Kit.dict.label('runs.list.title', 'Runs');
         panel.appendChild(title);
 
-        const generatedToggle = document.createElement('a');
-        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs');
-        panel.appendChild(generatedToggle);
-
+        const controls = document.createElement('div');
+        controls.className = 'route-controls';
         const issueFilterControl = UI.createSegmentedControl(
             PROTOCOL_ISSUE_FILTER_OPTIONS,
             (value) => {
@@ -6551,7 +6549,12 @@ function renderProtocolRuns(container) {
             },
             { label: 'Run triage focus', value: issueKindFilter || '' },
         );
-        panel.appendChild(issueFilterControl.element);
+        controls.appendChild(issueFilterControl.element);
+
+        const generatedToggle = document.createElement('a');
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs');
+        controls.appendChild(generatedToggle);
+        panel.appendChild(controls);
 
         if (issueListActive) {
             if (runPaginator) runPaginator.clear();

@@ -93,6 +93,10 @@ before broad audit or implementation claims continue.
   response and make repeated stages look duplicated. Rehearsal sessions are now
   revalidated against persisted task state before listing/responding, and the
   UI discards out-of-order rehearsal refreshes.
+- `P3.19`: real Safari found the Runs generated/audit toggle stretched across
+  the panel while Conversations showed the same hidden-state control as a
+  compact pill. Runs now uses the shared `route-controls` row for the triage
+  tabs and generated/audit toggle.
 - `P3.8`: Runs Overview is progressive again. It now shows run summary,
   current-step/artifact entry points, and available actions without rendering
   full stage evidence under Overview.
@@ -515,6 +519,7 @@ Open IA decisions:
 | P3.16 | Done | Runs and protocol issues fetch/page candidate rows before expensive decoration; Dashboard and conversation detail have progressive first-paint/lazy-loading paths. | SQL pagination/index tests, dashboard/nav Playwright, conversation linked-runs/protocol-panel smoke. |
 | P3.17 | Done | Dashboard secondary loading no longer turns background navigation/teardown races into user-visible errors or failing console-error assertions. | Deployed Playwright rerun has zero dashboard secondary snapshot console errors. |
 | P3.18 | Done | Real multi-stage protocol execution can outlive a short UI scenario budget even when it completes correctly and produces artifacts. | Deployed data-analysis scenario passed, including five-stage execution, run artifacts, and task artifact preview. |
+| P3.19 | Done | Runs generated/audit hidden-state control rendered as a stretched panel-width button instead of the compact control used by Conversations. | Runs reuses the shared `route-controls` row; work-surface visual regression covers the generated toggle. |
 
 ### P4: Protocol Authoring, Protocol Catalog, Capabilities
 

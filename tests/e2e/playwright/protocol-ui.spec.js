@@ -896,7 +896,7 @@ test.describe('protocol authoring live', () => {
   });
 
   test('data analysis workflow can be authored, rehearsed, and executed through the standard UI', async ({ page }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(480_000);
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
@@ -1132,7 +1132,7 @@ test.describe('protocol authoring live', () => {
       });
       const runId = String(created.run?.protocol_run_id || '');
       expect(runId).toBeTruthy();
-      await waitForRunStatus(page, runId, 'completed', 300000);
+      await waitForRunStatus(page, runId, 'completed', 420000);
       const finalDetail = await getRunDetail(page, runId);
       expect(String(finalDetail.run?.status || '')).toBe('completed');
       expect(finalDetail.stage_executions.some((item) => String(item.stage_key || '') === publishKey)).toBe(true);

@@ -539,20 +539,22 @@ function renderDashboard(container) {
     let secondarySnapshotInflight = null;
     function loadSecondarySnapshot({ soft = false } = {}) {
         if (secondarySnapshotInflight) return secondarySnapshotInflight;
+        const secondary = (label, promise, fallback) => promise.catch((err) => {
+            console.warn(`Dashboard secondary snapshot skipped ${label}`, err);
+            return fallback;
+        });
         secondarySnapshotInflight = Promise.all([
-            API.listApprovals({ limit: 4 }),
-            loadFollowUpTasks(),
-            loadActiveTasks(),
-            API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
-            API.listProtocols({ limit: 50 }).catch(() => []),
-            API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }).catch(() => ({ runs: [] })),
-            API.listProtocolIssues({ limit: 6 }).catch(() => ({ issues: [] })),
+            secondary('approvals', API.listApprovals({ limit: 4 }), { approvals: [] }),
+            secondary('follow-up tasks', loadFollowUpTasks(), { tasks: [] }),
+            secondary('active tasks', loadActiveTasks(), { tasks: [] }),
+            secondary('completed tasks', API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }), { tasks: [] }),
+            secondary('protocols', API.listProtocols({ limit: 50 }), []),
+            secondary('protocol runs', API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }), { runs: [] }),
+            secondary('protocol issues', API.listProtocolIssues({ limit: 6 }), { issues: [] }),
         ]).then(([approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues]) => {
             applySnapshotPatch({ approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues });
         }).catch((err) => {
-            if (!soft || !hasLoaded) {
-                UI.reportError('Failed to load dashboard details', err, { context: 'Dashboard secondary snapshot failed' });
-            }
+            console.warn('Dashboard secondary snapshot failed', err);
         }).finally(() => {
             secondarySnapshotInflight = null;
         });

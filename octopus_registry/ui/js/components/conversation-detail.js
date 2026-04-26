@@ -40,6 +40,7 @@ function renderConversationDetail(container, params) {
     let conversationSettings = null;
     let availableConversationSkills = [];
     let availableConversationProtocols = [];
+    let conversationProtocolsLoaded = false;
     let linkedProtocolRuns = [];
     let selectedActivationSkill = requestedActivationSkill;
     let selectedProtocolId = '';
@@ -467,8 +468,11 @@ function renderConversationDetail(container, params) {
         syncManagementControls();
         if (meta) renderMetaCard(meta);
         scheduleManagementIdleClose();
-        if (nextMode === 'protocols' && !availableConversationProtocols.length && !linkedProtocolRuns.length) {
-            void loadConversationProtocols({ soft: true });
+        if (nextMode === 'protocols') {
+            renderProtocolsPanel();
+            if (!conversationProtocolsLoaded) {
+                void loadConversationProtocols({ soft: true });
+            }
         }
         if (focus) {
             requestAnimationFrame(() => {
@@ -1673,6 +1677,7 @@ function renderConversationDetail(container, params) {
             );
             linkedProtocolRuns = runData || [];
             managementSupport.protocols = true;
+            conversationProtocolsLoaded = true;
             renderProtocolsPanel();
             if (meta) {
                 renderMetaCard(meta);

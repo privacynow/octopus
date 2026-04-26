@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from telegram.constants import ParseMode
 
 from octopus_sdk.registry.models import parse_agent_discovery_query
@@ -26,6 +28,7 @@ from app.presentation.telegram import (
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
+    protocol_run_artifacts_message,
     recovery_notice_markup,
     pending_html_outcome_message,
     raw_missing_message,
@@ -115,6 +118,42 @@ def test_skill_add_confirmation_renders_expected_buttons():
     assert "helper" in rendered.text
     assert rendered.reply_markup.inline_keyboard[0][0].callback_data == "skill_add_confirm:helper"
     assert rendered.reply_markup.inline_keyboard[0][1].callback_data == "skill_add_cancel"
+
+
+def test_protocol_artifacts_message_distinguishes_available_and_missing_artifacts():
+    detail = SimpleNamespace(
+        run=SimpleNamespace(protocol_run_id="run-1"),
+        artifacts=[
+            SimpleNamespace(
+                artifact_key="plan",
+                verification_state="verified",
+                state="available",
+                exists=True,
+                workspace_path="plan.md",
+                size_bytes=42,
+            ),
+            SimpleNamespace(
+                artifact_key="report",
+                verification_state="declared",
+                state="",
+                exists=False,
+                workspace_path="report.md",
+                size_bytes=0,
+            ),
+        ],
+    )
+
+    rendered = protocol_run_artifacts_message(
+        detail,
+        deep_link="http://registry.local/ui/runs?run_id=run-1",
+        artifact_links={"plan": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content"},
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "<code>plan</code>: verified" in rendered.text
+    assert "Download" in rendered.text
+    assert "<code>report</code>: declared" in rendered.text
+    assert "not produced yet" in rendered.text
 
 
 def test_recovery_notice_markup_renders_expected_buttons():

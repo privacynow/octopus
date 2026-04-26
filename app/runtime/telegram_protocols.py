@@ -49,6 +49,26 @@ def protocol_run_url(runtime: TelegramRuntime, run_id: str, *, registry_url: str
     return f"{base.rstrip('/')}/ui/runs?run_id={quote(str(run_id or '').strip())}"
 
 
+def protocol_artifact_url(
+    runtime: TelegramRuntime,
+    run_id: str,
+    artifact_key: str,
+    *,
+    registry_url: str = "",
+) -> str:
+    base = str(registry_url or "").strip()
+    if not base:
+        registry = next(iter(runtime.config.agent_registries), None)
+        base = str(getattr(registry, "url", "") or "").strip() if registry is not None else ""
+    if not base:
+        return ""
+    run_token = quote(str(run_id or "").strip())
+    artifact_token = quote(str(artifact_key or "").strip())
+    if not run_token or not artifact_token:
+        return ""
+    return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content"
+
+
 def protocol_action_requires_confirmation(action: str) -> bool:
     return str(action or "").strip().lower() in {"cancel", "send-back"}
 

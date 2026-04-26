@@ -1361,6 +1361,8 @@ def protocol_usage_message() -> TelegramRenderedMessage:
             "/protocol list\n"
             "/protocol start <slug> <problem statement>\n"
             "/protocol status <run_id>\n"
+            "/protocol artifacts <run_id>\n"
+            "/protocol export <run_id>\n"
             "/protocol watch <run_id>\n"
             "/protocol unwatch <run_id>\n"
             "/protocol cancel <run_id> [reason]\n"
@@ -1445,6 +1447,72 @@ def protocol_run_status_message(
             lines.append(f"Latest summary: {html.escape(latest.decision_summary)}")
         elif latest.failure_detail:
             lines.append(f"Latest failure: {html.escape(latest.failure_detail)}")
+    if deep_link:
+        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def protocol_run_artifacts_message(
+    detail,
+    *,
+    deep_link: str = "",
+    artifact_links: dict[str, str] | None = None,
+) -> TelegramRenderedMessage:
+    run = detail.run
+    links = artifact_links or {}
+    if not detail.artifacts:
+        lines = [
+            "<b>Protocol artifacts</b>",
+            f"Run id: <code>{html.escape(run.protocol_run_id)}</code>",
+            "No artifacts are declared for this run yet.",
+        ]
+        if deep_link:
+            lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+        return TelegramRenderedMessage(
+            text="\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+
+    lines = [
+        "<b>Protocol artifacts</b>",
+        f"Run id: <code>{html.escape(run.protocol_run_id)}</code>",
+    ]
+    for item in detail.artifacts[:12]:
+        key = str(getattr(item, "artifact_key", "") or "artifact").strip()
+        state = str(
+            getattr(item, "verification_state", "")
+            or getattr(item, "state", "")
+            or "declared"
+        ).strip()
+        exists = bool(getattr(item, "exists", False))
+        path = str(
+            getattr(item, "workspace_path", "")
+            or getattr(item, "location", "")
+            or ""
+        ).strip()
+        size = int(getattr(item, "size_bytes", 0) or 0)
+        status = state or ("available" if exists else "declared")
+        if exists and status == "declared":
+            status = "available"
+        detail_bits = [status]
+        if path:
+            detail_bits.append(path)
+        if size > 0:
+            detail_bits.append(f"{size} bytes")
+        line = f"- <code>{html.escape(key)}</code>: {html.escape(' · '.join(detail_bits))}"
+        link = links.get(key, "")
+        if exists and link:
+            line += f" · <a href=\"{html.escape(link)}\">Download</a>"
+        elif not exists:
+            line += " · not produced yet"
+        lines.append(line)
+    if len(detail.artifacts) > 12:
+        lines.append(f"Showing first 12 of {len(detail.artifacts)} artifacts.")
     if deep_link:
         lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
     return TelegramRenderedMessage(

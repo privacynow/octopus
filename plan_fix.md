@@ -194,7 +194,8 @@ Verified current state:
 
 ### Pending Local Patch
 
-None after the deployed `P3.17`/`P3.18`/`P4.27`/`P5.13` fix. The only unrelated
+SDK/Telegram protocol-interface implementation is in the local patch and is
+awaiting deploy/audit before `P8` items can be marked done. The only unrelated
 untracked local item is `.cursor/`, which is not part of this plan.
 
 ### Deployment Blocker
@@ -208,6 +209,38 @@ M1/M2/M3 verification until M3 auth is restored; M1/M2 registry UI fixes remain
 in scope.
 
 ## Product Model
+
+### Protocol Surface Ownership
+
+The Registry is the protocol control plane. It owns canonical HTTP APIs,
+persistence, validation, permissions, lifecycle, templates, runs, artifacts,
+human collaboration, and the Registry UI.
+
+The bot SDK must not own duplicate protocol APIs or storage. It owns the shared
+client/service interface that all bot channels use to call Registry protocol
+APIs consistently.
+
+Telegram, Slack, future bots, and Registry-adjacent clients are peer product
+surfaces over the same Registry protocol model. Channel code should parse input
+and render channel-native output, but protocol listing, launch, status, action,
+artifact, and export semantics must come from the shared SDK interface.
+
+Current smell:
+
+- Registry APIs are in the correct place.
+- `octopus_sdk.registry.client.RegistryClient` already wraps many protocol
+  endpoints.
+- `octopus_sdk.protocols.launch` already contains shared launch helpers.
+- Telegram still hand-assembles parts of protocol start/status/action behavior
+  in `app/runtime/telegram_ingress.py` and `app/runtime/telegram_protocols.py`.
+
+Target:
+
+- One SDK protocol service/client wraps the existing Registry client and launch
+  helpers.
+- Registry UI and Telegram both exercise the same canonical REST nouns.
+- Telegram exposes the workflow-useful subset of Registry protocol capability,
+  without becoming a protocol authoring UI.
 
 ### Work
 
@@ -511,6 +544,17 @@ Open IA decisions:
 | P7.4 | Planned | Multi-tenant/role model is assumed, not fully defined. | Product role/capability policy. |
 | P7.5 | Planned | Security beyond CSRF/session needs a dedicated pass. | Markdown/XSS and approval-action review. |
 
+### P8: SDK And Channel Protocol Surface
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P8.1 | Active | Protocol API ownership is correct in Registry, but channel integrations need one SDK protocol service/client instead of hand-assembling workflows. | SDK unit tests prove Telegram and future channels call the shared service over existing Registry client methods. |
+| P8.2 | Active | Telegram supports protocol commands, but start/status/action/watch logic is still mixed into Telegram ingress helpers. | Telegram command tests assert parsing/rendering stays in Telegram while protocol semantics come from SDK service. |
+| P8.3 | Active | Telegram can start and watch protocols but does not expose artifact discovery/download/preview parity with Registry UI. | `/protocol artifacts <run_id>` and optional export tests over generated run artifacts. |
+| P8.4 | Active | Registry UI protocol launch and Telegram protocol launch need cross-surface equivalence. | Integration test starts equivalent runs from UI and Telegram/stub and asserts origin, root conversation, entry agent, run state, and artifact visibility. |
+| P8.5 | Active | Stale protocol-authoring nouns such as `/v1/protocol-authoring/manifest` must not re-enter the product surface. | OpenAPI/SDK/UI contract test asserts current nouns and either intentional 404 or explicit deprecation for stale routes. |
+| P8.6 | Planned | Telegram should expose only workflow-useful protocol operations, not full authoring/template/rehearsal/admin flows. | Telegram user-guide and presenter tests match the capability exposure table. |
+
 ## Workstreams
 
 ### W1: Navigation And Product IA
@@ -675,17 +719,84 @@ Acceptance:
   the protocol management panel is opened.
 - Query plans have matching indexes for run filters and issue candidates.
 
+### W8: SDK And Telegram Protocol Surface
+
+Scope:
+
+- Add one SDK protocol service/client over the existing `RegistryClient`
+  protocol methods and `octopus_sdk.protocols.launch` helpers.
+- Keep Registry HTTP APIs in Registry; do not move storage, validation,
+  lifecycle, artifacts, or permissions into bot runtimes.
+- Migrate Telegram protocol commands so command parsing and rendering remain in
+  Telegram, while listing, launch, status, actions, artifacts, and export use
+  the SDK protocol service.
+- Keep Registry UI on canonical REST nouns and align JS API contracts with SDK
+  endpoint coverage.
+- Add Telegram artifact UX for protocol runs.
+- Add cross-surface verification that Registry UI and Telegram start equivalent
+  protocol runs and expose the same outputs.
+
+Implementation guidance:
+
+- Reuse `octopus_sdk.registry.client.RegistryClient` methods; do not add a
+  second HTTP client or duplicate endpoint wrappers.
+- Reuse `octopus_sdk.protocols.launch.launch_protocol_from_conversation` and
+  existing protocol models.
+- Put new product-level SDK behavior in an SDK module, not in
+  `app/runtime/telegram_ingress.py`.
+- Keep Telegram-specific session watch persistence in Telegram runtime code
+  only where it is truly channel state.
+- Use current registry nouns: `/v1/protocols`, `/v1/protocol-drafts`,
+  `/v1/protocol-templates`, `/v1/protocol-authoring/options`,
+  `/v1/protocol-runs`, and run artifact/action/export subresources.
+- Do not revive `/v1/protocol-authoring/manifest` as a second authoring API.
+
+Telegram capability exposure:
+
+| Registry protocol capability | Telegram behavior |
+|------------------------------|-------------------|
+| List published protocols | `/protocol list` |
+| Launch from conversation | `/protocol start <slug> <problem statement>` |
+| View run status, stage, participants | `/protocol status <run_id>` |
+| Watch/unwatch updates | `/protocol watch <run_id>` and `/protocol unwatch <run_id>` |
+| Retry, accept, send back, cancel | Existing action commands, with confirmation for destructive actions |
+| List run artifacts | Add `/protocol artifacts <run_id>` |
+| Download/open artifact | Provide Registry links where safely available; clearly explain unavailable artifacts |
+| Preview small text artifact | Optional short preview, capped and escaped for Telegram |
+| Export run | Optional `/protocol export <run_id>` if output is sent as a document or concise link |
+| Author/edit protocols | Registry UI only; Telegram links to Registry |
+| Publish templates | Registry UI only |
+| Rehearsal/scenario authoring | Registry UI only |
+| Validate/publish/archive/diff | Registry UI or future operator-only command, not normal Telegram |
+
+Acceptance:
+
+- A user can discover, start, track, and inspect a protocol run from Telegram.
+- Telegram artifact output is understandable: available, missing, declared, or
+  unavailable-on-host states are explicit.
+- Registry UI protocol launch and Telegram launch produce equivalent Registry
+  run records and artifact visibility.
+- Telegram code no longer owns protocol workflow semantics beyond channel
+  parsing, rendering, and watch persistence.
+- Future bot channels can adopt the same SDK protocol service without copying
+  Telegram command internals.
+
 ## Immediate Execution Order
 
-1. Run dashboard, run, and protocol Playwright smoke against the deployed
-   registry after the `P3.16` deploy.
-2. Hard-refresh real Safari.
-3. Verify Protocols, Runs, Dashboard, and Conversation detail first-paint and
-   drill-through behavior.
-4. Keep M3 excluded from current claims; do not block UI cleanup on M3 auth.
-5. Run accessibility, keyboard, mobile/narrow Safari, theme-contrast, and
+1. Implement the SDK protocol service/client over the existing Registry client
+   and launch helpers.
+2. Migrate Telegram `/protocol` commands to the SDK service without changing
+   command syntax.
+3. Add Telegram artifact UX and tests.
+4. Add SDK, Telegram, Registry UI, and cross-surface equivalence tests.
+5. Run dashboard, run, protocol, and Telegram smoke against the deployed
+   registry/M1/M2 stack.
+6. Hard-refresh real Safari for Registry UI verification.
+7. Keep M3 excluded from current claims; do not block UI/SDK/Telegram cleanup
+   on M3 auth.
+8. Run accessibility, keyboard, mobile/narrow Safari, theme-contrast, and
    resilience checks.
-6. Only then resume broad 500+ screenshot audit.
+9. Only then resume broad 500+ screenshot audit.
 
 ## Verification Matrix
 
@@ -695,8 +806,13 @@ Acceptance:
 | `git diff --check` | No whitespace/patch hygiene issues. |
 | `.venv/bin/python -m pytest tests/test_registry_ui_contract.py` | Static UI contracts match product terminology and shared primitives. |
 | `.venv/bin/python -m pytest tests/test_protocols.py tests/test_db_postgres.py` | Protocol run/issue query behavior and DB indexes remain valid. |
+| `.venv/bin/python -m pytest tests/test_registry_sdk_contract.py tests/test_sdk_type_safety.py` | SDK contracts and type boundaries remain valid. |
+| `.venv/bin/python -m pytest tests/test_protocol_telegram.py tests/test_telegram_presenters.py` | Telegram protocol commands and rendered messages use the shared protocol interface correctly. |
+| `.venv/bin/python -m pytest tests/test_telegram_runtime_skills.py tests/test_telegram_delegation_channel.py` | Telegram regressions around skills and delegation still hold after protocol-service migration. |
+| Telegram API stub protocol pass | Bot surface can list/start/status/watch/artifacts/export protocols against a running Registry without direct DB setup. |
 | `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/protocol-ui.spec.js` | Protocol authoring, rehearsal, execution, conversations, and artifacts still work. |
 | `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/registry-work-surface.spec.js` | Work/nav/runs/conversations/tasks/capabilities desktop behavior. |
+| Cross-surface protocol launch pass | Registry UI launch and Telegram launch create equivalent run lineage and artifact visibility. |
 | Real Safari nav pass | Deployed assets, cache, and actual browser behavior match tests. |
 | Real Safari Capabilities pass | Human catalog is clickable, filters internals, expands/collapses inline, and shows real instruction text without a side editor. |
 | Real Safari Conversations pass | Pagination and linked work behavior are usable. |
@@ -745,6 +861,12 @@ Shared primitives:
 - Runs expose state, stage, task, conversation, artifact, and audit lineage in
   one coherent model.
 - Artifacts use the same action contract everywhere.
+- Protocol APIs remain canonical in Registry; bot SDK exposes one shared
+  protocol service/client over those APIs.
+- Telegram can list, launch, inspect, watch, act on, and inspect artifacts for
+  protocol runs without duplicating protocol workflow semantics.
+- Registry UI and Telegram protocol launches produce equivalent run lineage and
+  artifact visibility.
 - Generated/rehearsal/test data does not dominate normal user pages.
 - M3 status is either fixed or explicitly excluded from real-agent claims.
 - All listed automated checks pass after deploy.

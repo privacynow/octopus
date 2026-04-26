@@ -1221,6 +1221,7 @@ def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, 
     paths = response.json()["paths"]
     assert "/v1/protocols/{protocol_id}/archive" in paths
     assert "/v1/protocol-authoring/options" in paths
+    assert "/v1/protocol-authoring/manifest" not in paths
     assert "/v1/protocol-drafts" in paths
     protocol_list_parameters = {
         item["name"]

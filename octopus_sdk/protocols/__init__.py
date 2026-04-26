@@ -11,4 +11,5 @@ from .launch import (
     list_launchable_protocols,
     resolve_launchable_protocol,
 )
-from .ports import ProtocolCatalogPort, ProtocolInvocationPort, ProtocolObservationPort
+from .ports import ProtocolCatalogPort, ProtocolInvocationPort, ProtocolObservationPort, ProtocolRunControlPort
+from .service import ProtocolService

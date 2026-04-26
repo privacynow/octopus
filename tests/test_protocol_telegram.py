@@ -59,6 +59,10 @@ def _run_detail(*, run_id="run-1", status="running", version=2, stage_key="plann
         artifact_key="plan",
         verification_state="verified" if status != "failed" else "missing",
         state="available" if status != "failed" else "missing",
+        exists=status != "failed",
+        workspace_path="plan.md",
+        location="plan.md",
+        size_bytes=128 if status != "failed" else 0,
     )
     return SimpleNamespace(
         run=run,
@@ -158,7 +162,16 @@ async def test_protocol_cancel_requires_confirmation_before_mutation(monkeypatch
             async def get_run(self, run_id):
                 return _run_detail(run_id=run_id, version=4)
 
-            async def act_on_protocol_run(self, run_id, *, action, reason, expected_version=None):
+            async def act_on_protocol_run(
+                self,
+                run_id,
+                *,
+                action,
+                reason,
+                idempotency_key="",
+                expected_version=None,
+            ):
+                del idempotency_key
                 calls.append((action, reason))
                 return SimpleNamespace(
                     run=SimpleNamespace(
@@ -246,6 +259,83 @@ async def test_protocol_status_reports_watch_state(monkeypatch):
         reply = last_reply(msg)
         assert "Notifications: <code>watching</code>" in reply
         assert "Open in registry" in reply
+
+
+async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        class _Client:
+            async def get_run(self, run_id):
+                return _run_detail(run_id=run_id, version=2, stage_key="planning")
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol artifacts run-1",
+            args=["artifacts", "run-1"],
+        )
+
+        reply = last_reply(msg)
+        assert "Protocol artifacts" in reply
+        assert "<code>plan</code>: verified" in reply
+        assert "Download" in reply
+        assert "/v1/protocol-runs/run-1/artifacts/plan/content" in reply
+        assert "Open in registry" in reply
+
+
+async def test_protocol_export_sends_json_document(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        class _Export:
+            def model_dump(self, **kwargs):
+                return {
+                    "run": {"protocol_run_id": "run-1", "status": "completed"},
+                    "artifacts": [{"artifact_key": "plan", "workspace_path": "plan.md"}],
+                }
+
+        class _Client:
+            async def export_run(self, run_id):
+                assert run_id == "run-1"
+                return _Export()
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol export run-1",
+            args=["export", "run-1"],
+        )
+
+        assert msg.replies[-1]["document_sent"] is True
+        assert msg.replies[-1]["caption"] == "Protocol run export: run-1"
+        assert msg.replies[-1]["document"].name == "protocol_run_run-1.json"
 
 
 async def test_protocol_watch_and_unwatch_commands_toggle_persisted_watch(monkeypatch):

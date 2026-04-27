@@ -24,7 +24,9 @@ function renderTaskList(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Tasks</h2>';
+    header.innerHTML = currentProtocolRunId
+        ? '<h2>Run stage tasks</h2><p>Protocol-generated tasks are shown as children of this run.</p>'
+        : '<h2>Delegations</h2><p>Standalone work delegated from one agent or collaborator to another.</p>';
     container.appendChild(header);
 
     const summaryRail = document.createElement('section');
@@ -91,6 +93,14 @@ function renderTaskList(container) {
     listShell.appendChild(pagEl);
     const paginator = UI.createCursorPaginator(pagEl, () => loadList());
 
+    function _taskStatusHref(status) {
+        const params = new URLSearchParams();
+        if (status) params.set('status', status);
+        if (currentProtocolRunId) params.set('protocol_run_id', currentProtocolRunId);
+        const query = params.toString();
+        return query ? `/ui/tasks?${query}` : '/ui/tasks';
+    }
+
     function renderSummary(summary) {
         const items = [
             {
@@ -98,21 +108,21 @@ function renderTaskList(container) {
                 value: String(summary.tasks?.pending || 0),
                 label: 'Pending',
                 detail: 'queued or submitted',
-                href: '/ui/tasks?status=queued',
+                href: _taskStatusHref('queued'),
             },
             {
                 key: 'running',
                 value: String(summary.tasks?.running || 0),
                 label: 'Running',
                 detail: 'currently active',
-                href: '/ui/tasks?status=running',
+                href: _taskStatusHref('running'),
             },
             {
                 key: 'failed',
                 value: String(summary.tasks?.failed_24h || 0),
                 label: 'Needs follow-up',
                 detail: 'failed in the last day',
-                href: '/ui/tasks?status=failed',
+                href: _taskStatusHref('failed'),
             },
         ];
         UI.memoizedRender(summaryRail, items, (nextItems) => nextItems.map((item) => {
@@ -192,6 +202,7 @@ function renderTaskList(container) {
             expandedTaskIds.clear();
             paginator.reset();
             _writeState();
+            loadSummary();
             loadList();
         });
         actions.appendChild(clearFilter);
@@ -482,6 +493,17 @@ function renderTaskList(container) {
         return item;
     }
 
+    function _visibleTask(task) {
+        if (currentProtocolRunId) {
+            return String(task.protocol_run_id || '') === String(currentProtocolRunId || '');
+        }
+        return !task.protocol_run_id && !UI.isDefaultHiddenRecord(task);
+    }
+
+    function _coerceTaskRows(payload) {
+        return Array.isArray(payload?.tasks) ? payload.tasks : (Array.isArray(payload) ? payload : []);
+    }
+
     function renderList(tasks, data) {
         currentTasks = Array.isArray(tasks) ? tasks : [];
         currentListData = data;
@@ -495,8 +517,8 @@ function renderTaskList(container) {
                 currentProtocolRunId
                     ? 'No tasks recorded for this run yet.'
                     : currentStatus
-                        ? 'No tasks in this state.'
-                        : 'No tasks yet.',
+                        ? 'No standalone delegations in this state.'
+                        : 'No standalone delegations yet.',
                 true,
             )]);
             paginator.clear();
@@ -519,8 +541,29 @@ function renderTaskList(container) {
 
     async function loadSummary({ soft = false } = {}) {
         try {
-            const summary = await API.getSummary();
-            renderSummary(summary);
+            const statusGroups = {
+                pending: ['queued', 'submitted', 'leased'],
+                running: ['running'],
+                failed_24h: ['failed', 'timed_out'],
+            };
+            const entries = await Promise.all(Object.entries(statusGroups).map(async ([key, statuses]) => {
+                const payloads = await Promise.all(statuses.map((status) => {
+                    const params = { limit: UI.DEFAULT_PAGE_LIMIT, status };
+                    if (currentProtocolRunId) params.protocol_run_id = currentProtocolRunId;
+                    return API.listTasks(params).catch(() => ({ tasks: [] }));
+                }));
+                const seen = new Set();
+                const tasks = payloads
+                    .flatMap((payload) => _coerceTaskRows(payload))
+                    .filter((task) => {
+                        const taskId = String(task.routed_task_id || '');
+                        if (!taskId || seen.has(taskId) || !_visibleTask(task)) return false;
+                        seen.add(taskId);
+                        return true;
+                    });
+                return [key, tasks.length];
+            }));
+            renderSummary({ tasks: Object.fromEntries(entries) });
             summaryLoaded = true;
         } catch (err) {
             if (soft && summaryLoaded) {
@@ -538,7 +581,13 @@ function renderTaskList(container) {
         if (currentProtocolRunId) params.protocol_run_id = currentProtocolRunId;
         try {
             const data = await API.listTasks(params);
-            renderList(data.tasks || data || [], data);
+            const rawTasks = data.tasks || data || [];
+            const visibleTasks = rawTasks.filter((task) => _visibleTask(task));
+            if (currentTaskId && !visibleTasks.some((task) => String(task.routed_task_id || '') === String(currentTaskId || ''))) {
+                const selectedHidden = rawTasks.find((task) => String(task.routed_task_id || '') === String(currentTaskId || ''));
+                if (selectedHidden) visibleTasks.unshift(selectedHidden);
+            }
+            renderList(visibleTasks, { ...data, tasks: visibleTasks });
         } catch (err) {
             if (soft && listLoaded) {
                 UI.reportError('Failed to refresh tasks', err, { context: 'Task list soft refresh failed' });

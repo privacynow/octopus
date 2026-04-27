@@ -7,7 +7,7 @@ function renderConversationList(container) {
     const CONVERSATION_TYPES = [
         { key: 'all', value: '', label: 'All' },
         { key: 'conversation', value: 'conversation', label: 'Conversations' },
-        { key: 'task_thread', value: 'task_thread', label: 'Task threads' },
+        { key: 'task_thread', value: 'task_thread', label: 'Delegation threads' },
     ];
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
@@ -19,7 +19,13 @@ function renderConversationList(container) {
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentQ = UI.readQueryParam('q', '');
     let currentStatus = UI.readQueryParam('status', '');
-    let currentType = UI.readQueryParam('type', '');
+    let currentType = UI.readQueryParam('type', 'conversation');
+    let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
+    const initialCursor = Math.max(0, Number.parseInt(UI.readQueryParam('cursor', '0'), 10) || 0);
+    const initialCursorStack = [];
+    for (let value = 0; value < initialCursor; value += limit) {
+        initialCursorStack.push(value);
+    }
     let searchTimeout = null;
     let hasLoaded = false;
     let quickStartLoaded = false;
@@ -30,6 +36,7 @@ function renderConversationList(container) {
     const conversationPreviews = new Map();
     const conversationPreviewErrors = new Map();
     const conversationPreviewLoading = new Set();
+    let paginator = null;
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -79,10 +86,12 @@ function renderConversationList(container) {
     });
     const typeBar = typeControl.element;
     controls.appendChild(typeBar);
+    const generatedToggle = document.createElement('a');
+    controls.appendChild(generatedToggle);
 
     function applyStatus(value) {
         currentStatus = value;
-        paginator.reset();
+        paginator.reset(0);
         statusControl.setActive(currentStatus);
         _writeState();
         loadPage();
@@ -90,7 +99,7 @@ function renderConversationList(container) {
 
     function applyType(value) {
         currentType = value;
-        paginator.reset();
+        paginator.reset(0);
         typeControl.setActive(currentType);
         _writeState();
         loadPage();
@@ -101,9 +110,17 @@ function renderConversationList(container) {
             q: currentQ,
             status: currentStatus,
             type: currentType,
+            include_generated: includeGenerated ? '1' : '',
+            cursor: paginator && Number(paginator.cursor) > 0 ? paginator.cursor : '',
             conversation_id: currentConversationId || '',
         });
+        _updateGeneratedToggle();
     }
+
+    function _updateGeneratedToggle() {
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'work');
+    }
+    _updateGeneratedToggle();
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
@@ -116,7 +133,14 @@ function renderConversationList(container) {
     const pagEl = document.createElement('div');
     pagEl.className = 'pagination-shell';
     listShell.appendChild(pagEl);
-    const paginator = UI.createCursorPaginator(pagEl, () => loadPage());
+    paginator = UI.createCursorPaginator(pagEl, () => loadPage(), {
+        initialCursor,
+        initialStack: initialCursorStack,
+        onChange: () => {
+            currentConversationId = '';
+            _writeState();
+        },
+    });
 
     searchInput.value = currentQ;
 
@@ -124,7 +148,7 @@ function renderConversationList(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             currentQ = searchInput.value.trim();
-            paginator.reset();
+            paginator.reset(0);
             _writeState();
             loadPage();
         }, 250);
@@ -150,12 +174,6 @@ function renderConversationList(container) {
         agentsLink.className = 'section-link';
         agentsLink.textContent = 'Agents';
         links.appendChild(agentsLink);
-
-        const approvalsLink = document.createElement('a');
-        approvalsLink.href = '/ui/approvals';
-        approvalsLink.className = 'section-link';
-        approvalsLink.textContent = 'Approvals';
-        links.appendChild(approvalsLink);
 
         head.appendChild(links);
         quickShell.appendChild(head);
@@ -225,7 +243,8 @@ function renderConversationList(container) {
         try {
             const data = await API.listAgents({ state: 'connected', limit: QUICK_START_INLINE_LIMIT + 1 });
             const agents = (data.agents || data || []).filter(
-                (agent) => String((agent && agent.execution_state) || 'healthy') !== 'faulted',
+                (agent) => String((agent && agent.execution_state) || 'healthy') !== 'faulted'
+                    && !UI.isDefaultHiddenRecord(agent),
             );
             renderQuickStart(agents.slice(0, QUICK_START_INLINE_LIMIT), {
                 hasOverflow: !!data.has_more || agents.length > QUICK_START_INLINE_LIMIT,
@@ -271,13 +290,11 @@ function renderConversationList(container) {
         conversationPreviewLoading.add(key);
         conversationPreviewErrors.delete(key);
         try {
-            const [meta, runData] = await Promise.all([
-                API.getConversation(key),
-                API.listProtocolRuns({ root_conversation_id: key, limit: 5 }),
-            ]);
+            const meta = await API.getConversation(key);
+            const runs = await API.listConversationProtocolRuns(key, meta, { limit: 5 });
             conversationPreviews.set(key, {
                 meta,
-                runs: runData.runs || runData || [],
+                runs,
             });
         } catch (err) {
             conversationPreviewErrors.set(key, err);
@@ -321,7 +338,7 @@ function renderConversationList(container) {
         const openTasks = document.createElement('a');
         openTasks.href = _conversationHref(item, 'tasks');
         openTasks.className = 'btn btn-sm';
-        openTasks.textContent = 'Open tasks/activity';
+        openTasks.textContent = 'Open linked work';
         actions.appendChild(openTasks);
         panel.appendChild(actions);
 
@@ -395,7 +412,7 @@ function renderConversationList(container) {
             const parts = [];
             const targetLabel = UI.visibleLabel(item.target_display_name, item.target_agent_id);
             if (targetLabel) parts.push(targetLabel);
-            if (item.conversation_type === 'task_thread') parts.push('operational task thread');
+            if (item.conversation_type === 'task_thread') parts.push('delegation thread');
             if (item.origin_channel) parts.push(item.origin_channel);
             if (item.updated_at || item.created_at) parts.push(UI.relativeTime(item.updated_at || item.created_at));
             sub.textContent = parts.join(' · ');
@@ -407,7 +424,7 @@ function renderConversationList(container) {
             shell.dataset.signature = rowSignature;
 
             const row = UI.renderListRow({
-                label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : targetLabel) || 'Untitled conversation',
+                label: item.title || (item.conversation_type === 'task_thread' ? 'Delegation thread' : targetLabel) || 'Untitled conversation',
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
@@ -459,7 +476,11 @@ function renderConversationList(container) {
             },
         });
 
-        paginator.render({ hasMore: !!data.has_more, nextCursor: data.next_cursor });
+        paginator.render({
+            hasMore: !!data.has_more,
+            nextCursor: data.next_cursor,
+            info: `Page ${paginator.stackLength + 1}`,
+        });
         hasLoaded = true;
         if (currentConversationId && conversations.some((item) => String(item.conversation_id || '') === String(currentConversationId || ''))) {
             void loadConversationPreview(currentConversationId);
@@ -473,7 +494,20 @@ function renderConversationList(container) {
         if (currentType) params.conversation_type = currentType;
         try {
             const data = await API.listConversations(params);
-            renderRows(data.conversations || data || [], data);
+            const rawRows = data.conversations || data || [];
+            const rows = UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated });
+            if (currentConversationId && !rows.some((item) => String(item.conversation_id || '') === String(currentConversationId || ''))) {
+                let selectedHidden = rawRows.find((item) => String(item.conversation_id || '') === String(currentConversationId || ''));
+                if (!selectedHidden) {
+                    try {
+                        selectedHidden = await API.getConversation(currentConversationId);
+                    } catch (err) {
+                        void err;
+                    }
+                }
+                if (selectedHidden) rows.unshift(selectedHidden);
+            }
+            renderRows(rows, { ...data, conversations: rows });
         } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh conversations', err, { context: 'Conversation list soft refresh failed' });

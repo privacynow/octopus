@@ -175,8 +175,16 @@ def test_rehearsal_manager_queues_and_completes_stage_without_external_egress(
         decision="completed",
     )
     assert accepted is True
-    assert manager.list_pending(protocol_run_id=run_id) == [], (
-        "Session must be removed after a successful response"
+    manager._pending[first_session.routed_task_id] = first_session
+    assert manager.respond(
+        routed_task_id=first_session.routed_task_id,
+        response_text="Duplicate stale response.",
+        decision="completed",
+    ) is False
+    next_pending = manager.list_pending(protocol_run_id=run_id)
+    assert first_session.routed_task_id not in {item.routed_task_id for item in next_pending}
+    assert [item.stage_key for item in next_pending] == ["review"], (
+        "Rehearsal sessions should recover the next persisted stage without waiting for another poll tick"
     )
 
     advanced = store.get_protocol_run(run_id, access=operator_access())
@@ -191,6 +199,98 @@ def test_rehearsal_manager_queues_and_completes_stage_without_external_egress(
     rehearsal_card = agents[0]
     assert str(rehearsal_card.slug or "") == REHEARSAL_AGENT_SLUG
     assert str(rehearsal_card.role or "") == "rehearsal"
+
+
+def test_rehearsal_manager_recovers_pending_session_from_persisted_task(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
+    published = published_protocol(store, document=_simple_rehearsable_document())
+
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": rehearsal_agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Rehearse with recoverable session state.",
+            "constraints_json": {},
+            "is_rehearsal": True,
+        },
+        access=operator_access(),
+    )
+    assert created.ok is True
+    run_id = created.run.protocol_run_id
+    manager._poll_once_sync()
+    first_session = manager.list_pending(protocol_run_id=run_id)[0]
+
+    recovered_manager = RehearsalSessionManager(store=store)
+    recovered_agent_id, _recovered_token = recovered_manager.ensure_agent()
+    assert recovered_agent_id == rehearsal_agent_id
+    recovered = recovered_manager.list_pending(protocol_run_id=run_id)
+    assert [item.routed_task_id for item in recovered] == [first_session.routed_task_id]
+    assert recovered[0].stage_key == "planning"
+    assert recovered[0].instructions
+
+    accepted = recovered_manager.respond(
+        routed_task_id=first_session.routed_task_id,
+        response_text="Recovered session response.",
+        decision="completed",
+    )
+    assert accepted is True
+    advanced = store.get_protocol_run(run_id, access=operator_access())
+    assert advanced.run.current_stage_key == "review"
+
+
+def test_rehearsal_submit_recovers_after_reserved_agent_token_rotation(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
+    published = published_protocol(store, document=_simple_rehearsable_document())
+
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": rehearsal_agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Rehearse across a token rotation.",
+            "constraints_json": {},
+            "is_rehearsal": True,
+        },
+        access=operator_access(),
+    )
+    assert created.ok is True
+    run_id = created.run.protocol_run_id
+
+    manager._poll_once_sync()
+    first_session = manager.list_pending(protocol_run_id=run_id)[0]
+    assert manager.respond(
+        routed_task_id=first_session.routed_task_id,
+        response_text="Planning completed before token rotation.",
+        decision="completed",
+    ) is True
+
+    second_session = manager.list_pending(protocol_run_id=run_id)[0]
+    assert second_session.stage_key == "review"
+
+    # A second manager instance represents a restart or competing registry
+    # process. Enrollment intentionally rotates the plaintext token stored in
+    # Postgres; the live manager must recover on submit, not strand the UI.
+    rotating_manager = RehearsalSessionManager(store=store)
+    rotated_agent_id, _rotated_token = rotating_manager.ensure_agent()
+    assert rotated_agent_id == rehearsal_agent_id
+
+    assert manager.respond(
+        routed_task_id=second_session.routed_task_id,
+        response_text="PROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Review accepted.",
+        decision="accept",
+        decision_summary="Review accepted.",
+    ) is True
+    advanced = store.get_protocol_run(run_id, access=operator_access())
+    assert advanced.run.status == "completed"
 
 
 def test_rehearsal_poll_refreshes_reserved_agent_heartbeat(

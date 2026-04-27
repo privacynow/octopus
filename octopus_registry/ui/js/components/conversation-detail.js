@@ -40,6 +40,7 @@ function renderConversationDetail(container, params) {
     let conversationSettings = null;
     let availableConversationSkills = [];
     let availableConversationProtocols = [];
+    let conversationProtocolsLoaded = false;
     let linkedProtocolRuns = [];
     let selectedActivationSkill = requestedActivationSkill;
     let selectedProtocolId = '';
@@ -88,7 +89,7 @@ function renderConversationDetail(container, params) {
         {
             key: 'tasks',
             value: 'tasks',
-            label: 'Tasks',
+            label: 'Linked work',
             id: 'task-view-tab',
             controls: 'conversation-timeline-panel',
         },
@@ -467,8 +468,11 @@ function renderConversationDetail(container, params) {
         syncManagementControls();
         if (meta) renderMetaCard(meta);
         scheduleManagementIdleClose();
-        if (nextMode === 'protocols' && !availableConversationProtocols.length && !linkedProtocolRuns.length) {
-            void loadConversationProtocols({ soft: true });
+        if (nextMode === 'protocols') {
+            renderProtocolsPanel();
+            if (!conversationProtocolsLoaded) {
+                void loadConversationProtocols({ soft: true });
+            }
         }
         if (focus) {
             requestAnimationFrame(() => {
@@ -1662,16 +1666,18 @@ function renderConversationDetail(container, params) {
             return;
         }
         try {
+            const conversationData = meta || await API.getConversation(convoId);
             const [protocolData, runData] = await Promise.all([
                 API.listProtocols({ lifecycle_state: 'published', limit: 100 }),
-                API.listProtocolRuns({ root_conversation_id: convoId, limit: 25 }),
+                API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 }),
             ]);
             availableConversationProtocols = (protocolData.protocols || protocolData || []).filter((item) =>
                 String(item.lifecycle_state || '') === 'published'
                 && String(item.current_version_id || '').trim(),
             );
-            linkedProtocolRuns = runData.runs || runData || [];
+            linkedProtocolRuns = runData || [];
             managementSupport.protocols = true;
+            conversationProtocolsLoaded = true;
             renderProtocolsPanel();
             if (meta) {
                 renderMetaCard(meta);
@@ -1683,6 +1689,23 @@ function renderConversationDetail(container, params) {
             }
             UI.clearMemoizedRender(protocolsPanel);
             UI.reconcileChildren(protocolsPanel, [UI.createErrorCard('Failed to load conversation protocols: ' + err.message, loadConversationProtocols)]);
+        }
+    }
+
+    async function loadConversationLinkedRuns({ soft = false } = {}) {
+        try {
+            const conversationData = meta || await API.getConversation(convoId);
+            linkedProtocolRuns = await API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 });
+            if (meta) renderMetaCard(meta);
+            if (managementMode === 'protocols') {
+                renderProtocolsPanel();
+            }
+        } catch (err) {
+            if (!soft) {
+                UI.reportError('Failed to load linked protocol runs', err, {
+                    context: 'Conversation linked protocol runs failed',
+                });
+            }
         }
     }
 
@@ -2384,22 +2407,10 @@ function renderConversationDetail(container, params) {
         });
     }
 
-    function taskThreadTaskId(data) {
-        const conversation = data || meta;
-        if (!conversation || String(conversation.conversation_type || 'conversation') !== 'task_thread') {
-            return '';
-        }
-        const externalRef = String(conversation.external_conversation_ref || '').trim();
-        if (!externalRef.startsWith('routed-task:')) {
-            return '';
-        }
-        return externalRef.slice('routed-task:'.length).trim();
-    }
-
     async function loadRelatedTasks({ soft = false, silent = false } = {}) {
         try {
             const conversationData = meta || await API.getConversation(convoId);
-            const taskId = taskThreadTaskId(conversationData);
+            const taskId = API.routedTaskIdFromConversation(conversationData);
             if (taskId) {
                 const task = await API.getTask(taskId);
                 relatedTasks = task ? [task] : [];
@@ -2478,7 +2489,9 @@ function renderConversationDetail(container, params) {
             }
             void loadConversationSkills({ soft: true });
             void loadConversationSettings({ soft: true });
-            void loadConversationProtocols({ soft: true });
+            if (requestedManagementMode !== 'protocols') {
+                void loadConversationLinkedRuns({ soft: true });
+            }
         } catch (err) {
             UI.reconcileChildren(metaCard, [UI.createErrorCard('Failed to load conversation metadata', loadConversation)]);
         }

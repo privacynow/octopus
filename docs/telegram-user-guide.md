@@ -134,6 +134,8 @@ Current commands:
 /protocol list
 /protocol start <slug> <problem statement>
 /protocol status <run_id>
+/protocol artifacts <run_id>
+/protocol export <run_id>
 /protocol watch <run_id>
 /protocol unwatch <run_id>
 /protocol retry <run_id> [reason]
@@ -147,6 +149,10 @@ Important behavior:
 - `start` automatically begins watching the new run in that Telegram chat
 - `watch` and `unwatch` control follow-up notifications explicitly
 - `status` includes the registry deep link when one is available
+- `artifacts` lists declared and generated run artifacts, marks missing outputs,
+  and includes download links for artifacts the registry can serve
+- `export` sends a JSON document with the run, stages, participants, artifacts,
+  tasks, and transitions
 - `send-back` and `cancel` require an explicit `confirm` token plus a short
   reason before the action is applied
 - stage-change and terminal notifications come from the shared registry run
@@ -157,6 +163,7 @@ Examples:
 ```text
 /protocol start software-engineering Build a secure review workflow for this repo
 /protocol status run-123
+/protocol artifacts run-123
 /protocol send-back run-123 confirm tighten the artifact contract for plan.md
 ```
 

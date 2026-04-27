@@ -49,6 +49,8 @@ The current product model assumes:
 - skills are the primary capability concept
 - routing is skill-derived
 - guidance is provider policy
+- protocols are Registry-owned workflow definitions/runs, exposed to bot
+  channels through the SDK protocol service
 
 ## Where To Extend
 
@@ -66,6 +68,12 @@ Examples:
 - guidance preview rules
 - routing decisions
 - conversation workflow logic
+- protocol listing, launch, run actions, artifact inspection, and export
+
+For protocol work, keep HTTP APIs and persistence in `octopus_registry/`.
+Extend `octopus_sdk/protocols/` so Telegram, Slack, and future bots use one
+shared interface over those Registry APIs instead of copying protocol workflow
+logic into each channel.
 
 ### Bot runtime or provider behavior
 

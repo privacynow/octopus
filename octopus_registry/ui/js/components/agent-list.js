@@ -9,6 +9,8 @@ function renderAgentList(container) {
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let nameFilter = UI.readQueryParam('q', '');
     let presenceFilter = UI.readQueryParam('state', '');
+    let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
+    let selectedAgentId = UI.readQueryParam('agent_id', '');
     let hasLoaded = false;
     let searchTimeout = null;
     let currentAgents = [];
@@ -32,6 +34,12 @@ function renderAgentList(container) {
     workbench.className = 'workbench-panel';
     shell.appendChild(workbench);
 
+    const controls = document.createElement('div');
+    controls.className = 'route-controls';
+    workbench.appendChild(controls);
+    const generatedToggle = document.createElement('a');
+    controls.appendChild(generatedToggle);
+
     const listHost = document.createElement('div');
     listHost.className = 'kit-agents-host';
     workbench.appendChild(listHost);
@@ -43,6 +51,10 @@ function renderAgentList(container) {
 
     function _executionFaulted(agent) {
         return String(agent.execution_state || 'healthy') === 'faulted';
+    }
+
+    function _updateGeneratedToggle() {
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'agents');
     }
 
     function _adaptAgent(agent) {
@@ -65,29 +77,81 @@ function renderAgentList(container) {
         };
     }
 
+    function _selectedAgentVisible(agents) {
+        if (!selectedAgentId) return true;
+        return (agents || []).some((agent) => String(agent.id || '') === String(selectedAgentId || ''));
+    }
+
+    function _agentWorkspaceHref(agent) {
+        return '/ui/agents/' + encodeURIComponent(agent.id || agent.agent_id || '');
+    }
+
+    function _agentCapabilitiesHref(agent) {
+        return '/ui/skills?agent_id=' + encodeURIComponent(agent.id || agent.agent_id || '');
+    }
+
+    function _renderAgentInlineDetail(agent) {
+        const raw = agent?._raw || agent || {};
+        const panel = document.createElement('section');
+        panel.className = 'conversation-inline-detail';
+        panel.dataset.key = `agent-inline-detail:${String(agent?.id || raw.agent_id || '')}`;
+
+        const title = document.createElement('h3');
+        title.textContent = String(agent?.displayName || raw.display_name || raw.slug || 'Agent');
+        panel.appendChild(title);
+
+        panel.appendChild(Kit.agentSummary({ agent: raw }));
+
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+
+        const openProfile = document.createElement('a');
+        openProfile.className = 'btn btn-sm';
+        openProfile.href = _agentWorkspaceHref(agent || raw);
+        openProfile.textContent = 'Open agent workspace';
+        actions.appendChild(openProfile);
+
+        const openCapabilities = document.createElement('a');
+        openCapabilities.className = 'btn btn-sm';
+        openCapabilities.href = _agentCapabilitiesHref(agent || raw);
+        openCapabilities.textContent = 'Open capabilities';
+        actions.appendChild(openCapabilities);
+
+        panel.appendChild(actions);
+        return panel;
+    }
+
     function _repaintList() {
-        const adapted = currentAgents.map(_adaptAgent);
+        _updateGeneratedToggle();
+        const adapted = UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated }).map(_adaptAgent);
+        if (!_selectedAgentVisible(adapted)) {
+            selectedAgentId = '';
+            UI.updateQueryParams({ q: nameFilter, state: presenceFilter, include_generated: includeGenerated ? '1' : '', agent_id: '' });
+        }
         const node = Kit.agentsList({
             agents: adapted,
             search: nameFilter,
             presenceFilter,
+            selectedId: selectedAgentId,
             onSearch: (value) => {
                 clearTimeout(searchTimeout);
                 searchTimeout = setTimeout(() => {
                     nameFilter = value.trim();
                     paginator.reset();
-                    UI.updateQueryParams({ q: nameFilter, state: presenceFilter });
+                    UI.updateQueryParams({ q: nameFilter, state: presenceFilter, include_generated: includeGenerated ? '1' : '', agent_id: selectedAgentId || '' });
                     loadPage();
                 }, 250);
             },
             onPresenceFilter: (value) => {
                 presenceFilter = value || '';
                 paginator.reset();
-                UI.updateQueryParams({ q: nameFilter, state: presenceFilter });
+                UI.updateQueryParams({ q: nameFilter, state: presenceFilter, include_generated: includeGenerated ? '1' : '', agent_id: selectedAgentId || '' });
                 loadPage();
             },
             onSelect: (agent) => {
-                Router.navigate('/ui/agents/' + encodeURIComponent(agent.id));
+                selectedAgentId = String(selectedAgentId || '') === String(agent.id || '') ? '' : String(agent.id || '');
+                UI.updateQueryParams({ q: nameFilter, state: presenceFilter, include_generated: includeGenerated ? '1' : '', agent_id: selectedAgentId || '' });
+                _repaintList();
             },
             onStartConversation: async (agent) => {
                 try {
@@ -100,6 +164,7 @@ function renderAgentList(container) {
                     UI.reportError('Failed to open conversation', err, { context: 'Agent conversation open failed' });
                 }
             },
+            renderExpanded: _renderAgentInlineDetail,
         });
         UI.reconcileChildren(listHost, [node]);
         paginator.render({

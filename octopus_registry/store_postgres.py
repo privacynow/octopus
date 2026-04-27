@@ -18,7 +18,7 @@ from octopus_sdk.content_models import (
     SkillRevisionRecord,
 )
 from octopus_sdk.protocols import (
-    ProtocolAuthoringManifestRecord,
+    ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
     ProtocolArtifactRecord,
     ProtocolDefinitionDiffRecord,
@@ -1152,12 +1152,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> list[ProtocolTemplateSummaryRecord]:
         return self._protocol_store.list_protocol_templates(access=access)
 
-    def get_protocol_authoring_manifest(
+    def get_protocol_authoring_options(
         self,
         *,
         access: ProtocolAccessContextRecord,
-    ) -> ProtocolAuthoringManifestRecord:
-        return self._protocol_store.get_protocol_authoring_manifest(access=access)
+    ) -> ProtocolAuthoringOptionsRecord:
+        return self._protocol_store.get_protocol_authoring_options(access=access)
 
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.get_protocol(protocol_id, access=access)
@@ -1251,6 +1251,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.publish_protocol(protocol_id, access=access)
+
+    def publish_protocol_template(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        slug: str = "",
+        display_name: str = "",
+        description: str = "",
+    ) -> ProtocolMutationRecord:
+        return self._protocol_store.publish_protocol_template(
+            protocol_id,
+            access=access,
+            slug=slug,
+            display_name=display_name,
+            description=description,
+        )
 
     def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.archive_protocol(protocol_id, access=access)

@@ -146,9 +146,49 @@ const API = (() => {
         return `/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifactKey)}/content`;
     }
 
+    function routedTaskIdFromConversation(conversation) {
+        if (!conversation || typeof conversation !== 'object') return '';
+        if (String(conversation.conversation_type || 'conversation') !== 'task_thread') return '';
+        const externalRef = String(conversation.external_conversation_ref || '').trim();
+        return externalRef.startsWith('routed-task:')
+            ? externalRef.slice('routed-task:'.length).trim()
+            : '';
+    }
+
+    function _normalizeProtocolRuns(payload) {
+        if (Array.isArray(payload)) return payload;
+        if (Array.isArray(payload?.runs)) return payload.runs;
+        return [];
+    }
+
+    async function listConversationProtocolRuns(conversationId, conversation = {}, opts = {}) {
+        const normalizedId = String(conversationId || '').trim();
+        const limit = Number(opts.limit || 25) || 25;
+        const runData = await request('GET', '/v1/protocol-runs', {
+            params: { root_conversation_id: normalizedId, limit },
+        });
+        const runs = [..._normalizeProtocolRuns(runData)];
+        const taskId = routedTaskIdFromConversation(conversation);
+        if (!taskId) return runs;
+        try {
+            const task = await request('GET', `/v1/tasks/${encodeURIComponent(taskId)}`);
+            const runId = String(task?.protocol_run_id || '').trim();
+            if (!runId || runs.some((run) => String(run.protocol_run_id || '') === runId)) {
+                return runs;
+            }
+            const detail = await request('GET', `/v1/protocol-runs/${encodeURIComponent(runId)}`);
+            const linkedRun = detail?.run || detail;
+            return linkedRun ? [linkedRun, ...runs].slice(0, limit) : runs;
+        } catch (err) {
+            _notify('Could not resolve linked protocol run', err, 'Conversation protocol run lookup failed');
+            return runs;
+        }
+    }
+
     return {
         setCsrfToken,
         fetchCsrf,
+        routedTaskIdFromConversation,
 
         // Agents
         getSummary: () =>
@@ -232,6 +272,7 @@ const API = (() => {
             }),
         exportConversation: (id) =>
             request('GET', `/v1/conversations/${encodeURIComponent(id)}/export`, { raw: true }),
+        listConversationProtocolRuns,
 
         // Tasks
         listTasks: (opts = {}) =>
@@ -249,12 +290,10 @@ const API = (() => {
         // Protocols
         listProtocols: (opts = {}) =>
             request('GET', '/v1/protocols', { params: opts }),
+        getProtocolAuthoringOptions: () =>
+            request('GET', '/v1/protocol-authoring/options'),
         listProtocolTemplates: () =>
             request('GET', '/v1/protocol-templates'),
-        getProtocolAuthoringManifest: () =>
-            request('GET', '/v1/protocol-authoring/manifest'),
-        getProtocolTemplate: (slug) =>
-            request('GET', `/v1/protocol-templates/${encodeURIComponent(slug)}`),
         getProtocol: (id) =>
             request('GET', `/v1/protocols/${encodeURIComponent(id)}`),
         getProtocolVersion: (protocolId, versionId) =>
@@ -282,6 +321,8 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
         publishProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
+        createProtocolTemplate: (body = {}) =>
+            request('POST', '/v1/protocol-templates', { body }),
         archiveProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
         exportProtocolDraft: (id, format = 'json') =>

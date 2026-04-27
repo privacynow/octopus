@@ -22,7 +22,7 @@ from octopus_sdk.protocols import (
     PROTOCOL_STAGE_KIND_OPTIONS,
     PROTOCOL_DEFAULT_VISIBILITY,
     REHEARSAL_AUTHORITY_REF,
-    ProtocolAuthoringManifestRecord,
+    ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
@@ -238,6 +238,24 @@ class ProtocolPostgresAdapter:
         )
 
     @staticmethod
+    def _protocol_template_summary_from_document(
+        document: ProtocolDefinitionDocumentRecord,
+        *,
+        featured: bool = False,
+    ) -> ProtocolTemplateSummaryRecord:
+        metadata = document.metadata.as_dict()
+        return ProtocolTemplateSummaryRecord(
+            slug=str(metadata.get("slug", "") or "").strip(),
+            display_name=str(metadata.get("display_name", "") or metadata.get("slug", "") or "Protocol template").strip(),
+            description=str(metadata.get("description", "") or "").strip(),
+            featured=featured,
+            participant_count=len(document.participants),
+            artifact_count=len(document.artifacts),
+            stage_count=len(document.stages),
+            stage_kind_sequence=[stage.stage_kind for stage in document.stages],
+        )
+
+    @staticmethod
     def _protocol_run_from_row(row: Mapping[str, object]) -> ProtocolRunRecord:
         return record(
             ProtocolRunRecord,
@@ -441,14 +459,44 @@ class ProtocolPostgresAdapter:
 
     def _unique_protocol_slug(self, conn, base_slug: str, *, protocol_id: str = "") -> str:
         normalized = str(base_slug or "").strip().lower() or f"protocol-{uuid.uuid4().hex[:8]}"
+        builtin_slugs = {
+            str(item.slug or "").strip()
+            for item in builtin_protocol_template_summaries()
+            if str(item.slug or "").strip()
+        }
         candidate = normalized
         suffix = 1
         while True:
             row = self._protocol_row_for_slug(conn, candidate)
-            if row is None or str(row.get("protocol_id", "") or "") == str(protocol_id or ""):
+            if (
+                candidate not in builtin_slugs
+                and (row is None or str(row.get("protocol_id", "") or "") == str(protocol_id or ""))
+            ):
                 return candidate
             suffix += 1
             candidate = f"{normalized}-{suffix}"
+
+    def _protocol_template_document_from_row(
+        self,
+        conn,
+        row: Mapping[str, object],
+    ) -> ProtocolDefinitionDocumentRecord:
+        version_row = None
+        current_version_id = str(row.get("current_version_id", "") or "").strip()
+        if current_version_id:
+            version_row = self._protocol_version_row(conn, current_version_id)
+        raw_definition = (version_row or {}).get("definition_json") or row.get("draft_definition_json") or {}
+        return ProtocolDefinitionDocumentRecord.model_validate(raw_definition)
+
+    def _protocol_template_summary_from_row(
+        self,
+        conn,
+        row: Mapping[str, object],
+    ) -> ProtocolTemplateSummaryRecord:
+        return self._protocol_template_summary_from_document(
+            self._protocol_template_document_from_row(conn, row),
+            featured=False,
+        )
 
     @staticmethod
     def _blank_protocol_document(
@@ -1425,16 +1473,24 @@ class ProtocolPostgresAdapter:
         created_after: str = "",
         include_drafts: bool | None = None,
     ) -> list[ProtocolDefinitionRecord]:
-        builtin_slugs = {
+        builtin_slugs = [
             str(item.slug or "").strip()
             for item in builtin_protocol_template_summaries()
             if str(item.slug or "").strip()
-        }
+        ]
+        if include_drafts is None:
+            include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         clauses: list[str] = []
         params: list[object] = []
+        clauses.append("visibility <> 'registry_template'")
+        for builtin_slug in builtin_slugs:
+            clauses.append("slug <> %s")
+            params.append(builtin_slug)
         if lifecycle_state:
             params.append(lifecycle_state)
             clauses.append("lifecycle_state = %s")
+        elif include_drafts is False:
+            clauses.append("lifecycle_state = 'published'")
         if slug:
             params.append(slug)
             clauses.append("slug = %s")
@@ -1445,9 +1501,10 @@ class ProtocolPostgresAdapter:
                 raise ValueError("created_after must be ISO-8601 text") from exc
             params.append(created_after_iso)
             clauses.append("created_at >= %s")
+        if not self._access_has_role(access, "admin"):
+            params.append(self._access_org_id(access))
+            clauses.append("(owner_org_id = %s OR owner_org_id = '')")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        if include_drafts is None:
-            include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
@@ -1456,23 +1513,28 @@ class ProtocolPostgresAdapter:
                 FROM {SCHEMA}.protocol_definitions
                 {where_sql}
                 ORDER BY updated_at DESC, display_name ASC, slug ASC
+                LIMIT %s OFFSET %s
                 """,
-                tuple(params),
+                tuple([*params, max(1, int(limit or 50)), max(0, int(cursor or 0))]),
             )
         visible = [
             self._protocol_record_from_row(row)
             for row in rows
             if self._protocol_visible_to_access(row, access=access, include_drafts=include_drafts)
-            and str(row.get("visibility", "") or "") != "registry_template"
-            and str(row.get("slug", "") or "").strip() not in builtin_slugs
         ]
-        return visible[cursor : cursor + limit]
+        return visible
 
     def get_protocol_template(self, slug: str, *, access: ProtocolAccessContextRecord) -> ProtocolDefinitionDocumentRecord:
-        del access
         if not self._config.protocol_registry_templates_enabled:
             raise KeyError(slug)
-        return builtin_protocol_document(slug)
+        normalized_slug = str(slug or "").strip()
+        with self._connect() as conn:
+            row = self._protocol_row_for_slug(conn, normalized_slug)
+            if row is not None and str(row.get("visibility", "") or "") == "registry_template":
+                if not self._protocol_visible_to_access(row, access=access, include_drafts=False):
+                    raise PermissionError(normalized_slug)
+                return self._protocol_template_document_from_row(conn, row)
+        return builtin_protocol_document(normalized_slug)
 
     def list_protocol_templates(
         self,
@@ -1483,17 +1545,34 @@ class ProtocolPostgresAdapter:
             return []
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             return []
-        return list(builtin_protocol_template_summaries())
+        builtin_summaries = list(builtin_protocol_template_summaries())
+        builtin_slugs = {str(item.slug or "").strip() for item in builtin_summaries if str(item.slug or "").strip()}
+        with self._connect() as conn:
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_definitions
+                WHERE visibility = 'registry_template'
+                ORDER BY updated_at DESC, display_name ASC, slug ASC
+                """,
+            )
+            authored_summaries = [
+                self._protocol_template_summary_from_row(conn, row)
+                for row in rows
+                if self._protocol_visible_to_access(row, access=access, include_drafts=False)
+                and str(row.get("slug", "") or "").strip() not in builtin_slugs
+            ]
+        return builtin_summaries + authored_summaries
 
-    def get_protocol_authoring_manifest(
+    def get_protocol_authoring_options(
         self,
         *,
         access: ProtocolAccessContextRecord,
-    ) -> ProtocolAuthoringManifestRecord:
+    ) -> ProtocolAuthoringOptionsRecord:
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             raise PermissionError("Protocol authoring requires author access.")
-        return ProtocolAuthoringManifestRecord(
-            templates=self.list_protocol_templates(access=access),
+        return ProtocolAuthoringOptionsRecord(
             sections=list(PROTOCOL_AUTHORING_SECTION_OPTIONS),
             stage_kind_options=list(PROTOCOL_STAGE_KIND_OPTIONS),
             artifact_kind_options=list(PROTOCOL_ARTIFACT_KIND_OPTIONS),
@@ -2031,6 +2110,156 @@ class ProtocolPostgresAdapter:
             validation=strict_validation,
         )
 
+    def publish_protocol_template(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        slug: str = "",
+        display_name: str = "",
+        description: str = "",
+    ) -> ProtocolMutationRecord:
+        if not any(self._access_has_role(access, role) for role in ("publisher", "admin")):
+            return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol template publish requires publisher access.")
+        loaded = self.get_protocol(protocol_id, access=access)
+        if not loaded.ok or loaded.protocol is None:
+            return loaded
+        if str(loaded.protocol.visibility or "") == "registry_template":
+            return ProtocolMutationRecord(ok=False, status="invalid_action", message="Protocol templates are already reusable starters.")
+        current_version_id = str(loaded.protocol.current_version_id or "").strip()
+        if str(loaded.protocol.lifecycle_state or "") != "published" or not current_version_id:
+            return ProtocolMutationRecord(
+                ok=False,
+                status="invalid_action",
+                message="Publish the protocol before making a reusable template.",
+                protocol=loaded.protocol,
+                draft_definition_json=loaded.draft_definition_json,
+                draft_document=loaded.draft_document,
+                version=loaded.version,
+                validation=loaded.validation,
+            )
+
+        now = utcnow_iso()
+        actor_ref = self._access_actor_ref(access)
+        template_row: dict[str, object] | None = None
+        template_version: ProtocolDefinitionVersionRecord | None = None
+        strict_document: ProtocolDefinitionDocumentRecord | None = None
+        strict_validation = None
+
+        with self._connect() as conn, write_tx(conn):
+            source_version_row = self._protocol_version_row(conn, current_version_id)
+            if source_version_row is None:
+                return ProtocolMutationRecord(
+                    ok=False,
+                    status="not_found",
+                    message="Published protocol version not found.",
+                    protocol=loaded.protocol,
+                    draft_definition_json=loaded.draft_definition_json,
+                    draft_document=loaded.draft_document,
+                    version=loaded.version,
+                    validation=loaded.validation,
+                )
+            source_document = dict(source_version_row.get("definition_json") or {})
+            source_metadata = dict(source_document.get("metadata") or {})
+            source_slug = str(source_metadata.get("slug", "") or loaded.protocol.slug or "protocol").strip()
+            source_name = str(source_metadata.get("display_name", "") or loaded.protocol.display_name or source_slug).strip()
+            source_description = str(source_metadata.get("description", "") or loaded.protocol.description or "").strip()
+            template_slug = self._unique_protocol_slug(conn, str(slug or f"{source_slug}-template").strip())
+            template_name = str(display_name or f"{source_name} Template").strip()
+            template_description = str(description or source_description or "").strip()
+            template_document = self._with_protocol_metadata(
+                source_document,
+                slug=template_slug,
+                display_name=template_name,
+                description=template_description,
+            )
+            strict_validation = validate_protocol_document(template_document, mode="strict")
+            if not strict_validation.ok or strict_validation.normalized_document is None:
+                return ProtocolMutationRecord(
+                    ok=False,
+                    status="invalid",
+                    message="Published protocol version cannot be converted into a valid template.",
+                    protocol=loaded.protocol,
+                    draft_definition_json=RegistryJsonRecord.model_validate(template_document),
+                    draft_document=None,
+                    version=loaded.version,
+                    validation=strict_validation,
+                )
+            strict_document = strict_validation.normalized_document
+            content_hash = protocol_definition_content_hash(strict_document)
+            template_protocol_id = uuid.uuid4().hex
+            template_version_id = uuid.uuid4().hex
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_definitions (
+                        protocol_id, slug, display_name, description, lifecycle_state, current_version_id,
+                        owner_org_id, visibility, created_by, updated_by, draft_revision,
+                        draft_definition_json, draft_content_hash, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, 'published', %s, %s, 'registry_template', %s, %s, 1, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        template_protocol_id,
+                        template_slug,
+                        template_name,
+                        template_description,
+                        template_version_id,
+                        self._access_org_id(access),
+                        actor_ref,
+                        actor_ref,
+                        jsonb(strict_document.model_dump(mode="json")),
+                        content_hash,
+                        now,
+                        now,
+                    ),
+                )
+                template_row = db_cur.fetchone()
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_definition_versions (
+                        protocol_definition_version_id, protocol_id, version, definition_json,
+                        content_hash, validation_status, published_at, published_by, created_at
+                    ) VALUES (%s, %s, 1, %s, %s, 'valid', %s, %s, %s)
+                    """,
+                    (
+                        template_version_id,
+                        template_protocol_id,
+                        jsonb(strict_document.model_dump(mode="json")),
+                        content_hash,
+                        now,
+                        actor_ref,
+                        now,
+                    ),
+                )
+                template_version = record(
+                    ProtocolDefinitionVersionRecord,
+                    {
+                        "protocol_definition_version_id": template_version_id,
+                        "protocol_id": template_protocol_id,
+                        "version": 1,
+                        "definition_json": strict_document.model_dump(mode="json"),
+                        "content_hash": content_hash,
+                        "validation_status": "valid",
+                        "published_at": now,
+                        "published_by": actor_ref,
+                        "created_at": now,
+                    },
+                )
+
+        if template_row is None or strict_document is None:
+            raise RuntimeError("Failed to publish protocol template")
+        return ProtocolMutationRecord(
+            ok=True,
+            status="template_published",
+            message="Protocol template published.",
+            protocol=self._protocol_record_from_row(template_row),
+            draft_definition_json=RegistryJsonRecord.model_validate(strict_document.model_dump(mode="json")),
+            draft_document=strict_document,
+            version=template_version,
+            validation=strict_validation,
+        )
+
     def archive_protocol(
         self,
         protocol_id: str,
@@ -2083,8 +2312,13 @@ class ProtocolPostgresAdapter:
         root_conversation_id: str = "",
         origin_channel: str = "",
     ) -> list[ProtocolRunRecord]:
+        page_limit = max(1, int(limit or 25))
+        page_cursor = max(0, int(cursor or 0))
         params: list[object] = []
         clauses: list[str] = []
+        if not self._access_has_role(access, "admin"):
+            params.append(self._access_org_id(access))
+            clauses.append("pr.run_org_id = %s")
         if status:
             params.append(status)
             clauses.append("pr.status = %s")
@@ -2111,15 +2345,16 @@ class ProtocolPostgresAdapter:
                   ON c.conversation_id = pr.root_conversation_id
                 {where}
                 ORDER BY pr.updated_at DESC, pr.created_at DESC
+                LIMIT %s OFFSET %s
                 """,
-                tuple(params),
+                tuple([*params, page_limit + 1, page_cursor]),
             )
             visible: list[ProtocolRunRecord] = []
             for row in rows:
                 if self._assert_protocol_run_visible(row, access=access) is None:
                     continue
                 visible.append(self._protocol_run_from_row(self._decorate_protocol_run_row_with_review_state(conn, row)))
-        return visible[cursor : cursor + limit]
+        return visible
 
     def _protocol_issues_for_row(
         self,
@@ -2242,7 +2477,46 @@ class ProtocolPostgresAdapter:
         normalized_kind = str(issue_kind or "").strip().lower()
         normalized_run_id = str(protocol_run_id or "").strip()
         normalized_protocol_id = str(protocol_id or "").strip()
+        known_issue_kinds = {"blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"}
+        if normalized_kind and normalized_kind not in known_issue_kinds:
+            return []
         now = utcnow_iso()
+        page_limit = max(1, int(limit or 25))
+        page_cursor = max(0, int(cursor or 0))
+        clauses: list[str] = []
+        params: list[object] = []
+        if not self._access_has_role(access, "admin"):
+            params.append(self._access_org_id(access))
+            clauses.append("pr.run_org_id = %s")
+        if normalized_run_id:
+            params.append(normalized_run_id)
+            clauses.append("pr.protocol_run_id = %s")
+        if normalized_protocol_id:
+            params.append(normalized_protocol_id)
+            clauses.append("pr.protocol_id = %s")
+        if normalized_kind == "blocked_run":
+            clauses.append("pr.status = 'blocked'")
+        elif normalized_kind == "invalid_contract":
+            clauses.append("(pr.blocked_code = 'protocol_contract_invalid' OR pse.failure_code = 'protocol_contract_invalid')")
+        elif normalized_kind == "stuck_lease":
+            params.append(now)
+            clauses.append("(pse.status = 'running' AND pse.lease_expires_at <> '' AND pse.lease_expires_at <= %s)")
+        elif normalized_kind == "expired_timeout":
+            params.append(now)
+            clauses.append("(pse.status = 'running' AND pse.timeout_at <> '' AND pse.timeout_at <= %s)")
+        else:
+            params.extend([now, now])
+            clauses.append(
+                """(
+                    pr.status = 'blocked'
+                    OR pr.blocked_code = 'protocol_contract_invalid'
+                    OR pse.failure_code = 'protocol_contract_invalid'
+                    OR (pse.status = 'running' AND pse.lease_expires_at <> '' AND pse.lease_expires_at <= %s)
+                    OR (pse.status = 'running' AND pse.timeout_at <> '' AND pse.timeout_at <= %s)
+                )"""
+            )
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        candidate_limit = page_cursor + page_limit + 1
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
@@ -2269,8 +2543,11 @@ class ProtocolPostgresAdapter:
                   ON pse.protocol_stage_execution_id = pr.current_stage_execution_id
                 LEFT JOIN {SCHEMA}.protocol_definitions pd
                   ON pd.protocol_id = pr.protocol_id
+                {where}
                 ORDER BY pr.updated_at DESC, pr.protocol_run_id DESC
+                LIMIT %s
                 """,
+                tuple([*params, candidate_limit]),
             )
             issues: list[ProtocolIssueRecord] = []
             for row in rows:
@@ -2283,14 +2560,8 @@ class ProtocolPostgresAdapter:
                 if self._assert_protocol_run_visible(run_row, access=access) is None:
                     continue
                 for issue in self._protocol_issues_for_row(row, now=now):
-                    if normalized_kind and issue.issue_kind != normalized_kind:
-                        continue
-                    if normalized_run_id and issue.protocol_run_id != normalized_run_id:
-                        continue
-                    if normalized_protocol_id and issue.protocol_id != normalized_protocol_id:
-                        continue
                     issues.append(issue)
-        return issues[cursor : cursor + limit]
+        return issues[page_cursor : page_cursor + page_limit + 1]
 
     def create_protocol_run(
         self,

@@ -70,6 +70,9 @@ def test_management_views_request_agent_pages_with_supported_limit() -> None:
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
     ).read_text(encoding="utf-8")
+    usage_view = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
+    ).read_text(encoding="utf-8")
     guidance_editor = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
     ).read_text(encoding="utf-8")
@@ -139,21 +142,25 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
-    assert "Available skills" in workspace
+    assert "return UI.isHumanAssignableCapabilityName(item?.skill_name || item);" in workspace
+    assert "Available capabilities" in workspace
     assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
     assert "API.listRehearsalSessions(" in workspace
     assert "API.respondRehearsalSession(" in workspace
     assert "API.listProtocolScenarios(" in workspace
-    assert "API.getProtocolRun(rehearsal.runId)" in workspace
+    assert "const refreshRunId = rehearsal.runId;" in workspace
+    assert "API.getProtocolRun(refreshRunId)" in workspace
 
     # Authoring API the kit surface drives
-    assert "API.getProtocolAuthoringManifest()" in workspace
+    assert "API.getProtocolAuthoringOptions()" in workspace
+    assert "API.listProtocolTemplates()" in workspace
     assert "API.createProtocolDraft(" in workspace
     assert "created?.run?.protocol_run_id" in workspace
     assert "API.saveProtocolDraft(" in workspace
     assert "API.publishProtocol(" in workspace
+    assert "API.createProtocolTemplate(" in workspace
     assert "API.archiveProtocol(" in workspace
     assert "API.deleteProtocol(" in workspace
     assert "API.validateProtocol(" in workspace
@@ -185,7 +192,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Preferred agent:" in workspace
     assert "quickstart-chip" in workspace
     assert "pins the step to" in workspace
-    assert "Required skill" in workspace
+    assert "Required capability" in workspace
     assert "Pin matching agent (optional)" in workspace
     assert "Specific agent" in workspace
     assert "Show workflow map" in workspace
@@ -222,7 +229,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "'Workflow overview'" not in workspace
 
     # Runs route (kept until Step 7)
-    assert "API.listProtocolRuns({ limit: 50 })" in workspace
+    assert "API.listProtocolRuns({" in workspace
+    assert "cursor: runPaginator ? runPaginator.cursor : 0" in workspace
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
@@ -295,7 +303,8 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
     assert "UI.readQueryParam('protocol_view'" not in workspace
     assert "protocol_view:" in workspace  # kept in _writeState to clear legacy URLs
-    assert "API.getProtocolTemplate('software-engineering')" not in workspace
+    assert "API.getProtocolTemplate(" not in workspace
+    assert "API.getProtocolAuthoringManifest(" not in workspace
     assert "loadDefaultTemplate" not in workspace
 
     # Protocol authoring lifecycle subscription is retained
@@ -304,8 +313,10 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
 
     # Router wiring
-    assert "Router.register('/ui/templates', renderGallery);" in app_js
-    assert "Router.register('/ui/gallery', renderGallery);" in app_js
+    assert "renderProtocolTemplateRedirect" not in app_js
+    assert "Router.register('/ui/templates'" not in app_js
+    assert "Router.register('/ui/gallery'" not in app_js
+    assert "renderGallery" not in app_js
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
     assert "path.startsWith('/ui/protocol-runs')" not in router_js
@@ -392,14 +403,21 @@ def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     assert "href: '/ui/protocols'" in dashboard
     assert "`/ui/runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`" in dashboard
     assert "'/ui/runs?issue_kind=all'" in dashboard
-    assert 'href="/ui/templates"' in index_html
+    assert 'href="/ui/templates"' not in index_html
     assert 'href="/ui/protocols"' in index_html
+    assert '<li class="nav-group">Team</li>' not in index_html
+    assert index_html.index('<li class="nav-group">Work</li>') < index_html.index('href="/ui/conversations"') < index_html.index('href="/ui/runs"') < index_html.index('href="/ui/agents"') < index_html.index('<li class="nav-group">Build</li>')
+    assert index_html.index('<li class="nav-group">Build</li>') < index_html.index('href="/ui/protocols"') < index_html.index('href="/ui/skills"') < index_html.index('href="/ui/guidance"') < index_html.index('<li class="nav-group">Operations</li>')
+    assert index_html.index('<li class="nav-group">Operations</li>') < index_html.index('href="/ui/"')
 
 
 def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     helper = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
     ).read_text(encoding="utf-8")
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
@@ -436,8 +454,23 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Manage what each bot can do." in skill_catalog
+    assert "Find reusable capabilities for conversations and protocol stages." in skill_catalog
+    assert "Capability catalog" in skill_catalog
+    assert "Choose a bot only when you need to manage installation or drafts." in skill_catalog
+    assert "UI.isHumanAssignableCapabilityName(name)" in skill_catalog
+    assert "String(selectedSkillOrigin || '') === 'global'" in skill_catalog
+    assert "Use this in a protocol stage by choosing Assignment, then Existing capability." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
+    assert "workspace.classList.add('dashboard-board-stacked');" in skill_catalog
+    assert "detailEl.hidden = true;" in skill_catalog
+    assert "capability-inline-detail" in skill_catalog
+    assert "function _renderSelectedSkillInlineDetail(selected)" in skill_catalog
+    assert "function _buildSelectedSkillDetailNodes(selected)" in skill_catalog
+    assert "function _renderAgentCapabilityIntro(agentLabel)" in skill_catalog
+    assert "agent-capability-intro" in skill_catalog
+    assert "Loading capability instructions…" in skill_catalog
+    assert "Instructions preview" in skill_catalog
+    assert "API.getSkillDetail(agent.agent_id, skillName)" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
     assert "label: 'Studio'" not in skill_catalog
     assert "currentStudioTab = _readStudioTab()" in skill_catalog
@@ -511,6 +544,11 @@ def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
 
     # List
     assert "Kit.agentsList(" in agent_list
+    assert "selectedAgentId = UI.readQueryParam('agent_id', '')" in agent_list
+    assert "selectedId: selectedAgentId" in agent_list
+    assert "renderExpanded: _renderAgentInlineDetail" in agent_list
+    assert "Open agent workspace" in agent_list
+    assert "Open capabilities" in agent_list
     assert "trustTier: String(agent.trust_tier" in agent_list
     assert "currentCapacity: Number(agent.current_capacity" in agent_list
     assert "softDeletedAt: String(agent.soft_deleted_at" in agent_list
@@ -555,17 +593,20 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
     assert "!_isGeneratedSkill(skill)" in skill_catalog
     assert "!UI.isGeneratedTimestampName(skill)" in kit
     assert "function buildSkillsCard(agent) {" in agent_detail
-    assert "Manage capabilities" in agent_detail
-    assert "Open Capabilities page" in agent_detail
-    assert "Open in Capabilities" in agent_detail
-    assert "Open conversation and activate" in agent_detail
-    assert "Quick actions live here." in agent_detail
+    assert "Open Capabilities workspace" in agent_detail
+    assert "Router.navigate(skillsWorkspaceHref())" in agent_detail
+    assert "Open a conversation with ${label}" in skill_catalog
+    assert "function openSkillsDrawer(" not in agent_detail
+    assert "Open Capabilities page" not in agent_detail
+    assert "Quick actions live here." not in agent_detail
     assert "Available capabilities" in agent_detail
     assert "buildSkillsCard(agent)," in agent_detail
     assert "buildOperationsCard(agent, workers)," in agent_detail
     assert "quickstart-chip static" in agent_detail
-    assert "skills-drawer-dialog" in css
-    assert "skills-drawer-overlay" in css
+    assert "skills-drawer-dialog" not in css
+    assert "skills-drawer-overlay" not in css
+    assert "renderExpanded = null" in kit
+    assert "agent-inline-detail" in kit
 
 
 def test_guidance_editor_exposes_progressive_draft_and_review_workspace() -> None:
@@ -625,6 +666,93 @@ def test_conversation_empty_state_avoids_repeating_route_title() -> None:
     assert "No conversations yet." not in conversation_list
 
 
+def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+    kit = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    agent_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
+    ).read_text(encoding="utf-8")
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    usage_view = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function isDefaultHiddenRecord(" in helper
+    assert "function defaultVisibleRecords(" in helper
+    assert "isGeneratedOrRehearsalText" in helper
+    assert "draft-[0-9a-f]{8}" in helper
+    assert "[-_]\\d{1,4}$" in helper
+    assert "item.includes('e2e')" in helper
+    assert "item.includes('spec')" in helper
+    assert "const canonical = normalized.replace(/[-_]+/g, ' ');" in helper
+    assert "canonical.startsWith('meta protocol composer ')" in helper
+    assert "hiddenFields.some((field) => isGeneratedOrRehearsalText(record?.[field]))" in helper
+    assert "'compose-assistant-protocol'" in helper
+    assert "'publish-report'" in helper
+    assert "'current_stage_key'" in helper
+    assert "function updateQueryToggleLink(" in helper
+    assert "function updateGeneratedAuditToggleLink(" in helper
+    assert "filter-toggle-link" in css
+
+    assert "UI.defaultVisibleRecords(rawRows, { includeHidden: includeGenerated })" in conversation_list
+    assert "let currentType = UI.readQueryParam('type', 'conversation');" in conversation_list
+    assert "&& !UI.isDefaultHiddenRecord(agent)" in conversation_list
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'work')" in conversation_list
+    assert "approvalsLink" not in conversation_list
+
+    assert "!item.protocol_run_id && !UI.isDefaultHiddenRecord(item)" in dashboard
+    assert "UI.defaultVisibleRecords(dashboardState.conversations.conversations || [], { includeHidden: false })" in dashboard
+    assert "UI.defaultVisibleRecords(dashboardState.agents.agents || dashboardState.agents || [], { includeHidden: false })" in dashboard
+    assert "function visibleDashboardRuns()" in dashboard
+    assert "function visibleDashboardProtocols()" in dashboard
+    assert "function loadSecondarySnapshot(" in dashboard
+    assert "void loadSecondarySnapshot({ soft });" in dashboard
+    assert "API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT })" in dashboard
+    assert "API.listProtocols({ limit: 50 })" in dashboard
+    assert "Filtered by default · generated/audit totals inside" in dashboard
+
+    assert "UI.defaultVisibleRecords(currentAgents, { includeHidden: includeGenerated })" in agent_list
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'agents')" in agent_list
+    assert "!task.protocol_run_id && !UI.isDefaultHiddenRecord(task)" in task_list
+    assert "function _visibleTask(task)" in task_list
+    assert "renderSummary({ tasks: Object.fromEntries(entries) });" in task_list
+    assert "API.getSummary()" not in task_list
+    assert "<h2>Delegations</h2>" in task_list
+
+    assert "UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog })" in workspace
+    assert "label: 'Generated drafts'" in workspace
+    assert "UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated })" in workspace
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs')" in workspace
+    assert "No normal runs match this filter." in workspace
+    assert "String(item?.conversation_type || 'conversation') !== 'task_thread'" in usage_view
+    assert "UI.defaultVisibleRecords(candidates, { includeHidden: includeGenerated })" in usage_view
+    assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'usage')" in usage_view
+    assert "return [...visible, ...generated];" in kit
+    assert "&& !UI.isDefaultHiddenRecord(agent)" in skill_catalog
+
+
 def test_dashboard_surfaces_recently_completed_tasks() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     dashboard = (
@@ -632,7 +760,8 @@ def test_dashboard_surfaces_recently_completed_tasks() -> None:
     ).read_text(encoding="utf-8")
 
     assert "createGroupedSection(" in dashboard
-    assert "'Tasks'" in dashboard
+    assert "'Work needing attention'" in dashboard
+    assert "'Tasks'" not in dashboard
     assert "loadActiveTasks()" in dashboard
     assert "loadTasksByStatus(['queued', 'submitted', 'leased', 'running'])" in dashboard
     assert "loadTasksByStatus(['failed', 'cancelled', 'timed_out'])" in dashboard
@@ -677,8 +806,9 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "buildNeedsAttention" not in dashboard
     assert "label: 'Queued backlog'" in dashboard
     assert "label: 'Unhealthy agents'" in dashboard
-    assert "label: 'Tokens · 24h'" in dashboard
-    assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" in dashboard
+    assert "label: 'Usage review'" in dashboard
+    assert "label: 'Tokens · 24h'" not in dashboard
+    assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" not in dashboard
     assert "value: String(summary.conversations?.open || 0)" not in dashboard
     assert "value: String(summary.tasks?.running || 0)" not in dashboard
     assert "value: String(summary.tasks?.failed_24h || 0)" not in dashboard
@@ -690,9 +820,6 @@ def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
     usage_view = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
     ).read_text(encoding="utf-8")
-    dashboard = (
-        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
-    ).read_text(encoding="utf-8")
     event_renderers = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
     ).read_text(encoding="utf-8")
@@ -700,12 +827,12 @@ def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
     assert "cached_prompt_tokens_available" in usage_view
     assert "cached_completion_tokens_available" in usage_view
     assert "uncached" in usage_view
-    assert "cached in" in dashboard
+    assert "cached" in usage_view
     assert "Input uncached" in event_renderers
     assert "Reply uncached" in event_renderers
 
 
-def test_conversation_views_distinguish_task_threads() -> None:
+def test_conversation_views_distinguish_delegation_threads() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_list = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
@@ -715,17 +842,22 @@ def test_conversation_views_distinguish_task_threads() -> None:
     ).read_text(encoding="utf-8")
 
     assert "conversation_type" in conversation_list
-    assert "operational task thread" in conversation_list
-    assert "Task thread" in conversation_list
+    assert "delegation thread" in conversation_list
+    assert "Delegation thread" in conversation_list
+    assert "Open linked work" in conversation_list
     assert "conversation_type" in agent_detail
-    assert "operational task thread" in agent_detail
-    assert "Task thread" in agent_detail
+    assert "delegation thread" in agent_detail
+    assert "Delegation thread" in agent_detail
     assert "No direct conversations." in agent_detail
     assert "taskThreadsGroup.hidden = false" in agent_detail
     detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
     ).read_text(encoding="utf-8")
-    assert "externalRef.startsWith('routed-task:')" in detail
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+    assert "externalRef.startsWith('routed-task:')" in api_js
+    assert "API.routedTaskIdFromConversation(conversationData)" in detail
     assert "API.getTask(taskId)" in detail
     assert "conversationsLoaded = false" in agent_detail
     assert "document.getElementById('agent-conversations-list')" not in agent_detail
@@ -744,6 +876,8 @@ def test_conversation_tab_keeps_the_parent_view_conversational() -> None:
     assert "'delegation.submitted'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
     assert "'delegation.completed'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
     assert "'task.status'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
+    assert "label: 'Linked work'" in detail
+    assert "label: 'Tasks'" not in detail
     assert "return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');" in detail
     assert "@role:' + role" not in detail
     assert "@skill:' + value" not in detail
@@ -773,6 +907,22 @@ def test_conversation_route_owns_scroll_on_wide_viewports() -> None:
     assert ".conversation-page {" in css
     assert ".conversation-shell {" in css
     assert ".conversation-layout {" in css
+
+
+def test_conversation_pagination_is_addressable_and_visible() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    ui_helpers = (repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js").read_text(encoding="utf-8")
+    css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
+
+    assert "UI.readQueryParam('cursor', '0')" in conversation_list
+    assert "initialStack: initialCursorStack" in conversation_list
+    assert "cursor: paginator && Number(paginator.cursor) > 0 ? paginator.cursor : ''" in conversation_list
+    assert "info: `Page ${paginator.stackLength + 1}`" in conversation_list
+    assert "onChange({ cursor, hasPrev: cursorStack.length > 0, stackLength: cursorStack.length });" in ui_helpers
+    assert "#content > .content-inner.conversation-list-route-shell .pagination {" in css
     assert "overflow: hidden;" in css
     assert "flex: 1 1 auto;" in css
 
@@ -838,6 +988,12 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
     ).read_text(encoding="utf-8")
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
     helper = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
     ).read_text(encoding="utf-8")
@@ -851,7 +1007,14 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Conversation protocols" in detail
     assert "Start a published protocol" in detail
     assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
-    assert "API.listProtocolRuns({ root_conversation_id: convoId, limit: 25 })" in detail
+    assert "API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 })" in detail
+    assert "function loadConversationLinkedRuns(" in detail
+    assert "requestedManagementMode !== 'protocols'" in detail
+    assert "API.listConversationProtocolRuns(key, meta, { limit: 5 })" in conversation_list
+    assert "function routedTaskIdFromConversation(conversation)" in api_js
+    assert "externalRef.startsWith('routed-task:')" in api_js
+    assert "request('GET', `/v1/tasks/${encodeURIComponent(taskId)}`)" in api_js
+    assert "request('GET', `/v1/protocol-runs/${encodeURIComponent(runId)}`)" in api_js
     assert "API.createProtocolRun({" in detail
     assert "root_conversation_id: convoId" in detail
     assert "entry_agent_id: agentId" in detail
@@ -893,6 +1056,8 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
 
     assert "function createArtifactActionRow({" in helper
     assert "function createArtifactListRow({" in helper
+    assert "function isHumanAssignableCapabilityName(value)" in helper
+    assert "&& !isGeneratedOrRehearsalText(normalized)" in helper
     assert "function compactMarkdownReferences(text)" in helper
     assert "function _ensureArtifactPreviewDelegation()" in helper
     assert "document.addEventListener('click', async (event)" in helper
@@ -937,13 +1102,18 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
 
     assert "isLink || isAction ? 'is-actionable' : 'is-passive'" in helper
-    assert "const usePressableContainer = isAction && hasTrailing;" in helper
-    assert "target.closest('a, button, input, textarea, select, summary, [role=\"button\"], [data-artifact-preview-url]')" in helper
+    assert "const hasInteractiveTrailing = hasTrailing && trailing instanceof Element" in helper
+    assert "const usePressableContainer = isAction && hasInteractiveTrailing;" in helper
+    assert "main.classList.add('list-row-pressable');" in helper
+    assert "makePressable(main, activate);" in helper
+    assert "makePressable(row, activate);" not in helper
+    assert "target.closest(interactiveSelector)" in helper
     assert "Busy: ${current} of ${max} work slots used" in (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
     assert ".list-row.is-actionable {" in css
     assert ".list-row-with-artifact-actions {" in css
+    assert ".list-row-pressable {" in css
     assert "grid-template-columns: minmax(0, 1fr);" in css
     assert ".list-row-with-artifact-actions .artifact-action-row" in css
     assert ".protocol-runs-workbench" in css

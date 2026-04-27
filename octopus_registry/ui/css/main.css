@@ -715,6 +715,17 @@ select {
     font-size: 0.82rem;
 }
 
+.filter-toggle-link {
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.filter-toggle-link.is-active {
+    background: color-mix(in srgb, var(--accent, #954c2f) 12%, var(--bg));
+    border-color: rgba(149, 76, 47, 0.45);
+    color: var(--text);
+}
+
 .btn-primary {
     background: var(--accent);
     border-color: transparent;
@@ -903,6 +914,11 @@ select {
     flex: 1;
 }
 
+.list-row-pressable {
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+
 .list-row-label,
 .settings-row-label {
     font-weight: 600;
@@ -943,6 +959,27 @@ select {
 .list-row-shell > .list-row {
     flex: 1;
     border-bottom: 0;
+}
+
+.capability-list-entry {
+    display: grid;
+    align-items: stretch;
+    gap: 0;
+}
+
+.capability-list-entry > .list-row {
+    grid-column: 1 / -1;
+    border-bottom: 0;
+}
+
+.capability-list-entry > .list-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    padding: 0 var(--space-3) var(--space-3);
+}
+
+.capability-list-entry > .capability-inline-detail {
+    grid-column: 1 / -1;
 }
 
 .conversation-list-entry {
@@ -1350,6 +1387,19 @@ select {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+}
+
+#content > .content-inner.conversation-list-route-shell .pagination-shell {
+    flex: 0 0 auto;
+    padding-top: var(--space-2);
+}
+
+#content > .content-inner.conversation-list-route-shell .pagination {
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-card);
 }
 
 .workbench-row {
@@ -2300,6 +2350,25 @@ select {
     overflow: hidden;
 }
 
+#content > .content-inner.protocol-runs-route-shell .protocol-runs-workbench .protocol-panel {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 10rem);
+}
+
+#content > .content-inner.protocol-runs-route-shell .kit-runs-list {
+    flex: 1 1 auto;
+}
+
+#content > .content-inner.protocol-runs-route-shell .kit-runs-list-body {
+    max-height: calc(100dvh - 24rem);
+}
+
+#content > .content-inner.protocol-runs-route-shell .kit-runs-inline-detail {
+    max-height: calc(100dvh - 18rem);
+    overflow: auto;
+}
+
 #content > .content-inner.protocol-runs-route-shell .protocol-surface-shell {
     min-height: 0;
     overflow: hidden;
@@ -2537,29 +2606,6 @@ select {
 .confirm-dialog-body {
     min-height: 0;
     overflow: auto;
-}
-
-.skills-drawer-overlay {
-    justify-content: flex-end;
-    align-items: stretch;
-    padding: 0;
-}
-
-.skills-drawer-dialog {
-    width: min(44rem, 100vw);
-    max-width: min(44rem, 100vw) !important;
-    min-height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 0;
-    border-right: 0;
-    box-shadow: var(--shadow-card);
-    overflow: hidden;
-}
-
-.skills-drawer-dialog .studio-stack {
-    min-height: 0;
-    overflow: auto;
-    align-content: start;
 }
 
 .session-card-actions {
@@ -4066,10 +4112,10 @@ select {
 
 .kit-stage-workspace-panel {
     padding: var(--space-5);
-    border: 1px solid rgba(17, 24, 39, 0.05);
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 10px 22px rgba(17, 24, 39, 0.03);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-card);
 }
 
 .kit-stage-workspace-body {
@@ -4093,19 +4139,19 @@ select {
 }
 
 .kit-stage-workspace-panel .kit-details-control {
-    background: rgba(255, 255, 255, 0.84);
-    border-color: rgba(17, 24, 39, 0.05);
+    background: var(--bg);
+    border-color: var(--border);
 }
 
 .kit-stage-workspace-nav.segmented-control,
 .kit-selector-editor > .segmented-control {
-    border-color: rgba(17, 24, 39, 0.045);
-    background: rgba(255, 255, 255, 0.68);
+    border-color: var(--border);
+    background: var(--bg-tertiary);
 }
 
 .kit-stage-workspace-nav .segmented-control-btn:not(.active),
 .kit-selector-editor > .segmented-control .segmented-control-btn:not(.active) {
-    color: rgba(45, 31, 24, 0.72);
+    color: var(--text-secondary);
 }
 
 .kit-stage-workspace-subsection {
@@ -5242,6 +5288,10 @@ select {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+}
+.agent-inline-detail {
+    margin: var(--space-1) calc(var(--space-3) * -1) calc(var(--space-3) * -1);
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 .kit-agent-presence-chip {
     display: inline-flex;

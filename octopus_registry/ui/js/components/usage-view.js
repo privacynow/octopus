@@ -4,6 +4,7 @@
 function renderUsageView(container) {
     const cleanups = UI.beginCleanupScope();
     let currentRange = '7d';
+    let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let hasLoaded = false;
 
     const header = document.createElement('header');
@@ -34,6 +35,9 @@ function renderUsageView(container) {
     });
     const rangeBar = rangeControl.element;
     controls.appendChild(rangeBar);
+
+    const generatedToggle = document.createElement('a');
+    controls.appendChild(generatedToggle);
 
     const summaryEl = document.createElement('section');
     summaryEl.className = 'summary-rail';
@@ -116,6 +120,43 @@ function renderUsageView(container) {
             card.dataset.key = item.key;
             return card;
         }));
+    }
+
+    function updateGeneratedToggle() {
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'usage');
+    }
+
+    function visibleUsageRows(rows) {
+        const candidates = includeGenerated
+            ? (rows || [])
+            : (rows || []).filter((item) => String(item?.conversation_type || 'conversation') !== 'task_thread');
+        return UI.defaultVisibleRecords(candidates, { includeHidden: includeGenerated });
+    }
+
+    function summarizeUsageRows(rows, fallback) {
+        if (includeGenerated) {
+            return fallback || {};
+        }
+        const summary = {
+            prompt_tokens: 0,
+            cached_prompt_tokens: 0,
+            cached_prompt_tokens_available: rows.some((item) => item.cached_prompt_tokens_available === true),
+            completion_tokens: 0,
+            cached_completion_tokens: 0,
+            cached_completion_tokens_available: rows.some((item) => item.cached_completion_tokens_available === true),
+            cost_usd: 0,
+            cost_available: rows.some((item) => item.cost_available !== false),
+        };
+        rows.forEach((item) => {
+            summary.prompt_tokens += Number(item.prompt_tokens || 0);
+            summary.cached_prompt_tokens += Number(item.cached_prompt_tokens || 0);
+            summary.completion_tokens += Number(item.completion_tokens || 0);
+            summary.cached_completion_tokens += Number(item.cached_completion_tokens || 0);
+            if (item.cost_available !== false) {
+                summary.cost_usd += Number(item.cost_usd || 0);
+            }
+        });
+        return summary;
     }
 
     function renderTable(rows) {
@@ -210,8 +251,10 @@ function renderUsageView(container) {
             const usage = await API.getUsage(_rangeToParams(currentRange));
             const daily = usage.daily_total || {};
             const rows = Array.isArray(usage) ? usage : (usage.by_conversation || []);
-            renderSummary(daily);
-            renderTable(rows);
+            const visibleRows = visibleUsageRows(rows);
+            updateGeneratedToggle();
+            renderSummary(summarizeUsageRows(visibleRows, daily));
+            renderTable(visibleRows);
             hasLoaded = true;
         } catch (err) {
             if (soft && hasLoaded) {
@@ -225,6 +268,7 @@ function renderUsageView(container) {
         }
     }
 
+    updateGeneratedToggle();
     UI.subscribeWithRefresh(cleanups, 'usage', () => loadUsage({ soft: true }), 500);
     container.__routeReady = loadUsage();
 }

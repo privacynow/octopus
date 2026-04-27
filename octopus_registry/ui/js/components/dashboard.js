@@ -160,8 +160,20 @@ function renderDashboard(container) {
     }
 
     function coerceTaskList(payload) {
-        return payload && Array.isArray(payload.tasks)
-            ? payload.tasks
+        return coerceList(payload, 'tasks');
+    }
+
+    function coerceRunList(payload) {
+        return coerceList(payload, 'runs');
+    }
+
+    function coerceProtocolList(payload) {
+        return coerceList(payload, 'protocols');
+    }
+
+    function coerceList(payload, key) {
+        return payload && Array.isArray(payload[key])
+            ? payload[key]
             : Array.isArray(payload)
                 ? payload
                 : [];
@@ -184,7 +196,7 @@ function renderDashboard(container) {
                 return false;
             }
             seen.add(taskId);
-            return true;
+            return !item.protocol_run_id && !UI.isDefaultHiddenRecord(item);
         });
         return { tasks };
     }
@@ -233,6 +245,8 @@ function renderDashboard(container) {
         activeTasks: { tasks: [] },
         recentCompletedTasks: { tasks: [] },
         agents: { agents: [] },
+        protocols: [],
+        protocolRuns: { runs: [] },
         protocolIssues: { issues: [] },
     };
 
@@ -240,36 +254,37 @@ function renderDashboard(container) {
         return new Date(Date.now() - RECENT_COMPLETED_WINDOW_MS).toISOString();
     }
 
+    function visibleDashboardTasks(payload) {
+        return coerceTaskList(payload).filter((item) => !item.protocol_run_id && !UI.isDefaultHiddenRecord(item));
+    }
+
+    function visibleDashboardRuns() {
+        return UI.defaultVisibleRecords(coerceRunList(dashboardState.protocolRuns), { includeHidden: false });
+    }
+
+    function visibleDashboardProtocols() {
+        return UI.defaultVisibleRecords(coerceProtocolList(dashboardState.protocols), { includeHidden: false });
+    }
+
     function renderSummaryRail(summary) {
-        const promptTokens = Number(summary.usage_24h?.prompt_tokens || 0);
-        const completionTokens = Number(summary.usage_24h?.completion_tokens || 0);
-        const cachedPromptTokens = Number(summary.usage_24h?.cached_prompt_tokens || 0);
-        const cachedCompletionTokens = Number(summary.usage_24h?.cached_completion_tokens || 0);
-        const cachedPromptAvailable = summary.usage_24h?.cached_prompt_tokens_available === true;
-        const cachedCompletionAvailable = summary.usage_24h?.cached_completion_tokens_available === true;
-        const totalTokens = promptTokens + completionTokens;
         const unhealthyAgents = Number(summary.agents?.degraded || 0)
             + Number(summary.agents?.disconnected || 0)
             + Number(summary.agents?.execution_faulted || 0);
-        const costAvailable = summary.usage_24h?.cost_available !== false;
-        let tokenDetail = `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
-        if (cachedPromptAvailable || cachedCompletionAvailable) {
-            const detailParts = [tokenDetail];
-            if (cachedPromptAvailable) {
-                detailParts.push(`${cachedPromptTokens.toLocaleString()} cached in`);
-            }
-            if (cachedCompletionAvailable) {
-                detailParts.push(`${cachedCompletionTokens.toLocaleString()} cached out`);
-            }
-            tokenDetail = detailParts.join(' · ');
-        }
+        const visibleActiveTasks = visibleDashboardTasks(dashboardState.activeTasks);
+        const visibleRuns = visibleDashboardRuns();
+        const visibleProtocols = visibleDashboardProtocols();
+        const activeRuns = visibleRuns.filter((run) =>
+            ['queued', 'running', 'blocked'].includes(String(run.status || '').trim().toLowerCase()));
+        const blockedRuns = visibleRuns.filter((run) => String(run.status || '').trim().toLowerCase() === 'blocked');
+        const publishedProtocols = visibleProtocols.filter((item) =>
+            String(item.lifecycle_state || '').trim().toLowerCase() === 'published');
         const items = [
             {
                 key: 'queued-backlog',
-                value: String(summary.tasks?.pending || 0),
+                value: String(visibleActiveTasks.length),
                 label: 'Queued backlog',
-                detail: `${summary.tasks?.running || 0} running now`,
-                href: '/ui/tasks?status=running',
+                detail: `${visibleActiveTasks.filter((item) => String(item.status || '') === 'running').length} running now`,
+                href: '/ui/runs',
             },
             {
                 key: 'unhealthy-agents',
@@ -280,38 +295,26 @@ function renderDashboard(container) {
             },
             {
                 key: 'protocol-runs',
-                value: String(summary.protocols?.runs_active || 0),
+                value: String(activeRuns.length),
                 label: 'Active protocol runs',
                 detail: [
-                    `${summary.protocols?.runs_blocked || 0} blocked`,
-                    `${summary.protocols?.runs_contract_invalid || 0} invalid contracts`,
-                    `${summary.protocols?.overdue_timeouts || 0} overdue timeouts`,
-                    `${Math.round(Number(summary.protocols?.completion_rate_24h || 0) * 100)}% completion · 24h`,
-                    `${summary.protocols?.operator_interventions_24h || 0} interventions · 24h`,
+                    `${blockedRuns.length} blocked`,
+                    `${visibleRuns.length} visible recent runs`,
                 ].join(' · '),
                 href: '/ui/runs',
             },
             {
                 key: 'protocol-definitions',
-                value: String(summary.protocols?.definitions_published || 0),
-                label: 'Published protocols',
-                detail: `${summary.protocols?.definitions_total || 0} total definitions`,
+                value: String(publishedProtocols.length || visibleProtocols.length),
+                label: publishedProtocols.length ? 'Published protocols' : 'Visible protocols',
+                detail: `${visibleProtocols.length} visible definitions`,
                 href: '/ui/protocols',
             },
             {
-                key: 'tokens-24h',
-                value: totalTokens.toLocaleString(),
-                label: 'Tokens · 24h',
-                detail: tokenDetail,
-                href: '/ui/usage',
-            },
-            {
-                key: 'cost-24h',
-                value: costAvailable ? ('$' + Number(summary.usage_24h?.cost_usd || 0).toFixed(4)) : '—',
-                label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable',
-                detail: costAvailable
-                    ? `${summary.conversations?.active || 0} active conversations`
-                    : 'Codex does not report execution cost',
+                key: 'usage-review',
+                value: 'Open',
+                label: 'Usage review',
+                detail: 'Filtered by default · generated/audit totals inside',
                 href: '/ui/usage',
             },
         ];
@@ -341,6 +344,11 @@ function renderDashboard(container) {
             badgeClass: 'badge-queued',
             href: '/ui/approvals',
         }));
+        if (!approvalRows.length) {
+            UI.clearMemoizedRender(approvalsHost);
+            UI.reconcileChildren(approvalsHost, []);
+            return;
+        }
         UI.memoizedRender(approvalsHost, approvals, () => [
             createSection(
                 'approvals',
@@ -353,7 +361,9 @@ function renderDashboard(container) {
     }
 
     function renderConversationSection() {
-        const conversationsData = dashboardState.conversations;
+        const conversationsData = {
+            conversations: UI.defaultVisibleRecords(dashboardState.conversations.conversations || [], { includeHidden: false }),
+        };
         const rowsState = (conversationsData.conversations || []).slice(0, 6).map((item) => ({
             id: String(item.conversation_id || ''),
             title: String(item.title || ''),
@@ -387,9 +397,9 @@ function renderDashboard(container) {
     }
 
     function renderTaskSection() {
-        const activeTasks = coerceTaskList(dashboardState.activeTasks);
-        const followUpTasks = coerceTaskList(dashboardState.followUpTasks);
-        const recentCompletedTasks = coerceTaskList(dashboardState.recentCompletedTasks);
+        const activeTasks = visibleDashboardTasks(dashboardState.activeTasks);
+        const followUpTasks = visibleDashboardTasks(dashboardState.followUpTasks);
+        const recentCompletedTasks = visibleDashboardTasks(dashboardState.recentCompletedTasks);
         const rowsState = {
             active: taskRowsState(activeTasks),
             followUp: taskRowsState(followUpTasks),
@@ -415,8 +425,8 @@ function renderDashboard(container) {
         UI.memoizedRender(tasksHost, rowsState, () => [
             createGroupedSection(
                 'tasks',
-                'Tasks',
-                '/ui/tasks',
+                'Work needing attention',
+                '/ui/runs',
                 groups,
                 'No recent task activity.',
             ),
@@ -424,7 +434,9 @@ function renderDashboard(container) {
     }
 
     function renderAgentSection() {
-        const agentsData = dashboardState.agents;
+        const agentsData = {
+            agents: UI.defaultVisibleRecords(dashboardState.agents.agents || dashboardState.agents || [], { includeHidden: false }),
+        };
         const rowsState = (agentsData.agents || agentsData || []).slice(0, 6).map((item) => ({
             id: String(item.agent_id || ''),
             display: String(item.display_name || item.slug || ''),
@@ -461,7 +473,7 @@ function renderDashboard(container) {
     }
 
     function renderProtocolIssuesSection() {
-        const issues = (dashboardState.protocolIssues.issues || []).slice(0, 6);
+        const issues = UI.defaultVisibleRecords(dashboardState.protocolIssues.issues || [], { includeHidden: false }).slice(0, 6);
         const rowsState = issues.map((item) => ({
             runId: String(item.protocol_run_id || ''),
             kind: String(item.issue_kind || ''),
@@ -503,35 +515,62 @@ function renderDashboard(container) {
         renderProtocolIssuesSection();
     }
 
-    function applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocolIssues }) {
+    function hasPatchKey(patch, key) {
+        return Object.prototype.hasOwnProperty.call(patch || {}, key);
+    }
+
+    function applySnapshotPatch(patch = {}) {
         if (!dashboardGrid.isConnected) {
             UI.reconcileChildren(content, [dashboardGrid]);
         }
-        dashboardState.summary = summary;
-        dashboardState.approvals = approvals;
-        dashboardState.conversations = conversations;
-        dashboardState.followUpTasks = { tasks: followUpTasks.tasks || followUpTasks || [] };
-        dashboardState.activeTasks = { tasks: activeTasks.tasks || activeTasks || [] };
-        dashboardState.recentCompletedTasks = { tasks: recentCompletedTasks.tasks || recentCompletedTasks || [] };
-        dashboardState.agents = agents;
-        dashboardState.protocolIssues = { issues: protocolIssues.issues || protocolIssues || [] };
+        if (hasPatchKey(patch, 'summary')) dashboardState.summary = patch.summary;
+        if (hasPatchKey(patch, 'approvals')) dashboardState.approvals = patch.approvals;
+        if (hasPatchKey(patch, 'conversations')) dashboardState.conversations = patch.conversations;
+        if (hasPatchKey(patch, 'followUpTasks')) dashboardState.followUpTasks = { tasks: patch.followUpTasks.tasks || patch.followUpTasks || [] };
+        if (hasPatchKey(patch, 'activeTasks')) dashboardState.activeTasks = { tasks: patch.activeTasks.tasks || patch.activeTasks || [] };
+        if (hasPatchKey(patch, 'recentCompletedTasks')) dashboardState.recentCompletedTasks = { tasks: patch.recentCompletedTasks.tasks || patch.recentCompletedTasks || [] };
+        if (hasPatchKey(patch, 'agents')) dashboardState.agents = patch.agents;
+        if (hasPatchKey(patch, 'protocols')) dashboardState.protocols = coerceProtocolList(patch.protocols);
+        if (hasPatchKey(patch, 'protocolRuns')) dashboardState.protocolRuns = { runs: coerceRunList(patch.protocolRuns) };
+        if (hasPatchKey(patch, 'protocolIssues')) dashboardState.protocolIssues = { issues: patch.protocolIssues.issues || patch.protocolIssues || [] };
         renderDashboardView();
+    }
+
+    let secondarySnapshotInflight = null;
+    function loadSecondarySnapshot({ soft = false } = {}) {
+        if (secondarySnapshotInflight) return secondarySnapshotInflight;
+        const secondary = (label, promise, fallback) => promise.catch((err) => {
+            console.warn(`Dashboard secondary snapshot skipped ${label}`, err);
+            return fallback;
+        });
+        secondarySnapshotInflight = Promise.all([
+            secondary('approvals', API.listApprovals({ limit: 4 }), { approvals: [] }),
+            secondary('follow-up tasks', loadFollowUpTasks(), { tasks: [] }),
+            secondary('active tasks', loadActiveTasks(), { tasks: [] }),
+            secondary('completed tasks', API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }), { tasks: [] }),
+            secondary('protocols', API.listProtocols({ limit: 50 }), []),
+            secondary('protocol runs', API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }), { runs: [] }),
+            secondary('protocol issues', API.listProtocolIssues({ limit: 6 }), { issues: [] }),
+        ]).then(([approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues]) => {
+            applySnapshotPatch({ approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues });
+        }).catch((err) => {
+            console.warn('Dashboard secondary snapshot failed', err);
+        }).finally(() => {
+            secondarySnapshotInflight = null;
+        });
+        return secondarySnapshotInflight;
     }
 
     async function loadSnapshot({ soft = false } = {}) {
         try {
-            const [summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocolIssues] = await Promise.all([
+            const [summary, conversations, agents] = await Promise.all([
                 API.getSummary(),
-                API.listApprovals({ limit: 4 }),
                 API.listConversations({ limit: 6, status: 'open' }),
-                loadFollowUpTasks(),
-                loadActiveTasks(),
-                API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
                 API.listAgents({ limit: 8 }),
-                API.listProtocolIssues({ limit: 6 }).catch(() => ({ issues: [] })),
             ]);
-            applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents, protocolIssues });
+            applySnapshotPatch({ summary, conversations, agents });
             hasLoaded = true;
+            void loadSecondarySnapshot({ soft });
         } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh dashboard', err, { context: 'Dashboard soft refresh failed' });

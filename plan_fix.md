@@ -1,1039 +1,908 @@
-# Registry Human-Usability Refactor Plan
-
-## Status
-
-This is the active plan. It replaces the previous incremental UI cleanup plan.
-
-Implementation progress:
-
-- Runs default split-pane composition has been removed in source. The selected
-  run now expands inline through the existing `Kit.runsList` path.
-- Runs route now has a viewport-bounded shell so long selected-run content
-  scrolls inside the work area instead of forcing page-level document scroll.
-- Conversation list rows now support inline inspection for status, agent,
-  primary actions, and linked runs before opening the full conversation
-  workspace.
-- Conversation list now has a viewport-bounded shell with internal list
-  scrolling.
-- Shared artifact action rendering is still reused; no new artifact row path
-  was introduced.
-- Runs evidence now uses the single `Overview / Stages / Artifacts / Audit`
-  model in source, and `Stages` has a nested stage navigator so a long protocol
-  does not dump every stage card at once.
-- The latest broad Playwright pass exposed follow-on issues now tracked in the
-  active work: authoring was requesting disconnected M3's skill catalog and
-  surfacing 503 console errors; E2E specs still encoded removed `Outputs` and
-  `Open conversation` labels; one data-analysis execution remained `running`
-  beyond the current scenario timeout and must be inspected as a real stuck-run
-  risk, not dismissed as a test artifact.
-- The next broad Playwright pass narrowed the active failures to two concrete
-  UI/product issues: run stage evidence navigation was not switching away from
-  the current stage when a stage execution id was missing or unstable, and the
-  meta-assistant scenario kept creating timestamp-named custom capabilities
-  that polluted authoring lists. Both are now treated as product regressions,
-  not only test-maintenance problems.
-- Remaining phases still require full visual audit, broader Work-surface
-  alignment, deployment verification, and end-to-end scenario execution.
-
-The latest finding is product-level, not page-level: the Registry still has
-multiple competing interaction models for the same kind of object. Stages and
-some task views use progressive inline expansion. Runs now expand inline, but
-the expanded run still renders outputs, execution, participants, decisions, and
-issues as unrelated sub-apps with different layout models. Conversations use a
-full-page document/workspace with long vertical flow. Agents, capabilities,
-protocol authoring, tasks, approvals, and artifacts each expose related
-concepts with different density, action placement, and expansion behavior.
-
-That inconsistency is the core usability failure. The fix is not more local CSS
-or another one-off Runs redesign. The fix is one Registry interaction grammar,
-applied across every major surface.
-
-## What Went Wrong In The Previous Pass
-
-The prior work improved pieces of the UI but did not fully solve the human
-workflow:
-
-- Desktop was treated as wider mobile instead of a distinct work surface with
-  its own hierarchy and reading rhythm.
-- Runs moved to inline expansion but kept the old mental model inside the
-  expanded detail: Outputs, Execution, Participants, Decisions, and Issues each
-  tell a different story about the same run evidence.
-- Conversations still behave like a long document rather than a bounded
-  workspace with persistent context and reachable actions.
-- Related objects such as run, task, conversation, approval, stage, and artifact
-  are still rendered as neighboring resources instead of one lineage.
-- Some clickable-looking rows do not reveal the expected details in place.
-- Horizontal pressure was reduced in isolated spots but not solved at the
-  interaction-model level.
-- Vertical overflow is still uncontrolled on long Runs and Conversations views,
-  and Runs can embed a dense dashboard inside a single expanded row.
-- Dense metadata, repeated pills, borders, and raw technical concepts still
-  compete with the user's actual job.
-
-The new plan treats these symptoms as one design-system and product-flow issue.
-
-## Product North Star
-
-A human user should be able to:
-
-- create or choose a protocol
-- start work from a conversation, agent, protocol, or dashboard
-- follow execution from protocol to run to stage to task to artifact
-- understand what happened without joining separate lists mentally
-- preview, open, download, or copy produced artifacts wherever they appear
-- recover from blocked, failed, or stale work without needing raw internals
-- use agents and capabilities without understanding selector diagnostics,
-  workers, raw capacity, or routing plumbing
-
-The UI must make the workflow visible through product concepts, not through
-database objects or implementation layers.
-
-## Latest Active Fixes
-
-- Real Safari full-audit pass on 2026-04-24 confirmed the next blocking
-  defect: completed protocol stage tasks opened by clicking a collapsed Tasks
-  row did not re-render into their expanded artifact state, even when the API
-  payload already contained `result.artifacts` and the matching Run showed the
-  artifacts. This violates the artifact action contract because a human
-  entering from Tasks cannot preview, open, download, or copy output paths
-  without knowing to jump to Runs. Fix direction: keep the existing shared task
-  artifact renderer, make expansion state part of the task-list render
-  signature and the keyed item signature, then force one re-render when a row
-  expands or collapses.
-- The same Safari pass confirmed the Runs and Dashboard surfaces still expose
-  stale/running protocol work as normal `running` or `leased` work even when a
-  stuck-lease issue exists elsewhere. This is tracked as an active usability
-  follow-up: stale state must be visible at the row/card where the user sees
-  the work, not only inside a separate issue tab or dashboard footer.
-- The same Safari pass confirmed the Protocols list is functionally correct but
-  visually flooded by timestamped/generated scenario definitions. This is a
-  release-readiness risk for human use. Test-created protocols must either be
-  cleaned up, created in an explicit test namespace, or filtered from the
-  default team-authored list without hiding real team protocols.
-- Run stage evidence navigation must be keyed by a stable stage identity with a
-  safe fallback to stage key, so clicking `Load data`, `Architecture`, or any
-  other stage changes the inline evidence card predictably.
-- Generated timestamp capability names must not appear in default authoring
-  lists. Capability lists may expose them through explicit search or operator
-  tooling, but normal protocol authoring should remain human-scaled.
-- E2E scenario fixtures must reuse human-named capabilities instead of creating
-  new timestamp-named skills on every run. Test data that makes the product UI
-  worse is itself a product-quality failure.
-- After every redeploy, real Safari must be hard-refreshed with
-  `Option+Command+R` before visual judgment, because a normal reload can keep
-  stale CSS and JavaScript assets.
-- Shared segmented controls must activate from the button itself, not from a
-  fragile delegated click path. Run evidence, stage editor subtabs, and other
-  tabbed controls should all inherit the same reliable behavior from
-  `UI.createSegmentedControl`.
-- Run detail global chrome must stay quiet. Summary metadata and run-level
-  interventions belong in `Overview`, not above every evidence tab. Retry,
-  accept, send back, and cancel should only appear when the current run state
-  and stage transitions make that action real; export remains available as an
-  audit action.
-- Dark theme kit pills must use the shared theme tokens instead of falling back
-  to light-only `--color-*` defaults. Filter chips, status chips, and related
-  list pills must remain readable in both light and dark themes.
-- Artifact rows may remain row-clickable for preview, but their accessible name
-  must describe the artifact itself, not swallow child actions such as
-  `Preview`, `Open`, `Download`, and `Copy path`.
-
-## Core Product Rule
-
-Use one object interaction grammar everywhere:
-
-1. A row/card gives a readable summary.
-2. Clicking the row expands details inline directly under that row/card.
-3. Only one item in a list is expanded by default unless a surface explicitly
-   needs multi-select comparison.
-4. The expanded content is progressive: summary first, artifacts/actions next,
-   lineage/context next, technical details last.
-5. Full detail pages still exist for deep links and power use, but they are
-   secondary. They must not be the only way to inspect an object.
-6. URLs with an object id select and expand the matching row, not just open a
-   disconnected side panel.
-
-This same grammar applies to runs, conversations, tasks, approvals, protocol
-stages, agents, capabilities, and dashboard work cards unless there is a clear
-product reason to make an exception.
-
-## Runs Product Model
-
-The Runs surface must use one hierarchy:
-
-1. Run
-2. Stages in authored workflow order
-3. Stage evidence
-4. Artifacts, tasks, decisions, participants, and issues attached to that stage
-
-Global run views are allowed, but they must be rollups of this hierarchy, not a
-second unrelated model. For example:
-
-- `Overview` summarizes the run state, current problem, blocking issues, and
-  next actions.
-- `Stages` is the primary inspection model and shows stages in workflow order
-  from Planning through Acceptance.
-- `Artifacts` is the same artifact renderer grouped by producing stage; it is
-  not a separate flat artifact universe with a different visual language.
-- `Audit` is the raw operational escape hatch for participants, decisions, and
-  technical events.
-
-Runs fails usability review if:
-
-- the same artifact appears in `Outputs` and `Execution` through different row
-  models
-- stage order is reversed from the authored workflow
-- more than two navigation layers are visible at once
-- status problems such as stuck leases are hidden behind an Issues tab
-- participants and decisions are shown as primary concepts before the user can
-  understand the stage they belong to
-- a user must mentally join run, task, stage, conversation, and artifact from
-  separate screens to understand what happened
-
-## Viewport Contract
-
-Primary Registry work surfaces must be viewport-bounded:
-
-- The app shell stays within the browser viewport.
-- Navigation and page identity remain stable.
-- Search/filter/action regions do not scroll away immediately.
-- Lists use internal scrolling or visible pagination sized to the available
-  work area.
-- Expanded details are contained and scroll internally when needed.
-- Conversation composer and primary actions remain reachable.
-- No surface relies on full-document vertical scrolling for normal operation.
-- No surface introduces horizontal page overflow at desktop or narrow widths.
-
-Long content is allowed, but it must live inside an intentional work region, not
-push the whole application below the screen.
-
-## Shared Design Contracts
-
-### 1. Expandable Object Row
-
-Every repeated operational object should use the same contract:
-
-- summary title
-- human status
-- key context
-- primary action or inline expand action
-- secondary actions that wrap inside the row
-- expanded region directly below the selected row
-
-Rows that do not expand or navigate must not look clickable.
-
-### 2. Progressive Expansion Panel
-
-Expanded panels use the same section order:
-
-1. Outcome or current state
-2. Primary actions
-3. Produced or expected artifacts
-4. Lineage and related work
-5. Decisions, approvals, or issues
-6. Technical details
-
-Sections should be collapsed or summarized when they are not central to the
-current task.
-
-### 3. Execution Lineage
-
-Execution views must present one story:
-
-- protocol
-- run
-- stage
-- task
-- assigned agent or participant
-- conversation or activity
-- approval or decision
-- artifacts
-
-The user should be able to enter from any of these objects and understand the
-same hierarchy.
-
-### 4. Artifact Action Contract
-
-Every concrete artifact reference uses the same shared artifact row:
-
-- label
-- producing stage/task
-- path
-- verification or availability state
-- Preview when previewable
-- Open when browser-viewable
-- Download when bytes are available
-- Copy path
-
-Declared artifacts that have not been produced must say `Not produced yet` or
-`Declared only`. They must not render broken Preview/Open/Download actions.
-
-### 5. Capability Contract
-
-Users see capabilities. Operators see routing internals.
-
-Default authoring and conversation surfaces should show:
-
-- capability name
-- plain-language description
-- available agents
-- where it can be used
-- setup state
-
-Default surfaces should not show selector resolution, advertised skill plumbing,
-generated timestamp skill spam, raw worker state, or raw capacity mutation.
-
-### 6. Density Contract
-
-Lower density is achieved by reducing simultaneous concepts, not by shrinking
-everything.
-
-Default UI should use:
-
-- fewer borders
-- calmer typography for inactive rows
-- more whitespace around major decisions
-- compact rows only for repeated scan lists
-- plain-language labels instead of raw IDs wherever possible
-- technical details behind explicit disclosure
-
-## Current Live Defects To Fix
-
-### Runs
-
-Observed problem:
-
-- Runs uses inline expansion now, but the expanded detail still has no single
-  product model.
-- `Outputs` presents artifacts as a flat list.
-- `Execution` presents stage outputs through a different stage card model.
-- `Participants` and `Decisions` expose raw operational records as peer tabs,
-  even though they are usually supporting evidence for a stage.
-- `Issues` hides critical state such as stuck leases behind a tab instead of
-  elevating it to the run row and header.
-- Stage order in Execution can be reverse-chronological instead of authored
-  workflow order, so Acceptance appears before Planning.
-- The detail region can show triage tabs, status chips, run-row expansion,
-  detail tabs, participant filters, stage tabs, metadata cards, action groups,
-  and artifact rows at the same time.
-- The visual language changes between subtabs, making users infer whether they
-  are looking at the same evidence, a different evidence set, or raw internals.
-
-Target behavior:
-
-- Runs list remains full-width within the work area.
-- Clicking a run expands the run detail inline under that run row.
-- The expanded run panel uses four progressive sections at most:
-  - `Overview`: state, outcome, active issue, next action, and root context
-  - `Stages`: workflow-ordered stage timeline with stage evidence inline
-  - `Artifacts`: the same artifact row grouped by producing stage
-  - `Audit`: decisions, participants, raw task links, and support diagnostics
-- Stage order follows the authored workflow, not reverse execution insertion
-  order.
-- Output artifacts and stage artifacts use the same renderer and same action
-  placement.
-- Participants and decisions are contextual inside Stages first, then available
-  in Audit for raw inspection.
-- Critical issues are elevated into the run row and Overview before the user
-  opens Audit.
-- Deep links select and expand the target run and open the most relevant
-  section without creating another route-specific model.
-- Long lineage uses contained scrolling or section pagination inside the
-  expanded run panel.
-- `Stages` uses one nested stage navigator and renders one active stage evidence
-  card at a time; the authored workflow remains visible without turning the run
-  into a vertical wall.
-
-### Conversations
-
-Observed problem:
-
-- Conversation list is calmer than Runs but still uses full-page vertical flow.
-- Selecting a conversation navigates away instead of first offering inline
-  context.
-- Conversation detail can become a long workspace where task boards, linked
-  runs, artifacts, and messages exceed the viewport.
-- Composer and primary actions can become detached from the current context.
-- Operational task threads can look empty when the useful content is activity.
-- Linked runs are visible, but not progressively inspectable in place.
-
-Target behavior:
-
-- Conversation rows can expand inline for preview, linked runs, recent tasks,
-  recent artifacts, and primary actions.
-- `Open full conversation` remains available for message-heavy work.
-- Full conversation detail is a viewport-bounded workspace.
-- Header/context remains stable.
-- Composer remains reachable.
-- Linked runs and tasks expand in place using the same run/task expansion
-  contract.
-- Operational task threads default to the activity/task view when that is the
-  useful content.
-- Long task/activity lists are paginated or internally scrolled within the
-  available work area.
-
-### Tasks
-
-Observed problem:
-
-- Task detail is closer to the target model, but still must be aligned with
-  Runs and Conversations.
-- Task artifacts and parent lineage must remain consistent everywhere a task
-  appears.
-
-Target behavior:
-
-- Task rows expand inline under the clicked task.
-- Expanded task content shows parent run, parent stage, assignment, expected
-  outputs, actual artifacts, and conversation/activity.
-- Task detail deep links select and expand the matching task.
-- Artifact actions are identical to Runs and Conversations.
-
-### Approvals
-
-Observed problem:
-
-- Approvals can read as isolated decisions rather than part of execution
-  lineage.
-
-Target behavior:
-
-- Approval rows expand inline.
-- Expanded approval content shows the run/stage/task context, artifact(s) under
-  review, decision state, reviewer, and links/actions.
-- Approval artifacts use the same artifact row contract.
-
-### Dashboard
-
-Observed problem:
-
-- Dashboard risks becoming another duplicate resource index.
-
-Target behavior:
-
-- Dashboard shows high-level entry points and attention items.
-- Dashboard cards expand inline only enough to orient the user.
-- Full details route to the canonical surface, where the selected row expands.
-- Recent artifacts use the same action contract.
-
-### Protocols And Stages
-
-Observed problem:
-
-- Protocol stages are closest to the desired inline model, but density and
-  screen movement can still disrupt work.
-- Stage authoring must not reintroduce side panels or disconnected drawers.
-
-Target behavior:
-
-- Stage editor remains inline under the selected stage.
-- Add-stage and remove-stage actions stay local to the stage.
-- Stage sub-sections are progressive and do not push the active work below the
-  screen unnecessarily.
-- Artifact expectations are clear before execution and become actionable after
-  a run produces bytes.
-- Standard authoring hides internal runtime selector and advanced plumbing.
-
-### Agents And Capabilities
-
-Observed problem:
-
-- Agents and capabilities still expose too many internal concepts as default
-  content.
-- Capabilities can become an intimidating wall of names.
-- There is still risk of duplicated skill/routing/advertised-skill concepts.
-
-Target behavior:
-
-- Agent list uses human status: Ready, Busy, Unavailable, Needs setup.
-- Agent detail has a stable header with Start conversation and Run protocol.
-- Capabilities are grouped, searchable, and summarized.
-- Generated timestamp names do not appear in default pickers.
-- Selector preview, raw routing, worker diagnostics, token rotation, trust
-  mutation, and capacity mutation live in Operations or technical details.
-
-## Target Information Architecture
+# Registry Product Plan
+
+## Purpose
+
+This is the single active plan for Registry UI/product cleanup. It replaces the
+older accumulated plan and absorbs the useful content from `ui_issues.md`.
+
+The goal is not visual polish. The product problem is information architecture
+and lineage: runtime objects are exposed as peer products, generated/test data
+dominates normal surfaces, and users cannot reliably follow work from intent to
+execution to artifacts.
+
+Do not create another active UI plan. New product findings go into this file
+before broad audit or implementation claims continue.
+
+## Current State
+
+### Completed And Verified
+
+- `P2.19`: SPA navigation now swaps the new route shell before awaiting async
+  route readiness, preventing stale Safari content under a new URL.
+- `P1.4`: `Approvals` is removed from default main nav. The route remains for
+  deep links/operator access.
+- `P4.15` and `P4.23`: stage creation allows a name-only unassigned draft step.
+  Owner role and assignment are progressive fields.
+- `P4.15`: add-stage clicks with an unfinished draft prompt the user to
+  continue, move, or discard instead of silently resetting draft data.
+- `P4.26`: stage Assignment supports `New capability needed` through the
+  existing skill/capability selector pipeline, not a duplicate runtime selector.
+- `P4.26`: existing template capabilities that are not currently advertised by
+  a live agent remain `Existing capability`. New-capability state is explicit
+  author intent, not inferred from a catalog miss.
+- `P4.26`: explicit Assignment mode changes remain explicit. A skill assignment
+  can still be viewed through `Specific agent` mode when the author chooses it.
+- `P4.25`: Capabilities defaults to a human catalog rather than a bot-management
+  dead end.
+- `P4.25`: Capabilities hides `*`, `Rehearsal`, and generated timestamp variants
+  from the default catalog; rows are clickable and show assignment details.
+- `P4.25`: default Capabilities now uses the same inline expand/collapse grammar
+  as the other work surfaces. Selecting a capability expands details under that
+  row, not in a side editor, and loads the real advertised instruction text from
+  the existing bot skill-detail API.
+- `P4.25` and `P5.11`: agent-scoped Capabilities now follows the same inline
+  expansion grammar as the default catalog. The agent detail page routes into
+  the shared Capabilities workspace instead of opening a duplicate drawer, and
+  selected capability details render full-width below the clicked row rather
+  than as a desktop side card.
+- `P5.11`: the Agents list now expands agent details inline under the selected
+  row, exposes `Open agent workspace` and `Open capabilities`, and removes the
+  old detail-navigation/split-panel expectation from the default path.
+- `P1.7`: default nav now uses Work, Build, Operations; operational
+  `Dashboard` lives under Operations; fake `Team` is gone. Agents are moving
+  into Work as collaborators/workers rather than remaining a Build resource.
+- `P5.12`: Conversations pagination is visible, URL-addressable, refresh-stable,
+  and verified in real Safari.
+- Conversation task-thread copy now uses delegation/linked-work language while
+  preserving the underlying task/delegation route.
+- `P3`: Dashboard empty approvals collapse; the main backlog card routes to
+  Runs; default dashboard language uses `Work needing attention`.
+- `P1.6`, `P3.14`, `P4.24`, `P5.10`: generated/rehearsal/test records now use
+  one shared default-visibility predicate. Conversations, Runs, Agents,
+  Dashboard, Capabilities agent eligibility, Delegations, and the Protocol
+  catalog hide those records by default and expose explicit audit/generated
+  toggles where a user may need to inspect them.
+- `P5.10`: Conversations now default to direct conversations instead of `All`;
+  protocol-generated delegation threads remain available through the
+  `Delegation threads`/`All` filters and generated/audit toggle.
+- `P1.5`: `/ui/tasks` is reframed as `Delegations` for standalone work. When
+  opened with `protocol_run_id`, it becomes `Run stage tasks` and shows those
+  tasks as children of that run instead of as peer work.
+- `P4.24`: Protocols default to canonical human-authored definitions; generated
+  drafts are available through `Show generated drafts` and remain compacted in
+  generated families when shown.
+- `P4.24`: Default generated-record detection now covers timestamped protocol
+  names, numeric template-derived variants such as `software-engineering-draft-69`,
+  and anonymous `draft-<hash>` records.
+- `P3.14`: Dashboard work groups exclude protocol-generated stage tasks from
+  standalone work needing attention; protocol issues and runs remain the
+  canonical protocol-execution surfaces.
+- `P4`: software-engineering rehearsal testing now waits for the backend's
+  pending rehearsal session before each UI response, preventing stale DOM
+  session submissions.
+- `P4.28`: rehearsal pending sessions are recoverable from persisted protocol
+  run and routed-task state, and submit now re-enrolls once if the reserved
+  rehearsal agent token was rotated by another registry process before the
+  author answers a stage. The UI no longer depends only on the rehearsal
+  manager's in-memory `_pending` map or a stale plaintext token.
+- `P4.29`: real Safari found that the protocol starter's `Start blank`
+  button could become visible/focusable without activating after catalog
+  reconciliation. Starter actions now bind after morphdom reconciliation using
+  one starter-control path, and the deep-link starter scenario is covered.
+- `P4.30`: full scenario E2E found stale rehearsal cards could remain after a
+  response and make repeated stages look duplicated. Rehearsal sessions are now
+  revalidated against persisted task state before listing/responding, and the
+  UI discards out-of-order rehearsal refreshes.
+- `P3.19`: real Safari found the Runs generated/audit toggle stretched across
+  the panel while Conversations showed the same hidden-state control as a
+  compact pill. Runs now uses the shared `route-controls` row for the triage
+  tabs and generated/audit toggle.
+- `P3.8`: Runs Overview is progressive again. It now shows run summary,
+  current-step/artifact entry points, and available actions without rendering
+  full stage evidence under Overview.
+- `P3.14`: Runs use the existing cursor paginator instead of dumping the first
+  50 executions into a single page.
+- `P3.15`: Protocols first paint no longer blocks on the assignment catalog;
+  template discovery now uses `GET /v1/protocol-templates`, authoring options
+  use `GET /v1/protocol-authoring/options`, and the protocol catalog filters
+  and paginates in SQL with catalog/template indexes.
+- `P3.16`: Runs now filter/page in SQL before review-state decoration, protocol
+  issues only scan candidate runs/stages, Dashboard renders a primary snapshot
+  before secondary panels, and Conversation detail loads linked runs separately
+  from the full protocol-launch catalog.
+- `P3.17`: Dashboard secondary loading now degrades with per-call fallbacks and
+  warning-level diagnostics instead of turning route/test teardown races into
+  user-visible errors.
+- `P3.18`: The data-analysis UI scenario now matches deployed five-stage agent
+  execution time and verifies final run artifacts plus stage-task artifact
+  preview after completion.
+- `P4.27`: Conversation protocol management now renders the protocols panel and
+  loads the published protocol catalog when Protocols is selected, even if
+  linked protocol runs were already lazy-loaded.
+- `P5.13`: Browser conversation message-send timeline verification is green
+  after background dashboard work was made non-disruptive.
+- `P3.14`: Usage now uses the shared generated/audit visibility predicate and
+  exposes `Show generated/audit usage`; default usage totals/table are computed
+  from visible human rows.
+- `P3.14`: Usage rows now carry conversation lineage from the existing usage
+  endpoint so protocol-stage task threads can be hidden from default usage
+  without relying only on title heuristics.
+- `P3.14`: The shared generated/audit predicate now covers generated workflow
+  keys such as `compose-assistant-protocol` and `publish-report`, not only
+  timestamped names.
+- `P4.25`: Capability names now use the shared generated/rehearsal predicate, so
+  generated/meta E2E capabilities do not appear in the default catalog.
+- `P4.25`: the custom capability create dialog now uses labeled fields and
+  initial focus instead of placeholder-only inputs, so UI automation and real
+  users target the slug and description fields unambiguously.
+- `P4`: the meta-assistant scenario now creates one stable human-facing
+  capability (`assistant-workflow-composer-demo`) instead of generating new
+  hidden E2E capability names that pollute or disappear from the default
+  catalog.
+- `P3.12` and `P6.4`: artifact rows with Preview/Open/Download/Copy actions no
+  longer expose the entire artifact card as a single accessibility button; the
+  row text remains the row action and artifact actions remain separate controls.
+- `P5.1` and `P6.4`: the artifact-row accessibility fix exposed a follow-up
+  regression where normal list rows with static trailing badges only responded
+  on the text column. The shared row helper now reserves split pressable/action
+  behavior only for rows whose trailing content actually contains controls.
+- `B5` and `P1.5`: real Safari found that stage-task conversation rows expanded
+  but showed `No protocol runs linked to this conversation yet` because the
+  preview only queried `root_conversation_id`. The shared API client now
+  resolves task-thread conversations through `external_conversation_ref` ->
+  routed task -> `protocol_run_id`, and both conversation list and detail use
+  that same path.
+- `B5` and `P5.12`: real Safari then exposed a second linked-work gap:
+  a direct `/ui/conversations?...&conversation_id=...` link could point to a
+  conversation outside the current cursor page, leaving the URL selected but no
+  row expanded. The conversation list now restores the selected conversation
+  through the existing conversation API before rendering the page.
+- `B5` and `P1.5`: real Safari on deployed commit `56af5bc` verified the
+  full drill-through route: direct delegation-thread conversation link ->
+  linked run -> run artifact preview -> stage evidence -> stage task -> task
+  artifact preview.
+
+Verified current state:
+
+- `node --check` on edited JS files was clean.
+- `git diff --check` was clean.
+- `tests/e2e/playwright/protocol-ui.spec.js`: 14 passed against deployed
+  registry commit `56af5bc`.
+- `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
+  against deployed registry commit `56af5bc`; the skipped task-detail test
+  still requires a run with at least two routed stage tasks in the current data
+  set.
+- `tests/test_registry_ui_contract.py`: 41 passed locally after contract updates.
+- `tests/test_registry_usage.py` plus
+  `tests/test_registry_service.py::test_usage_endpoint_rolls_up_delegated_child_usage`
+  passed locally after usage lineage updates.
+- `tests/test_protocol_rehearsal.py`: passed locally after the rehearsal
+  session and explicit artifact-content checks.
+- Real Safari confirmed hard-refresh discipline, Capabilities filtering/detail,
+  Work/Build/Operations nav, filtered Runs default, and conversation pagination
+  Previous/Next/cursor behavior.
+- Real Safari on deployed commit `b086911` confirmed default Runs hide
+  generated/audit executions until the explicit toggle and verified run
+  artifact drill-through to preview/copy actions before the accessibility patch.
+- Real Safari on deployed commit `54dd3cb` confirmed hard refresh, run artifact
+  rows expose Preview/Open/Download/Copy as separate controls, Preview renders
+  real CSV artifact content, and delegation-thread conversation rows expand and
+  collapse from the full row after the static-trailing-badge regression fix.
+- Real Safari on deployed commit `56af5bc` confirmed the direct
+  `conversation_id` route restores the selected row across pagination, resolves
+  its linked protocol run after async task lookup, and preserves artifact
+  Preview/Open/Download/Copy actions on both run and stage-task surfaces.
+- Real Safari on deployed commit `4d16b22c` confirmed the Capabilities default
+  catalog has no side-panel editor, expands Architecture inline with real
+  instruction text, collapses from the same row, and reopens with URL state
+  restored after `Option+Command+R`.
+- `tests/e2e/playwright/registry-work-surface.spec.js`: 8 passed and 1 skipped
+  against deployed registry commit `4d16b22c`, including the Capabilities
+  inline-detail, collapse, and instruction-preview regression.
+- Real Safari on deployed commit `15e08eb6` confirmed the agent-specific
+  Capabilities page hard-refreshes into a stacked catalog, expands Architecture
+  as a full-width panel below the row with real instruction text, and collapses
+  from the same row. This closes the follow-up miss where the DOM was inline but
+  desktop CSS still placed the detail as a right-side card.
+- `tests/e2e/playwright/registry-work-surface.spec.js`: 9 passed and 1 skipped
+  against deployed registry commit `15e08eb6`. The suite now asserts selected
+  capability details are geometrically below the clicked row and nearly
+  full-width, so the right-side card regression fails automatically.
+
+### Pending Local Patch
+
+The local patch now includes the deployed SDK/Telegram protocol-interface work
+plus rehearsal-session recovery fixes found by the full deployed UI suite. The
+latest local addition handles stale rehearsal agent tokens by re-enrolling once
+on submit; it is awaiting redeploy and rerun of the failing data-analysis
+rehearsal scenario before `P8` and `P4.28` can be marked fully verified. The
+only unrelated untracked local item is `.cursor/`, which is not part of this
+plan.
+
+### Deployment Blocker
+
+Octopus redeploy restarts registry, M1, and M2. M3 still fails because
+`/Users/tinker/octopus/.deploy/provider-auth/claude/.claude.json` is zero bytes
+and the M3 container exits with `Claude auth not found`.
+
+The current execution excludes M3 per user direction. Do not claim full
+M1/M2/M3 verification until M3 auth is restored; M1/M2 registry UI fixes remain
+in scope.
+
+## Product Model
+
+### Protocol Surface Ownership
+
+The Registry is the protocol control plane. It owns canonical HTTP APIs,
+persistence, validation, permissions, lifecycle, templates, runs, artifacts,
+human collaboration, and the Registry UI.
+
+The bot SDK must not own duplicate protocol APIs or storage. It owns the shared
+client/service interface that all bot channels use to call Registry protocol
+APIs consistently.
+
+Telegram, Slack, future bots, and Registry-adjacent clients are peer product
+surfaces over the same Registry protocol model. Channel code should parse input
+and render channel-native output, but protocol listing, launch, status, action,
+artifact, and export semantics must come from the shared SDK interface.
+
+Current smell:
+
+- Registry APIs are in the correct place.
+- `octopus_sdk.registry.client.RegistryClient` already wraps many protocol
+  endpoints.
+- `octopus_sdk.protocols.launch` already contains shared launch helpers.
+- Telegram still hand-assembles parts of protocol start/status/action behavior
+  in `app/runtime/telegram_ingress.py` and `app/runtime/telegram_protocols.py`.
+
+Target:
+
+- One SDK protocol service/client wraps the existing Registry client and launch
+  helpers.
+- Registry UI and Telegram both exercise the same canonical REST nouns.
+- Telegram exposes the workflow-useful subset of Registry protocol capability,
+  without becoming a protocol authoring UI.
 
 ### Work
 
-Surfaces:
+Work is where users resume or inspect active work. It should answer:
 
-- Dashboard
+- What needs attention?
+- What is running?
+- What completed?
+- Where are the outputs?
+- What do I do next?
+
+Work should include:
+
 - Conversations
-- Runs
-- Tasks
-- Approvals
+- Runs / Executions
+- Agents, as collaborators/workers users can start work with and inspect
+- Delegations, if standalone delegated work remains a normal user destination
 
-Purpose:
+Work should not include:
 
-- what is happening
-- what needs attention
-- where to resume
-- where to inspect outputs
+- Empty queues
+- Runtime health dashboards
+- Raw routing diagnostics
+- Provider guidance
+- Duplicate protocol-stage task lists
 
 ### Build
 
-Surfaces:
+Build is where users define things that can be reused.
+
+Build should include:
 
 - Protocols
-- Templates
-- Capabilities when authoring is user-facing
+- Capabilities
 
-Purpose:
+`Team` is not currently a real product category. Agents are not a team model in
+this product. The normal Agents entry point belongs in Work because users talk
+to agents, assign work to them, and inspect what they are doing. Agent
+configuration, capability installation, provider setup, routing, and diagnostic
+details should remain progressively disclosed inside the agent page or
+Operations, not as the primary navigation model.
 
-- create, edit, publish, reuse, and launch workflows
-
-### Team
-
-Surfaces:
-
-- Agents
-- Agent detail
-- Agent-related work
-
-Purpose:
-
-- understand who can do work
-- start work with an agent
-- inspect an agent's recent work
+Templates are not a separate Build destination. They are protocol utilities:
+users create a new protocol from a reusable starter or publish an existing
+protocol as a reusable starter from inside the Protocols workflow.
 
 ### Operations
 
-Surfaces:
+Operations is where platform/runtime concerns live.
 
+Operations should include:
+
+- Dashboard, unless it is redesigned into a true human Home
 - Routing
-- Selector diagnostics
-- Worker/runtime diagnostics
-- Provider guidance
-- Capacity, trust, tokens, usage
+- Usage
+- Guidance
+- Runtime diagnostics
+- Provider auth/status
+- Worker/capacity/trust/token controls
+- Generated/test/rehearsal audit filters
 
-Purpose:
+The current Dashboard contains queues, health, usage, and protocol issues. In
+that form it is operational, not normal Work.
 
-- inspect and operate the system
-- not default authoring or execution flow
+### Delegations And Tasks
 
-## Implementation Guidance
+`Task` is a valid underlying concept: a delegation from one agent/person to
+another. It exists even without protocols.
 
-Do not add parallel UI layers. Extend existing shared primitives and page
-renderers in place.
+The mistake is treating all tasks the same in the UI:
 
-Before adding a new function, component, CSS class, or API projection:
+- Standalone delegated work can be a normal product surface, likely named
+  `Delegations`.
+- Protocol-generated stage tasks are children of `run -> stage -> task`.
+- Protocol stage tasks must not masquerade as independent peer work beside
+  protocol runs.
+- `/ui/tasks` may remain as the route during migration, but normal UI must show
+  provenance clearly.
 
-1. Search for the existing shared primitive.
-2. Extend the shared primitive if the concept is the same.
-3. Replace page-local behavior with the shared primitive when possible.
-4. Add a new helper only if there is no coherent existing owner.
-5. If a new helper is necessary, document its single responsibility and use it
-   from every relevant surface immediately.
+### Runs
 
-Known shared concepts that should have one owner:
+Runs are protocol executions. A run owns:
 
-- object row
-- expandable detail panel
-- work-surface viewport container
-- action row
-- metadata grid
-- artifact row/actions
-- lineage projection
-- capability projection
-- status badge/status language
-- pagination/internal-scroll behavior
+- Stage order
+- Stage execution state
+- Protocol-generated tasks
+- Conversations created for stage work
+- Artifacts
+- Decisions/review loops
+- Issues and audit trail
 
-## Implementation Phases
+Runs are the canonical surface for protocol execution.
 
-### Phase 0: Inventory And Removal Map
+### Protocols And Templates
 
-Goals:
+Protocols are the canonical home for authoring, publishing, running, and
+reusing workflows.
 
-- identify every list/detail, side-panel, drawer, and full-document-scroll
-  pattern
-- map each to the target inline expansion grammar
-- find page-local duplicate row/artifact/action components
+Templates are separate reusable starter objects, but they are managed through
+Protocols rather than through a standalone gallery destination:
 
-Steps:
+- `New protocol` offers `Blank protocol` and `From template`.
+- `From template` shows built-in starters and team-published templates inline
+  inside the Protocols creation flow.
+- `Publish as template` copies a stable protocol snapshot into a separate
+  template record.
+- Templates do not live-reference mutable protocol drafts or silently change
+  when the source protocol is edited later.
+- Updating an existing template is explicit: `Update template from this version`
+  or equivalent.
+- `/ui/templates` and `/ui/gallery` are not product routes. Users enter
+  templates from Protocols, and old template/gallery URLs should fall through
+  to normal route recovery rather than acting as a second product surface.
 
-1. Inventory Runs, Conversations, Tasks, Approvals, Dashboard, Protocols,
-   Agents, Capabilities, and Operations.
-2. Mark each current pattern:
-   - keep and extend
-   - replace with shared expandable row
-   - move to Operations
-   - delete as duplicate/dead code
-3. Identify old split-pane assumptions in CSS and JS.
-4. Identify tests that assert old side-panel behavior.
-5. Update this plan with any discovered blockers before implementation.
+### Conversations
+
+Conversations are collaboration surfaces. They should not look empty when work
+exists elsewhere.
+
+Conversation pages must show:
+
+- Chat timeline when there are messages
+- Linked work when the useful content is tasks/runs
+- Protocol launches and resulting run/artifact state
+- Delegations in context
+
+The normal UI should avoid making users choose a separate `Tasks` product from a
+conversation unless the copy makes the relationship explicit.
+
+### Capabilities
+
+Capabilities are the human-facing concept. Skills, routing skills, selector
+preview, advertised skills, and worker diagnostics are implementation or
+operator vocabulary.
+
+Default Capabilities should:
+
+- Show searchable human capabilities without choosing a bot first
+- Hide internal/system selectors such as `*` and `Rehearsal`
+- Collapse generated timestamp variants
+- Allow row click to inspect usage and assignment slug
+- Offer bot-scoped install/import/draft/review only as secondary management
+
+### Artifacts
+
+Artifacts are concrete outputs. Every artifact reference should use one shared
+action contract:
+
+- Preview when previewable
+- Open when host path/link is available
+- Download when content is available
+- Copy path/reference
+- Clear unavailable state when a declared artifact has not been produced
+
+This contract applies in Runs, Stages, Tasks/Delegations, Conversations, and
+Dashboard references.
+
+## Hard Rules
+
+- The default UI must show human workflows, not implementation tables.
+- Top-level navigation must be small enough to learn.
+- A thing should have one canonical user-facing home.
+- Deep links may exist for diagnostics, but should not force top-level clutter.
+- Creating a draft object must not require execution-ready configuration.
+- Assignment is progressive and should not block stage creation.
+- Draft data must never be lost by switching tabs, panels, stages, or add-step
+  anchors.
+- Operator controls live in Operations or explicit technical details, not
+  default authoring or work review.
+- Generated/rehearsal/test data must not dominate default user surfaces.
+- No database seeding may substitute for UI-created state during product
+  verification.
+
+## Target Navigation
+
+This is the target structure. It is not fully implemented yet.
+
+### Work
+
+- Conversations
+- Runs / Executions
+- Agents
+- Delegations, if standalone delegated work remains a normal user destination
+
+### Build
+
+- Protocols
+- Capabilities
+
+### Operations
+
+- Dashboard, unless redesigned as a user Home
+- Routing
+- Usage
+- Guidance
+- Diagnostics/Admin
+
+Open IA decisions:
+
+- Final label: `Runs`, `Executions`, or `Work`.
+- Whether standalone delegated work is visible as `Delegations` in default nav.
+- Whether Dashboard moves to Operations or is split into `Home` plus
+  `Operations Dashboard`.
+- Exact wording for protocol starters: `Templates`, `Starters`, or
+  `Reusable starters` inside the Protocols creation flow.
+
+## Active Blockers
+
+| ID | Blocker | Current Evidence | Required Outcome |
+|----|---------|------------------|------------------|
+| B1 | Tasks vs Runs needed lineage separation. | Done: standalone `/ui/tasks` is Delegations; `protocol_run_id` deep links are Run stage tasks; Dashboard excludes protocol stage tasks from standalone groups; real Safari verified Conversation -> linked run -> stage task -> artifact preview on deployed commit `56af5bc`. | Keep regression coverage in work-surface and protocol UI suites. |
+| B2 | M3 cannot start. | Claude auth file is zero bytes; container exits. User explicitly excluded M3 from this execution. | Do not claim all-agent verification until M3 auth is restored. |
+| B3 | Generated/rehearsal/test data dominated default pages. | Patched through shared visibility predicate across default pages with audit/generated toggles; Runs, Conversations, Protocols, Dashboard, Delegations, Agents, Capabilities, and Usage are covered by automated checks; Runs filtering was rechecked in real Safari after deploy. | Keep as regression coverage and include the same forbidden-data checks in the broad audit. |
+| B4 | Protocol catalog was flooded by generated drafts. | Done for default catalog: real Safari shows only canonical drafts until `Show generated drafts`. | Keep regression coverage and revisit only if product needs a richer archive view. |
+| B5 | Runs/Delegations/Artifacts lineage is still incomplete. | Done for the current product route: shared artifact action rows exist in Runs, Tasks, and task-board conversation context; Runs Overview links progressively into Stages and Artifacts; protocol E2E verifies run artifact preview/download and stage-task drill-through; real Safari verified direct conversation -> linked run -> run artifacts -> stage task -> task artifact preview on deployed commit `56af5bc`. | Keep as a regression gate and continue broader audit for other lineage surfaces. |
+
+## Findings
+
+### P1: Information Architecture
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P1.1 | Active | Sidebar exposes too many implementation nouns as peer destinations. | Real Safari nav review and DOM assertions. |
+| P1.2 | Done | `/ui/templates` and `/ui/gallery` no longer exist as standalone destinations. | Templates removed from default nav; route contract asserts both route registrations are gone. |
+| P1.3 | Active | Terminology drifts between Capabilities, skills, Templates, gallery, protocols, tasks, and runs. | User-facing string inventory. |
+| P1.4 | Partial | Approvals is removed from default nav, but contextual approval verification remains. | Contextual approval scenario. |
+| P1.5 | Done | Standalone delegations are real, protocol-generated stage tasks now have run-context copy, and direct task-thread `conversation_id` links stay visible across pagination. | Keep Safari and Playwright regression coverage for conversation linked work to run/stage task. |
+| P1.6 | Done | Shared default visibility filtering is patched and covered across normal work/build/operations surfaces. | Keep broad-audit regression checks. |
+| P1.7 | Planned | Dashboard is operational, Team is fake, and Agents belongs in Work as a collaborator/work entry point, with technical configuration progressively disclosed. | Nav grouping test plus real Safari pass after deploy. |
+
+### P2: Platform Shell And Resilience
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P2.1 | Partial | 404 recovery exists but needs route smoke coverage. | `/ui/does-not-exist` recovery test. |
+| P2.2 | Planned | Logout bypasses SPA intentionally but needs contributor contract. | Router contract test or note. |
+| P2.3 | Planned | Sidebar resize behavior can surprise users. | Resize pass with open sidebar. |
+| P2.6 | Planned | Session expiry/401 handling needs consistent return behavior. | Expired-session test. |
+| P2.7 | Planned | CSRF bootstrap failure needs degraded state. | Forced CSRF failure test. |
+| P2.8 | Planned | Offline/slow network can create duplicate toasts or endless loading. | Throttled/offline test. |
+| P2.9 | Planned | WebSocket reconnect and route subscription lifecycle need verification. | Route-change/reconnect integration test. |
+| P2.19 | Done | Real Safari stale SPA content after nav. | Playwright nav test plus Safari hard-refresh verification. |
+
+### P3: Work, Runs, Delegations, Dashboard, Artifacts
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P3.1 | Active | Dashboard is an operational index, not a clean user Work surface. | Move/redesign Dashboard and assert nav placement. |
+| P3.5 | Partial | Approvals empty queue was a dead top-level destination. | Default nav hides it; contextual approval still tested. |
+| P3.8 | Partial | Expanded Runs now use Overview as a real entry point instead of rendering stage evidence by default; broad Safari verification still needed. | Progressive Overview/Stages/Artifacts/Audit tests. |
+| P3.12 | Partial | Artifact actions use shared Preview/Open/Download/Copy behavior and row/action accessibility is fixed; remaining work is exhaustive cross-surface verification. | Shared artifact row tests in runs, stages, tasks, conversations. |
+| P3.13 | Active | Stale leases can read as ordinary `running`. | Stuck-lease row and overview assertions. |
+| P3.14 | Done | Default filtering is patched for Runs, Dashboard, Conversations, Agents, Protocols, Delegations, Capabilities, and Usage. | Real Safari broad-audit regression checks. |
+| P3.15 | Done | Protocols render was blocked by full assignment/catalog loading and broad protocol scans. | Authoring options/templates API contract, SQL catalog indexes, protocol template Playwright flow. |
+| P3.16 | Done | Runs and protocol issues fetch/page candidate rows before expensive decoration; Dashboard and conversation detail have progressive first-paint/lazy-loading paths. | SQL pagination/index tests, dashboard/nav Playwright, conversation linked-runs/protocol-panel smoke. |
+| P3.17 | Done | Dashboard secondary loading no longer turns background navigation/teardown races into user-visible errors or failing console-error assertions. | Deployed Playwright rerun has zero dashboard secondary snapshot console errors. |
+| P3.18 | Done | Real multi-stage protocol execution can outlive a short UI scenario budget even when it completes correctly and produces artifacts. | Deployed data-analysis scenario passed, including five-stage execution, run artifacts, and task artifact preview. |
+| P3.19 | Done | Runs generated/audit hidden-state control rendered as a stretched panel-width button instead of the compact control used by Conversations. | Runs reuses the shared `route-controls` row; work-surface visual regression covers the generated toggle. |
+
+### P4: Protocol Authoring, Protocol Catalog, Capabilities
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P4.6 | Partial | Workflow map must remain on-demand and interactive without replacing primary authoring. | Map interaction test. |
+| P4.15 | Done | Create-stage flow blocked on assignment and could clobber draft data. | UI-only unassigned stage and draft-preservation tests. |
+| P4.16 | Partial | Standard/operator authoring split must omit internals from standard DOM and API. | Negative tests for Advanced/custom runtime/internal fields. |
+| P4.23 | Done | Blank stage required owner role. | Name-only stage creation test. |
+| P4.24 | Done | Protocol list hides generated drafts by default and exposes compact generated families through a toggle. | Real Safari catalog verification passed on deployed `d2ac48a`. |
+| P4.25 | Done | Capabilities must be a human catalog, not passive bot admin or internal selector list; generated/meta E2E capabilities are hidden by default; selected capabilities expand inline with real instruction content on both default and agent-scoped pages. | Row expand/collapse, geometry-below-row, instruction-preview, internal-filter, selector consistency tests, and real Safari pass on deployed `15e08eb6`. |
+| P4.26 | Done | Missing capability had no natural assignment path. | `New capability needed` UI-only scenario. |
+| P4.27 | Done | Conversation protocol management could show capabilities copy in a protocols-mode shell if linked runs were already loaded but the published protocol catalog was still lazy. | Deployed conversation protocol launch E2E opens the protocols body, lists published protocols, and launches a run. |
+| P4.28 | Done | Data-analysis rehearsal found two coupled failures: a valid persisted stage task can be rejected after manager/session recovery edges, and the visible second-stage rehearsal card can post the previous stage payload when morphdom preserves old form listeners. | Keyed rehearsal cards/forms by routed task id, posted the current form identity, kept run-scoped backend rehydration, asserted posted payload identity in Playwright, and reran the deployed data-analysis scenario successfully on `5049e0f5`. |
+| P4.29 | Done | Real Safari starter panel exposed a visible/focusable `Start blank` button that did not activate after catalog reconciliation. | Starter controls bind after reconciliation; deep-link starter test clicks `Start blank` from `?new=template&include_generated=1`; real Safari hard-refresh and click-through passed after deploy. |
+| P4.30 | Done | Full scenario suite exposed stale/duplicated rehearsal session cards after submit. | Manager prunes stale pending sessions against task state; UI ignores out-of-order rehearsal refreshes; rehearsal regression tests rerun. |
+
+### P5: Conversations, Agents, Collaboration
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P5.1 | Active | Conversation list filters and quick starts are busy, especially on mobile. | Filter-collapse/mobile smoke test. |
+| P5.3 | Active | Conversation detail needs dedicated audit for composer, timeline, linked work, settings, focus, scroll, send/WS, markdown. | Dedicated conversation detail audit. |
+| P5.10 | Done | Conversation list filters generated/rehearsal records by default and keeps audit access explicit. | Human conversations prioritized in real Safari. |
+| P5.11 | Partial | Agent list and Capabilities agent eligibility hide generated/rehearsal agents by default; list details now expand inline and route to the shared Capabilities workspace; the remaining work is the broader agent-detail work-first audit. | Agent inline-detail tests, shared Capabilities route tests, and remaining work-first audit. |
+| P5.12 | Done | Conversations pagination is broken or unclear. | URL-addressable pagination, Playwright pass, and real Safari pass after deploy. |
+| P5.13 | Done | Conversation message-send timeline verification stays green after background dashboard work is made non-disruptive. | Deployed browser conversation send E2E returns to the visible chat timeline without console errors. |
+
+### P6: Presentation, Accessibility, Responsive
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P6.1 | Planned | Breakpoints can create layout jumps. | Breakpoint review. |
+| P6.3 | Planned | Protocol full rerender can cause keyboard/AT focus loss. | Keyboard focus preservation test. |
+| P6.4 | Partial | Artifact action buttons are no longer nested under a single row button; broader ARIA verification remains. | Axe and manual keyboard pass. |
+| P6.5 | Planned | Theme contrast is not systematically measured. | Light/dark contrast audit. |
+| P6.11 | Planned | Mobile matrix is incomplete. | Mobile route matrix. |
+| P6.12 | Planned | IA success metrics are undefined. | Define clicks/time-to-output measures. |
+
+### P7: Operations And Admin Framing
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P7.1 | Active | Routing exposes powerful disable toggles with little framing. | Operations-only route and warning/context copy. |
+| P7.2 | Active | Usage belongs in Operations with cost/token framing. | Operations nav and copy review. |
+| P7.3 | Active | Guidance is provider/bot baseline editing and should remain Operations/admin. | Route framing and role/capability gate. |
+| P7.4 | Planned | Multi-tenant/role model is assumed, not fully defined. | Product role/capability policy. |
+| P7.5 | Planned | Security beyond CSRF/session needs a dedicated pass. | Markdown/XSS and approval-action review. |
+
+### P8: SDK And Channel Protocol Surface
+
+| ID | Status | Finding | Verification |
+|----|--------|---------|--------------|
+| P8.1 | Active | Protocol API ownership is correct in Registry, but channel integrations need one SDK protocol service/client instead of hand-assembling workflows. | SDK unit tests prove Telegram and future channels call the shared service over existing Registry client methods. |
+| P8.2 | Active | Telegram supports protocol commands, but start/status/action/watch logic is still mixed into Telegram ingress helpers. | Telegram command tests assert parsing/rendering stays in Telegram while protocol semantics come from SDK service. |
+| P8.3 | Active | Telegram can start and watch protocols but does not expose artifact discovery/download/preview parity with Registry UI. | `/protocol artifacts <run_id>` and optional export tests over generated run artifacts. |
+| P8.4 | Active | Registry UI protocol launch and Telegram protocol launch need cross-surface equivalence. | Integration test starts equivalent runs from UI and Telegram/stub and asserts origin, root conversation, entry agent, run state, and artifact visibility. |
+| P8.5 | Active | Stale protocol-authoring nouns such as `/v1/protocol-authoring/manifest` must not re-enter the product surface. | OpenAPI/SDK/UI contract test asserts current nouns and either intentional 404 or explicit deprecation for stale routes. |
+| P8.6 | Planned | Telegram should expose only workflow-useful protocol operations, not full authoring/template/rehearsal/admin flows. | Telegram user-guide and presenter tests match the capability exposure table. |
+
+## Workstreams
+
+### W1: Navigation And Product IA
+
+Scope:
+
+- Remove fake `Team`.
+- Move `Agents` into Work as the normal collaborator/work entry point.
+- Keep agent technical configuration and operations controls progressively
+  disclosed inside agent detail or Operations.
+- Move current Dashboard into Operations or split it into Home plus Operations
+  Dashboard.
+- Decide if default nav exposes `Delegations`.
+- Keep deep links for `/ui/tasks` and `/ui/approvals`.
 
 Acceptance:
 
-- every affected surface has one target interaction model
-- no duplicate replacement components are proposed
-- old tests that encode broken UI are listed for rewrite or deletion
+- Default nav expresses Work, Build, Operations.
+- Work includes Agents; Build does not list Agents as a peer to Protocols and
+  Capabilities.
+- No normal user has to infer whether Tasks or Runs is the right place for a
+  protocol execution.
+- No important direct delegation workflow is lost.
 
-### Phase 1: Shared Interaction Grammar
+### W2: Capabilities And Agents
 
-Goals:
+Scope:
 
-- create or extend one reusable object-row and expansion contract
-- create one viewport-bounded work-surface contract
-
-Steps:
-
-1. Extend the existing shared list/row primitive to support inline expansion.
-2. Extend the existing panel/section primitive for progressive expansion
-   content.
-3. Add a shared work-surface layout that bounds list and expansion content to
-   the viewport.
-4. Add a shared internal-scroll/pagination rule for long sections.
-5. Ensure action rows wrap inside their container, not based only on global
-   viewport breakpoints.
-6. Ensure passive rows do not advertise clickability.
+- Keep the Capabilities row click/detail/internal-filter behavior as a
+  regression gate.
+- Hide internal/system capabilities from normal catalog.
+- Keep bot management secondary.
+- Make agent pages work-first: start conversation, run protocol, current/recent
+  work, availability, then capabilities/configuration as secondary detail.
+- Group or hide Rehearsal/test agents from default normal views.
 
 Acceptance:
 
-- one shared row expansion contract exists
-- one shared viewport work-surface contract exists
-- shared artifact rows fit inside the expansion panel
-- desktop and narrow use the same mental model
+- Capabilities opens to a usable catalog.
+- Clicking Architecture or another capability expands meaningful details inline,
+  including real instruction text from an advertising bot.
+- Agent-specific Capabilities uses the same full-width row expansion and
+  collapse behavior; it must not reintroduce a side drawer or desktop split
+  editor for capability details.
+- No `*`, `Rehearsal`, or generated timestamp flood in default catalog.
+- Agent pages do not dump capabilities twice.
 
-### Phase 2: Runs Evidence-Model Refactor
+### W3: Conversations
 
-Goals:
+Scope:
 
-- keep inline run expansion
-- replace the current competing run sub-models with one evidence hierarchy
-- make Runs match the progressive stage/task model without hiding critical
-  state
-
-Steps:
-
-1. Keep the existing full-width inline run list and remove any remaining dead
-   side-detail assumptions.
-2. Replace the run detail sub-tabs with at most four sections: `Overview`,
-   `Stages`, `Artifacts`, and `Audit`.
-3. Make `Stages` the primary inspection model:
-   - sort stages by authored workflow order
-   - show current/completed/blocked state per stage
-   - show the assigned participant/agent as supporting context
-   - show stage tasks and stage artifacts inline
-   - show stage decisions or approvals as contextual evidence
-4. Make `Artifacts` a rollup of the same stage artifact rows:
-   - group by producing stage
-   - use the same Preview/Open/Download/Copy path action row
-   - show declared/missing outputs without broken actions
-5. Move raw `Participants` and `Decisions` into `Audit`:
-   - retain all operational data
-   - present it as support/debug evidence, not primary user workflow
-6. Elevate critical status:
-   - stuck lease, blocked, failed, timeout, or stale-running state appears in
-     the run row and Overview
-   - Issues remains available in Audit but is not the only discovery path
-7. Preserve deep links by selecting the target run and activating the relevant
-   section without creating a second route-specific renderer.
-8. Remove duplicate Outputs/Execution artifact row rendering and tests that
-   assert separate visual models.
+- Fix conversation pagination.
+- Reframe `Tasks` view/copy as linked work or delegated work.
+- Preserve task/delegation concept without making protocol stage tasks peer
+  work.
+- Ensure conversation-launched protocols are traceable to runs and artifacts.
+- Make task-linked conversations non-empty by default.
 
 Acceptance:
 
-- Runs has no default disconnected side-detail panel.
-- Clicking a run expands detail inline under that run.
-- The expanded run has no more than two visible navigation layers at once.
-- Stage order is Planning to Acceptance for the Software Engineering protocol.
-- `Overview` surfaces stuck/blocked/stale status without opening Audit.
-- `Stages` and `Artifacts` use the same artifact component and action layout.
-- Artifacts can be previewed/opened/downloaded/copied from both stage context
-  and rollup context.
-- Participants and decisions remain inspectable but do not dominate the default
-  run understanding path.
-- Run detail does not create horizontal overflow on desktop.
-- Run detail does not push the whole page beyond the viewport for normal use.
+- Pagination controls work in real Safari and Playwright.
+- Filters and selected inline detail survive pagination correctly.
+- A conversation with linked run/task activity shows useful work context.
 
-### Phase 3: Conversations Viewport Workspace
+### W4: Runs, Delegations, And Artifacts
 
-Goals:
+Scope:
 
-- make Conversations consistent without losing the conversation workspace
-  value
-
-Steps:
-
-1. Add inline expansion to the conversation list for quick preview and linked
-   work.
-2. Keep `Open full conversation` as a secondary action.
-3. Refactor full conversation detail into a viewport-bounded workspace.
-4. Keep header/context and composer reachable.
-5. Make linked runs expand in place using the Run expansion contract.
-6. Make linked tasks expand in place using the Task expansion contract.
-7. Default operational task threads to activity/tasks when messages are empty.
-8. Add pagination or internal scrolling for long activity/task lists.
+- Tighten run expanded detail around Overview, Stages, Artifacts, Audit.
+- Surface artifacts from Overview and stage context.
+- Clearly mark stale leases and blocked states.
+- Show protocol-generated tasks under run/stage lineage.
+- Preserve standalone delegations separately.
+- Push run list filtering, pagination, and common UI filters into SQL before
+  decorating rows with review state.
+- Push protocol-issue filters into SQL and only scan candidate runs/stages.
+- Add indexes for run filters used by Runs, Conversations, Dashboard, and
+  protocol launch drill-through.
 
 Acceptance:
 
-- Conversation list supports inline inspection.
-- Full conversation detail does not become an uncontrolled document scroll.
-- Composer remains reachable.
-- Linked runs/tasks are inspectable without context-jumping.
-- Empty-looking operational task threads are eliminated.
+- A user can explain a run state from row and Overview.
+- A user can preview/download artifacts from every context where they appear.
+- Protocol stage task evidence does not require choosing a separate peer app.
+- Run and issue pages stay responsive with large history because they page
+  before expensive decoration.
 
-### Phase 4: Tasks, Approvals, Dashboard Alignment
+### W5: Protocol Authoring And Catalog
 
-Goals:
+Scope:
 
-- align adjacent Work surfaces with the same grammar
+- Keep completed unassigned-stage and missing-capability flows green.
+- Preserve interactive workflow map on demand.
+- Group/hide generated protocol variants.
+- Remove Templates/Gallery as a standalone product surface.
+- Move template selection into the existing Protocols creation flow.
+- Add `Publish as template` from a protocol as a snapshot-copy operation, not a
+  live reference to a mutable draft.
+- Add explicit template update semantics for future edits.
 
-Steps:
+Implementation guidance:
 
-1. Ensure task list/detail uses the same row expansion and viewport contract.
-2. Ensure approval list/detail uses the same row expansion and lineage sections.
-3. Ensure Dashboard cards link to canonical surfaces and only expand enough to
-   orient the user.
-4. Remove duplicate artifact/action rendering from these pages.
-5. Rewrite tests that assumed side panels or disconnected details.
-
-Acceptance:
-
-- tasks, approvals, and dashboard work cards follow the same interaction model
-- artifacts and lineage read the same across all Work surfaces
-- no duplicate page-local artifact row remains
-
-### Phase 5: Protocol, Agent, And Capability Cleanup
-
-Goals:
-
-- keep the authoring and team surfaces aligned with the same product rules
-
-Steps:
-
-1. Preserve inline protocol stage editing.
-2. Ensure stage sub-sections are progressive and viewport-aware.
-3. Keep internal runtime selector and advanced plumbing out of the standard
-   authoring path.
-4. Refactor agent detail around summary, actions, capabilities, related work,
-   technical details, and operations.
-5. Keep `Start conversation` and `Run protocol` reachable in agent context.
-6. Consolidate skills/routing/advertised skills into user-facing capabilities.
-7. Hide generated timestamp skill spam from default pickers.
+- Reuse the existing protocol editor and draft creation pipeline.
+- Extend the current `source_kind: "template"` creation path instead of adding a
+  parallel template editor.
+- Add one backend template object/snapshot path for user-published templates
+  while preserving built-in starters as system-provided template records.
+- The template list API should return built-in starters plus user/team-published
+  templates for the current authoring context.
+- Publishing a template should copy from a published protocol version by
+  default. Draft-to-template, if allowed, must be explicit and validated.
+- Do not let source protocol edits mutate existing templates silently.
+- Do not reintroduce `/ui/templates` or `/ui/gallery`; normal nav and CTAs
+  should point at `/ui/protocols` creation.
 
 Acceptance:
 
-- standard authors do not see operator plumbing
-- agents are usable without understanding internals
-- capabilities are scannable and reused across conversation/protocol/agent UI
+- Blank-to-published protocol authoring is possible through UI only.
+- Protocol-to-template publishing is possible through UI only.
+- Creating from a template is available inside Protocols, not a separate gallery.
+- A template created from a protocol remains stable after later source protocol
+  edits.
+- Updating a template from a protocol is explicit and auditable.
+- Stage add/remove/assignment/routing/artifact flows are verified.
+- Protocol list prioritizes canonical workflows.
 
-### Phase 6: Visual Density And Desktop Polish
+### W6: Operations, Resilience, Accessibility
 
-Goals:
+Scope:
 
-- make the product feel calm and readable without hiding useful actions
-
-Steps:
-
-1. Reduce borders where section hierarchy already communicates grouping.
-2. Use quieter typography for inactive rows.
-3. Increase internal padding where rows feel cramped.
-4. Reduce spacing between inactive repeated rows where the current rhythm feels
-   wasteful.
-5. Keep active expanded rows visually clear but not heavy.
-6. Audit action placement so users do not have to scan across the entire
-   screen for primary actions.
-7. Validate in real desktop Safari, not only a narrow automated viewport.
+- Route Operations concerns out of normal Work/Build.
+- Verify session/CSRF/offline/WS behavior.
+- Run accessibility, keyboard, contrast, reduced-motion, and mobile matrix.
+- Keep Safari cache refresh discipline after deploy.
 
 Acceptance:
 
-- inactive rows are easy to scan but not visually loud
-- active rows are clear without making the screen dense
-- desktop feels intentionally designed, not stretched mobile
-- narrow/mobile remains usable
+- Operator controls are framed and gated.
+- Browser resilience does not create stale or misleading UI.
+- UI is usable in keyboard, mobile, and light/dark modes.
 
-### Phase 7: Tests And Product Scenarios
+### W7: Responsiveness And Loading Model
 
-Goals:
+Scope:
 
-- make the UI behavior enforceable
-- stop relying on direct database setup as a substitute for human workflow
+- First paint should render useful shell/primary rows without waiting for
+  secondary catalog, preview, or management data.
+- Heavy list endpoints should filter and paginate in SQL before Python
+  decoration or access-safe post-processing.
+- Secondary panels should use lazy loading and cache/stale-while-revalidate
+  behavior where the data is not needed for the initial user decision.
+- Do not add duplicate endpoints for the same product concept; rename or extend
+  existing resources with clear nouns.
 
-Required UI scenarios:
+Acceptance:
 
-1. Create a protocol from blank through UI.
-2. Create a protocol from template through UI.
-3. Add, remove, and reorder/inspect stages through UI.
-4. Select capability and optional agent through UI.
-5. Launch a protocol from conversation through UI.
-6. Execute a realistic software-engineering protocol and verify outputs.
-7. Open the run from conversation and inspect inline run expansion.
-8. Open the task from run and inspect inline task expansion.
-9. Preview/open/download/copy artifacts from run, task, conversation, and
-   dashboard references.
-10. Inspect a stale/running/problem run and verify the status language is
-    understandable.
-11. Use an agent from the agent page without seeing operator internals.
-12. Open Operations and verify routing/selector diagnostics remain available
-    for operator paths.
+- Protocols, Runs, Dashboard, and Conversation detail show useful content before
+  enrichment data finishes.
+- Dashboard first paint is not blocked by protocol catalog, run issue, or agent
+  management calls.
+- Conversation detail does not fetch the full published protocol catalog unless
+  the protocol management panel is opened.
+- Query plans have matching indexes for run filters and issue candidates.
 
-Negative invariants:
+### W8: SDK And Telegram Protocol Surface
 
-- no custom runtime selector in standard protocol authoring
-- no `Advanced` plumbing section in standard authoring
-- no selector preview on default agent detail
-- no raw token/trust/capacity mutation in normal user flow
-- no empty workers panel in default agent detail
-- no generated timestamp skill spam in default pickers
-- no disconnected Runs side-detail panel in the default Runs path
-- no page-level horizontal overflow on desktop or narrow widths
+Scope:
 
-Testing rules:
+- Add one SDK protocol service/client over the existing `RegistryClient`
+  protocol methods and `octopus_sdk.protocols.launch` helpers.
+- Keep Registry HTTP APIs in Registry; do not move storage, validation,
+  lifecycle, artifacts, or permissions into bot runtimes.
+- Migrate Telegram protocol commands so command parsing and rendering remain in
+  Telegram, while listing, launch, status, actions, artifacts, and export use
+  the SDK protocol service.
+- Keep Registry UI on canonical REST nouns and align JS API contracts with SDK
+  endpoint coverage.
+- Add Telegram artifact UX for protocol runs.
+- Add cross-surface verification that Registry UI and Telegram start equivalent
+  protocol runs and expose the same outputs.
 
-- UI scenarios must create and mutate state through product UI or product APIs,
-  not direct database writes.
-- Database inspection is allowed only to diagnose or verify, never as the
-  primary way to create UI state.
-- Contract tests should cover shared primitives so fixes stay consolidated.
-- Old tests that assert broken split-pane or duplicate behavior must be removed
-  or rewritten.
+Implementation guidance:
 
-### Phase 8: Visual Audit And Deployment
+- Reuse `octopus_sdk.registry.client.RegistryClient` methods; do not add a
+  second HTTP client or duplicate endpoint wrappers.
+- Reuse `octopus_sdk.protocols.launch.launch_protocol_from_conversation` and
+  existing protocol models.
+- Put new product-level SDK behavior in an SDK module, not in
+  `app/runtime/telegram_ingress.py`.
+- Keep Telegram-specific session watch persistence in Telegram runtime code
+  only where it is truly channel state.
+- Use current registry nouns: `/v1/protocols`, `/v1/protocol-drafts`,
+  `/v1/protocol-templates`, `/v1/protocol-authoring/options`,
+  `/v1/protocol-runs`, and run artifact/action/export subresources.
+- Do not revive `/v1/protocol-authoring/manifest` as a second authoring API.
 
-Goals:
+Telegram capability exposure:
 
-- verify breadth after scenario depth is green
-- deploy from the canonical flow only
+| Registry protocol capability | Telegram behavior |
+|------------------------------|-------------------|
+| List published protocols | `/protocol list` |
+| Launch from conversation | `/protocol start <slug> <problem statement>` |
+| View run status, stage, participants | `/protocol status <run_id>` |
+| Watch/unwatch updates | `/protocol watch <run_id>` and `/protocol unwatch <run_id>` |
+| Retry, accept, send back, cancel | Existing action commands, with confirmation for destructive actions |
+| List run artifacts | Add `/protocol artifacts <run_id>` |
+| Download/open artifact | Provide Registry links where safely available; clearly explain unavailable artifacts |
+| Preview small text artifact | Optional short preview, capped and escaped for Telegram |
+| Export run | Optional `/protocol export <run_id>` if output is sent as a document or concise link |
+| Author/edit protocols | Registry UI only; Telegram links to Registry |
+| Publish templates | Registry UI only |
+| Rehearsal/scenario authoring | Registry UI only |
+| Validate/publish/archive/diff | Registry UI or future operator-only command, not normal Telegram |
 
-Visual audit must include:
+Acceptance:
 
-- real desktop Safari Runs list and expanded run
-- real desktop Safari Runs Overview, Stages, Artifacts, and Audit sections
-- real desktop Safari comparison that the same artifact renders consistently
-  in stage context and artifact rollup context
-- real desktop Safari Conversations list and full conversation
-- narrow/mobile Runs and Conversations
-- Tasks inline expansion
-- Approvals inline expansion
-- Protocol stage editor
-- Agent list and agent detail
-- Capabilities picker/search
-- Dashboard recent work and artifacts
-- Operations routing/selector diagnostics
+- A user can discover, start, track, and inspect a protocol run from Telegram.
+- Telegram artifact output is understandable: available, missing, declared, or
+  unavailable-on-host states are explicit.
+- Registry UI protocol launch and Telegram launch produce equivalent Registry
+  run records and artifact visibility.
+- Telegram code no longer owns protocol workflow semantics beyond channel
+  parsing, rendering, and watch persistence.
+- Future bot channels can adopt the same SDK protocol service without copying
+  Telegram command internals.
 
-The screenshot audit is breadth. Passing scenario specs are the release bar.
+## Immediate Execution Order
 
-Deployment rule:
+1. Implement the SDK protocol service/client over the existing Registry client
+   and launch helpers.
+2. Migrate Telegram `/protocol` commands to the SDK service without changing
+   command syntax.
+3. Add Telegram artifact UX and tests.
+4. Add SDK, Telegram, Registry UI, and cross-surface equivalence tests.
+5. Run dashboard, run, protocol, and Telegram smoke against the deployed
+   registry/M1/M2 stack.
+6. Hard-refresh real Safari for Registry UI verification.
+7. Keep M3 excluded from current claims; do not block UI/SDK/Telegram cleanup
+   on M3 auth.
+8. Run accessibility, keyboard, mobile/narrow Safari, theme-contrast, and
+   resilience checks.
+9. Only then resume broad 500+ screenshot audit.
 
-1. Commit in `/Users/tinker/output/bots/telegram-agent-bot`.
-2. Push from that checkout.
-3. Pull in `/Users/tinker/octopus`.
-4. Redeploy from `/Users/tinker/octopus`.
+## Verification Matrix
 
-Do not use source-to-target sync as the deployment mechanism.
+| Command / Pass | What It Proves |
+|----------------|----------------|
+| `node --check` on edited JS | No syntax regressions in changed UI code. |
+| `git diff --check` | No whitespace/patch hygiene issues. |
+| `.venv/bin/python -m pytest tests/test_registry_ui_contract.py` | Static UI contracts match product terminology and shared primitives. |
+| `.venv/bin/python -m pytest tests/test_protocols.py tests/test_db_postgres.py` | Protocol run/issue query behavior and DB indexes remain valid. |
+| `.venv/bin/python -m pytest tests/test_registry_sdk_contract.py tests/test_sdk_type_safety.py` | SDK contracts and type boundaries remain valid. |
+| `.venv/bin/python -m pytest tests/test_protocol_telegram.py tests/test_telegram_presenters.py` | Telegram protocol commands and rendered messages use the shared protocol interface correctly. |
+| `.venv/bin/python -m pytest tests/test_telegram_runtime_skills.py tests/test_telegram_delegation_channel.py` | Telegram regressions around skills and delegation still hold after protocol-service migration. |
+| Telegram API stub protocol pass | Bot surface can list/start/status/watch/artifacts/export protocols against a running Registry without direct DB setup. |
+| `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/protocol-ui.spec.js` | Protocol authoring, rehearsal, execution, conversations, and artifacts still work. |
+| `./.tmp/playwright/node_modules/.bin/playwright test -c tests/e2e/playwright.config.js tests/e2e/playwright/registry-work-surface.spec.js` | Work/nav/runs/conversations/tasks/capabilities desktop behavior. |
+| Cross-surface protocol launch pass | Registry UI launch and Telegram launch create equivalent run lineage and artifact visibility. |
+| Real Safari nav pass | Deployed assets, cache, and actual browser behavior match tests. |
+| Real Safari Capabilities pass | Human catalog is clickable, filters internals, expands/collapses inline, and shows real instruction text without a side editor. |
+| Real Safari Conversations pass | Pagination and linked work behavior are usable. |
+| Full audit | Breadth after known blockers are fixed, not a substitute for scenario depth. |
+
+## Route And Component Map
+
+| Route | Component |
+|-------|-----------|
+| `/ui`, `/ui/` | `components/dashboard.js` |
+| `/ui/approvals` | `components/approval-list.js` |
+| `/ui/agents` | `components/agent-list.js` |
+| `/ui/agents/:id` | `components/agent-detail.js` |
+| `/ui/agents/:id/conversations` | `components/agent-detail.js` |
+| `/ui/conversations` | `components/conversation-list.js` |
+| `/ui/conversations/:id` | `components/conversation-detail.js` |
+| `/ui/tasks` | `components/task-list.js` |
+| `/ui/protocols` | `components/protocol-workspace.js` |
+| `/ui/runs` | `components/protocol-workspace.js`, `renderProtocolRuns` |
+| `/ui/routing` | `components/routing-policy-list.js` |
+| `/ui/skills` | `components/skill-catalog.js` |
+| `/ui/usage` | `components/usage-view.js` |
+| `/ui/guidance` | `components/guidance-editor.js` |
+| `/ui/login` | `components/login-form.js` |
+
+Shared primitives:
+
+- `helpers/ui.js`
+- `helpers/kit.js`
+- `components/task-board.js`
+- `components/composer-autocomplete.js`
+- `components/event-renderers.js`
+- `router.js`
+- `app.js`
+- `ui/css/main.css`
 
 ## Definition Of Done
 
-This work is done only when:
+- Default nav reflects Work, Build, Operations without fake categories.
+- Standalone delegations remain usable.
+- Protocol-generated tasks are contextual children of runs/stages.
+- Capabilities is a human catalog by default and bot management is secondary.
+- Protocol authoring keeps unassigned, agent-only, capability-only, and missing
+  capability flows green.
+- Conversations pagination works and linked work is visible.
+- Runs expose state, stage, task, conversation, artifact, and audit lineage in
+  one coherent model.
+- Artifacts use the same action contract everywhere.
+- Protocol APIs remain canonical in Registry; bot SDK exposes one shared
+  protocol service/client over those APIs.
+- Telegram can list, launch, inspect, watch, act on, and inspect artifacts for
+  protocol runs without duplicating protocol workflow semantics.
+- Registry UI and Telegram protocol launches produce equivalent run lineage and
+  artifact visibility.
+- Generated/rehearsal/test data does not dominate normal user pages.
+- M3 status is either fixed or explicitly excluded from real-agent claims.
+- All listed automated checks pass after deploy.
+- Real Safari is hard-refreshed and visually verified after deploy.
 
-- Runs uses inline expansion by default and no longer uses a disconnected
-  side-detail panel.
-- Runs uses one evidence hierarchy: Run -> Stages -> stage evidence ->
-  artifacts/tasks/decisions/participants/issues.
-- Runs does not render the same artifact or stage evidence through unrelated
-  visual models across subtabs.
-- Runs exposes no more than two visible navigation layers at once.
-- Runs shows critical stuck/blocked/stale status in the row and overview, not
-  only inside an Issues or Audit tab.
-- Runs stages are ordered by authored workflow order.
-- Conversations list supports inline inspection and full conversation detail is
-  viewport-bounded.
-- Runs and Conversations do not overflow horizontally on real desktop Safari.
-- Runs and Conversations do not rely on uncontrolled full-document vertical
-  scrolling for normal use.
-- Tasks, Approvals, Dashboard, Protocol stages, Agents, and Capabilities follow
-  the same object interaction grammar where applicable.
-- Artifacts use one preview/open/download/copy contract everywhere concrete
-  bytes exist.
-- Declared or missing artifacts never show broken file actions.
-- Users can trace protocol, run, stage, task, conversation, approval, and
-  artifact as one lineage.
-- Standard authoring paths hide operator internals.
-- Operator tools remain available in Operations.
-- UI scenario tests exercise real product flows instead of direct database
-  state creation.
-- Old duplicate/dead UI paths and tests are deleted as the new shared contract
-  replaces them.
-- Visual audit confirms desktop and narrow/mobile are both usable.
-- Deployment follows push here, pull there.
+## Deployment Rule
 
-## Risks And Mitigations
+For live verification:
 
-### Risk: Inline Runs Become A Dashboard Inside A Row
-
-Mitigation:
-
-- keep `Overview`, `Stages`, `Artifacts`, and `Audit` as the only default
-  sections
-- make `Stages` the primary path and demote raw records to `Audit`
-- avoid participant filters, stage tabs, and detail tabs being visible together
-- require the artifact rollup to reuse the same stage artifact renderer
-
-### Risk: Inline Expansion Becomes Too Tall
-
-Mitigation:
-
-- allow one expanded row by default
-- make sections progressive
-- use internal scrolling/pagination inside long sections
-- keep full detail pages as secondary escape hatches
-
-### Risk: Removing Split Panes Hurts High-Volume Triage
-
-Mitigation:
-
-- preserve fast filters/search
-- keep keyboard-friendly row selection
-- keep compact summaries
-- use inline expansion for detail without losing list context
-
-### Risk: Conversations Need A Different Model
-
-Mitigation:
-
-- use inline expansion for conversation list and linked objects
-- keep full conversation as a bounded workspace
-- do not force message-heavy work into a tiny row expansion
-
-### Risk: Shared Primitives Become Over-General
-
-Mitigation:
-
-- shared primitives own layout and interaction contracts
-- page renderers still own product-specific content
-- avoid new parallel run/task/conversation components
-
-### Risk: Visual Cleanup Only Shrinks The UI
-
-Mitigation:
-
-- reduce simultaneous concepts first
-- then tune spacing, borders, and typography
-- validate visually after each major surface
-
-### Risk: Tests Miss Human Workflow Again
-
-Mitigation:
-
-- require UI-created state for scenario tests
-- include artifact outcome assertions
-- include real desktop Safari visual checks
-- record discovered issues in this plan before continuing broad audit
-
-## Immediate Next Steps
-
-1. Refactor Runs expanded detail to the `Overview`, `Stages`, `Artifacts`,
-   `Audit` evidence model.
-2. Sort run stages by authored workflow order and verify Software Engineering
-   reads Planning through Acceptance.
-3. Consolidate Outputs and Execution artifact rendering into one shared row
-   contract grouped by producing stage.
-4. Move raw Participants and Decisions into Audit while surfacing their
-   stage-relevant summaries inside Stages.
-5. Elevate stuck/blocked/stale state into the run row and Overview.
-6. Convert Conversations linked runs to the same bounded run preview model.
-7. Continue aligning Tasks, Approvals, Dashboard, Protocol stages, Agents, and
-   Capabilities with the shared work-surface and artifact contracts.
-8. Run UI scenarios and real Safari visual audit after each major surface.
-
-## Open Findings Log
-
-New findings discovered during implementation or audit must be added here with:
-
-- surface
-- reproduction path
-- observed behavior
-- expected behavior
-- severity
-- fix owner or phase
-- verification method
-
-Current open findings:
-
-- Runs / real Safari: the expanded run detail is technically inline but still
-  uses competing sub-models. `Outputs` renders artifacts as a flat list,
-  `Execution` renders stage evidence with different navigation and row
-  treatment, `Participants` and `Decisions` expose raw records as peer tabs,
-  and `Issues` hides critical state. Expected behavior: one evidence hierarchy
-  with `Overview`, `Stages`, `Artifacts`, and `Audit`, where global views are
-  rollups of stage evidence rather than separate visual systems. Severity:
-  high. Fix owner: Runs evidence-model refactor. Verification method: real
-  Safari expanded run review plus automated assertions that stage order,
-  artifact actions, issue elevation, and section count match the Runs Product
-  Model.
-- Runs / real Safari: Execution can show Software Engineering stages in reverse
-  human order, with Acceptance before Planning. Expected behavior: stages
-  render in authored workflow order from Planning through Acceptance unless the
-  user explicitly chooses an audit chronology. Severity: high. Fix owner: Runs
-  evidence-model refactor. Verification method: open a Software Engineering
-  run and assert visible stage order starts with Planning and ends with
-  Acceptance.
-- Runs / real Safari: more than two navigation layers can be visible at once
-  in one expanded run: triage tabs, status chips, run-row expansion, run detail
-  tabs, participant filters, and execution stage tabs. Expected behavior: the
-  default run detail exposes at most one run-section control plus one local
-  progressive control inside the active section. Severity: high. Fix owner:
-  Runs evidence-model refactor. Verification method: visual audit and DOM
-  assertions for visible tab groups/navigation controls inside expanded run.
-- Runs / real Safari: a run can show the plain row/status value `running` even
-  when its write lease has expired and the detail Issues section reports
-  `stuck lease · lease_expired`. Expected behavior: stuck/problem state is
-  visible at row and status-summary level without requiring users to discover
-  the Issues tab. Severity: medium-high. Verification method: load
-  `/ui/runs?status=running`, expand a stuck run, and confirm the row/status
-  calls out the stuck lease condition before opening Issues.
-- Conversations / real Safari: linked runs inside conversation previews and
-  full conversation headers are still navigation links/chips only. They can
-  route users to Runs, but they cannot be inspected progressively from the
-  conversation context. Expected behavior: linked runs use the shared run
-  expansion contract or an equivalent bounded preview so users can inspect
-  state/artifacts without mentally jumping between disconnected pages.
-  Severity: medium. Fix owner: linked-object lineage pass. Verification method:
-  open `/ui/conversations`, expand a conversation with linked runs, and inspect
-  the run without leaving the conversation work surface.
-- Protocols / real Safari: one route transition from Templates to Protocols
-  briefly rendered the previous Templates content under the Protocols URL until
-  reload. This was not reproduced on a second attempt. Expected behavior:
-  route content and URL always reconcile without manual refresh. Severity: low
-  unless reproduced. Verification method: repeat top-nav transitions across
-  Templates, Protocols, Runs, Conversations, Tasks, Agents, and Capabilities in
-  real Safari with cache disabled/normal refresh.
-- Audit coverage: this pass exercised broad real Safari flows, but it has not
-  yet produced a literal 500+ screenshot corpus. Expected behavior: do not
-  claim the 500+ screenshot breadth gate until the harness records and indexes
-  that many distinct Safari screenshots. Severity: process. Verification
-  method: screenshot manifest with count, route, viewport, action, and result.
-- Deployment / real environment: M3 still fails to stay up after redeploy while
-  Registry, M1, and M2 are healthy. Expected behavior: either M3 is configured
-  and usable, or scenarios and UI copy clearly treat it as unavailable so users
-  do not route work to a dead agent. Severity: medium. Verification method:
-  redeploy from `/Users/tinker/octopus`, check container health, then validate
-  `/ui/agents` reports the same usable agent set.
-
-Resolved or verified in the latest implementation passes:
-
-- Runs: split-pane detail was replaced by inline expansion and
-  collapse-on-active-row behavior. The internal run evidence model remains open
-  and is tracked above.
-- Runs / real Safari: changing the status filter clears stale incompatible
-  selections and removes stale `run_id` values.
-- Runs / real Safari: completed participant rows prefer resolved outcomes over
-  raw running state.
-- Runs / real Safari: artifact Outputs expose the shared Preview/Open/Download/
-  Copy path action row when concrete bytes exist.
-- Conversations / real Safari: the list uses inline expansion, one expanded
-  conversation at a time, and click-to-collapse for the active row.
-- Conversations / real Safari: the full conversation page uses top-level tabs
-  rather than rendering all subsections simultaneously.
-- Tasks / real Safari: tasks now use the same single inline expansion contract
-  as Runs, Conversations, and protocol stages; clicking a different task
-  collapses the previous detail and clicking the active task collapses it.
-- Tasks / real Safari: the implementation task for run
-  `186e8080c07342e2943dd0fbf821c740` exposes produced output artifacts inline
-  with Preview/Open/Download/Copy path actions after redeploy and reload.
-- Protocol stages / real Safari: stage rows expand inline, Done collapses the
-  editor, Assignment hides Advanced/custom runtime internals, Files & outputs
-  stays on the selected stage, and the workflow map remains interactive on
-  demand.
+1. Commit and push from `/Users/tinker/output/bots/telegram-agent-bot`.
+2. Pull in `/Users/tinker/octopus`.
+3. Redeploy from `/Users/tinker/octopus`.
+4. Hard-refresh Safari with `Option+Command+R`.
+5. Verify in real Safari before claiming product completion.

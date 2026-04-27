@@ -2,6 +2,8 @@
 
 import asyncio
 import contextlib
+import io
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -19,11 +21,7 @@ from octopus_sdk.identity import (
     telegram_conversation_ref,
     telegram_numeric_id,
 )
-from octopus_sdk.protocols import (
-    launch_protocol_from_conversation,
-    list_launchable_protocols,
-    resolve_launchable_protocol,
-)
+from octopus_sdk.protocols import ProtocolService
 from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.sessions import (
     SessionState,
@@ -827,6 +825,7 @@ async def cmd_protocol(
         await update.effective_message.reply_text("Protocol control requires a connected registry.")
         return
     client, agent_id, registry_url = registry_access
+    protocol_service = ProtocolService(client)
     args = tuple(event.args or ())
     sub = str(args[0] or "").strip().lower() if args else ""
     if sub in {"", "help"}:
@@ -835,7 +834,7 @@ async def cmd_protocol(
         return
     if sub == "list":
         try:
-            protocols = await list_launchable_protocols(client)
+            protocols = await protocol_service.list_launchable()
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to list protocols. {exc}")
             return
@@ -852,7 +851,7 @@ async def cmd_protocol(
             await update.effective_message.reply_text("Usage: /protocol start <slug> <problem statement>")
             return
         try:
-            match = await resolve_launchable_protocol(client, slug)
+            match = await protocol_service.resolve_launchable(slug)
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to load protocols. {exc}")
             return
@@ -867,9 +866,7 @@ async def cmd_protocol(
             title=f"Telegram chat {event.chat_id}",
         )
         try:
-            launch = await launch_protocol_from_conversation(
-                client,
-                client,
+            launch = await protocol_service.launch_from_conversation(
                 {
                     "protocol_ref": match.protocol_id,
                     "entry_agent_id": agent_id,
@@ -923,7 +920,7 @@ async def cmd_protocol(
             return
         run_id = str(args[1] or "").strip()
         try:
-            detail = await client.get_run(run_id)
+            detail = await protocol_service.get_run_status(run_id)
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
             return
@@ -935,6 +932,51 @@ async def cmd_protocol(
         )
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
+    if sub == "artifacts":
+        if len(args) < 2:
+            await update.effective_message.reply_text("Usage: /protocol artifacts <run_id>")
+            return
+        run_id = str(args[1] or "").strip()
+        try:
+            detail = await protocol_service.get_run_status(run_id)
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
+            return
+        artifact_links = {
+            str(item.artifact_key or ""): telegram_protocols.protocol_artifact_url(
+                runtime,
+                run_id,
+                item.artifact_key,
+                registry_url=registry_url,
+            )
+            for item in (detail.artifacts or [])
+            if item.exists and str(item.artifact_key or "").strip()
+        }
+        rendered = telegram_presenters.protocol_run_artifacts_message(
+            detail,
+            deep_link=telegram_protocols.protocol_run_url(runtime, run_id, registry_url=registry_url),
+            artifact_links=artifact_links,
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if sub == "export":
+        if len(args) < 2:
+            await update.effective_message.reply_text("Usage: /protocol export <run_id>")
+            return
+        run_id = str(args[1] or "").strip()
+        try:
+            exported = await protocol_service.export_run(run_id)
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to export the protocol run. {exc}")
+            return
+        payload = exported.model_dump(mode="json")
+        doc = io.BytesIO(json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"))
+        doc.name = f"protocol_run_{run_id}.json"
+        await update.effective_message.reply_document(
+            document=doc,
+            caption=f"Protocol run export: {run_id}",
+        )
+        return
     if sub in {"watch", "unwatch"}:
         if len(args) < 2:
             await update.effective_message.reply_text(f"Usage: /protocol {sub} <run_id>")
@@ -942,7 +984,7 @@ async def cmd_protocol(
         run_id = str(args[1] or "").strip()
         if sub == "watch":
             try:
-                detail = await client.get_run(run_id)
+                detail = await protocol_service.get_run_status(run_id)
             except RegistryClientError as exc:
                 await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
                 return
@@ -995,8 +1037,8 @@ async def cmd_protocol(
                 await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
                 return
         try:
-            detail = await client.get_run(run_id)
-            result = await client.act_on_protocol_run(
+            detail = await protocol_service.get_run_status(run_id)
+            result = await protocol_service.act_on_run(
                 run_id,
                 action=sub,
                 reason=reason,

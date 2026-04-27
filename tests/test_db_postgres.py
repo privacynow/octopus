@@ -58,6 +58,35 @@ def test_run_init_is_noop_on_current_db(postgres_truncated):
     assert errors == []
 
 
+def test_protocol_responsiveness_indexes_exist(postgres_truncated):
+    """Run and issue list filters have matching indexes for UI-scale history."""
+    from app.db.postgres import get_connection
+
+    expected_indexes = {
+        "idx_protocol_runs_protocol_updated",
+        "idx_protocol_runs_entry_agent_updated",
+        "idx_protocol_runs_root_conversation_updated",
+        "idx_protocol_runs_origin_channel_updated",
+        "idx_protocol_runs_org_status_updated",
+        "idx_protocol_runs_blocked_code_updated",
+        "idx_protocol_stage_executions_running_lease",
+        "idx_protocol_stage_executions_running_timeout",
+        "idx_protocol_stage_executions_failure_code",
+    }
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'agent_registry'
+                """
+            )
+            actual_indexes = {row[0] for row in cur.fetchall()}
+
+    assert expected_indexes <= actual_indexes
+
+
 def test_run_init_does_not_seed_builtin_protocols_into_authored_definitions(postgres_base_url, request):
     """DB init leaves builtin protocol examples out of authored protocol rows."""
     from app.db.postgres import get_connection

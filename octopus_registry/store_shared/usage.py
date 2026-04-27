@@ -91,6 +91,8 @@ def aggregate_usage_rows(rows: Iterable[UsageSummaryRecord | Mapping[str, Any]])
             {
                 "conversation_id": conversation_id,
                 "title": title,
+                "conversation_type": str(metadata.get("conversation_type") or "conversation"),
+                "origin_channel": str(metadata.get("origin_channel") or ""),
                 **empty_usage_total(),
             },
         )

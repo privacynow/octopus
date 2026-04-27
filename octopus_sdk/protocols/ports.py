@@ -73,3 +73,16 @@ class ProtocolObservationPort(Protocol):
     async def list_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]: ...
 
     async def export_run(self, run_id: str) -> ProtocolRunExportRecord: ...
+
+
+@runtime_checkable
+class ProtocolRunControlPort(Protocol):
+    async def act_on_protocol_run(
+        self,
+        run_id: str,
+        *,
+        action: str,
+        reason: str = "",
+        idempotency_key: str = "",
+        expected_version: int | None = None,
+    ) -> ProtocolRunMutationRecord: ...

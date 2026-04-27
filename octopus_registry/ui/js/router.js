@@ -54,7 +54,14 @@ const Router = (() => {
         inner.className = 'content-inner';
         const msg = document.createElement('div');
         msg.className = 'empty-state';
-        msg.textContent = 'Page not found';
+        const title = document.createElement('p');
+        title.textContent = 'Page not found';
+        msg.appendChild(title);
+        const home = document.createElement('a');
+        home.className = 'btn btn-primary';
+        home.href = '/ui/';
+        home.textContent = 'Go to Dashboard';
+        msg.appendChild(home);
         inner.appendChild(msg);
         _swapMountedRoute(inner, renderId, null, normalized);
     }
@@ -151,12 +158,18 @@ const Router = (() => {
                 UI.setActiveCleanupBag(null);
             }
         }
-        await _routeReadyPromise(inner);
         if (renderId !== renderSequence) {
             _cleanup(nextCleanup);
             return;
         }
         _swapMountedRoute(inner, renderId, nextCleanup, activePath);
+        try {
+            await _routeReadyPromise(inner);
+        } catch (e) {
+            if (renderId === renderSequence) {
+                _renderRouteError(inner, e);
+            }
+        }
     }
 
     function _updateActiveNav(path) {

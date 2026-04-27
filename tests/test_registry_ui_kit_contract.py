@@ -212,6 +212,14 @@ def test_main_css_carries_kit_primitive_classes() -> None:
     assert ".kit-workflow-view-full" not in css
     assert ".kit-workflow-view-focus" not in css
     assert ".kit-workflow-compact" not in css
+
+
+def test_rehearsal_session_forms_are_keyed_by_routed_task() -> None:
+    kit = _read("js", "helpers", "kit.js")
+
+    assert "card.dataset.key = `rehearsal-session:" in kit
+    assert "form.dataset.routedTaskId = routedTaskId;" in kit
+    assert "const currentRoutedTaskId = String(form.dataset.routedTaskId" in kit
     assert "'protocol.workflow.narrow.empty'" not in kit
 
 

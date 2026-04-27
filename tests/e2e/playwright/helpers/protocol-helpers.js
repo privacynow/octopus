@@ -188,6 +188,8 @@ async function setSelectValue(control, value) {
 async function openBlankDraft(page) {
   await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'New protocol' }).click();
+  await expect(page.locator('[data-testid="protocol-starter"]')).toBeVisible();
+  await page.getByRole('button', { name: 'Start blank' }).click();
   await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
   await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
 }
@@ -202,11 +204,11 @@ async function openConversationForAgentFromUi(page, agentId) {
 }
 
 async function openTemplateDraft(page, templateName, { expectedStageKeys = [], retry = true } = {}) {
-  await page.goto('/ui/gallery', { waitUntil: 'domcontentloaded' });
+  await page.goto('/ui/protocols?new=template', { waitUntil: 'domcontentloaded' });
   const templateCard = page.locator('.protocol-template-card').filter({ hasText: templateName }).first();
   await expect(templateCard).toBeVisible();
   await templateCard.getByRole('button', { name: 'Use template' }).click();
-  await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
+  await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
   if (expectedStageKeys.length) {
     await expect(page.locator('[data-testid^="workflow-stage-"]').first()).toBeVisible({ timeout: 15000 });
     const actualStageKeys = await page.locator('[data-testid^="workflow-stage-"]').evaluateAll((nodes) =>
@@ -274,7 +276,8 @@ async function createStep(page, {
   const ownerRoleSelect = stepBasics.getByLabel('Owner role').first();
   if (ownerRole) {
     await setSelectValue(ownerRoleSelect, ownerRole);
-  } else {
+  } else if (roleName || roleKey) {
+    await setSelectValue(ownerRoleSelect, '__new__');
     const roleNameControl = stepBasics.getByLabel('Role name').first();
     await expect(roleNameControl).toBeVisible();
     await roleNameControl.fill(roleName || `${name} role`);
@@ -285,54 +288,59 @@ async function createStep(page, {
   if (stageKind) {
     await setSelectValue(stepBasics.getByLabel('Stage type').first(), stageKind);
   }
-  if (!selectorValue) {
-    throw new Error(`selectorValue is required when creating step ${key || name}`);
-  }
-  const assignmentSection = await openStagePanel(page, stageEditorShell, {
-    tab: 'Assignment',
-    heading: 'Assignment',
-  });
-  const valueLabel = selectorKind === 'agent'
-    ? 'Agent'
-    : selectorKind === 'skill'
-      ? 'Required skill'
-      : 'Choose runtime role tag';
-  if (selectorKind === 'agent' || selectorKind === 'skill') {
-    const modeLabel = selectorKind === 'agent' ? 'Specific agent' : 'By skill';
-    const modeTab = assignmentSection.getByRole('tab', { name: modeLabel, exact: true });
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await modeTab.click();
-      const valueCount = await assignmentSection.getByLabel(valueLabel, { exact: true }).count();
-      if (valueCount) {
-        break;
+  if (selectorValue) {
+    const assignmentSection = await openStagePanel(page, stageEditorShell, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
+    const valueLabel = selectorKind === 'agent'
+      ? 'Agent'
+      : selectorKind === 'new-capability'
+        ? 'Needed capability'
+        : selectorKind === 'skill'
+          ? 'Required capability'
+          : 'Choose runtime role tag';
+    if (selectorKind === 'agent' || selectorKind === 'skill' || selectorKind === 'new-capability') {
+      const modeLabel = selectorKind === 'agent'
+        ? 'Specific agent'
+        : selectorKind === 'new-capability'
+          ? 'New capability needed'
+          : 'Existing capability';
+      const modeTab = assignmentSection.getByRole('tab', { name: modeLabel, exact: true });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await modeTab.click();
+        const valueCount = await assignmentSection.getByLabel(valueLabel, { exact: true }).count();
+        if (valueCount) {
+          break;
+        }
+        await page.waitForTimeout(100);
       }
-      await page.waitForTimeout(100);
-    }
-  } else {
-    const advanced = assignmentSection.locator('summary').filter({ hasText: 'Custom runtime selector' }).first();
-    if (await advanced.count()) {
-      await advanced.click();
-    }
-  }
-  const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true }).first();
-  await expect(valueControl).toBeVisible();
-  const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
-  if (valueTag === 'select') {
-    let targetValue = selectorValue;
-    if (selectorValue === '__first__') {
-      targetValue = await valueControl.locator('option').evaluateAll((options) =>
-        options.map((option) => String(option.value || '')).find((value) => value),
-      );
-      if (!targetValue) {
-        throw new Error(`No selectable ${selectorKind} option is available for ${key || name}`);
+    } else {
+      const advanced = assignmentSection.locator('summary').filter({ hasText: 'Custom runtime selector' }).first();
+      if (await advanced.count()) {
+        await advanced.click();
       }
     }
-    await setSelectValue(valueControl, targetValue);
-  } else {
-    await valueControl.fill(selectorValue);
-    await valueControl.blur();
+    const valueControl = assignmentSection.getByLabel(valueLabel, { exact: true }).first();
+    await expect(valueControl).toBeVisible();
+    const valueTag = await valueControl.evaluate((element) => element.tagName.toLowerCase());
+    if (valueTag === 'select') {
+      let targetValue = selectorValue;
+      if (selectorValue === '__first__') {
+        targetValue = await valueControl.locator('option').evaluateAll((options) =>
+          options.map((option) => String(option.value || '')).find((value) => value),
+        );
+        if (!targetValue) {
+          throw new Error(`No selectable ${selectorKind} option is available for ${key || name}`);
+        }
+      }
+      await setSelectValue(valueControl, targetValue);
+    } else {
+      await valueControl.fill(selectorValue);
+      await valueControl.blur();
+    }
+    await page.waitForTimeout(150);
   }
-  await page.waitForTimeout(150);
   if (instructions) {
     const instructionsSection = await openStagePanel(page, stageEditorShell, {
       tab: 'Instructions',

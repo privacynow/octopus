@@ -81,7 +81,7 @@ window.Kit = (() => {
         'protocol.participant.selector_kind.placeholder': 'Choose how this step should resolve…',
         'protocol.participant.selector_strategy.label': 'Strategy',
         'protocol.participant.selector_value.label': 'Rule value',
-        'protocol.participant.selector_value.help': 'For example: a skill slug, a runtime role tag, or an agent slug.',
+        'protocol.participant.selector_value.help': 'For example: a capability slug, a runtime role tag, or an agent slug.',
         'protocol.participant.selector_value.placeholder': 'e.g. legal-review, approver, m1',
         'protocol.participant.selector_preview.label': 'Who matches right now',
         'protocol.participant.selector_preview.help': 'Preview uses the shared registry selector resolution path. Choose a matching agent to pin this step when needed.',
@@ -103,7 +103,7 @@ window.Kit = (() => {
         'protocol.stage.stage_key.placeholder': 'planning',
         'protocol.stage.stage_key.help': 'Internal reference for this step. It is usually generated from the name.',
         'protocol.stage.participant_key.label': 'Owner role',
-        'protocol.stage.participant_key.help': 'Which reusable role owns this step.',
+        'protocol.stage.participant_key.help': 'Optional while drafting. Choose or create a reusable role before publishing if this step needs to execute.',
         'protocol.stage.stage_kind.label': 'Stage type',
         'protocol.stage.stage_kind.help': 'Work produces output; review evaluates output; acceptance signs off.',
         'protocol.stage.instructions.label': 'Instructions',
@@ -168,11 +168,11 @@ window.Kit = (() => {
         'protocol.canvas.empty.title': 'Start the workflow',
         'protocol.canvas.empty.body': 'Add the first step in the workflow and create its owner role inline if needed.',
         'protocol.catalog.empty.title': 'No protocols yet',
-        'protocol.catalog.empty.body': 'Create one from Templates, or start from a blank draft.',
+        'protocol.catalog.empty.body': 'Create a blank protocol, or start from a reusable template.',
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',
-        'protocol.catalog.gallery': 'Browse template gallery',
+        'protocol.catalog.template': 'Use a template',
         'protocol.firstrun.participant': 'Add the first role.',
         'protocol.firstrun.stage': 'Add the first step for that role.',
         'protocol.firstrun.transition': 'Connect the step to the next step or an outcome.',
@@ -909,18 +909,19 @@ window.Kit = (() => {
 
         function _compactGeneratedRecords(items) {
             const groups = new Map();
-            const output = [];
+            const visible = [];
+            const generated = [];
             (items || []).forEach((record) => {
                 const generatedSource = UI.generatedTimestamp(record.display_name || '')
                     ? record.display_name
                     : UI.generatedTimestamp(record.slug || '')
                         ? record.slug
                         : '';
-                if (!generatedSource) {
-                    output.push(record);
+                if (!generatedSource && !UI.isDefaultHiddenRecord(record)) {
+                    visible.push(record);
                     return;
                 }
-                const family = UI.compactGeneratedName(generatedSource, { stripUiOnly: true });
+                const family = UI.compactGeneratedName(generatedSource || record.display_name || record.slug || 'Generated drafts', { stripUiOnly: true });
                 const key = [
                     String(record.lifecycle_state || 'draft'),
                     family.toLowerCase(),
@@ -932,13 +933,13 @@ window.Kit = (() => {
                         _catalogCollapsedCount: 1,
                     };
                     groups.set(key, collapsedRecord);
-                    output.push(collapsedRecord);
+                    generated.push(collapsedRecord);
                     return;
                 }
                 const existing = groups.get(key);
                 existing._catalogCollapsedCount = Number(existing._catalogCollapsedCount || 1) + 1;
             });
-            return output;
+            return [...visible, ...generated];
         }
 
         function renderList() {
@@ -2009,6 +2010,7 @@ window.Kit = (() => {
             card.dataset.routedTaskId = String(session.routed_task_id || '');
             card.dataset.stageKey = String(session.stage_key || '');
             const routedTaskId = String(session.routed_task_id || '');
+            card.dataset.key = `rehearsal-session:${routedTaskId || String(session.stage_key || '')}`;
             const sessionDraft = drafts && typeof drafts === 'object' && drafts[routedTaskId]
                 ? drafts[routedTaskId]
                 : {};
@@ -2052,6 +2054,9 @@ window.Kit = (() => {
 
             const form = document.createElement('form');
             form.className = 'kit-rehearsal-session-form';
+            form.dataset.routedTaskId = routedTaskId;
+            form.dataset.stageKey = String(session.stage_key || '');
+            form.dataset.participantKey = String(session.participant_key || '');
 
             const textarea = document.createElement('textarea');
             textarea.className = 'kit-rehearsal-session-response';
@@ -2179,6 +2184,7 @@ window.Kit = (() => {
                     btn.type = 'button';
                     btn.className = 'kit-rehearsal-scenario-btn';
                     btn.textContent = scenario.display_name || dictValue('protocol.rehearsal.scenarios.unnamed', 'Untitled');
+                    btn.dataset.key = `rehearsal-scenario:${routedTaskId}:${String(scenario.protocol_scenario_id || scenario.display_name || '')}`;
                     btn.setAttribute('aria-pressed', String(sessionDraft.scenarioId || '') === String(scenario.protocol_scenario_id || '') ? 'true' : 'false');
                     btn.addEventListener('click', () => {
                         textarea.value = String(scenario.response_text || '');
@@ -2206,8 +2212,9 @@ window.Kit = (() => {
             form.addEventListener('submit', (e) => {
                 e.preventDefault();
                 if (typeof onRespond === 'function') {
+                    const currentRoutedTaskId = String(form.dataset.routedTaskId || card.dataset.routedTaskId || '').trim();
                     onRespond({
-                        routedTaskId: session.routed_task_id,
+                        routedTaskId: currentRoutedTaskId,
                         responseText: textarea.value,
                         decision: form.__decisionSelect instanceof HTMLSelectElement
                             ? String(form.__decisionSelect.value || '')
@@ -2228,8 +2235,8 @@ window.Kit = (() => {
                                 };
                             })
                             .filter(Boolean),
-                        stageKey: session.stage_key,
-                        participantKey: session.participant_key,
+                        stageKey: String(form.dataset.stageKey || card.dataset.stageKey || ''),
+                        participantKey: String(form.dataset.participantKey || ''),
                     });
                 }
             });
@@ -2496,6 +2503,7 @@ window.Kit = (() => {
         onPresenceFilter = null,
         onSelect = null,
         onStartConversation = null,
+        renderExpanded = null,
         emptyHint = '',
     } = {}) {
         const root = document.createElement('div');
@@ -2541,12 +2549,14 @@ window.Kit = (() => {
             ));
         } else {
             entries.forEach((agent) => {
+                const selected = String(agent.id || '') === String(selectedId || '');
                 const row = document.createElement('article');
                 row.className = 'kit-agents-list-row';
-                if (String(agent.id || '') === String(selectedId || '')) {
+                if (selected) {
                     row.classList.add('is-selected');
                 }
                 row.dataset.agentId = String(agent.id || '');
+                row.setAttribute('aria-expanded', String(selected));
 
                 const head = document.createElement('div');
                 head.className = 'kit-agents-list-row-head';
@@ -2606,11 +2616,19 @@ window.Kit = (() => {
                     const detailsBtn = document.createElement('button');
                     detailsBtn.type = 'button';
                     detailsBtn.className = 'btn btn-sm';
-                    detailsBtn.textContent = 'Details';
+                    detailsBtn.textContent = selected ? 'Hide details' : 'Details';
+                    detailsBtn.setAttribute('aria-expanded', String(selected));
                     detailsBtn.addEventListener('click', () => onSelect(agent));
                     actions.appendChild(detailsBtn);
                 }
                 if (actions.childElementCount) row.appendChild(actions);
+                if (selected && typeof renderExpanded === 'function') {
+                    const expanded = renderExpanded(agent);
+                    if (expanded instanceof Node) {
+                        expanded.classList.add('agent-inline-detail');
+                        row.appendChild(expanded);
+                    }
+                }
                 list.appendChild(row);
             });
         }

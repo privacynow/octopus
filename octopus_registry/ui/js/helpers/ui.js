@@ -210,7 +210,11 @@ window.UI = (() => {
         const isLink = !!href;
         const isAction = !href && typeof onClick === 'function';
         const hasTrailing = trailing instanceof Node;
-        const usePressableContainer = isAction && hasTrailing;
+        const interactiveSelector = 'a, button, input, textarea, select, summary, [role="button"], [data-artifact-preview-url], [data-artifact-preview-action]';
+        const hasInteractiveTrailing = hasTrailing && trailing instanceof Element && (
+            trailing.matches(interactiveSelector) || !!trailing.querySelector(interactiveSelector)
+        );
+        const usePressableContainer = isAction && hasInteractiveTrailing;
         const row = document.createElement(isLink ? 'a' : isAction && !usePressableContainer ? 'button' : 'div');
         row.className = [
             'list-row',
@@ -225,10 +229,6 @@ window.UI = (() => {
         } else if (isAction && !usePressableContainer) {
             row.type = 'button';
         }
-        if (usePressableContainer) {
-            row.setAttribute('aria-label', [label, sublabel, badgeText].filter(Boolean).join(' · '));
-        }
-
         const main = document.createElement('div');
         main.className = 'list-row-main';
 
@@ -269,13 +269,15 @@ window.UI = (() => {
             const activate = (event) => {
                 const target = event && event.target instanceof Element ? event.target : null;
                 if (target && target !== row) {
-                    const nestedInteractive = target.closest('a, button, input, textarea, select, summary, [role="button"], [data-artifact-preview-url]');
+                    const nestedInteractive = target.closest(interactiveSelector);
                     if (nestedInteractive && nestedInteractive !== row) return;
                 }
                 onClick(event);
             };
             if (usePressableContainer) {
-                makePressable(row, activate);
+                main.classList.add('list-row-pressable');
+                main.setAttribute('aria-label', [label, sublabel, badgeText].filter(Boolean).join(' · '));
+                makePressable(main, activate);
             } else {
                 row.addEventListener('click', activate);
             }
@@ -645,11 +647,133 @@ window.UI = (() => {
         return Boolean(generatedTimestamp(value));
     }
 
+    function isHumanAssignableCapabilityName(value) {
+        const normalized = String(value || '').trim().toLowerCase();
+        return Boolean(normalized)
+            && normalized !== '*'
+            && normalized !== 'rehearsal'
+            && !isGeneratedOrRehearsalText(normalized);
+    }
+
+    function _recordFieldText(record, fields) {
+        return fields
+            .map((field) => String(record?.[field] || '').trim())
+            .filter(Boolean)
+            .join(' ');
+    }
+
+    function isGeneratedOrRehearsalText(value) {
+        const normalized = String(value || '').trim().toLowerCase();
+        if (!normalized) return false;
+        const canonical = normalized.replace(/[-_]+/g, ' ');
+        const generatedWorkflowKeys = [
+            'compose-assistant-protocol',
+            'compose assistant protocol',
+            'publish-report',
+            'publish report',
+            'live-authoring',
+            'live authoring',
+        ];
+        const generatedWorkflowKey = generatedWorkflowKeys.some((item) =>
+            normalized === item
+            || normalized.startsWith(`${item} `)
+            || normalized.includes(` ${item} `)
+            || normalized.endsWith(` ${item}`)
+            || canonical === item
+            || canonical.startsWith(`${item} `)
+            || canonical.includes(` ${item} `)
+            || canonical.endsWith(` ${item}`));
+        const looksLikeGeneratedVariant = (
+            /^draft-[0-9a-f]{8}$/i.test(normalized)
+            || (
+                /[-_]\d{1,4}$/.test(normalized)
+                && /\b(?:draft|protocol|analysis|approval|engineering|authoring|assistant|document|software)\b/.test(canonical)
+            )
+        );
+        return normalized === 'rehearsal'
+            || normalized === 'registry.rehearsal'
+            || normalized.startsWith('rehearsal ')
+            || normalized.includes(' rehearsal')
+            || normalized.includes(' meta protocol composer ')
+            || normalized.startsWith('meta protocol composer ')
+            || canonical.includes(' meta protocol composer ')
+            || canonical.startsWith('meta protocol composer ')
+            || generatedWorkflowKey
+            || looksLikeGeneratedVariant
+            || isGeneratedTimestampName(normalized);
+    }
+
+    function isDefaultHiddenRecord(record) {
+        if (record == null) return false;
+        if (typeof record !== 'object') {
+            return isGeneratedOrRehearsalText(record);
+        }
+        if (record.is_rehearsal === true || record.rehearsal === true || record.is_generated === true) {
+            return true;
+        }
+        const tags = Array.isArray(record.tags)
+            ? record.tags.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+            : [];
+        if (tags.some((tag) => ['rehearsal', 'generated', 'test', 'system'].includes(tag))) {
+            return true;
+        }
+        const source = [
+            record.source_kind,
+            record.entry_authority_ref,
+            record.origin_channel,
+            record.run_mode,
+            record.bot_key,
+            record.role,
+        ].map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
+        if (source.some((item) => (
+            item === 'rehearsal'
+            || item === 'registry.rehearsal'
+            || item === 'generated'
+            || item.includes('e2e')
+            || item.includes('spec')
+            || item.includes('test')
+            || item.includes('audit')
+            || item.endsWith('-ui')
+        ))) {
+            return true;
+        }
+        const hiddenFields = [
+            'display_name',
+            'name',
+            'title',
+            'slug',
+            'protocol_id',
+            'protocol_key',
+            'protocol_display_name',
+            'protocol_name',
+            'current_stage_key',
+            'stage_key',
+            'problem_statement',
+            'conversation_title',
+            'target_display_name',
+            'target_agent_id',
+            'origin_display_name',
+            'origin_agent_id',
+            'skill_name',
+        ];
+        if (hiddenFields.some((field) => isGeneratedOrRehearsalText(record?.[field]))) {
+            return true;
+        }
+        return isGeneratedOrRehearsalText(_recordFieldText(record, hiddenFields));
+    }
+
+    function defaultVisibleRecords(records, { includeHidden = false } = {}) {
+        const list = Array.isArray(records) ? records : [];
+        return includeHidden ? list : list.filter((record) => !isDefaultHiddenRecord(record));
+    }
+
     function compactGeneratedName(value, { stripUiOnly = false } = {}) {
         const original = String(value || '').trim();
         if (!original) return '';
         let label = original
             .replace(/(?:[\s_-]+)\d{10,}(?:\b|$)/g, '')
+            .replace(/[-_\s]+\d{1,4}$/g, '')
+            .replace(/^draft-[0-9a-f]{8}$/i, 'Generated draft')
             .replace(/[-_]+/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
@@ -997,13 +1121,61 @@ window.UI = (() => {
         return { element: group, setActive, buttons };
     }
 
-    function createCursorPaginator(container, loadFn, { initialCursor = 0 } = {}) {
+    function updateQueryToggleLink(link, active, {
+        param = 'include_generated',
+        value = '1',
+        label = 'Generated/audit',
+        activeState = 'included',
+        inactiveState = 'hidden',
+        showLabel = '',
+        hideLabel = '',
+    } = {}) {
+        if (!link) return;
+        const enabled = Boolean(active);
+        const url = new URL(window.location.href);
+        if (enabled) {
+            url.searchParams.delete(param);
+        } else {
+            url.searchParams.set(param, value);
+        }
+        link.href = `${url.pathname}${url.search}${url.hash}`;
+        link.className = 'btn btn-sm filter-toggle-link';
+        link.classList.toggle('is-active', enabled);
+        link.setAttribute('role', 'button');
+        link.setAttribute('aria-pressed', String(enabled));
+        link.dataset.state = enabled ? 'included' : 'hidden';
+        link.textContent = `${label}: ${enabled ? activeState : inactiveState}`;
+        const actionLabel = enabled
+            ? (hideLabel || `Hide ${label.toLowerCase()}`)
+            : (showLabel || `Show ${label.toLowerCase()}`);
+        link.setAttribute('aria-label', actionLabel);
+        link.title = actionLabel;
+    }
+
+    function updateGeneratedAuditToggleLink(link, includeGenerated, noun = 'work') {
+        updateQueryToggleLink(link, includeGenerated, {
+            label: 'Generated/audit',
+            activeState: 'included',
+            inactiveState: 'hidden',
+            showLabel: `Show generated/audit ${noun}`,
+            hideLabel: `Hide generated/audit ${noun}`,
+        });
+    }
+
+    function createCursorPaginator(container, loadFn, { initialCursor = 0, initialStack = [], onChange = null } = {}) {
         let cursor = initialCursor;
-        let cursorStack = [];
+        let cursorStack = Array.isArray(initialStack) ? initialStack.slice() : [];
+
+        function emitChange() {
+            if (typeof onChange === 'function') {
+                onChange({ cursor, hasPrev: cursorStack.length > 0, stackLength: cursorStack.length });
+            }
+        }
 
         function reset(nextCursor = initialCursor) {
             cursor = nextCursor;
             cursorStack = [];
+            emitChange();
         }
 
         function clear() {
@@ -1017,12 +1189,15 @@ window.UI = (() => {
                 hasNext: !!hasMore,
                 info,
                 onPrev: () => {
-                    cursor = cursorStack.pop() || initialCursor;
+                    const previousCursor = cursorStack.pop();
+                    cursor = previousCursor === undefined ? initialCursor : previousCursor;
+                    emitChange();
                     loadFn();
                 },
                 onNext: () => {
                     cursorStack.push(cursor);
                     cursor = nextCursor;
+                    emitChange();
                     loadFn();
                 },
             });
@@ -1242,7 +1417,7 @@ window.UI = (() => {
         }
         const badge = document.createElement('span');
         badge.className = 'badge badge-task-thread';
-        badge.textContent = 'Task thread';
+        badge.textContent = 'Delegation thread';
         return badge;
     }
 
@@ -1374,6 +1549,10 @@ window.UI = (() => {
         isPreviewableFilePath,
         generatedTimestamp,
         isGeneratedTimestampName,
+        isHumanAssignableCapabilityName,
+        isGeneratedOrRehearsalText,
+        isDefaultHiddenRecord,
+        defaultVisibleRecords,
         compactGeneratedName,
         conversationHref,
         taskArtifactEvidence,
@@ -1406,6 +1585,8 @@ window.UI = (() => {
         invalidateCachedData,
         subscribeWithRefresh,
         createSegmentedControl,
+        updateQueryToggleLink,
+        updateGeneratedAuditToggleLink,
         createCursorPaginator,
         memoizedRender,
         clearMemoizedRender,

@@ -388,14 +388,26 @@ class ProtocolTemplateSummaryRecord(RegistryRecordModel):
     stage_kind_sequence: list[ProtocolStageKind] = Field(default_factory=list)
 
 
-class ProtocolAuthoringManifestRecord(RegistryRecordModel):
-    templates: list[ProtocolTemplateSummaryRecord] = Field(default_factory=list)
+class ProtocolAuthoringOptionsRecord(RegistryRecordModel):
     sections: list[str] = Field(default_factory=lambda: list(PROTOCOL_AUTHORING_SECTION_OPTIONS))
     stage_kind_options: list[ProtocolStageKind] = Field(default_factory=lambda: list(PROTOCOL_STAGE_KIND_OPTIONS))
     artifact_kind_options: list[ProtocolArtifactKind] = Field(default_factory=lambda: list(PROTOCOL_ARTIFACT_KIND_OPTIONS))
     selector_kind_options: list[str] = Field(default_factory=lambda: list(PROTOCOL_SELECTOR_KIND_OPTIONS))
     default_surface: ProtocolAuthoringSurface = "standard"
     operator_surface_available: bool = False
+
+
+class ProtocolTemplateCreateRecord(RegistryRecordModel):
+    source_protocol_id: str = ""
+    slug: str = ""
+    display_name: str = ""
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "ProtocolTemplateCreateRecord":
+        if not str(self.source_protocol_id or "").strip():
+            raise ValueError("source_protocol_id is required when creating a protocol template")
+        return self
 
 
 class ProtocolDraftCreateRecord(RegistryRecordModel):

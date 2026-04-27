@@ -19,7 +19,7 @@ from octopus_sdk.content_models import (
 )
 from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.protocols import (
-    ProtocolAuthoringManifestRecord,
+    ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionDiffRecord,
@@ -702,12 +702,12 @@ class AbstractRegistryStore(Protocol):
     ) -> list[ProtocolTemplateSummaryRecord]:
         """Return template metadata for protocol authoring."""
 
-    def get_protocol_authoring_manifest(
+    def get_protocol_authoring_options(
         self,
         *,
         access: ProtocolAccessContextRecord,
-    ) -> ProtocolAuthoringManifestRecord:
-        """Return protocol-authoring sections, templates, and option lists."""
+    ) -> ProtocolAuthoringOptionsRecord:
+        """Return protocol-authoring sections and option lists."""
 
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Return one protocol definition with latest validation/version metadata."""
@@ -751,6 +751,17 @@ class AbstractRegistryStore(Protocol):
 
     def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Publish the current validated draft as a new immutable version."""
+
+    def publish_protocol_template(
+        self,
+        protocol_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        slug: str = "",
+        display_name: str = "",
+        description: str = "",
+    ) -> ProtocolMutationRecord:
+        """Publish the latest immutable version as a reusable template snapshot."""
 
     def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Archive one published protocol definition."""

@@ -1,249 +1,160 @@
 # Skills Model
 
-Skills use one shared backend model across the registry UI, Telegram, and any
-future clients. Different clients may bundle actions differently, but they must
-call the same backend operations and arrive at the same state transitions.
+This is the technical model behind the registry `Capabilities` surface.
 
-## Core Layers
+The current runtime noun is `skill`. The current UI/product noun is
+`capability`. They refer to the same product concept.
 
-Every skill surface should describe the same bot/session states:
+## Core State Layers
+
+Every client must preserve these distinct states:
 
 1. `Catalog`
-   What skills exist for this product, tenant, or bot context.
+   What skills/capabilities exist.
 2. `Available on this bot`
-   Which skills are available on one specific agent.
+   Which skills one agent can use.
 3. `Default for new conversations`
-   Which available skills seed newly created conversations for that bot.
+   Which available skills seed future conversations.
 4. `Active in this conversation`
-   Which available skills are turned on for one conversation right now.
+   Which skills are active in one conversation.
+5. `Routing skills`
+   Which skills this agent advertises for delegation/routing.
 
-These states are distinct. Making a skill available on a bot does not activate
-it in every conversation. Setting a default seeds new conversations only.
-Activating a skill in one conversation does not change bot-wide availability.
+Rules:
 
-## Routing Is Skill-Derived
-
-Cross-bot discovery and delegation use `routing skills`, which are derived from
-the normal skill state rather than managed as a second product object.
-
-A routing skill is:
-
-- available on the bot
-- runtime-ready
-- allowed by registry-owned routing policy
-
-Routing uses that bot-level projection. Conversation activation stays
-session-local. Additional filters such as region, tier, or compliance may
-exist as routing policy dimensions, but they are not a second skill system.
+- availability does not imply active everywhere
+- default does not update old conversations
+- conversation activation does not change bot-level availability
+- routing is derived, not separately authored
 
 ## Orthogonal Dimensions
 
-Skills also carry dimensions that are independent from the core states:
+| Dimension | Values |
+| --- | --- |
+| Source | Core, Store, Custom, Generated |
+| Kind | prompt, executable |
+| Setup | Needs setup, Ready |
+| Lifecycle | Draft, Submitted, Approved, Published, Archived |
 
-- `Source`
-  - `Core`: built into the runtime image
-  - `Store`: installed from the remote skill store
-  - `Custom`: authored inside Octopus and managed through lifecycle actions
-- `Kind`
-  - `prompt`: applied as operator-selected conversation instructions in the
-    provider run context
-  - `executable`: enabled through runtime orchestration, not only prompt text
-- `Setup`
-  - `Needs setup`: requires credentials before it can be active in a
-    conversation
-  - `Ready`: no missing setup is blocking activation
-- `Lifecycle`
-  - `Draft`
-  - `Submitted`
-  - `Approved`
-  - `Published`
-  - `Archived`
+Generated/rehearsal/test skills must be identifiable so default human surfaces
+can hide them.
+
+## Routing Skills
+
+Routing skills are derived from:
+
+- bot-level availability
+- runtime readiness
+- registry routing policy
+
+Routing may also apply policy dimensions such as region, trust, tier, or
+compliance. Those dimensions do not replace skills and should not be presented
+as another skill catalog.
 
 ## Shared Operations
 
-The shared backend operations are:
+Backend-owned operations include:
 
-- list or search catalog
-- inspect one skill
-- install, update, or uninstall a store skill on a bot
-- activate, deactivate, or clear skills in a conversation
+- list/search catalog
+- inspect skill
+- install/update/uninstall store skill on a bot
+- activate/deactivate/clear conversation skills
 - start setup and submit credential values
-- create, inspect, edit, submit, approve, reject, publish, or archive custom skills
+- create/edit/submit/approve/reject/publish/archive custom skills
+- export/import custom skill packages
 
-Clients can compose these operations into smoother flows, but they should not
-reimplement their rules or invent extra state machines.
-
-The activation state is shared across both kinds. What changes is the execution
-semantics after activation:
-
-- active prompt skills shape the normal provider context
-- active executable skills also participate in runtime orchestration
-
-Examples:
-
-- Registry UI `Add to conversation`
-  - inspect bot availability
-  - activate
-  - if setup is needed, prompt for credentials
-- Telegram `/skills add <name>`
-  - activate
-  - if setup is needed, prompt for credentials
-
-Both flows still use the same activation and setup operations.
-
-## Peer Clients
-
-Registry UI and chat clients are peers in product terms:
-
-- same backend operations
-- same validation
-- same permissions
-- same lifecycle
-- same vocabulary
-
-The registry UI is allowed to be a richer wrapper because it can present
-multi-step flows, detail panels, and lifecycle history more comfortably than a
-chat surface. That richer UX must still be built on the shared backend
-operations.
+Registry UI and Telegram may present these differently, but must call the same
+backend operations.
 
 ## Draft Package Model
 
-Custom skills use the same package shape as Core and Store skills. The mutable
-draft model includes:
+Custom skills use a package shape compatible with Core and Store skills.
 
-- metadata
-  - `name`
-  - `display_name`
-  - `description`
-- instructions
-  - `body`
-- setup
-  - `requirements`
-- provider extensions
-  - `provider_config`
-- artifacts
-  - `files`
-- lifecycle
-  - revision history
-  - approval history
-  - publish/archive state
+Mutable draft content:
 
-The package content is the source of truth. The following fields are derived on
-read or lifecycle transitions:
+- name
+- display name
+- description
+- instruction body
+- requirements
+- provider config
+- files
+- revision/lifecycle metadata
 
-- `validation_problems`
-- `publish_ready`
-- `runtime_available`
-- `has_unpublished_changes`
+Derived fields:
 
-These values may be cached, but they are not a second persisted truth source.
+- validation problems
+- publish readiness
+- runtime availability
+- unpublished changes
 
-## Skill Package Spec
+Derived fields may be cached, but they are not a second source of truth.
 
-The current on-disk skill package format is:
+## On-Disk Package Shape
 
-- required:
-  - `skill.md`
-- optional:
-  - `requires.yaml`
-  - `claude.yaml`
-  - `codex.yaml`
-  - additional files and scripts that the skill references at runtime
+Required:
 
-### `skill.md`
+- `skill.md`
 
-Primary instruction body plus optional frontmatter metadata such as:
+Optional:
 
-- `name`
-- `display_name`
-- `description`
-
-### `requires.yaml`
-
-Credential requirements used during setup. Each requirement can define:
-
-- `key`
-- `prompt`
-- `help_url`
-- optional validation rules
-
-### Provider config files
-
-Provider-specific configuration can live in:
-
+- `requires.yaml`
 - `claude.yaml`
 - `codex.yaml`
+- additional files/scripts
 
-These files extend the runtime context for the relevant provider without
-changing the shared skill lifecycle.
-
-### Additional files
-
-Additional files are stored as text artifacts inside the package. They are used
-for helper scripts, templates, or supporting content referenced by the skill at
-runtime.
-
-Shared package policy:
+Policy:
 
 - safe relative paths only
 - reserved package filenames may not be reused
-- shell scripts are the only files that may be marked executable
-- attached file limits are:
-  - at most 16 files
-  - 64 KB per file
-  - 256 KB total
-- file count and file size limits are validated in the backend
-- registry uploads and chat-provided file mutations go through the same
-  ingestion and validation rules
+- only `.sh` files may be executable
+- at most 16 files
+- 64 KB per file
+- 256 KB total
 
-## Validation And Lifecycle Rules
+## Validation And Lifecycle
 
-- validation is backend-owned, not client-owned
-- submit and publish both invoke shared validation
-- clients show the same validation problems, even if they present them
-  differently
-- invalid drafts can be saved only if they still satisfy package policy;
-  submit/publish remain blocked until validation passes
+Validation is backend-owned.
 
-Registry and chat are peers here:
+Rules:
 
-- registry can show inline panels, lists, and guided flows
-- chat can expose the same backend operations in smaller or more text-oriented
-  steps
-- neither client is allowed to invent a separate lifecycle or draft format
+- clients do not invent validation rules
+- submit and publish invoke shared validation
+- invalid drafts can be saved only if they satisfy package safety policy
+- publish remains blocked until validation passes
+- lifecycle actions require permissions
 
-Current client exposure over the same backend operations:
+## Client Exposure
 
-- registry `Skills`
-  - progressive draft editing through `Write`, `Setup`, `Review`, and `Advanced`
-  - validation/readiness display in `Review`
-  - lifecycle actions in `Review`
-  - package import/export and low-level package fields in `Advanced`
-- Telegram `/skills export <name> [draft|published]`
-  - export a custom skill package ZIP
-- Telegram `/skills import [target-name]`
-  - import a custom skill package ZIP into a new or existing draft
+Registry UI:
 
-The registry is the richer wrapper, not the authority. Chat remains a peer
-client.
+- richer editing and review flow
+- search/filter catalog
+- bot availability
+- conversation activation
+- custom draft lifecycle
+- package import/export
 
-## Product Rules
+Telegram:
 
-- Store listings feed the same unified `Skills` workspace. The store is a
-  source, not a separate product concept.
-- Custom skills use the same install and activation model after they are
-  published.
-- Core, Store, and Custom skills share one logical package model even if their
-  ingestion paths differ (disk seed, store import, in-product draft authoring).
-- User-facing copy should prefer:
-  - `Catalog`
-  - `Available on this bot`
-  - `Default for new conversations`
-  - `Active in this conversation`
-  - `Routing skills`
-  - `Needs setup`
-  - `Ready`
-  - `Core / Store / Custom`
+- text-oriented commands over the same backend
+- add/remove/list active skills
+- import/export where permitted
+- lifecycle actions only where permissions allow
 
-Avoid surfacing internal-only terms such as `builtin` or a competing end-user
-`capabilities` concept as the primary UX label.
+## Product Copy
+
+Prefer user-facing copy:
+
+- Capability
+- Catalog
+- Available on this bot
+- Default for new conversations
+- Active in this conversation
+- Routing skills
+- Needs setup
+- Ready
+- Core / Store / Custom / Generated
+
+Avoid exposing internal-only terms such as `builtin` or creating a competing
+end-user noun for the same concept.

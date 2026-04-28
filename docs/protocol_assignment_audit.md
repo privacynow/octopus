@@ -1,29 +1,81 @@
 # Protocol Assignment Audit
 
-This artifact locks the active assignment and validation contract for protocol authoring.
+This document records the current assignment contract and the intended product
+direction for protocol authoring.
 
-## Runtime rule
+## Product Rule
 
-- Canonical authored assignment: `stage.selector`
-- Participants are reusable role records only: `participant_key`, display metadata, shared instructions
-- Legacy `participants[].selector` and `required_skills` are migration inputs only during document canonicalization
-- Runtime selector dispatch reads only the selected stage's `selector`
-- Skill selector runtime preference still applies: when a protocol run starts from an entry agent and a step uses a skill selector without an explicit `preferred_agent_id`, runtime resolution prefers the run entry agent if that agent satisfies the selector
-- `preferred_agent_id` remains a runtime hint, not a second authored assignment field
+Assignment belongs to the stage.
 
-## Surface audit
+Participants/roles are reusable identity and shared instruction records. They
+are not the primary assignment authority for a stage.
 
-| Surface | Assignment formatter / summary | Validation entry point | Expected user-visible state |
-| --- | --- | --- | --- |
-| Workflow canvas | `_stageNodeSublabel()` / `_stageAssignmentSummary()` in [`protocol-workspace.js`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js) | Lifecycle validation surface from `_validationEl()` | Steps show owner role plus one compact assignment summary derived from the stage selector |
-| Workflow outline | `_sceneOutline()` in [`protocol-workspace.js`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js) | Lifecycle validation surface from `_validationEl()` | Outline stays structural: section and step labels only, no duplicate selector prose |
-| Step editor hero and assignment section | `_stageEditorHero()` / `_selectorEditor()` in [`protocol-workspace.js`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js) | Lifecycle validation surface from `_validationEl()` plus inline preview in `_selectorEditor()` | Authors can fully configure assignment in the step editor without leaving the step flow |
-| Role editor | `_participantEditorShell()` in [`protocol-workspace.js`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js) | Lifecycle validation surface from `_validationEl()` | Role editor only manages reusable role identity and shared instructions; it is not an assignment authority |
-| Registry runtime/store | `dispatch_target_selector()` in [`engine.py`](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/engine.py) and store projection in [`protocol_store.py`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/protocol_store.py) | runtime blocked decision / store snapshot fields | Runtime and snapshots read stage selectors; participant rows are runtime role state, not canonical authored assignment |
+## Current Runtime Rule
 
-## Validation issue contract
+- Canonical authored stage assignment is `stage.selector`.
+- A stage also references `participant_key` for role/instruction context.
+- Legacy `participants[].selector` and `required_skills` are canonicalization
+  inputs only.
+- Runtime selector dispatch reads the selected stage selector.
+- Skill selectors may prefer the run entry agent when no explicit
+  `preferred_agent_id` is pinned and the entry agent satisfies the selector.
+- `preferred_agent_id` is a runtime hint, not a second authored assignment
+  field.
 
-Validation is authoritative in [`documents.py`](/Users/tinker/output/bots/telegram-agent-bot/octopus_sdk/protocols/documents.py):
+## Current Draft Vs Publish Behavior
+
+The UI may allow incomplete or unassigned stages while an author is drafting.
+
+Current publish validation still blocks stages that do not resolve an
+assignment/selector. That is current implementation behavior, not a reason to
+show internal selector plumbing to standard authors.
+
+If product direction changes to allow published unassigned/manual stages, this
+document, `octopus_sdk/protocols/documents.py`, protocol UI validation, runtime
+dispatch, and tests must change together.
+
+## Standard Authoring Surface
+
+Standard authors should see:
+
+- stage title
+- stage instructions
+- clear assignment summary
+- capability/skill choice where desired
+- agent choice where desired
+- matching-agent quick choices when the list is small
+- scalable selector when the list is larger
+- artifacts
+- routing/transitions
+
+Standard authors should not see:
+
+- raw `stage_key`
+- custom runtime selector internals
+- `max_rounds`
+- `timeout_seconds`
+- operator-only runtime fields
+
+Delete/remove actions should be visible in the stage flow, not hidden inside an
+internal `Advanced` section.
+
+## Surface Audit
+
+| Surface | Assignment responsibility | Expected behavior |
+| --- | --- | --- |
+| Protocol stage stack | Shows one compact assignment summary. | No duplicate assignment prose. |
+| Stage editor | Owns assignment editing. | Author can choose none while drafting, agent, skill/capability, or skill with preferred agent. |
+| Role/participant editor | Owns reusable role identity and shared instructions. | Does not become the primary assignment editor. |
+| Workflow map | Shows structure and optional context. | Not required for primary authoring. |
+| Registry runtime/store | Resolves stage selector and run participant state. | Runtime reads stage-owned assignment. |
+
+## Validation Issue Contract
+
+Current validation lives in:
+
+- `octopus_sdk/protocols/documents.py`
+
+Current assignment-related issues include:
 
 - `stage.selector_required`
 - `stage.selector_kind_required`
@@ -33,11 +85,11 @@ Validation is authoritative in [`documents.py`](/Users/tinker/output/bots/telegr
 
 UI entry point:
 
-- `_validationEl()` in [`protocol-workspace.js`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/components/protocol-workspace.js)
+- `_validationEl()` in `octopus_registry/ui/js/components/protocol-workspace.js`
 
 Expected behavior:
 
-- missing stage selector blocks publish
-- missing stage selector never silently falls back to entry agent
-- skill selectors may still prefer the run entry agent at runtime when that agent matches the authored skill
-- every user-facing assignment summary is derived from the same stage selector contract
+- draft editing can be incomplete
+- publish validation reports assignment issues clearly
+- missing assignment must not silently fall back to an arbitrary agent
+- user-facing summaries derive from the same stage selector contract

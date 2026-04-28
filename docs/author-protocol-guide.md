@@ -161,3 +161,14 @@ acceptance over durable artifacts.
 
 Use it as a starting point when the workflow needs reviewable outputs rather
 than a one-off conversation.
+
+## Built-In Manufacturing Local Analytics Template
+
+The built-in `manufacturing-local-analytics` template is the customer-safe data
+analytics starter. It models local CSV contract definition, local profiling,
+analysis script generation, local execution, validation, and report review.
+
+Use it when the user needs repeatable analytics over private CSV or database
+extracts without pasting raw rows into the model prompt. The stage contract
+keeps model-visible context to schema, counts, relationship checks, and
+aggregates, while scripts and reports remain workspace artifacts.

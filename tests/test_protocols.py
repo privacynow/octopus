@@ -320,7 +320,7 @@ def test_validate_protocol_document_warns_when_legacy_required_skills_has_multip
 
 
 def test_builtin_protocol_templates_use_selector_backed_assignment() -> None:
-    for slug in ("software-engineering", "document-approval"):
+    for slug in ("software-engineering", "document-approval", "manufacturing-local-analytics"):
         document = builtin_protocol_document(slug)
         assert document.participants
         for participant in document.participants:
@@ -1164,6 +1164,9 @@ def test_registry_store_sources_builtin_protocol_templates_from_code_not_authore
     approval = store.get_protocol_template("document-approval", access=operator_access())
     assert approval.slug == "document-approval"
     assert approval.display_name == "Document Approval"
+    analytics = store.get_protocol_template("manufacturing-local-analytics", access=operator_access())
+    assert analytics.slug == "manufacturing-local-analytics"
+    assert analytics.display_name == "Manufacturing Local Analytics"
 
 
 def test_registry_store_authoring_options_and_templates_are_separate_resources(postgres_registry_truncated: str) -> None:
@@ -1381,6 +1384,19 @@ def test_registry_store_create_template_protocol_draft_clones_builtin_template(p
     assert approval_created.draft_definition_json["stages"]
     assert approval_created.validation is not None
     assert approval_created.validation.ok is True
+
+    analytics_created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "manufacturing-local-analytics"}),
+        access=operator_access(),
+    )
+
+    assert analytics_created.ok is True
+    assert analytics_created.protocol is not None
+    assert analytics_created.protocol.slug != "manufacturing-local-analytics"
+    assert analytics_created.draft_definition_json["metadata"]["display_name"].startswith("Manufacturing Local Analytics")
+    assert analytics_created.draft_definition_json["stages"]
+    assert analytics_created.validation is not None
+    assert analytics_created.validation.ok is True
 
 
 def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_registry_truncated: str) -> None:

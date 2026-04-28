@@ -140,6 +140,15 @@ You can:
 - publish a protocol as a template
 - start or inspect runs
 
+Built-in starter templates include:
+
+- `Software Engineering` for staged software planning, architecture,
+  implementation, review, and acceptance.
+- `Document Approval` for draft/review/approval document workflows.
+- `Manufacturing Local Analytics` for local CSV profiling, script generation,
+  repeatable analysis, artifact validation, and report review without raw row
+  prompts.
+
 Standard authoring should focus on:
 
 - stage title/instructions

@@ -113,7 +113,7 @@ Use the registry to:
 For the browser workflow, use
 [docs/registry-user-guide.md](docs/registry-user-guide.md).
 
-## Demo Use Case: Local Data Analytics Without Uploading Raw CSVs
+## Demo Use Case: Local Manufacturing Analytics Without Uploading Raw CSVs
 
 One practical customer workflow is local data analytics and reporting.
 
@@ -127,9 +127,16 @@ The intended pattern is:
 - keep generated code, reports, and charts as local artifacts
 
 This lets a customer use Octopus to build a repeatable analytics/reporting
-pipeline without pasting raw property records into the model prompt. The
+pipeline without pasting raw manufacturing records into the model prompt. The
 operator still controls the boundary: do not paste raw rows or attach private
 files to chat unless that is explicitly approved for the deployment.
+
+Run the deterministic demo:
+
+```bash
+./.venv/bin/python scripts/demo/manufacturing_local_analytics/run_demo.py \
+  --workspace .tmp/demo/manufacturing-local-analytics
+```
 
 For a step-by-step demo, use
 [docs/local-data-analytics-demo.md](docs/local-data-analytics-demo.md).

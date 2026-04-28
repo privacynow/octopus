@@ -233,10 +233,235 @@ def document_approval_protocol_document() -> ProtocolDefinitionDocumentRecord:
     )
 
 
+def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocumentRecord:
+    return canonical_protocol_document(
+        {
+            "schema_version": PROTOCOL_SCHEMA_VERSION,
+            "metadata": {
+                "slug": "manufacturing-local-analytics",
+                "display_name": "Manufacturing Local Analytics",
+                "description": (
+                    "Build and validate local manufacturing analytics scripts while keeping raw CSV rows "
+                    "inside the workspace."
+                ),
+            },
+            "participants": [
+                {"participant_key": "contract_author", "display_name": "Contract Author"},
+                {"participant_key": "script_author", "display_name": "Script Author"},
+                {"participant_key": "local_runner", "display_name": "Local Runner"},
+                {"participant_key": "validator", "display_name": "Validator"},
+                {"participant_key": "reviewer", "display_name": "Reviewer"},
+            ],
+            "artifacts": [
+                {
+                    "artifact_key": "input_contract",
+                    "kind": "workspace_file",
+                    "path": "protocol/input_contract.json",
+                    "description": "Local table contract, join keys, and privacy boundary.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "profile_script",
+                    "kind": "workspace_file",
+                    "path": "scripts/profile_manufacturing_data.py",
+                    "description": "Local profiler that emits schema, counts, missing values, and aggregate summaries.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "profile_summary",
+                    "kind": "workspace_file",
+                    "path": "reports/profile_summary.md",
+                    "description": "Model-safe profile summary with no raw CSV rows.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "model_visible_context",
+                    "kind": "workspace_file",
+                    "path": "reports/model_visible_context.md",
+                    "description": "Controlled context that can be shared with the assistant.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "analysis_script",
+                    "kind": "workspace_file",
+                    "path": "scripts/analyze_manufacturing_quality.py",
+                    "description": "Local analyzer that joins the CSVs and writes repeatable findings.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "quality_flags",
+                    "kind": "workspace_file",
+                    "path": "reports/quality_flags.csv",
+                    "description": "Panel-level high-risk flags generated locally.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "defect_summary",
+                    "kind": "workspace_file",
+                    "path": "reports/defect_summary.csv",
+                    "description": "Aggregate quality summary by shift, line, and dominant vendor.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "findings_report",
+                    "kind": "workspace_file",
+                    "path": "reports/manufacturing_findings.md",
+                    "description": "Human-readable findings and recommendations.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "heatmap",
+                    "kind": "workspace_file",
+                    "path": "reports/defect_heatmap.html",
+                    "description": "Renderable local defect risk heatmap.",
+                    "verify": True,
+                },
+                {
+                    "artifact_key": "run_manifest",
+                    "kind": "workspace_file",
+                    "path": "reports/run_manifest.json",
+                    "description": "Demo manifest with generated files, validation status, and privacy notes.",
+                    "verify": True,
+                },
+            ],
+            "stages": [
+                {
+                    "stage_key": "define_input_contract",
+                    "display_name": "Define Input Contract",
+                    "participant_key": "contract_author",
+                    "selector": {"kind": "skill", "value": "manufacturing-local-analytics"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "strict_completion": True,
+                    "require_output_verification": True,
+                    "timeout_seconds": 1800,
+                    "inputs": [],
+                    "outputs": ["input_contract"],
+                    "transitions": {"completed": "generate_profile_script"},
+                    "instructions": (
+                        "Define the expected local CSV files, join keys, privacy boundary, and output contract. "
+                        "Do not ask for raw rows; use only schema, counts, and aggregates as model-visible context."
+                    ),
+                },
+                {
+                    "stage_key": "generate_profile_script",
+                    "display_name": "Generate Profile Script",
+                    "participant_key": "script_author",
+                    "selector": {"kind": "skill", "value": "manufacturing-local-analytics"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "strict_completion": True,
+                    "require_output_verification": True,
+                    "timeout_seconds": 1800,
+                    "inputs": ["input_contract"],
+                    "outputs": ["profile_script"],
+                    "transitions": {"completed": "run_profile_locally"},
+                    "instructions": (
+                        "Create the local profiling script. It must inspect files on disk and write only "
+                        "schema, counts, missing values, relationship checks, and aggregates."
+                    ),
+                },
+                {
+                    "stage_key": "run_profile_locally",
+                    "display_name": "Run Profile Locally",
+                    "participant_key": "local_runner",
+                    "selector": {"kind": "skill", "value": "manufacturing-local-analytics"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "strict_completion": True,
+                    "require_output_verification": True,
+                    "timeout_seconds": 1800,
+                    "inputs": ["input_contract", "profile_script"],
+                    "outputs": ["profile_summary", "model_visible_context"],
+                    "transitions": {"completed": "generate_analysis_script"},
+                    "instructions": (
+                        "Run the profile script against the local CSVs and attach only controlled summaries. "
+                        "Raw CSV rows must remain in the workspace."
+                    ),
+                },
+                {
+                    "stage_key": "generate_analysis_script",
+                    "display_name": "Generate Analysis Script",
+                    "participant_key": "script_author",
+                    "selector": {"kind": "skill", "value": "manufacturing-local-analytics"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "strict_completion": True,
+                    "require_output_verification": True,
+                    "timeout_seconds": 1800,
+                    "inputs": ["input_contract", "model_visible_context"],
+                    "outputs": ["analysis_script"],
+                    "transitions": {"completed": "run_analysis_locally"},
+                    "instructions": (
+                        "Generate or revise the local analysis script using the controlled profile. The script "
+                        "must join the CSVs locally and produce repeatable reports."
+                    ),
+                },
+                {
+                    "stage_key": "run_analysis_locally",
+                    "display_name": "Run Analysis Locally",
+                    "participant_key": "local_runner",
+                    "selector": {"kind": "skill", "value": "manufacturing-local-analytics"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "strict_completion": True,
+                    "require_output_verification": True,
+                    "timeout_seconds": 1800,
+                    "inputs": ["input_contract", "analysis_script"],
+                    "outputs": ["quality_flags", "defect_summary", "findings_report", "heatmap"],
+                    "transitions": {"completed": "validate_outputs"},
+                    "instructions": (
+                        "Run the analysis script locally. Attach generated reports, flags, summaries, and heatmap "
+                        "as artifacts; do not paste raw source rows into the response."
+                    ),
+                },
+                {
+                    "stage_key": "validate_outputs",
+                    "display_name": "Validate Outputs",
+                    "participant_key": "validator",
+                    "selector": {"kind": "skill", "value": "testing"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "strict_completion": True,
+                    "require_output_verification": True,
+                    "timeout_seconds": 1800,
+                    "inputs": ["quality_flags", "defect_summary", "findings_report", "heatmap"],
+                    "outputs": ["run_manifest"],
+                    "transitions": {"completed": "review_report"},
+                    "instructions": (
+                        "Validate that all required artifacts exist, the known fixture findings are present, and "
+                        "the model-visible artifacts do not contain raw CSV rows."
+                    ),
+                },
+                {
+                    "stage_key": "review_report",
+                    "display_name": "Review Report",
+                    "participant_key": "reviewer",
+                    "selector": {"kind": "skill", "value": "code-review"},
+                    "stage_kind": "acceptance",
+                    "timeout_seconds": 1800,
+                    "inputs": ["run_manifest", "findings_report", "quality_flags", "defect_summary"],
+                    "outputs": [],
+                    "transitions": {"accept": "__complete__", "revise": "run_analysis_locally", "fail": "__failed__"},
+                    "instructions": (
+                        "Approve the report when the local artifacts are complete, repeatable, and safe to share. "
+                        "Send it back if outputs are missing or the privacy boundary is violated."
+                    ),
+                },
+            ],
+            "policies": {
+                "single_active_writer": True,
+                "max_review_rounds": 3,
+            },
+        }
+    )
+
+
 def builtin_protocol_documents() -> tuple[ProtocolDefinitionDocumentRecord, ...]:
     return (
         software_engineering_protocol_document(),
         document_approval_protocol_document(),
+        manufacturing_local_analytics_protocol_document(),
     )
 
 
@@ -304,6 +529,7 @@ def new_protocol_definition(
 __all__ = [
     "software_engineering_protocol_document",
     "document_approval_protocol_document",
+    "manufacturing_local_analytics_protocol_document",
     "builtin_protocol_documents",
     "builtin_protocol_template_summaries",
     "builtin_protocol_document",

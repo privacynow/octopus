@@ -88,6 +88,7 @@ def test_content_store_bootstrap_seeds_builtin_skills_and_guidance(tmp_path: Pat
         guidance = get_provider_guidance_service()
 
         assert catalog.has_skill("code-review")
+        assert catalog.has_skill("manufacturing-local-analytics")
         assert catalog.resolve_track("code-review") is not None
         assert guidance.effective_guidance("claude") is not None
         assert guidance.effective_guidance("codex") is not None

@@ -24,8 +24,8 @@ Status after the current implementation pass:
 | Provider guidance summary | Completed | Provider prompt/tool context uses `active_skill_tools_summary` and "Active skill tools". |
 | Registry UI product language | Completed in source | UI source now labels the product surface as Skills; legacy `new_capability` selector values are accepted only as input normalization and return `new_skill`. |
 | Documentation vocabulary | Completed for touched docs | README, architecture, SDK, registry, protocol, and skills docs use the updated product/architecture vocabulary. |
-| Product invariant canary matrix | Partially completed | Full Python suite and targeted JS syntax checks pass. Public UI/Telegram/CLI/deployed topology canaries still need a post-deploy run. |
-| Live Safari verification | Blocked until deploy/hard refresh | Real Safari is authenticated but is still serving old deployed assets that show `Capabilities`; the edited source has not been deployed to the running Octopus instance in this pass. |
+| Product invariant canary matrix | Partially completed | Full Python suite, targeted JS syntax checks, deployed status, and focused real-Safari smoke pass. Full public UI/Telegram/CLI canary matrix still needs a broader run. |
+| Live Safari verification | Completed for this refactor | After deploy and `Cmd+Option+R` hard refresh, real Safari shows `Skills` in navigation, loads the Skills catalog, expands Architecture inline, and loads M1 skill instructions. |
 | Octopus CLI peer-admin service alignment | Still planned | CLI is documented as a peer admin surface, but a shared admin service layer for CLI operations has not been implemented in this pass. |
 | Work lineage and artifact contract | Still planned | The naming refactor did not rebuild lineage/artifact UI behavior. |
 | Generated/test data hygiene | Still planned | The naming refactor did not add source-kind filtering for generated/rehearsal/test records. |
@@ -43,13 +43,15 @@ Verification completed in this pass:
 | `./.venv/bin/python -m pytest tests/test_product_vocabulary_contract.py -q` | 4 passed |
 | `./.venv/bin/python -m pytest tests/test_protocol_docs.py tests/test_product_vocabulary_contract.py tests/test_registry_ui_contract.py tests/test_registry_management_protocol.py tests/test_registry_service.py::test_agent_scoped_management_route_reports_missing_admin_operation tests/test_db_postgres.py tests/test_control_plane_adapters.py tests/test_control_plane_ports.py tests/test_registry_control_processor.py tests/test_registry_mirroring.py tests/test_sdk_composition.py tests/test_control_plane_integration.py tests/test_execution_finalization.py tests/test_runtime_process_profile.py tests/test_registry_adapter.py -q` | 149 passed |
 | `./.venv/bin/python -m pytest -q` | 2217 passed |
+| `git push origin feature/protocol` then `git -C /Users/tinker/octopus pull --ff-only origin feature/protocol` | Deployed checkout advanced to `c7fea4f6`. |
+| `./octopus redeploy --yes` | Registry, M1, and M2 rebuilt/restarted on current images; M3 failed because Claude auth is not configured. |
+| `./octopus status` | Registry running; M1 and M2 connected with healthy execution; M3 enrollment failed due missing Claude auth. |
+| Real Safari desktop hard refresh and smoke | Navigation shows `Skills`; Skills catalog renders; Architecture expands inline and loads skill instructions from M1. |
 
 Remaining execution order:
 
-1. Commit and deploy this refactor to the running Octopus checkout by the normal push-here/pull-there workflow.
-2. Hard-refresh real Safari and verify the deployed Registry UI no longer exposes `Capabilities` product copy.
-3. Run the public-path canary matrix against deployed m1/m2/m3 topology, including Registry UI, Telegram, CLI, routing/delegation, protocol authoring/execution, and artifact access.
-4. Execute the remaining product workstreams: CLI shared admin service, lineage/artifact contract, generated/test data hygiene, and performance/pagination/query-plan work.
+1. Run the full public-path canary matrix against deployed topology, including Registry UI, Telegram, CLI, routing/delegation, protocol authoring/execution, and artifact access. Treat M3 Claude auth as an explicit environment exception until configured.
+2. Execute the remaining product workstreams: CLI shared admin service, lineage/artifact contract, generated/test data hygiene, and performance/pagination/query-plan work.
 
 ## Problem Statement
 

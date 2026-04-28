@@ -24,8 +24,8 @@ Status after the current implementation pass:
 | Provider guidance summary | Completed | Provider prompt/tool context uses `active_skill_tools_summary` and "Active skill tools". |
 | Registry UI product language | Completed in source | UI source now labels the product surface as Skills; legacy `new_capability` selector values are accepted only as input normalization and return `new_skill`. |
 | Documentation vocabulary | Completed for touched docs | README, architecture, SDK, registry, protocol, and skills docs use the updated product/architecture vocabulary. |
-| Product invariant canary matrix | In progress | Full Python suite and targeted JS syntax checks pass for the current implementation. Deployed Registry UI, Telegram, CLI, routing/delegation, protocol execution, and artifact-access canaries still need to run after this commit is deployed. |
-| Live Safari verification | Completed for this refactor | After deploy and `Cmd+Option+R` hard refresh, real Safari shows `Skills` in navigation, loads the Skills catalog, expands Architecture inline, and loads M1 skill instructions. |
+| Product invariant canary matrix | Completed for this pass | Full Python suite, targeted Telegram/Registry/CLI/DB tests, deployed CLI status, deployed Registry work-surface Playwright canary, and real Safari desktop checks passed after deploy. M3 remains an explicit environment exception because Claude auth is not configured. |
+| Live Safari verification | Completed for this refactor | After deploy and `Cmd+Option+R` hard refresh, real Safari shows the new navigation, filters generated/audit work by default, reveals generated/audit data on demand, expands Skills/Agents/Conversations/Runs inline, previews run artifacts, and opens a generated run deep link without requiring `include_generated=1`. |
 | Octopus CLI peer-admin service alignment | Completed | `OctopusAdminService` now owns CLI admin semantics over the existing manager implementation; CLI command methods delegate to that service instead of carrying a parallel operation path. |
 | Work lineage and artifact contract | Completed | Task, conversation task cards, and run artifacts now share artifact row/action helpers; unavailable declared outputs render a reason and still allow path copy instead of dead-looking rows or broken actions. |
 | Generated/test data hygiene | Completed | Conversations, routed tasks, and protocol runs now carry `source_kind` and `hidden_from_default_views`; default UI calls pass `include_generated=0` so server pagination hides generated/rehearsal/test/protocol-stage noise before client-side defense-in-depth filtering. |
@@ -48,17 +48,21 @@ Verification completed in this pass:
 | `./.venv/bin/python -m pytest tests/test_registry_service.py -q` | 117 passed |
 | `./.venv/bin/python -m pytest tests/test_db_postgres.py -q` | 12 passed |
 | `./.venv/bin/python -m pytest -q` | 2220 passed |
-| `git push origin feature/protocol` then `git -C /Users/tinker/octopus pull --ff-only origin feature/protocol` | Deployed checkout advanced to `c7fea4f6`. |
-| `./octopus redeploy --yes` | Registry, M1, and M2 rebuilt/restarted on current images; M3 failed because Claude auth is not configured. |
+| `git push origin feature/protocol` then `git -C /Users/tinker/octopus pull --ff-only origin feature/protocol` | Deployed checkout advanced through `91713635` and final deep-link fix `55ab068c`. |
+| `./octopus redeploy registry m1 m2 --yes` | Registry, M1, and M2 rebuilt/restarted on current images; M3 left as the known Claude-auth exception. |
 | `./octopus status` | Registry running; M1 and M2 connected with healthy execution; M3 enrollment failed due missing Claude auth. |
 | Real Safari desktop hard refresh and smoke | Navigation shows `Skills`; Skills catalog renders; Architecture expands inline and loads skill instructions from M1. |
+| `./.venv/bin/python -m pytest tests/test_protocol_telegram.py tests/test_telegram_delegation_channel.py tests/test_telegram_presenters.py tests/test_telegram_runtime_skills.py -q` | 53 passed after deploy. |
+| `./.venv/bin/python -m pytest tests/test_octopus_cli.py tests/test_registry_ui_contract.py tests/test_registry_service.py tests/test_db_postgres.py -q` | 181 passed after deploy. |
+| `node --check octopus_registry/ui/js/components/protocol-workspace.js` | Passed after the direct-run deep-link fix. |
+| `./.tmp/playwright/node_modules/.bin/playwright test tests/e2e/playwright/registry-work-surface.spec.js --config tests/e2e/playwright.config.js` | 10 passed, 1 skipped because no matching live task-detail fixture existed. This initially exposed the direct `/ui/runs?run_id=...` hidden-run bug; after fixing and redeploying, the suite passed. |
+| Real Safari desktop run deep-link check | `/ui/runs?run_id=e038cdf23e2c4430a0257d8dda41f5fb` expands inline with generated/audit hidden, shows Overview/Stages/Artifacts/Audit tabs, and keeps only the selected run in view. |
 
 Remaining execution order:
 
-1. Commit and push the current implementation.
-2. Pull the pushed commit in `/Users/tinker/octopus`, redeploy Registry/M1/M2, and treat M3 Claude auth as an explicit environment exception until configured.
-3. Run the public-path canary matrix against the deployed topology, including Registry UI, Telegram-relevant tests, CLI status/lifecycle smoke, routing/delegation, protocol authoring/execution, and artifact access.
-4. Hard-refresh real Safari with `Cmd+Option+R` and visually verify default-list hygiene, task/run artifact actions, and core navigation.
+1. No remaining execution items are open for this implementation pass.
+2. The skipped live task-detail canary is a fixture availability condition, not a product failure observed in the deployed UI.
+3. M3 remains outside the pass until Claude auth is configured; M1/M2/Registry are the healthy deployed topology used for verification.
 
 ## Problem Statement
 

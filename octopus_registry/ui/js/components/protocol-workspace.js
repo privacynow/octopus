@@ -60,12 +60,15 @@ function _protocolArtifactPreviewable(item) {
 
 function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
+    const available = !missing && artifact?.exists !== false;
     return UI.createArtifactActionRow({
-        previewable: !missing && _protocolArtifactPreviewable(artifact),
+        previewable: available && _protocolArtifactPreviewable(artifact),
         previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
-        openHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key),
-        downloadHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }),
+        openHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
+        downloadHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }) : '',
         copyPathText: displayPath,
+        available,
+        unavailableReason: missing ? 'Declared artifact, not produced yet.' : 'Artifact path is not available on this host.',
     });
 }
 
@@ -7178,6 +7181,7 @@ function renderProtocolRuns(container) {
         const response = await API.listProtocolRuns({
             limit,
             cursor: runPaginator ? runPaginator.cursor : 0,
+            include_generated: includeGenerated ? '1' : '0',
         });
         runsListData = response || null;
         runs = response.runs || response || [];

@@ -559,6 +559,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
             str(request_payload.get("external_conversation_ref", "") or "").strip()
             or routed_task_external_conversation_ref(validated_request.routed_task_id)
         )
+        task_context = request_payload.get("context", {})
+        task_source_kind = (
+            "protocol_stage"
+            if isinstance(task_context, dict) and str(task_context.get("protocol_run_id", "") or "").strip()
+            else "delegation"
+        )
+        task_hidden = task_source_kind in {"protocol_stage", "rehearsal", "test"}
         for skill_name in requested_routed_skills(request_payload):
             if skill_name.lower() in disabled_skills:
                 raise RoutingSkillDisabledError(skill_name)
@@ -572,6 +579,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 str(validated_request.external_conversation_ref or "").strip()
                 or routed_task_external_conversation_ref(validated_request.routed_task_id)
             ),
+            source_kind=task_source_kind,
+            hidden_from_default_views=task_hidden,
             now=now,
         )
         with _cur(conn) as cur:
@@ -579,12 +588,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 f"""
                 INSERT INTO {_SCHEMA}.routed_tasks (
                     routed_task_id, parent_conversation_id, origin_agent_id, target_agent_id,
-                    title, request_json, status, summary, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'queued', '', %s, %s)
+                    source_kind, hidden_from_default_views, title, request_json, status, summary, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'queued', '', %s, %s)
                 ON CONFLICT(routed_task_id) DO UPDATE SET
                     parent_conversation_id = EXCLUDED.parent_conversation_id,
                     origin_agent_id = EXCLUDED.origin_agent_id,
                     target_agent_id = EXCLUDED.target_agent_id,
+                    source_kind = EXCLUDED.source_kind,
+                    hidden_from_default_views = EXCLUDED.hidden_from_default_views,
                     title = EXCLUDED.title,
                     request_json = EXCLUDED.request_json,
                     status = EXCLUDED.status,
@@ -596,6 +607,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     validated_request.parent_conversation_id,
                     validated_request.origin_agent_id,
                     validated_request.target_agent_id,
+                    task_source_kind,
+                    task_hidden,
                     validated_request.title,
                     _jsonb(request_payload),
                     now,
@@ -988,6 +1001,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
         title: str,
         origin_channel: str = "registry",
         external_conversation_ref: str = "",
+        source_kind: str = "human",
+        hidden_from_default_views: bool = False,
     ) -> ConversationRecord:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
@@ -998,10 +1013,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 title=title,
                 origin_channel=origin_channel,
                 external_conversation_ref=external_conversation_ref,
+                source_kind=source_kind,
+                hidden_from_default_views=hidden_from_default_views,
                 now=now,
             )
 
-    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "") -> list[ConversationRecord]:
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "", include_generated: bool = True) -> list[ConversationRecord]:
         fetch_limit = limit + 1
         if q and len(q) >= 3:
             search_hits = self.search_conversations(q, limit=fetch_limit + cursor)
@@ -1018,6 +1035,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     status=status,
                     conversation_type=conversation_type,
                     search_hit_ids=hit_ids,
+                    include_generated=include_generated,
                 )
         with self._connect() as conn:
             return shared_list_conversations(
@@ -1028,6 +1046,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 limit=limit,
                 status=status,
                 conversation_type=conversation_type,
+                include_generated=include_generated,
             )
 
     def get_conversation(self, conversation_id: str) -> ConversationRecord:
@@ -1283,6 +1302,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         entry_agent_id: str = "",
         root_conversation_id: str = "",
         origin_channel: str = "",
+        include_generated: bool = True,
     ) -> list[ProtocolRunRecord]:
         return self._protocol_store.list_protocol_runs(
             access=access,
@@ -1293,6 +1313,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             entry_agent_id=entry_agent_id,
             root_conversation_id=root_conversation_id,
             origin_channel=origin_channel,
+            include_generated=include_generated,
         )
 
     def list_protocol_issues(
@@ -1453,6 +1474,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         limit: int = 25,
         status: str = "",
         completed_since_iso: str = "",
+        include_generated: bool = True,
     ) -> list[TaskRecord]:
         with self._connect() as conn:
             return shared_list_tasks(
@@ -1465,6 +1487,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 limit=limit,
                 status=status,
                 completed_since_iso=completed_since_iso,
+                include_generated=include_generated,
             )
 
     def get_task(self, routed_task_id: str) -> TaskRecord:
@@ -1535,7 +1558,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 limit=limit,
             )
 
-    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "") -> list[ConversationRecord]:
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "", include_generated: bool = True) -> list[ConversationRecord]:
         with self._connect() as conn:
             return shared_list_agent_conversations(
                 conn,
@@ -1545,6 +1568,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cursor=cursor,
                 limit=limit,
                 conversation_type=conversation_type,
+                include_generated=include_generated,
             )
 
     def get_agent_status(self, agent_id: str) -> AgentStatusRecord | None:

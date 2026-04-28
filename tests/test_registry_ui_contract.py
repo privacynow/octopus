@@ -729,7 +729,7 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "function visibleDashboardProtocols()" in dashboard
     assert "function loadSecondarySnapshot(" in dashboard
     assert "void loadSecondarySnapshot({ soft });" in dashboard
-    assert "API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT })" in dashboard
+    assert "API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT, include_generated: '0' })" in dashboard
     assert "API.listProtocols({ limit: 50 })" in dashboard
     assert "Filtered by default · generated/audit totals inside" in dashboard
 
@@ -738,6 +738,7 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "!task.protocol_run_id && !UI.isDefaultHiddenRecord(task)" in task_list
     assert "function _visibleTask(task)" in task_list
     assert "renderSummary({ tasks: Object.fromEntries(entries) });" in task_list
+    assert "include_generated: currentProtocolRunId || includeGenerated ? '1' : '0'" in task_list
     assert "API.getSummary()" not in task_list
     assert "<h2>Delegations</h2>" in task_list
 
@@ -1089,8 +1090,12 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "className: ['artifact-list-row', className || ''].join(' ').trim()," in helper
     assert "onClick: previewTarget" in helper
     assert "event.preventDefault();" in helper
-    assert "openHref: missing ? '' : API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "const available = !missing && artifact?.exists !== false;" in protocol_workspace
+    assert "openHref: available ? API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "unavailableReason: missing ? 'Declared artifact, not produced yet.'" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
+    assert "function createTaskArtifactListRow(task, artifact, expectedOutput = null)" in helper
+    assert "function createPendingTaskArtifactListRow(task, expectedOutput)" in helper
     assert "UI.compactMarkdownReferences(task.result_summary || task.result_text || task.summary || task.instructions || '')" in task_list
     assert "const displaySummary = UI.compactMarkdownReferences(summary);" in task_board
     assert "UI.esc(UI.compactMarkdownReferences(event.content))" in event_renderers

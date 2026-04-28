@@ -41,6 +41,8 @@ def _conversation_payload(row):
         "target_agent_id": row["target_agent_id"],
         "target_display_name": row["target_name"] or "",
         "target_name": row["target_name"] or "",
+        "source_kind": row.get("source_kind", "human") or "human",
+        "hidden_from_default_views": bool(row.get("hidden_from_default_views", False)),
         "title": row["title"],
         "conversation_type": row["conversation_type"] or "conversation",
         "status": row["status"],
@@ -55,6 +57,8 @@ def _conversation_payload(row):
 def _linked_task_payload(row):
     return {
         "routed_task_id": row["routed_task_id"],
+        "source_kind": row.get("source_kind", "delegation") or "delegation",
+        "hidden_from_default_views": bool(row.get("hidden_from_default_views", False)),
         "parent_conversation_id": row["parent_conversation_id"],
         "origin_agent_id": row["origin_agent_id"],
         "origin_display_name": row["origin_name"] or "",
@@ -282,6 +286,8 @@ def ensure_conversation_in_tx(
     origin_channel: str,
     external_conversation_ref: str,
     now: str,
+    source_kind: str = "human",
+    hidden_from_default_views: bool = False,
 ) -> str:
     if not origin_channel or not origin_channel.strip():
         raise ValueError("origin_channel must not be empty")
@@ -302,7 +308,7 @@ def ensure_conversation_in_tx(
         f"""
         INSERT INTO {dialect.qualify('conversations')} (
             conversation_id, target_agent_id, title, conversation_type, origin_channel,
-            external_conversation_ref, status, created_at, updated_at
+            external_conversation_ref, source_kind, hidden_from_default_views, status, created_at, updated_at
         ) VALUES (
             {dialect.placeholder(1)},
             {dialect.placeholder(2)},
@@ -310,12 +316,16 @@ def ensure_conversation_in_tx(
             {dialect.placeholder(4)},
             {dialect.placeholder(5)},
             {dialect.placeholder(6)},
-            'open',
             {dialect.placeholder(7)},
-            {dialect.placeholder(8)}
+            {dialect.placeholder(8)},
+            'open',
+            {dialect.placeholder(9)},
+            {dialect.placeholder(10)}
         )
         ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
             title = EXCLUDED.title,
+            source_kind = EXCLUDED.source_kind,
+            hidden_from_default_views = EXCLUDED.hidden_from_default_views,
             updated_at = EXCLUDED.updated_at
         RETURNING conversation_id
         """,
@@ -326,6 +336,8 @@ def ensure_conversation_in_tx(
             conversation_type,
             origin_channel,
             external_conversation_ref,
+            source_kind,
+            hidden_from_default_views,
             now,
             now,
         ),
@@ -342,6 +354,8 @@ def create_conversation(
     origin_channel: str,
     external_conversation_ref: str,
     now: str,
+    source_kind: str = "human",
+    hidden_from_default_views: bool = False,
 ) -> ConversationRecord:
     conversation_id = ensure_conversation_in_tx(
         conn,
@@ -352,6 +366,8 @@ def create_conversation(
         origin_channel=origin_channel,
         external_conversation_ref=external_conversation_ref,
         now=now,
+        source_kind=source_kind,
+        hidden_from_default_views=hidden_from_default_views,
     )
     return get_conversation(conn, dialect=dialect, conversation_id=conversation_id)
 
@@ -1023,6 +1039,7 @@ def list_conversations(
     status: str = "",
     conversation_type: str = "",
     search_hit_ids: list[str] | None = None,
+    include_generated: bool = True,
 ) -> list[ConversationRecord]:
     fetch_limit = limit + 1
     params: list[object] = []
@@ -1049,6 +1066,8 @@ def list_conversations(
     if conversation_type:
         params.append(conversation_type)
         where_clauses.append(f"c.conversation_type = {dialect.placeholder(len(params))}")
+    if not include_generated:
+        where_clauses.append("c.hidden_from_default_views = FALSE")
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
     params.extend([fetch_limit, cursor])
@@ -1056,6 +1075,8 @@ def list_conversations(
         GROUP BY
             c.conversation_id,
             c.target_agent_id,
+            c.source_kind,
+            c.hidden_from_default_views,
             c.title,
             c.conversation_type,
             c.origin_channel,
@@ -1094,6 +1115,8 @@ def get_conversation(
         GROUP BY
             c.conversation_id,
             c.target_agent_id,
+            c.source_kind,
+            c.hidden_from_default_views,
             c.title,
             c.conversation_type,
             c.origin_channel,
@@ -1133,6 +1156,7 @@ def list_agent_conversations(
     cursor: int = 0,
     limit: int = 50,
     conversation_type: str = "",
+    include_generated: bool = True,
 ) -> list[ConversationRecord]:
     fetch_limit = limit + 1
     effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
@@ -1146,6 +1170,8 @@ def list_agent_conversations(
     if conversation_type:
         params.append(conversation_type)
         sql += f" AND c.conversation_type = {dialect.placeholder(len(params))}"
+    if not include_generated:
+        sql += " AND c.hidden_from_default_views = FALSE"
     params.extend([fetch_limit, cursor])
     sql += """
         ORDER BY c.updated_at DESC
@@ -1161,6 +1187,8 @@ def list_agent_conversations(
             "target_agent_id": row["target_agent_id"],
             "target_display_name": row["target_name"] or "",
             "target_name": row["target_name"] or "",
+            "source_kind": row.get("source_kind", "human") or "human",
+            "hidden_from_default_views": bool(row.get("hidden_from_default_views", False)),
             "title": row["title"],
             "conversation_type": row["conversation_type"] or "conversation",
             "origin_channel": row["origin_channel"],

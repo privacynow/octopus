@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.octopus_cli.admin_service import OctopusAdminService
 from app.octopus_cli.cli import OctopusCLI
 from app.octopus_cli.core import PromptIO
 from app.octopus_cli.models import (
@@ -83,6 +84,49 @@ def test_cli_start_registry_passes_deploy_options(tmp_path: Path) -> None:
     assert deploy.bind_host == "0.0.0.0"
     assert deploy.public_url == "http://mybox.local:8787"
     assert deploy.port is None
+
+
+def test_cli_mutating_commands_delegate_to_admin_service(tmp_path: Path) -> None:
+    cli = OctopusCLI(tmp_path)
+    calls: list[tuple[Action, list[str], bool]] = []
+
+    def _run_mutating(action, selectors, *, yes, deploy=None, connect=None, disconnect_registry_id=""):  # noqa: ANN001
+        del deploy, connect, disconnect_registry_id
+        calls.append((action, selectors, yes))
+        return 0
+
+    cli.admin.run_mutating = _run_mutating  # type: ignore[method-assign]
+
+    result = cli.run(["restart", "m1", "--yes"])
+
+    assert result == 0
+    assert calls == [(Action.RESTART, ["m1"], True)]
+
+
+def test_admin_service_redeploy_uses_existing_manager_operations(tmp_path: Path) -> None:
+    cli = OctopusCLI(tmp_path)
+    service = OctopusAdminService(cli.manager, io=cli.io)
+    calls: list[tuple[str, str, bool]] = []
+
+    cli.manager.has_local_registry = lambda: True  # type: ignore[method-assign]
+    cli.manager.stop_registry = lambda: calls.append(("registry", "stop", False))  # type: ignore[method-assign]
+    cli.manager.start_registry = (  # type: ignore[method-assign]
+        lambda *, force_rebuild=False, force_recreate=False, deploy=None:
+        calls.append(("registry", "start", bool(force_rebuild and force_recreate)))
+    )
+    cli.manager.restart_bot = lambda slug, *, force_rebuild=False: calls.append((slug, "restart", force_rebuild))  # type: ignore[method-assign]
+
+    result = service.redeploy([
+        ResolvedTarget(TargetKind.REGISTRY, "registry", "registry"),
+        ResolvedTarget(TargetKind.BOT, "m1", "M1"),
+    ])
+
+    assert result == 0
+    assert calls == [
+        ("registry", "stop", False),
+        ("registry", "start", True),
+        ("m1", "restart", True),
+    ]
 
 
 def test_cli_connect_remote_without_targets_uses_all_bots(tmp_path: Path) -> None:

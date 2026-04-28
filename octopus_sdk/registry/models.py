@@ -425,6 +425,8 @@ class MessageRecord(RegistryRecordModel):
 class TaskRecord(RegistryRecordModel):
     routed_task_id: str = ""
     delivery_id: str = ""
+    source_kind: str = "delegation"
+    hidden_from_default_views: bool = False
     status: str = ""
     summary: str = ""
     title: str = ""
@@ -461,6 +463,8 @@ class TaskRecord(RegistryRecordModel):
 class ConversationRecord(RegistryRecordModel):
     conversation_id: str = ""
     target_agent_id: str = ""
+    source_kind: str = "human"
+    hidden_from_default_views: bool = False
     title: str = ""
     conversation_type: str = "conversation"
     origin_channel: str = ""

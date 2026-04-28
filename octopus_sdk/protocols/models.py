@@ -431,6 +431,8 @@ class ProtocolRunRecord(RegistryRecordModel):
     protocol_run_id: str = ""
     protocol_id: str = ""
     protocol_definition_version_id: str = ""
+    source_kind: str = "protocol_run"
+    hidden_from_default_views: bool = False
     entry_agent_id: str = ""
     entry_authority_ref: str = ""
     is_rehearsal: bool = False

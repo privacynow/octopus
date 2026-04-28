@@ -898,6 +898,7 @@ def resource_agent_conversations(
     cursor: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     conversation_type: str = Query(default=""),
+    include_generated: bool = Query(default=True),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -908,6 +909,7 @@ def resource_agent_conversations(
         cursor=cursor,
         limit=limit,
         conversation_type=conversation_type,
+        include_generated=include_generated,
     )
     return _json_payload(_paginated_response("conversations", conversations, cursor, limit))
 
@@ -920,6 +922,7 @@ def resource_list_conversations(
     q: str = Query(default=""),
     status: str = Query(default=""),
     conversation_type: str = Query(default=""),
+    include_generated: bool = Query(default=True),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -930,6 +933,7 @@ def resource_list_conversations(
         q=q,
         status=status,
         conversation_type=conversation_type,
+        include_generated=include_generated,
     )
     return _json_payload(_paginated_response("conversations", conversations, cursor, limit))
 
@@ -1218,6 +1222,7 @@ def resource_list_tasks(
     parent_conversation_id: str = Query(default=""),
     protocol_run_id: str = Query(default=""),
     completed_since_iso: str = Query(default=""),
+    include_generated: bool = Query(default=True),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -1229,6 +1234,7 @@ def resource_list_tasks(
         limit=limit,
         status=status,
         completed_since_iso=completed_since_iso,
+        include_generated=include_generated,
     )
     tasks = _tasks_with_protocol_artifacts(tasks, access=_protocol_access(auth), store=store)
     return _json_payload(_paginated_response("tasks", tasks, cursor, limit))

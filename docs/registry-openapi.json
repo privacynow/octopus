@@ -5654,6 +5654,16 @@
             }
           },
           {
+            "in": "query",
+            "name": "include_generated",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Include Generated",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -7630,6 +7640,16 @@
             }
           },
           {
+            "in": "query",
+            "name": "include_generated",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Include Generated",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -8631,6 +8651,16 @@
               "default": "",
               "title": "Origin Channel",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_generated",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Include Generated",
+              "type": "boolean"
             }
           },
           {
@@ -11459,6 +11489,16 @@
               "default": "",
               "title": "Completed Since Iso",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_generated",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Include Generated",
+              "type": "boolean"
             }
           },
           {

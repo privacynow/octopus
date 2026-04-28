@@ -1023,6 +1023,12 @@ select {
     flex-wrap: wrap;
 }
 
+.artifact-action-unavailable {
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    line-height: 1.4;
+}
+
 .list-row-with-artifact-actions {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

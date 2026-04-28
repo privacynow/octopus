@@ -1779,10 +1779,12 @@ def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(
             entry_agent_id="",
             root_conversation_id="",
             origin_channel="",
+            include_generated=True,
         ):
             assert entry_agent_id == "agent-2"
             assert root_conversation_id == ""
             assert origin_channel == "telegram"
+            assert include_generated is True
             return [
                 {
                     "protocol_run_id": "run-2",
@@ -1834,8 +1836,10 @@ def test_protocol_run_list_route_accepts_root_conversation_filter(monkeypatch, t
             entry_agent_id="",
             root_conversation_id="",
             origin_channel="",
+            include_generated=True,
         ):
             assert root_conversation_id == "conv-9"
+            assert include_generated is True
             return [
                 {
                     "protocol_run_id": "run-9",
@@ -1869,6 +1873,41 @@ def test_protocol_run_list_route_accepts_root_conversation_filter(monkeypatch, t
     assert response.status_code == 200
     payload = response.json()
     assert payload["runs"][0]["root_conversation_id"] == "conv-9"
+
+
+def test_default_work_list_routes_pass_generated_visibility_filter(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    seen: dict[str, bool] = {}
+
+    class _Store:
+        def list_conversations(self, **kwargs):
+            seen["conversations"] = kwargs["include_generated"]
+            return []
+
+        def list_tasks(self, **kwargs):
+            seen["tasks"] = kwargs["include_generated"]
+            return []
+
+        def list_protocol_runs(self, **kwargs):
+            seen["runs"] = kwargs["include_generated"]
+            return []
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        assert client.get("/v1/conversations?include_generated=0").status_code == 200
+        assert client.get("/v1/tasks?include_generated=0").status_code == 200
+        assert client.get("/v1/protocol-runs?include_generated=0").status_code == 200
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert seen == {"conversations": False, "tasks": False, "runs": False}
 
 
 def test_protocol_run_create_route_returns_invalid_for_missing_entry_agent(monkeypatch, tmp_path: Path):

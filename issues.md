@@ -24,12 +24,12 @@ Status after the current implementation pass:
 | Provider guidance summary | Completed | Provider prompt/tool context uses `active_skill_tools_summary` and "Active skill tools". |
 | Registry UI product language | Completed in source | UI source now labels the product surface as Skills; legacy `new_capability` selector values are accepted only as input normalization and return `new_skill`. |
 | Documentation vocabulary | Completed for touched docs | README, architecture, SDK, registry, protocol, and skills docs use the updated product/architecture vocabulary. |
-| Product invariant canary matrix | Partially completed | Full Python suite, targeted JS syntax checks, deployed status, and focused real-Safari smoke pass. Full public UI/Telegram/CLI canary matrix still needs a broader run. |
+| Product invariant canary matrix | In progress | Full Python suite and targeted JS syntax checks pass for the current implementation. Deployed Registry UI, Telegram, CLI, routing/delegation, protocol execution, and artifact-access canaries still need to run after this commit is deployed. |
 | Live Safari verification | Completed for this refactor | After deploy and `Cmd+Option+R` hard refresh, real Safari shows `Skills` in navigation, loads the Skills catalog, expands Architecture inline, and loads M1 skill instructions. |
-| Octopus CLI peer-admin service alignment | Still planned | CLI is documented as a peer admin surface, but a shared admin service layer for CLI operations has not been implemented in this pass. |
-| Work lineage and artifact contract | Still planned | The naming refactor did not rebuild lineage/artifact UI behavior. |
-| Generated/test data hygiene | Still planned | The naming refactor did not add source-kind filtering for generated/rehearsal/test records. |
-| Performance and responsiveness | Still planned | The naming refactor did not add pagination/query-plan/index work. |
+| Octopus CLI peer-admin service alignment | Completed | `OctopusAdminService` now owns CLI admin semantics over the existing manager implementation; CLI command methods delegate to that service instead of carrying a parallel operation path. |
+| Work lineage and artifact contract | Completed | Task, conversation task cards, and run artifacts now share artifact row/action helpers; unavailable declared outputs render a reason and still allow path copy instead of dead-looking rows or broken actions. |
+| Generated/test data hygiene | Completed | Conversations, routed tasks, and protocol runs now carry `source_kind` and `hidden_from_default_views`; default UI calls pass `include_generated=0` so server pagination hides generated/rehearsal/test/protocol-stage noise before client-side defense-in-depth filtering. |
+| Performance and responsiveness | Completed for current scope | Added server-side generated filtering, query indexes for default lists, status/default task lists, parent conversation task lookup, protocol-run task lookup, and run default lists. |
 
 Verification completed in this pass:
 
@@ -43,6 +43,11 @@ Verification completed in this pass:
 | `./.venv/bin/python -m pytest tests/test_product_vocabulary_contract.py -q` | 4 passed |
 | `./.venv/bin/python -m pytest tests/test_protocol_docs.py tests/test_product_vocabulary_contract.py tests/test_registry_ui_contract.py tests/test_registry_management_protocol.py tests/test_registry_service.py::test_agent_scoped_management_route_reports_missing_admin_operation tests/test_db_postgres.py tests/test_control_plane_adapters.py tests/test_control_plane_ports.py tests/test_registry_control_processor.py tests/test_registry_mirroring.py tests/test_sdk_composition.py tests/test_control_plane_integration.py tests/test_execution_finalization.py tests/test_runtime_process_profile.py tests/test_registry_adapter.py -q` | 149 passed |
 | `./.venv/bin/python -m pytest -q` | 2217 passed |
+| `node --check` on modified Registry UI JavaScript files | Passed after artifact/generated-filter changes |
+| `./.venv/bin/python -m pytest tests/test_octopus_cli.py tests/test_registry_ui_contract.py -q` | 52 passed |
+| `./.venv/bin/python -m pytest tests/test_registry_service.py -q` | 117 passed |
+| `./.venv/bin/python -m pytest tests/test_db_postgres.py -q` | 12 passed |
+| `./.venv/bin/python -m pytest -q` | 2220 passed |
 | `git push origin feature/protocol` then `git -C /Users/tinker/octopus pull --ff-only origin feature/protocol` | Deployed checkout advanced to `c7fea4f6`. |
 | `./octopus redeploy --yes` | Registry, M1, and M2 rebuilt/restarted on current images; M3 failed because Claude auth is not configured. |
 | `./octopus status` | Registry running; M1 and M2 connected with healthy execution; M3 enrollment failed due missing Claude auth. |
@@ -50,8 +55,10 @@ Verification completed in this pass:
 
 Remaining execution order:
 
-1. Run the full public-path canary matrix against deployed topology, including Registry UI, Telegram, CLI, routing/delegation, protocol authoring/execution, and artifact access. Treat M3 Claude auth as an explicit environment exception until configured.
-2. Execute the remaining product workstreams: CLI shared admin service, lineage/artifact contract, generated/test data hygiene, and performance/pagination/query-plan work.
+1. Commit and push the current implementation.
+2. Pull the pushed commit in `/Users/tinker/octopus`, redeploy Registry/M1/M2, and treat M3 Claude auth as an explicit environment exception until configured.
+3. Run the public-path canary matrix against the deployed topology, including Registry UI, Telegram-relevant tests, CLI status/lifecycle smoke, routing/delegation, protocol authoring/execution, and artifact access.
+4. Hard-refresh real Safari with `Cmd+Option+R` and visually verify default-list hygiene, task/run artifact actions, and core navigation.
 
 ## Problem Statement
 

@@ -2454,6 +2454,7 @@ function renderConversationDetail(container, params) {
                 const data = await API.listTasks({
                     parent_conversation_id: convoId,
                     limit: 100,
+                    include_generated: '1',
                 });
                 relatedTasks = data.tasks || data || [];
             }

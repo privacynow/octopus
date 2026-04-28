@@ -844,6 +844,7 @@ window.UI = (() => {
         downloadHref = '',
         copyPathText = '',
         available = true,
+        unavailableReason = '',
         stopPropagation = true,
         copySuccessMessage = 'Artifact path copied.',
         copyErrorMessage = 'Failed to copy the artifact path.',
@@ -898,7 +899,14 @@ window.UI = (() => {
             actionRow.appendChild(downloadLink);
         }
 
-        if (available && String(copyPathText || '').trim()) {
+        if (!available) {
+            const reason = document.createElement('span');
+            reason.className = 'artifact-action-unavailable';
+            reason.textContent = unavailableReason || 'File action unavailable';
+            actionRow.appendChild(reason);
+        }
+
+        if (String(copyPathText || '').trim()) {
             const copyBtn = document.createElement('button');
             copyBtn.type = 'button';
             copyBtn.className = 'btn btn-sm';
@@ -950,6 +958,56 @@ window.UI = (() => {
             onClick: previewTarget
                 ? () => previewTarget.click()
                 : null,
+        });
+    }
+
+    function createTaskArtifactListRow(task, artifact, expectedOutput = null) {
+        const artifactKey = String(artifact?.artifact_key || expectedOutput?.artifact_key || '').trim();
+        const resolvedPath = taskArtifactDisplayPath(task, artifact, expectedOutput);
+        const hasTaskArtifactContent = !!(task?.routed_task_id && artifactKey);
+        const available = artifact?.exists !== false && hasTaskArtifactContent;
+        const actionRow = createArtifactActionRow({
+            previewable: available && taskArtifactPreviewable(artifact, expectedOutput),
+            previewTitle: `${artifactKey || 'artifact'} preview`,
+            openHref: available ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey) : '',
+            downloadHref: available ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey, { download: true }) : '',
+            copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),
+            available,
+            unavailableReason: available ? '' : 'Output has not been produced on this host yet.',
+        });
+        return createArtifactListRow({
+            label: taskArtifactLabel(artifact, expectedOutput),
+            sublabelParts: [
+                'Produced output',
+                resolvedPath || String(artifact?.path || ''),
+                artifactKey,
+                Number.isFinite(Number(artifact?.size_bytes || 0)) && Number(artifact?.size_bytes || 0) > 0
+                    ? `${Number(artifact.size_bytes || 0).toLocaleString()} bytes`
+                    : '',
+            ],
+            badgeText: artifact?.verification_state || (available ? 'available' : 'missing'),
+            badgeClass: available ? 'badge-connected' : 'badge-blocked',
+            actionRow,
+        });
+    }
+
+    function createPendingTaskArtifactListRow(task, expectedOutput) {
+        const resolvedPath = taskArtifactDisplayPath(task, null, expectedOutput);
+        const actionRow = createArtifactActionRow({
+            copyPathText: resolvedPath || String(expectedOutput?.path || ''),
+            available: false,
+            unavailableReason: 'Declared output, not produced yet.',
+        });
+        return createArtifactListRow({
+            label: taskArtifactLabel(null, expectedOutput),
+            sublabelParts: [
+                'Declared output',
+                resolvedPath || String(expectedOutput?.path || ''),
+                String(expectedOutput?.artifact_key || '').trim(),
+            ],
+            badgeText: 'not produced',
+            badgeClass: 'badge-blocked',
+            actionRow,
         });
     }
 
@@ -1562,6 +1620,8 @@ window.UI = (() => {
         taskArtifactPreviewable,
         createArtifactActionRow,
         createArtifactListRow,
+        createTaskArtifactListRow,
+        createPendingTaskArtifactListRow,
         compactMarkdownReferences,
         readQueryParam,
         updateQueryParams,

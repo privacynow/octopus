@@ -13,6 +13,7 @@ function renderTaskList(container) {
     let currentStatus = UI.readQueryParam('status', '');
     let currentProtocolRunId = UI.readQueryParam('protocol_run_id', '');
     let currentTaskId = UI.readQueryParam('task_id', '');
+    let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let summaryLoaded = false;
     let listLoaded = false;
     const expandedTaskIds = new Set(currentTaskId ? [currentTaskId] : []);
@@ -63,6 +64,9 @@ function renderTaskList(container) {
     });
     const statusBar = statusControl.element;
     controls.appendChild(statusBar);
+    const generatedToggle = document.createElement('a');
+    UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'delegations');
+    controls.appendChild(generatedToggle);
 
     function applyStatusFilter(value) {
         currentStatus = value;
@@ -77,7 +81,9 @@ function renderTaskList(container) {
             status: currentStatus || '',
             protocol_run_id: currentProtocolRunId || '',
             task_id: currentTaskId || '',
+            include_generated: includeGenerated ? '1' : '',
         });
+        UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'delegations');
     }
 
     const listShell = document.createElement('section');
@@ -140,35 +146,6 @@ function renderTaskList(container) {
         const runId = String(task.protocol_run_id || '').trim();
         if (!runId) return '';
         return `/ui/runs?run_id=${encodeURIComponent(runId)}`;
-    }
-
-    function _taskArtifactShell(task, artifact, expectedOutput = null) {
-        const resolvedPath = UI.taskArtifactDisplayPath(task, artifact, expectedOutput);
-        const actionRow = UI.createArtifactActionRow({
-            previewable: UI.taskArtifactPreviewable(artifact, expectedOutput),
-            previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
-            openHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key),
-            downloadHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true }),
-            copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),
-        });
-
-        return {
-            artifactKey: String(artifact?.artifact_key || ''),
-            row: UI.createArtifactListRow({
-                label: UI.taskArtifactLabel(artifact, expectedOutput),
-                sublabelParts: [
-                    'Produced output',
-                    resolvedPath || String(artifact?.path || ''),
-                    String(artifact?.artifact_key || '').trim(),
-                    Number.isFinite(Number(artifact?.size_bytes || 0)) && Number(artifact?.size_bytes || 0) > 0
-                        ? `${Number(artifact.size_bytes || 0).toLocaleString()} bytes`
-                        : '',
-                ],
-                badgeText: artifact.verification_state || (artifact.exists ? 'available' : 'missing'),
-                badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
-                actionRow,
-            }),
-        };
     }
 
     function _renderProtocolLineageBanner() {
@@ -399,7 +376,7 @@ function renderTaskList(container) {
                     const outputsList = document.createElement('div');
                     outputsList.className = 'task-artifact-list';
                     const outputNodes = recordedArtifacts.map((artifact) =>
-                        _taskArtifactShell(detailPayload, artifact, UI.taskExpectedOutput(expectedOutputs, artifact?.artifact_key)).row);
+                        UI.createTaskArtifactListRow(detailPayload, artifact, UI.taskExpectedOutput(expectedOutputs, artifact?.artifact_key)));
                     UI.reconcileChildren(outputsList, outputNodes);
                     detail.appendChild(outputsList);
                 }
@@ -411,16 +388,8 @@ function renderTaskList(container) {
                     detail.appendChild(expectedLabel);
 
                     const expectedList = document.createElement('div');
-                    const expectedNodes = pendingExpected.map((artifact) => UI.renderListRow({
-                        label: UI.taskArtifactLabel(null, artifact),
-                        sublabel: [
-                            'Declared output not yet recorded',
-                            String(artifact?.path || '').trim(),
-                            String(artifact?.artifact_key || '').trim(),
-                        ].filter(Boolean).join(' · '),
-                        badgeText: 'missing',
-                        badgeClass: 'badge-blocked',
-                    }));
+                    const expectedNodes = pendingExpected.map((artifact) =>
+                        UI.createPendingTaskArtifactListRow(detailPayload, artifact));
                     UI.reconcileChildren(expectedList, expectedNodes);
                     detail.appendChild(expectedList);
                 }
@@ -548,7 +517,11 @@ function renderTaskList(container) {
             };
             const entries = await Promise.all(Object.entries(statusGroups).map(async ([key, statuses]) => {
                 const payloads = await Promise.all(statuses.map((status) => {
-                    const params = { limit: UI.DEFAULT_PAGE_LIMIT, status };
+                    const params = {
+                        limit: UI.DEFAULT_PAGE_LIMIT,
+                        status,
+                        include_generated: currentProtocolRunId || includeGenerated ? '1' : '0',
+                    };
                     if (currentProtocolRunId) params.protocol_run_id = currentProtocolRunId;
                     return API.listTasks(params).catch(() => ({ tasks: [] }));
                 }));
@@ -576,7 +549,11 @@ function renderTaskList(container) {
     }
 
     async function loadList({ soft = false } = {}) {
-        const params = { cursor: paginator.cursor, limit };
+        const params = {
+            cursor: paginator.cursor,
+            limit,
+            include_generated: currentProtocolRunId || includeGenerated ? '1' : '0',
+        };
         if (currentStatus) params.status = currentStatus;
         if (currentProtocolRunId) params.protocol_run_id = currentProtocolRunId;
         try {

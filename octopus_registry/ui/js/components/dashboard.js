@@ -185,7 +185,7 @@ function renderDashboard(container) {
 
     async function loadTasksByStatus(statuses) {
         const payloads = await Promise.all(
-            (statuses || []).map((status) => API.listTasks({ limit: 6, status }).catch(() => ({ tasks: [] }))),
+            (statuses || []).map((status) => API.listTasks({ limit: 6, status, include_generated: '0' }).catch(() => ({ tasks: [] }))),
         );
         const seen = new Set();
         const tasks = sortTasks([
@@ -547,9 +547,9 @@ function renderDashboard(container) {
             secondary('approvals', API.listApprovals({ limit: 4 }), { approvals: [] }),
             secondary('follow-up tasks', loadFollowUpTasks(), { tasks: [] }),
             secondary('active tasks', loadActiveTasks(), { tasks: [] }),
-            secondary('completed tasks', API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }), { tasks: [] }),
+            secondary('completed tasks', API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso(), include_generated: '0' }), { tasks: [] }),
             secondary('protocols', API.listProtocols({ limit: 50 }), []),
-            secondary('protocol runs', API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }), { runs: [] }),
+            secondary('protocol runs', API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT, include_generated: '0' }), { runs: [] }),
             secondary('protocol issues', API.listProtocolIssues({ limit: 6 }), { issues: [] }),
         ]).then(([approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues]) => {
             applySnapshotPatch({ approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues });
@@ -565,7 +565,7 @@ function renderDashboard(container) {
         try {
             const [summary, conversations, agents] = await Promise.all([
                 API.getSummary(),
-                API.listConversations({ limit: 6, status: 'open' }),
+                API.listConversations({ limit: 6, status: 'open', include_generated: '0' }),
                 API.listAgents({ limit: 8 }),
             ]);
             applySnapshotPatch({ summary, conversations, agents });

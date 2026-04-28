@@ -489,7 +489,7 @@ function renderConversationList(container) {
     }
 
     async function loadPage({ soft = false } = {}) {
-        const params = { cursor: paginator.cursor, limit };
+        const params = { cursor: paginator.cursor, limit, include_generated: includeGenerated ? '1' : '0' };
         if (currentQ) params.q = currentQ;
         if (currentStatus) params.status = currentStatus;
         if (currentType) params.conversation_type = currentType;

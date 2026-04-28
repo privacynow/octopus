@@ -314,6 +314,8 @@ CREATE INDEX IF NOT EXISTS idx_registry_management_requests_agent_status
 CREATE TABLE IF NOT EXISTS agent_registry.conversations (
     conversation_id TEXT PRIMARY KEY,
     target_agent_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'human',
+    hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     title TEXT NOT NULL DEFAULT '',
     conversation_type TEXT NOT NULL DEFAULT 'conversation',
     origin_channel TEXT NOT NULL DEFAULT 'registry',
@@ -322,8 +324,31 @@ CREATE TABLE IF NOT EXISTS agent_registry.conversations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.conversations
+    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'human',
+    ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE agent_registry.conversations
+SET
+    source_kind = CASE
+        WHEN conversation_type = 'task_thread' OR external_conversation_ref LIKE 'routed-task:%' THEN 'delegation'
+        WHEN external_conversation_ref LIKE 'protocol-run:%' THEN 'protocol_run'
+        WHEN lower(title) LIKE '%rehearsal%' OR lower(external_conversation_ref) LIKE '%rehearsal%' THEN 'rehearsal'
+        WHEN lower(title) LIKE '%test%' OR lower(external_conversation_ref) LIKE '%test%' THEN 'test'
+        ELSE source_kind
+    END,
+    hidden_from_default_views = hidden_from_default_views
+        OR lower(title) LIKE '%rehearsal%'
+        OR lower(external_conversation_ref) LIKE '%rehearsal%'
+        OR lower(title) LIKE '%test%'
+        OR lower(external_conversation_ref) LIKE '%test%';
 CREATE INDEX IF NOT EXISTS idx_registry_conversations_updated
     ON agent_registry.conversations (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_conversations_default_updated
+    ON agent_registry.conversations (hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_conversations_type_default_updated
+    ON agent_registry.conversations (conversation_type, hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_conversations_agent_default_updated
+    ON agent_registry.conversations (target_agent_id, hidden_from_default_views, updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_external
     ON agent_registry.conversations (target_agent_id, origin_channel, external_conversation_ref);
 
@@ -332,6 +357,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.routed_tasks (
     parent_conversation_id TEXT NOT NULL,
     origin_agent_id TEXT NOT NULL,
     target_agent_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'delegation',
+    hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     title TEXT NOT NULL,
     request_json JSONB NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
@@ -340,8 +367,32 @@ CREATE TABLE IF NOT EXISTS agent_registry.routed_tasks (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.routed_tasks
+    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'delegation',
+    ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE agent_registry.routed_tasks
+SET
+    source_kind = CASE
+        WHEN (request_json #>> '{context,protocol_run_id}') <> '' THEN 'protocol_stage'
+        WHEN lower(title) LIKE '%rehearsal%' THEN 'rehearsal'
+        WHEN lower(title) LIKE '%test%' THEN 'test'
+        ELSE source_kind
+    END,
+    hidden_from_default_views = hidden_from_default_views
+        OR (request_json #>> '{context,protocol_run_id}') <> ''
+        OR lower(title) LIKE '%rehearsal%'
+        OR lower(title) LIKE '%test%';
 CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_updated
     ON agent_registry.routed_tasks (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_default_updated
+    ON agent_registry.routed_tasks (hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_status_default_updated
+    ON agent_registry.routed_tasks (status, hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_parent_updated
+    ON agent_registry.routed_tasks (parent_conversation_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_protocol_run
+    ON agent_registry.routed_tasks ((request_json #>> '{context,protocol_run_id}'), updated_at DESC)
+    WHERE (request_json #>> '{context,protocol_run_id}') <> '';
 
 CREATE TABLE IF NOT EXISTS agent_registry.events (
     seq BIGSERIAL PRIMARY KEY,
@@ -414,6 +465,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
     protocol_run_id TEXT PRIMARY KEY,
     protocol_id TEXT NOT NULL,
     protocol_definition_version_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'protocol_run',
+    hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     entry_agent_id TEXT NOT NULL DEFAULT '',
     entry_authority_ref TEXT NOT NULL DEFAULT '',
     is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE,
@@ -440,6 +493,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
     completed_at TEXT NOT NULL DEFAULT ''
 );
 ALTER TABLE agent_registry.protocol_runs
+    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'protocol_run',
+    ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS blocked_code TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS blocked_detail TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS run_org_id TEXT NOT NULL DEFAULT 'local',
@@ -448,6 +503,16 @@ ALTER TABLE agent_registry.protocol_runs
     ADD COLUMN IF NOT EXISTS retention_until TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS last_transition_at TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE agent_registry.protocol_runs
+SET
+    source_kind = CASE
+        WHEN is_rehearsal THEN 'rehearsal'
+        WHEN lower(problem_statement) LIKE '%test%' THEN 'test'
+        ELSE source_kind
+    END,
+    hidden_from_default_views = hidden_from_default_views
+        OR is_rehearsal
+        OR lower(problem_statement) LIKE '%test%';
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_updated
     ON agent_registry.protocol_runs (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_status
@@ -456,6 +521,8 @@ CREATE INDEX IF NOT EXISTS idx_protocol_runs_org
     ON agent_registry.protocol_runs (run_org_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_rehearsal
     ON agent_registry.protocol_runs (is_rehearsal, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_default_updated
+    ON agent_registry.protocol_runs (hidden_from_default_views, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_protocol_updated
     ON agent_registry.protocol_runs (protocol_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_entry_agent_updated

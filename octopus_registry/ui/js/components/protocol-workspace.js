@@ -6285,6 +6285,10 @@ function renderProtocolRuns(container) {
         renderRunsRoute();
     }
 
+    function _runRecordId(item) {
+        return String(item?.protocol_run_id || item?.id || item?.run_id || '').trim();
+    }
+
     function _filteredIssues() {
         return UI.defaultVisibleRecords(protocolIssues || [], { includeHidden: includeGenerated }).filter((item) => {
             const haystack = [
@@ -6600,10 +6604,13 @@ function renderProtocolRuns(container) {
         });
 
         const runSource = UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated });
-        if (currentRunId && !runSource.some((item) => String(item.protocol_run_id || item.id || item.run_id || '') === String(currentRunId || ''))) {
-            const selectedHiddenRun = (runs || []).find((item) =>
-                String(item.protocol_run_id || item.id || item.run_id || '') === String(currentRunId || ''));
-            if (selectedHiddenRun) runSource.unshift(selectedHiddenRun);
+        if (currentRunId && !runSource.some((item) => _runRecordId(item) === String(currentRunId || ''))) {
+            const selectedHiddenRun = (runs || []).find((item) => _runRecordId(item) === String(currentRunId || ''));
+            if (selectedHiddenRun) {
+                runSource.unshift(selectedHiddenRun);
+            } else if (_runRecordId(currentRun?.run) === String(currentRunId || '')) {
+                runSource.unshift(currentRun.run);
+            }
         }
         const listRuns = runSource.filter((item) => {
             if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
@@ -6617,7 +6624,7 @@ function renderProtocolRuns(container) {
             ].join(' ').toLowerCase();
             return haystack.includes(runSearch.toLowerCase());
         }).map((item) => {
-            const runId = item.protocol_run_id || item.id || item.run_id || '';
+            const runId = _runRecordId(item);
             const issue = issuesByRunId.get(String(runId || '').trim()) || null;
             return {
                 id: runId,

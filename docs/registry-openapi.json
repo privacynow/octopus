@@ -1307,7 +1307,9 @@
               {
                 "enum": [
                   "agent_not_connected",
-                  "capability_not_available",
+                  "admin_operation_not_implemented",
+                  "admin_operation_unavailable",
+                  "admin_interface_not_implemented",
                   "request_timeout",
                   "request_failed",
                   "request_invalid"
@@ -1803,9 +1805,9 @@
       "ProviderGuidancePreviewRecord": {
         "additionalProperties": false,
         "properties": {
-          "capability_summary": {
+          "active_skill_tools_summary": {
             "default": "",
-            "title": "Capability Summary",
+            "title": "Active Skill Tools Summary",
             "type": "string"
           },
           "composed_prompt": {

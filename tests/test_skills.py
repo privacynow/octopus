@@ -314,7 +314,7 @@ def test_context_builders():
     assert "Available on this bot:" in run_ctx.system_prompt
     assert "Active in this conversation: code-review." in run_ctx.system_prompt
     assert "## ACTIVE PROMPT SKILL: Code Review" in run_ctx.system_prompt
-    assert run_ctx.capability_summary == ""
+    assert run_ctx.active_skill_tools_summary == ""
     assert run_ctx.provider_config == {}
     assert run_ctx.credential_env == {}
 
@@ -345,7 +345,7 @@ def test_claude_system_prompt_injection():
     ctx = RunContext(
         extra_dirs=["/tmp/test"],
         system_prompt="You are an engineer.\n\n## Code Review\n\nReview code.",
-        capability_summary="",
+        active_skill_tools_summary="",
     )
     cmd_with = p_claude._build_run_cmd(state, "test prompt", extra_dirs=ctx.extra_dirs)
     # Simulate what run() does: insert --append-system-prompt before --
@@ -844,22 +844,22 @@ def test_build_provider_config():
 
 
 # =====================================================================
-# Phase 3: capability_summary
+# Phase 3: active_skill_tools_summary
 # =====================================================================
 
-def test_capability_summary():
-    from tests.support.skill_test_helpers import build_capability_summary
+def test_active_skill_tools_summary():
+    from tests.support.skill_test_helpers import build_active_skill_tools_summary
 
-    cap = build_capability_summary("claude", ["github-integration"])
+    cap = build_active_skill_tools_summary("claude", ["github-integration"])
     assert "MCP server" in cap
     assert "github" in cap
 
-    cap_codex = build_capability_summary("codex", ["github-integration"])
+    cap_codex = build_active_skill_tools_summary("codex", ["github-integration"])
     # Codex has scripts for github-integration
     assert len(cap_codex) > 0
     assert "script" in cap_codex.lower()
 
-    cap_empty = build_capability_summary("claude", ["code-review"])
+    cap_empty = build_active_skill_tools_summary("claude", ["code-review"])
     assert cap_empty == ""
 
 
@@ -943,15 +943,15 @@ def test_run_context_with_provider_config():
         provider_name="claude", credential_env={"GITHUB_TOKEN": "ghp_xxx"},
     )
     assert bool(ctx_p3.provider_config)
-    assert "MCP server" in ctx_p3.capability_summary
+    assert "MCP server" in ctx_p3.active_skill_tools_summary
     assert ctx_p3.credential_env.get("GITHUB_TOKEN") == "ghp_xxx"
 
-    # PreflightContext includes capability_summary but no secrets
+    # PreflightContext includes active_skill_tools_summary but no secrets
     pf_p3 = build_preflight_context(
         "engineer", ["github-integration"], ["/tmp/test"],
         provider_name="claude",
     )
-    assert "MCP server" in pf_p3.capability_summary
+    assert "MCP server" in pf_p3.active_skill_tools_summary
     assert not isinstance(pf_p3, RunContext)
 
 

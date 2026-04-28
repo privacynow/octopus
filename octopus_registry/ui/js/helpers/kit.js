@@ -81,7 +81,7 @@ window.Kit = (() => {
         'protocol.participant.selector_kind.placeholder': 'Choose how this step should resolve…',
         'protocol.participant.selector_strategy.label': 'Strategy',
         'protocol.participant.selector_value.label': 'Rule value',
-        'protocol.participant.selector_value.help': 'For example: a capability slug, a runtime role tag, or an agent slug.',
+        'protocol.participant.selector_value.help': 'For example: a skill slug, a runtime role tag, or an agent slug.',
         'protocol.participant.selector_value.placeholder': 'e.g. legal-review, approver, m1',
         'protocol.participant.selector_preview.label': 'Who matches right now',
         'protocol.participant.selector_preview.help': 'Preview uses the shared registry selector resolution path. Choose a matching agent to pin this step when needed.',
@@ -218,7 +218,7 @@ window.Kit = (() => {
         // Agents - work entry point with operational diagnostics behind detail.
         'agents.list.title': 'Agents',
         'agents.empty': 'No agents match this view.',
-        'agents.search.placeholder': 'Search by name, capability, role, or provider…',
+        'agents.search.placeholder': 'Search by name, skill, role, or provider…',
         'agents.presence.filter.all': 'All',
         'agents.presence.connected': 'Connected',
         'agents.presence.degraded': 'Degraded',
@@ -226,7 +226,7 @@ window.Kit = (() => {
         'agents.presence.standalone': 'Standalone',
         'agents.presence.stopped': 'Stopped',
         'agents.presence.faulted': 'Execution faulted',
-        'agents.detail.firstrun': 'Select an agent to start work, inspect capabilities, and open recent activity.',
+        'agents.detail.firstrun': 'Select an agent to start work, inspect skills, and open recent activity.',
         'agents.summary.agent_id': 'Agent ID',
         'agents.summary.slug': 'Slug',
         'agents.summary.role': 'Role',
@@ -239,7 +239,7 @@ window.Kit = (() => {
         'agents.summary.execution': 'Execution',
         'agents.summary.capacity': 'Workload',
         'agents.summary.last_heartbeat': 'Last heartbeat',
-        'agents.summary.skills': 'Capabilities',
+        'agents.summary.skills': 'Skills',
         'agents.trust_tier.community': 'Community',
         'agents.trust_tier.trusted': 'Trusted',
         'agents.trust_tier.verified': 'Verified',
@@ -274,7 +274,7 @@ window.Kit = (() => {
         'agents.selector.candidate_subtitle_template': '{role} · {slug}',
         'agents.selector.quick_picks': 'Quick picks',
 
-        // Capabilities / guidance - enough for stub adoption; expanded on migration
+        // Skills / guidance - enough for stub adoption; expanded on migration
         'skill.lifecycle.draft': 'Draft',
         'skill.lifecycle.published': 'Published',
         'skill.lifecycle.archived': 'Archived',
@@ -2582,23 +2582,23 @@ window.Kit = (() => {
                 sub.textContent = parts.join(' · ');
                 row.appendChild(sub);
 
-                const skills = _agentSkills(agent);
-                if (skills.length) {
-                    const capabilities = document.createElement('div');
-                    capabilities.className = 'kit-agents-capabilities';
-                    skills.slice(0, 5).forEach((skill) => {
+                const skillNames = _agentSkills(agent);
+                if (skillNames.length) {
+                    const skillsEl = document.createElement('div');
+                    skillsEl.className = 'kit-agents-skills';
+                    skillNames.slice(0, 5).forEach((skill) => {
                         const chip = document.createElement('span');
                         chip.className = 'quickstart-chip static';
                         chip.textContent = skill;
-                        capabilities.appendChild(chip);
+                        skillsEl.appendChild(chip);
                     });
-                    if (skills.length > 5) {
+                    if (skillNames.length > 5) {
                         const more = document.createElement('span');
                         more.className = 'quiet-note';
-                        more.textContent = `+${skills.length - 5} more`;
-                        capabilities.appendChild(more);
+                        more.textContent = `+${skillNames.length - 5} more`;
+                        skillsEl.appendChild(more);
                     }
-                    row.appendChild(capabilities);
+                    row.appendChild(skillsEl);
                 }
 
                 const actions = document.createElement('div');
@@ -2641,7 +2641,7 @@ window.Kit = (() => {
         root.className = 'kit-agent-summary';
         if (!agent) {
             root.appendChild(UI.renderEmptyState(
-                emptyHint || dictValue('agents.detail.firstrun', 'Select an agent to start work, inspect capabilities, and open recent activity.'),
+                emptyHint || dictValue('agents.detail.firstrun', 'Select an agent to start work, inspect skills, and open recent activity.'),
             ));
             return root;
         }
@@ -2659,7 +2659,7 @@ window.Kit = (() => {
         if (skills.length) {
             const skillsLabel = document.createElement('div');
             skillsLabel.className = 'detail-label';
-            skillsLabel.textContent = dictValue('agents.summary.skills', 'Capabilities');
+            skillsLabel.textContent = dictValue('agents.summary.skills', 'Skills');
             root.appendChild(skillsLabel);
             const chips = document.createElement('div');
             chips.className = 'chip-row';

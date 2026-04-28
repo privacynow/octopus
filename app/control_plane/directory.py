@@ -1,47 +1,47 @@
-"""Startup-built authority/capability directory for control-plane routing."""
+"""Startup-built authority/admin_interface directory for control-plane routing."""
 
 from __future__ import annotations
 
 
 class ControlPlaneDirectory:
     def __init__(self) -> None:
-        self._by_capability: dict[str, set[str]] = {}
+        self._by_admin_interface: dict[str, set[str]] = {}
 
-    def register(self, *, capability: str, authority_ref: str) -> None:
-        self._by_capability.setdefault(capability, set()).add(authority_ref)
+    def register(self, *, admin_interface: str, implementation_ref: str) -> None:
+        self._by_admin_interface.setdefault(admin_interface, set()).add(implementation_ref)
 
-    def authorities_for_capability(self, capability: str) -> set[str]:
-        return set(self._by_capability.get(capability, set()))
+    def implementations_for_admin_interface(self, admin_interface: str) -> set[str]:
+        return set(self._by_admin_interface.get(admin_interface, set()))
 
-    def capabilities_for_authority(self, authority_ref: str) -> set[str]:
-        capabilities: set[str] = set()
-        for capability, authorities in self._by_capability.items():
-            if authority_ref in authorities:
-                capabilities.add(capability)
-        return capabilities
+    def admin_interfaces_for_implementation(self, implementation_ref: str) -> set[str]:
+        admin_interfaces: set[str] = set()
+        for admin_interface, authorities in self._by_admin_interface.items():
+            if implementation_ref in authorities:
+                admin_interfaces.add(admin_interface)
+        return admin_interfaces
 
-    def all_capabilities(self) -> set[str]:
-        return set(self._by_capability.keys())
+    def all_admin_interfaces(self) -> set[str]:
+        return set(self._by_admin_interface.keys())
 
-    def all_authorities(self) -> set[str]:
+    def all_implementations(self) -> set[str]:
         authorities: set[str] = set()
-        for refs in self._by_capability.values():
+        for refs in self._by_admin_interface.values():
             authorities.update(refs)
         return authorities
 
     def all_pairs(self) -> set[tuple[str, str]]:
         pairs: set[tuple[str, str]] = set()
-        for capability, authorities in self._by_capability.items():
-            for authority_ref in authorities:
-                pairs.add((authority_ref, capability))
+        for admin_interface, authorities in self._by_admin_interface.items():
+            for implementation_ref in authorities:
+                pairs.add((implementation_ref, admin_interface))
         return pairs
 
 
 def build_control_plane_directory(
-    authority_capabilities: dict[str, set[str]],
+    implemented_admin_interfaces: dict[str, set[str]],
 ) -> ControlPlaneDirectory:
     directory = ControlPlaneDirectory()
-    for authority_ref, capabilities in authority_capabilities.items():
-        for capability in capabilities:
-            directory.register(capability=capability, authority_ref=authority_ref)
+    for implementation_ref, admin_interfaces in implemented_admin_interfaces.items():
+        for admin_interface in admin_interfaces:
+            directory.register(admin_interface=admin_interface, implementation_ref=implementation_ref)
     return directory

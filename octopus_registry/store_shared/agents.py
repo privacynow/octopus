@@ -138,8 +138,8 @@ def row_to_agent(row) -> AgentRecord:
         "connectivity_state": effective_state,
         "current_capacity": row["current_capacity"],
         "max_capacity": row["max_capacity"],
-        "channel_capabilities": decode_json_field(row.get("channel_capabilities_json"), []),
-        "management_capabilities": decode_json_field(row.get("management_capabilities_json"), []),
+        "transport_implementations": decode_json_field(row.get("transport_implementations"), []),
+        "supported_admin_operations": decode_json_field(row.get("supported_admin_operations"), []),
         "version": row["version"],
         "trust_tier": str(row.get("trust_tier", "community") or "community"),
         "soft_deleted_at": str(row.get("soft_deleted_at", "") or ""),
@@ -308,7 +308,7 @@ def enroll(
             agent_id, agent_token, display_name, slug, role, registry_scope,
             skills_json, tags_json, description, provider, mode,
             connectivity_state, current_capacity, max_capacity,
-            channel_capabilities_json, management_capabilities_json, version, bot_key,
+            transport_implementations, supported_admin_operations, version, bot_key,
             created_at, updated_at, last_heartbeat_at
         ) VALUES (
             {dialect.placeholder(1)},
@@ -349,8 +349,8 @@ def enroll(
             canonical_registry_connectivity_state(card.get("connectivity_state", "degraded")),
             card.get("current_capacity", 0),
             card.get("max_capacity", 1),
-            Jsonb(card.get("channel_capabilities", [])),
-            Jsonb(card.get("management_capabilities", [])),
+            Jsonb(card.get("transport_implementations", [])),
+            Jsonb(card.get("supported_admin_operations", [])),
             card.get("version", ""),
             bot_key,
             now,
@@ -391,8 +391,8 @@ def register(
         raise ValueError("bot_key must match the enrolled agent identity")
     current_skills = decode_json_field(row.get("skills_json"), [])
     current_tags = decode_json_field(row.get("tags_json"), [])
-    current_channel_capabilities = decode_json_field(row.get("channel_capabilities_json"), [])
-    current_management_capabilities = decode_json_field(row.get("management_capabilities_json"), [])
+    current_transport_implementations = decode_json_field(row.get("transport_implementations"), [])
+    current_supported_admin_operations = decode_json_field(row.get("supported_admin_operations"), [])
     dialect.execute(
         conn,
         f"""
@@ -408,8 +408,8 @@ def register(
             connectivity_state = {dialect.placeholder(9)},
             current_capacity = {dialect.placeholder(10)},
             max_capacity = {dialect.placeholder(11)},
-            channel_capabilities_json = {dialect.placeholder(12)},
-            management_capabilities_json = {dialect.placeholder(13)},
+            transport_implementations = {dialect.placeholder(12)},
+            supported_admin_operations = {dialect.placeholder(13)},
             version = {dialect.placeholder(14)},
             updated_at = {dialect.placeholder(15)},
             last_heartbeat_at = {dialect.placeholder(16)}
@@ -427,8 +427,8 @@ def register(
             canonical_registry_connectivity_state(register_payload.connectivity_state or row["connectivity_state"]),
             row["current_capacity"] if register_payload.current_capacity is None else register_payload.current_capacity,
             row["max_capacity"] if register_payload.max_capacity is None else register_payload.max_capacity,
-            Jsonb(card.channel_capabilities or current_channel_capabilities),
-            Jsonb(card.management_capabilities or current_management_capabilities),
+            Jsonb(card.transport_implementations or current_transport_implementations),
+            Jsonb(card.supported_admin_operations or current_supported_admin_operations),
             card.version or row["version"],
             now,
             now,

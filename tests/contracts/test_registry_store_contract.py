@@ -64,7 +64,7 @@ def _card(
         provider="codex",
         mode="registry",
         connectivity_state="connected",
-        channel_capabilities=["registry"],
+        transport_implementations=["registry"],
         version="test",
         bot_key=f"bot-{slug}",
     )
@@ -283,7 +283,7 @@ def test_enroll_requires_explicit_registry_scope(store):
                 "description": "Missing scope",
                 "provider": "codex",
                 "mode": "registry",
-                "channel_capabilities": ["registry"],
+                "transport_implementations": ["registry"],
                 "version": "test",
             }
         )
@@ -913,7 +913,7 @@ def test_coordination_scope_poll_filters_channel_deliveries(store):
     assert [item.kind for item in deliveries] == ["routed_task"]
 
 
-def test_create_routed_task_disabled_capability_raises(store):
+def test_create_routed_task_disabled_routing_skill_raises(store):
     origin_id, _ = _enroll(store, "origin-bot")
     target_id, _ = _enroll(store, "target-bot", ["reviewer"])
     conversation = store.create_conversation(
@@ -1434,7 +1434,7 @@ def test_register_preserves_omitted_capacity_and_card_lists(store):
     assert updated.max_capacity == 5
     assert updated.routing_skills == ["python", "tests"]
     assert updated.tags == ["backend"]
-    assert updated.channel_capabilities == ["registry"]
+    assert updated.transport_implementations == ["registry"]
     assert updated.registry_scope == "coordination"
 
 

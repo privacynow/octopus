@@ -43,6 +43,7 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
 )
 from octopus_sdk.registry.management import (
+    ALL_MANAGEMENT_OPERATIONS,
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
     ManagementRequest,
@@ -55,13 +56,7 @@ from octopus_sdk.registry.management_executor import (
 )
 from octopus_sdk.providers import ProviderStateRecord
 
-_FULL_MANAGEMENT_CAPABILITIES = [
-    "skill_catalog",
-    "skill_lifecycle",
-    "provider_guidance",
-    "conversation_skills",
-    "agent_runtime",
-]
+_FULL_MANAGEMENT_OPERATIONS = list(ALL_MANAGEMENT_OPERATIONS)
 
 
 @pytest.fixture(autouse=True)
@@ -168,9 +163,9 @@ def _enroll_and_register(
     slug: str,
     *,
     registry_scope: str = "full",
-    management_capabilities: list[str] | None = None,
+    supported_admin_operations: list[str] | None = None,
 ) -> tuple[str, str]:
-    advertised_management_capabilities = management_capabilities or list(_FULL_MANAGEMENT_CAPABILITIES)
+    advertised_supported_admin_operations = supported_admin_operations or list(_FULL_MANAGEMENT_OPERATIONS)
     bot_key = f"bot:{slug}"
     enroll = client.post(
         "/v1/agents/enroll",
@@ -188,8 +183,8 @@ def _enroll_and_register(
                 "provider": "codex",
                 "mode": "registry",
                 "connectivity_state": "degraded",
-                "channel_capabilities": ["telegram", "registry"],
-                "management_capabilities": advertised_management_capabilities,
+                "transport_implementations": ["telegram", "registry"],
+                "supported_admin_operations": advertised_supported_admin_operations,
                 "version": "test",
             },
         },
@@ -212,8 +207,8 @@ def _enroll_and_register(
                 "description": "Writes and tests code",
                 "provider": "codex",
                 "mode": "registry",
-                "channel_capabilities": ["telegram", "registry"],
-                "management_capabilities": advertised_management_capabilities,
+                "transport_implementations": ["telegram", "registry"],
+                "supported_admin_operations": advertised_supported_admin_operations,
                 "version": "test",
             },
             "connectivity_state": "connected",
@@ -623,14 +618,14 @@ def test_agent_scoped_management_route_reports_agent_not_connected(monkeypatch, 
     assert "not connected" in response.json()["detail"].lower()
 
 
-def test_agent_scoped_management_route_reports_missing_capability(monkeypatch, tmp_path: Path):
+def test_agent_scoped_management_route_reports_missing_admin_operation(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
     agent_id, _token = _enroll_and_register(
         client,
         "No Guidance Bot",
         "no-guidance-bot",
-        management_capabilities=["skill_catalog"],
+        supported_admin_operations=["list_catalog_skills"],
     )
 
     response = client.get(
@@ -639,7 +634,7 @@ def test_agent_scoped_management_route_reports_missing_capability(monkeypatch, t
     )
 
     assert response.status_code == 409
-    assert "provider_guidance" in response.json()["detail"]
+    assert "provider_guidance_detail" in response.json()["detail"]
 
 
 def test_agent_scoped_management_route_reports_request_timeout(monkeypatch, tmp_path: Path):
@@ -1006,7 +1001,7 @@ def test_registry_enroll_requires_explicit_registry_scope(monkeypatch, tmp_path:
                 "description": "Writes code",
                 "provider": "codex",
                 "mode": "registry",
-                "channel_capabilities": ["registry"],
+                "transport_implementations": ["registry"],
                 "version": "test",
             },
         },
@@ -3242,7 +3237,7 @@ def test_agent_api_invalid_token_uses_generic_401_detail(monkeypatch, tmp_path: 
                 "description": "Writes code",
                 "provider": "codex",
                 "mode": "registry",
-                "channel_capabilities": ["telegram", "registry"],
+                "transport_implementations": ["telegram", "registry"],
                 "version": "test",
             },
             "connectivity_state": "connected",
@@ -3413,8 +3408,8 @@ def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: P
                 "provider": "codex",
                 "mode": "registry",
                 "connectivity_state": "degraded",
-                "channel_capabilities": ["registry"],
-                "management_capabilities": [],
+                "transport_implementations": ["registry"],
+                "supported_admin_operations": [],
                 "version": "test",
             },
         },
@@ -3439,8 +3434,8 @@ def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: P
                 "description": "Epoch test bot",
                 "provider": "codex",
                 "mode": "registry",
-                "channel_capabilities": ["registry"],
-                "management_capabilities": [],
+                "transport_implementations": ["registry"],
+                "supported_admin_operations": [],
                 "version": "test",
             },
             "connectivity_state": "connected",

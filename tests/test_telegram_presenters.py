@@ -170,7 +170,7 @@ def test_provider_guidance_preview_message_renders_expected_html():
         preview_guidance="Use careful guidance",
         preview_source="draft",
         composed_prompt="Use careful guidance",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         prompt_weight=1,
     )

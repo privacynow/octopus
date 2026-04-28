@@ -37,7 +37,7 @@ class _FakeBus:
     async def request(self, command, *, timeout_seconds: float = 10.0):
         del timeout_seconds
         self.requests.append(command)
-        reply = self._request_replies.get(command.authority_ref)
+        reply = self._request_replies.get(command.implementation_ref)
         if isinstance(reply, Exception):
             raise reply
         if reply is None:
@@ -47,11 +47,11 @@ class _FakeBus:
 
 def _directory() -> ControlPlaneDirectory:
     directory = ControlPlaneDirectory()
-    directory.register(capability="conversation_projection", authority_ref="registry:alpha")
-    directory.register(capability="conversation_projection", authority_ref="registry:beta")
-    directory.register(capability="agent_directory", authority_ref="registry:alpha")
-    directory.register(capability="agent_directory", authority_ref="registry:beta")
-    directory.register(capability="health_publication", authority_ref="registry:alpha")
+    directory.register(admin_interface="conversation_projection", implementation_ref="registry:alpha")
+    directory.register(admin_interface="conversation_projection", implementation_ref="registry:beta")
+    directory.register(admin_interface="agent_directory", implementation_ref="registry:alpha")
+    directory.register(admin_interface="agent_directory", implementation_ref="registry:beta")
+    directory.register(admin_interface="health_publication", implementation_ref="registry:alpha")
     return directory
 
 
@@ -234,7 +234,7 @@ async def test_health_publication_fans_out_to_health_authorities_only() -> None:
     adapter = BusHealthPublication(
         bus,
         _directory(),
-        connectivity_state_for_authority=lambda _authority_ref: "connected",
+        connectivity_state_for_authority=lambda _implementation_ref: "connected",
     )
 
     await adapter.publish_health(
@@ -246,15 +246,15 @@ async def test_health_publication_fans_out_to_health_authorities_only() -> None:
         )
     )
 
-    assert [cmd.authority_ref for cmd in bus.submitted] == ["registry:alpha"]
+    assert [cmd.implementation_ref for cmd in bus.submitted] == ["registry:alpha"]
 
 
-def test_health_publication_connection_summary_reports_authority_capabilities() -> None:
+def test_health_publication_connection_summary_reports_implemented_admin_interfaces() -> None:
     directory = ControlPlaneDirectory()
-    directory.register(capability="conversation_projection", authority_ref="registry:full")
-    directory.register(capability="task_routing", authority_ref="registry:full")
-    directory.register(capability="agent_directory", authority_ref="registry:coord")
-    directory.register(capability="conversation_projection", authority_ref="registry:channel")
+    directory.register(admin_interface="conversation_projection", implementation_ref="registry:full")
+    directory.register(admin_interface="task_routing", implementation_ref="registry:full")
+    directory.register(admin_interface="agent_directory", implementation_ref="registry:coord")
+    directory.register(admin_interface="conversation_projection", implementation_ref="registry:channel")
     states = {
         "registry:channel": "connected",
         "registry:coord": "offline",
@@ -263,26 +263,26 @@ def test_health_publication_connection_summary_reports_authority_capabilities() 
     adapter = BusHealthPublication(
         _FakeBus(),
         directory,
-        connectivity_state_for_authority=lambda authority_ref: states[authority_ref],
+        connectivity_state_for_authority=lambda implementation_ref: states[implementation_ref],
     )
 
     summary = adapter.connection_summary()
 
     assert [authority.model_dump() for authority in summary.authorities] == [
         {
-            "authority_ref": "registry:channel",
+            "implementation_ref": "registry:channel",
             "connectivity_state": "connected",
-            "capabilities": ["conversation_projection"],
+            "admin_interfaces": ["conversation_projection"],
         },
         {
-            "authority_ref": "registry:coord",
+            "implementation_ref": "registry:coord",
             "connectivity_state": "offline",
-            "capabilities": ["agent_directory"],
+            "admin_interfaces": ["agent_directory"],
         },
         {
-            "authority_ref": "registry:full",
+            "implementation_ref": "registry:full",
             "connectivity_state": "degraded",
-            "capabilities": ["conversation_projection", "task_routing"],
+            "admin_interfaces": ["conversation_projection", "task_routing"],
         },
     ]
 
@@ -291,7 +291,7 @@ def test_health_publication_connection_summary_is_empty_without_authorities() ->
     adapter = BusHealthPublication(
         _FakeBus(),
         ControlPlaneDirectory(),
-        connectivity_state_for_authority=lambda _authority_ref: "offline",
+        connectivity_state_for_authority=lambda _implementation_ref: "offline",
     )
 
     summary = adapter.connection_summary()

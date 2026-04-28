@@ -210,7 +210,7 @@ class _GuidanceService:
     def provider_config(self, provider_name: str, active_skills: list[str], credential_env: CredentialEnvRecord | None = None) -> ProviderConfigRecord:
         del provider_name, active_skills, credential_env
         return ProviderConfigRecord()
-    def capability_summary(self, provider_name: str, active_skills: list[str]) -> str:
+    def active_skill_tools_summary(self, provider_name: str, active_skills: list[str]) -> str:
         del provider_name, active_skills
         return "caps"
     def prompt_weight(
@@ -249,7 +249,7 @@ class _GuidanceService:
         return RunContext(
             extra_dirs=[],
             system_prompt=guidance_override or "prompt",
-            capability_summary="caps",
+            active_skill_tools_summary="caps",
             file_policy="edit",
         )
     def build_preflight_context(
@@ -268,7 +268,7 @@ class _GuidanceService:
         return PreflightContext(
             extra_dirs=[],
             system_prompt=guidance_override or "prompt",
-            capability_summary="caps",
+            active_skill_tools_summary="caps",
         )
     def apply_compact_mode(self, system_prompt: str, compact: bool) -> str:
         del compact
@@ -436,7 +436,7 @@ def test_in_memory_work_queue_recovery_methods_fail_loudly(tmp_path: Path) -> No
         queue.recover_after_crash(data_dir, lease_ttl_seconds=0)
 
 
-def test_workflow_composer_optional_capabilities_fail_loudly() -> None:
+def test_workflow_composer_optional_dependencies_fail_loudly() -> None:
     workflows = _build_workflows(
         include_optional=False,
         include_deferred_notifications=False,
@@ -453,12 +453,24 @@ def test_workflow_composer_optional_capabilities_fail_loudly() -> None:
         )
 
 
-def test_workflow_composer_tracks_management_capabilities_from_optional_ports() -> None:
+def test_workflow_composer_tracks_supported_admin_operations_from_optional_ports() -> None:
     workflows = _build_workflows()
-    assert workflows.management_capabilities == (
-        "skill_catalog",
-        "conversation_skills",
-        "conversation_settings",
+    assert workflows.supported_admin_operations == (
+        "list_catalog_skills",
+        "search_catalog_skills",
+        "catalog_skill_detail",
+        "install_catalog_skill",
+        "uninstall_catalog_skill",
+        "update_catalog_skill",
+        "diff_catalog_skill",
+        "conversation_skill_state",
+        "activate_conversation_skill",
+        "deactivate_conversation_skill",
+        "clear_conversation_skills",
+        "submit_conversation_skill_credential",
+        "conversation_settings_state",
+        "set_conversation_setting",
+        "reset_conversation",
     )
 
 

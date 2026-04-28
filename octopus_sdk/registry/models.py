@@ -141,8 +141,8 @@ class AgentCard(RegistryRecordModel):
     connectivity_state: str = "standalone"
     current_capacity: int = 0
     max_capacity: int = 1
-    channel_capabilities: list[str] = Field(default_factory=list)
-    management_capabilities: list[str] = Field(default_factory=list)
+    transport_implementations: list[str] = Field(default_factory=list)
+    supported_admin_operations: list[str] = Field(default_factory=list)
     version: str = "dev"
 
 
@@ -378,8 +378,8 @@ class AgentRecord(RegistryRecordModel):
     connectivity_state: str = ""
     current_capacity: int = 0
     max_capacity: int = 1
-    channel_capabilities: list[str] = Field(default_factory=list)
-    management_capabilities: list[str] = Field(default_factory=list)
+    transport_implementations: list[str] = Field(default_factory=list)
+    supported_admin_operations: list[str] = Field(default_factory=list)
     version: str = ""
     trust_tier: str = "community"
     soft_deleted_at: str = ""

@@ -11,7 +11,7 @@ operator state. Bot runtimes connect to the registry, receive work, execute it
 through providers such as Claude or Codex, and publish events and results back
 to the registry. Users can work through Telegram or through browser-origin
 registry conversations. Operators use the registry UI to inspect and manage
-agents, conversations, runs, capabilities, guidance, routing, usage, and health.
+agents, conversations, runs, skills, guidance, routing, usage, and health.
 
 The core product lineage is:
 
@@ -504,7 +504,7 @@ Protocol document model:
 | Metadata | `slug`, `display_name`, `description`, schema version. |
 | Participants | `participant_key`, display name, shared instructions. |
 | Artifacts | `artifact_key`, display name, description, kind, workspace path, verify flag. |
-| Stages | `stage_key`, participant, selector, stage kind, instructions, inputs, outputs, transitions, write capability, strict completion, timeout. |
+| Stages | `stage_key`, participant, selector, stage kind, instructions, inputs, outputs, transitions, write access, strict completion, timeout. |
 | Policies | Single active writer, max review rounds. |
 
 Runtime lineage:
@@ -615,9 +615,9 @@ sequenceDiagram
     end
 ```
 
-## Skills, Capabilities, And Guidance
+## Skills And Guidance
 
-The UI label is `Capabilities`. The runtime model and APIs still use `skills`.
+The UI label is `Skills`. The runtime model and APIs still use `skills`.
 Routing skills are derived from bot skill availability and routing policy; they
 are not a second skill system.
 
@@ -659,7 +659,7 @@ Claude/Codex behavior. It is managed through provider guidance tracks/revisions,
 not through conversation activation or routing.
 
 Telegram and Registry UI should expose the same underlying skill/guidance
-capabilities through SDK and management interfaces. The browser may provide a
+skills through SDK and management interfaces. The browser may provide a
 richer editor; it must not be a separate source of truth.
 
 ## Registry UI
@@ -677,7 +677,7 @@ Key files:
 | `octopus_registry/ui/js/ws.js` | Browser WebSocket client and topic subscriptions. |
 | `octopus_registry/ui/js/helpers/ui.js` | Shared UI utilities, rendering helpers, artifact actions, default hidden-record filtering. |
 | `octopus_registry/ui/js/helpers/kit.js` | Shared Kit primitives for lists, summaries, protocol editor sections, runs, agents. |
-| `octopus_registry/ui/js/components/*.js` | Route components for dashboard, agents, conversations, runs/protocols, capabilities, guidance, routing, usage, login. |
+| `octopus_registry/ui/js/components/*.js` | Route components for dashboard, agents, conversations, runs/protocols, skills, guidance, routing, usage, login. |
 | `octopus_registry/ui/css/main.css` | Current styling system. |
 
 Current primary navigation:
@@ -685,7 +685,7 @@ Current primary navigation:
 | Group | Entries |
 | --- | --- |
 | Work | Conversations, Runs, Agents |
-| Build | Protocols, Capabilities, Guidance |
+| Build | Protocols, Skills, Guidance |
 | Operations | Dashboard, Routing, Usage |
 
 Linked but not primary routes:
@@ -764,9 +764,9 @@ modules:
 | Credentials/setup | `/clear_credentials`, setup callbacks, credential submission. |
 
 Telegram should call the same SDK workflow and registry participant interfaces
-that Registry UI-backed operations use. If a capability exists only in browser
-code and cannot be reached through SDK/management interfaces, that is an
-architecture gap.
+that Registry UI-backed operations use. If a skill or guidance operation exists
+only in browser code and cannot be reached through SDK/management interfaces,
+that is an architecture gap.
 
 ## Control Plane
 
@@ -780,7 +780,7 @@ flowchart LR
     Requester["Runtime workflow"] --> Bus["ControlPlaneBus"]
     Bus --> Store["PostgresControlPlaneStore"]
     Store --> Runner["ProcessorRunner"]
-    Runner --> Adapter["Capability adapter"]
+    Runner --> Adapter["SDK adapter"]
     Adapter --> Registry["Registry participant/API"]
     Adapter --> Store
     Store --> Requester
@@ -799,7 +799,7 @@ Security boundaries in the current runtime:
 | UI mutations | CSRF token from `/v1/auth/csrf`, `X-CSRF-Token` on mutating requests. |
 | Agent API | Enrollment token for first enroll, issued agent token for runtime calls. |
 | Registry UI shell | CSP, no framing, nosniff, referrer policy. |
-| Protocol authoring internals | Capability/role checks in the registry store, not just hidden UI. |
+| Protocol authoring internals | Skill/role checks in the registry store, not just hidden UI. |
 | Artifact paths | Safe path validation and workspace-root checks. |
 | Skill files | Safe relative paths, size limits, executable policy. |
 | Provider credentials | Credential store and provider auth mounts, not prompt-visible secrets. |
@@ -902,7 +902,7 @@ What a new channel should not write:
 7. Tasks are an execution substrate. User-facing surfaces should render linked
    work lineage.
 8. Artifacts use one action contract everywhere they are displayed.
-9. Skills/capabilities/guidance keep their distinct product meanings.
+9. Skills and guidance keep their distinct product meanings.
 10. Auth, API, and UI gates must align. Hiding controls in the UI is not enough.
 11. Postgres schema and store contracts are the supported durable persistence
     path.
@@ -925,7 +925,7 @@ product pressure and should be improved without creating parallel paths.
 | Tasks vs runs | Tasks are real delegation objects, but protocol stages also use tasks. | Keep task substrate; render user-facing lineage consistently. |
 | Artifact availability | Content can be referenced from tasks, runs, stages, conversations, and dashboards. | One artifact row/action component and one backend content contract. |
 | Protocol authoring density | Stage editing can become cognitively heavy. | Progressive inline stage editor with section tabs and state preservation. |
-| Capabilities naming | UI says capabilities, runtime says skills, routing says routing skills. | Keep nouns clear and avoid duplicate lists. |
+| Skills naming | UI says skills, runtime says skills, routing says routing skills. | Keep nouns clear and avoid duplicate lists. |
 | Operator-only controls | Internal protocol knobs are dangerous in normal authoring. | Enforce in API/store and omit from default DOM. |
-| Multi-tenant roles | Current role/org model is partial. | Harden role/capability model before commercial multi-tenant deployment. |
+| Multi-tenant roles | Current role/org model is partial. | Harden role/permission model before commercial multi-tenant deployment. |
 | Browser verification | Cache and viewport differences have hidden regressions. | Real Safari desktop/narrow audit is part of release verification. |

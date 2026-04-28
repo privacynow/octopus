@@ -11,8 +11,7 @@ from octopus_sdk.registry.management import (
     ManagementRequestPayload,
     ManagementResult,
     ManagementResultPayload,
-    management_capability_supported,
-    required_management_capability,
+    management_operation_supported,
 )
 
 
@@ -47,17 +46,14 @@ class RegistryManagementClient:
                 error_code="agent_not_connected",
                 detail=f"Agent {agent_id} is not connected.",
             )
-        if not management_capability_supported(
-            status.management_capabilities,
+        if not management_operation_supported(
+            status.supported_admin_operations,
             operation,
         ):
             raise ManagementClientError(
                 status_code=409,
-                error_code="capability_not_available",
-                detail=(
-                    f"Agent {agent_id} does not advertise the "
-                    f"{required_management_capability(operation)} capability."
-                ),
+                error_code="admin_operation_not_implemented",
+                detail=f"Agent {agent_id} does not implement the {operation} admin operation.",
             )
 
     async def send(

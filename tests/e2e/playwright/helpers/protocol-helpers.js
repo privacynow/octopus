@@ -295,17 +295,17 @@ async function createStep(page, {
     });
     const valueLabel = selectorKind === 'agent'
       ? 'Agent'
-      : selectorKind === 'new-capability'
-        ? 'Needed capability'
+      : selectorKind === 'new-skill'
+        ? 'Needed skill'
         : selectorKind === 'skill'
-          ? 'Required capability'
+          ? 'Required skill'
           : 'Choose runtime role tag';
-    if (selectorKind === 'agent' || selectorKind === 'skill' || selectorKind === 'new-capability') {
+    if (selectorKind === 'agent' || selectorKind === 'skill' || selectorKind === 'new-skill') {
       const modeLabel = selectorKind === 'agent'
         ? 'Specific agent'
-        : selectorKind === 'new-capability'
-          ? 'New capability needed'
-          : 'Existing capability';
+        : selectorKind === 'new-skill'
+          ? 'New skill needed'
+          : 'Existing skill';
       const modeTab = assignmentSection.getByRole('tab', { name: modeLabel, exact: true });
       for (let attempt = 0; attempt < 3; attempt += 1) {
         await modeTab.click();

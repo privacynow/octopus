@@ -243,7 +243,7 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
         "origin_surface",
         "surface_input",
         "surface_action",
-        "surface_capabilities",
+        "surface_egress_features",
         "surface_binding_id",
         "ExecutionSurfaceContext",
         "SurfaceBinding",
@@ -274,7 +274,7 @@ def test_legacy_registry_column_tokens_are_limited_to_migration_owners() -> None
         and path.suffix in {".py", ".sql"}
         and "__pycache__" not in path.parts
     )
-    forbidden_tokens = ("origin_surface", "surface_capabilities_json")
+    forbidden_tokens = ("origin_surface", "surface_egress_features_json")
     for path in candidate_paths:
         if path in allowed_paths:
             continue
@@ -853,19 +853,19 @@ def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes
     assert '"registry_id"' not in inbound_text
     assert "telegram_actor_key(" not in inbound_text
     assert "telegram_conversation_key(" not in inbound_text
-    assert "registry_authority_ref(" not in inbound_text
+    assert "registry_implementation_ref(" not in inbound_text
 
     session_text = session_state_path.read_text()
-    assert "registry_authority_ref(" not in session_text
+    assert "registry_implementation_ref(" not in session_text
 
     coordination_text = coordination_path.read_text()
-    assert "registry_authority_ref(" not in coordination_text
+    assert "registry_implementation_ref(" not in coordination_text
 
     presenters_text = presenters_path.read_text()
     assert 'agent.get("registry_id"' not in presenters_text
 
     worker_text = worker_path.read_text()
-    assert "_resolve_registry_authority_ref" not in worker_text
+    assert "_resolve_registry_implementation_ref" not in worker_text
     assert "parse_registry_ref(" not in worker_text
 
 
@@ -909,7 +909,7 @@ def test_shared_delivery_and_admission_do_not_branch_on_raw_telegram_surface_nam
     work_admission_path = repo_root / "app" / "runtime" / "work_admission.py"
 
     delivery_text = delivery_path.read_text()
-    assert 'channel_name == "telegram"' not in delivery_text
+    assert 'transport_implementation == "telegram"' not in delivery_text
 
     work_admission_text = work_admission_path.read_text()
     assert 'channel_type != "telegram"' not in work_admission_text

@@ -34,7 +34,7 @@ def test_run_init_applies_current_schema(postgres_base_url, request):
             )
             agent_columns = {row[0] for row in cur.fetchall()}
 
-    assert "channel_capabilities_json" in agent_columns
+    assert "transport_implementations" in agent_columns
     assert "registry_scope" in agent_columns
     assert "runtime_health_json" in agent_columns
     assert "bot_key" in agent_columns
@@ -179,8 +179,8 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "connectivity_state",
             "current_capacity",
             "max_capacity",
-            "channel_capabilities_json",
-            "management_capabilities_json",
+            "transport_implementations",
+            "supported_admin_operations",
             "version",
             "runtime_health_json",
             "trust_tier",
@@ -219,7 +219,6 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "request_id",
             "target_agent_id",
             "operation",
-            "capability",
             "payload_json",
             "status",
             "delivery_id",
@@ -524,7 +523,7 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
 
     assert by_table == expected_columns
     assert defaults[("agents", "registry_scope")].startswith("'full'")
-    assert "jsonb" in defaults[("agents", "channel_capabilities_json")]
+    assert "jsonb" in defaults[("agents", "transport_implementations")]
     assert "jsonb" in defaults[("agents", "runtime_health_json")]
     assert defaults[("conversations", "conversation_type")].startswith("'conversation'")
     assert defaults[("conversations", "origin_channel")].startswith("'registry'")

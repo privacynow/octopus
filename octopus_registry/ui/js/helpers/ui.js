@@ -647,7 +647,7 @@ window.UI = (() => {
         return Boolean(generatedTimestamp(value));
     }
 
-    function isHumanAssignableCapabilityName(value) {
+    function isHumanAssignableSkillName(value) {
         const normalized = String(value || '').trim().toLowerCase();
         return Boolean(normalized)
             && normalized !== '*'
@@ -1372,14 +1372,14 @@ window.UI = (() => {
         return { element: select, update };
     }
 
-    function filterManagedAgents(agents, capability = '') {
+    function filterManagedAgents(agents, adminOperation = '') {
         return (agents || []).filter((agent) => {
             const connectivity = String(agent.connectivity_state || '').trim();
-            const capabilities = Array.isArray(agent.management_capabilities)
-                ? agent.management_capabilities
+            const operations = Array.isArray(agent.supported_admin_operations)
+                ? agent.supported_admin_operations
                 : [];
             return ['connected', 'degraded'].includes(connectivity)
-                && (!capability || capabilities.includes(capability));
+                && (!adminOperation || operations.includes(adminOperation));
         });
     }
 
@@ -1549,7 +1549,7 @@ window.UI = (() => {
         isPreviewableFilePath,
         generatedTimestamp,
         isGeneratedTimestampName,
-        isHumanAssignableCapabilityName,
+        isHumanAssignableSkillName,
         isGeneratedOrRehearsalText,
         isDefaultHiddenRecord,
         defaultVisibleRecords,

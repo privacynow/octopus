@@ -127,7 +127,7 @@ class ProviderGuidancePort(Protocol):
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> int: ...
 
-    def capability_summary(self, provider_name: str, active_skills: list[str]) -> str: ...
+    def active_skill_tools_summary(self, provider_name: str, active_skills: list[str]) -> str: ...
 
     def estimate_prompt_size(
         self,
@@ -338,7 +338,7 @@ class WorkflowComposition:
     config: BotConfigBase
     sessions: SessionRuntimePort
     deferred_notifications: DeferredNotificationPort
-    management_capabilities: tuple[str, ...] = ()
+    supported_admin_operations: tuple[str, ...] = ()
     text_formatting: TextFormattingPort | None = None
     completion_webhook: CompletionWebhookPort | None = None
     trust_tier_resolver: TrustTierResolverPort | None = None

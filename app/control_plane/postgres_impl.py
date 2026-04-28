@@ -58,13 +58,13 @@ def _write_tx(conn):
 def _row_to_command(row: dict[str, Any]) -> ControlCommand:
     return ControlCommand(
         command_id=row["command_id"],
-        capability=row["capability"],
-        operation=row["operation"],
+        admin_interface=row["admin_interface"],
+        admin_operation=row["admin_operation"],
         payload_json=row["payload_json"],
         claimed_at=_iso_or_str(row.get("claimed_at")),
         priority=row["priority"],
         correlation_id=row.get("correlation_id") or "",
-        authority_ref=row["authority_ref"],
+        implementation_ref=row["implementation_ref"],
         idempotency_key=row.get("idempotency_key") or "",
         max_retries=row["max_retries"],
     )
@@ -96,15 +96,15 @@ def submit(conn, command: ControlCommand) -> str:
                     f"""
                     SELECT command_id
                     FROM {_SCHEMA}.control_plane_commands
-                    WHERE capability = %s
-                      AND operation = %s
-                      AND authority_ref = %s
+                    WHERE admin_interface = %s
+                      AND admin_operation = %s
+                      AND implementation_ref = %s
                       AND idempotency_key = %s
                     """,
                     (
-                        command.capability,
-                        command.operation,
-                        command.authority_ref,
+                        command.admin_interface,
+                        command.admin_operation,
+                        command.implementation_ref,
                         command.idempotency_key,
                     ),
                 )
@@ -114,19 +114,19 @@ def submit(conn, command: ControlCommand) -> str:
             cur.execute(
                 f"""
                 INSERT INTO {_SCHEMA}.control_plane_commands (
-                    command_id, capability, operation, payload_json, state,
-                    priority, correlation_id, authority_ref, idempotency_key,
+                    command_id, admin_interface, admin_operation, payload_json, state,
+                    priority, correlation_id, implementation_ref, idempotency_key,
                     result_json, error, retry_count, max_retries, created_at
                 ) VALUES (%s, %s, %s, %s, 'pending', %s, %s, %s, %s, NULL, NULL, 0, %s, %s)
                 """,
                 (
                     command.command_id,
-                    command.capability,
-                    command.operation,
+                    command.admin_interface,
+                    command.admin_operation,
                     command.payload_json,
                     command.priority,
                     command.correlation_id,
-                    command.authority_ref,
+                    command.implementation_ref,
                     command.idempotency_key,
                     command.max_retries,
                     now,
@@ -140,15 +140,15 @@ def submit(conn, command: ControlCommand) -> str:
                 f"""
                 SELECT command_id
                 FROM {_SCHEMA}.control_plane_commands
-                WHERE capability = %s
-                  AND operation = %s
-                  AND authority_ref = %s
+                WHERE admin_interface = %s
+                  AND admin_operation = %s
+                  AND implementation_ref = %s
                   AND idempotency_key = %s
                 """,
                 (
-                    command.capability,
-                    command.operation,
-                    command.authority_ref,
+                    command.admin_interface,
+                    command.admin_operation,
+                    command.implementation_ref,
                     command.idempotency_key,
                 ),
             )
@@ -178,18 +178,18 @@ def get_reply(conn, command_id: str) -> ControlReply | None:
 def poll_commands(
     conn,
     *,
-    allowed_pairs: set[tuple[str, str]],
+    allowed_admin_targets: set[tuple[str, str]],
     limit: int = 20,
     lease_seconds: float = 30.0,
 ) -> list[ControlCommand]:
-    if not allowed_pairs:
+    if not allowed_admin_targets:
         return []
     now = _utcnow()
     lease_expires_at = now + timedelta(seconds=lease_seconds)
-    pair_terms = " OR ".join("(authority_ref = %s AND capability = %s)" for _ in allowed_pairs)
+    pair_terms = " OR ".join("(implementation_ref = %s AND admin_interface = %s)" for _ in allowed_admin_targets)
     pair_args: list[str] = []
-    for authority_ref, capability in sorted(allowed_pairs):
-        pair_args.extend([authority_ref, capability])
+    for implementation_ref, admin_interface in sorted(allowed_admin_targets):
+        pair_args.extend([implementation_ref, admin_interface])
     with _write_tx(conn), _cur(conn) as cur:
         cur.execute(
             f"""
@@ -430,13 +430,13 @@ def purge_old_commands(conn, older_than_hours: int = 72) -> int:
         return cur.rowcount
 
 
-def reconcile_orphans(conn, *, allowed_pairs: set[tuple[str, str]]) -> int:
+def reconcile_orphans(conn, *, allowed_admin_targets: set[tuple[str, str]]) -> int:
     now = _utcnow()
     dead_lettered = 0
     with _write_tx(conn), _cur(conn) as cur:
         cur.execute(
             f"""
-            SELECT command_id, authority_ref, capability
+            SELECT command_id, implementation_ref, admin_interface
             FROM {_SCHEMA}.control_plane_commands
             WHERE state IN ('pending', 'claimed')
             FOR UPDATE SKIP LOCKED
@@ -444,14 +444,14 @@ def reconcile_orphans(conn, *, allowed_pairs: set[tuple[str, str]]) -> int:
         )
         rows = cur.fetchall()
         for row in rows:
-            pair = (row["authority_ref"], row["capability"])
-            if pair in allowed_pairs:
+            pair = (row["implementation_ref"], row["admin_interface"])
+            if pair in allowed_admin_targets:
                 continue
             cur.execute(
                 f"""
                 UPDATE {_SCHEMA}.control_plane_commands
                 SET state = 'dead_letter',
-                    error = 'invalid authority/capability pair',
+                    error = 'invalid authority/admin_interface pair',
                     completed_at = %s,
                     claimed_at = NULL,
                     lease_expires_at = NULL,
@@ -532,7 +532,7 @@ class PostgresControlPlaneStore:
         self,
         data_dir: Path,
         *,
-        allowed_pairs: set[tuple[str, str]],
+        allowed_admin_targets: set[tuple[str, str]],
         limit: int = 20,
         lease_seconds: float = 30.0,
     ) -> list[ControlCommand]:
@@ -540,7 +540,7 @@ class PostgresControlPlaneStore:
         with self._conn() as conn:
             return poll_commands(
                 conn,
-                allowed_pairs=allowed_pairs,
+                allowed_admin_targets=allowed_admin_targets,
                 limit=limit,
                 lease_seconds=lease_seconds,
             )
@@ -598,8 +598,8 @@ class PostgresControlPlaneStore:
         self,
         data_dir: Path,
         *,
-        allowed_pairs: set[tuple[str, str]],
+        allowed_admin_targets: set[tuple[str, str]],
     ) -> int:
         del data_dir
         with self._conn() as conn:
-            return reconcile_orphans(conn, allowed_pairs=allowed_pairs)
+            return reconcile_orphans(conn, allowed_admin_targets=allowed_admin_targets)

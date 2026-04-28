@@ -145,7 +145,7 @@ def test_telegram_transport_registers_and_dispatches_egress():
     registered = dispatcher.get_transport("telegram")
     assert registered is transport
     assert registered.boot_id == transport.boot_id
-    assert dispatcher.active_transport_types() == ["telegram"]
+    assert dispatcher.reported_transport_implementations() == ["telegram"]
 
     egress = dispatcher.create_egress(
         "telegram:test-bot:12345",

@@ -82,8 +82,8 @@ Current stage assignment forms:
 
 - no assignment while drafting
 - agent-oriented assignment
-- skill/capability-oriented assignment
-- skill/capability with a preferred matching agent
+- skill-oriented assignment
+- skill with a preferred matching agent
 - role/participant-based assignment where the role carries shared instructions
 
 Current publish validation still expects stages to resolve an assignment before

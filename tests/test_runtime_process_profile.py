@@ -41,7 +41,7 @@ def test_telegram_runtime_requires_full_registry_participant_coverage() -> None:
         agent_registries=(make_registry_connection(registry_scope="channel"),),
     )
 
-    with pytest.raises(RuntimeError, match="channel and coordination capabilities"):
+    with pytest.raises(RuntimeError, match="channel and coordination scopes"):
         validate_required_runtime_profile(config)
 
 
@@ -78,7 +78,7 @@ def test_required_telegram_profile_composes_real_services_and_transports(tmp_pat
     assert not isinstance(control_plane.health_publication, NoOpHealthPublication)
 
     dispatcher = runtime_process.bot_runtime.transport
-    assert dispatcher.active_transport_types() == ["telegram", "registry"]
+    assert dispatcher.reported_transport_implementations() == ["telegram", "registry"]
     assert dispatcher.descriptor_for_ref("telegram:test:12345") is not None
     assert dispatcher.descriptor_for_ref("registry:default:conversation:conv-1") is not None
 

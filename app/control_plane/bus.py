@@ -53,12 +53,12 @@ class ControlPlaneBus:
     async def poll_commands(
         self,
         *,
-        allowed_pairs: set[tuple[str, str]],
+        allowed_admin_targets: set[tuple[str, str]],
         limit: int = 20,
     ) -> list[ControlCommand]:
         return self._store().poll_commands(
             self._data_dir,
-            allowed_pairs=allowed_pairs,
+            allowed_admin_targets=allowed_admin_targets,
             limit=limit,
         )
 
@@ -113,9 +113,9 @@ class ControlPlaneBus:
     async def reconcile_orphans(
         self,
         *,
-        allowed_pairs: set[tuple[str, str]],
+        allowed_admin_targets: set[tuple[str, str]],
     ) -> int:
         return self._store().reconcile_orphans(
             self._data_dir,
-            allowed_pairs=allowed_pairs,
+            allowed_admin_targets=allowed_admin_targets,
         )

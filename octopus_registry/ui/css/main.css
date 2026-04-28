@@ -961,24 +961,24 @@ select {
     border-bottom: 0;
 }
 
-.capability-list-entry {
+.skill-list-entry {
     display: grid;
     align-items: stretch;
     gap: 0;
 }
 
-.capability-list-entry > .list-row {
+.skill-list-entry > .list-row {
     grid-column: 1 / -1;
     border-bottom: 0;
 }
 
-.capability-list-entry > .list-row-actions {
+.skill-list-entry > .list-row-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
     padding: 0 var(--space-3) var(--space-3);
 }
 
-.capability-list-entry > .capability-inline-detail {
+.skill-list-entry > .skill-inline-detail {
     grid-column: 1 / -1;
 }
 
@@ -5279,7 +5279,7 @@ select {
     color: var(--text-muted);
     font-size: 0.82rem;
 }
-.kit-agents-capabilities {
+.kit-agents-skills {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);

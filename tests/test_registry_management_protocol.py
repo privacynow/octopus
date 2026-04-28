@@ -11,6 +11,7 @@ from octopus_registry.management_client import ManagementClientError, RegistryMa
 import octopus_registry.ingress as registry_ingress
 from octopus_registry.store_postgres import RegistryPostgresStore
 from octopus_sdk.registry.management import (
+    ALL_MANAGEMENT_OPERATIONS,
     ConversationSkillListingRecord,
     ConversationSkillStateResult,
     InstallCatalogSkillResult,
@@ -24,12 +25,7 @@ from octopus_sdk.registry.management import (
 )
 from octopus_sdk.identity import conversation_key_for_ref
 
-_FULL_MANAGEMENT_CAPABILITIES = [
-    "skill_catalog",
-    "skill_lifecycle",
-    "provider_guidance",
-    "conversation_skills",
-]
+_FULL_MANAGEMENT_OPERATIONS = list(ALL_MANAGEMENT_OPERATIONS)
 
 
 def _register_agent(
@@ -37,9 +33,9 @@ def _register_agent(
     *,
     slug: str = "bot-under-test",
     connectivity_state: str = "connected",
-    management_capabilities: list[str] | None = None,
+    supported_admin_operations: list[str] | None = None,
 ) -> tuple[str, str]:
-    advertised_management_capabilities = management_capabilities or list(_FULL_MANAGEMENT_CAPABILITIES)
+    advertised_supported_admin_operations = supported_admin_operations or list(_FULL_MANAGEMENT_OPERATIONS)
     enroll = store.enroll(
         {
             "bot_key": f"bot:{slug}",
@@ -53,8 +49,8 @@ def _register_agent(
             "provider": "codex",
             "mode": "registry",
             "connectivity_state": connectivity_state,
-            "channel_capabilities": ["registry"],
-            "management_capabilities": advertised_management_capabilities,
+            "transport_implementations": ["registry"],
+            "supported_admin_operations": advertised_supported_admin_operations,
             "version": "test",
         }
     )
@@ -72,8 +68,8 @@ def _register_agent(
                 "description": "Bot under test",
                 "provider": "codex",
                 "mode": "registry",
-                "channel_capabilities": ["registry"],
-                "management_capabilities": advertised_management_capabilities,
+                "transport_implementations": ["registry"],
+                "supported_admin_operations": advertised_supported_admin_operations,
                 "version": "test",
             },
             "connectivity_state": connectivity_state,
@@ -98,7 +94,7 @@ def test_management_request_round_trip_polls_delivery_and_persists_result(postgr
 
     status = store.get_agent_status(agent_id)
     assert status is not None
-    assert list(status.management_capabilities) == _FULL_MANAGEMENT_CAPABILITIES
+    assert list(status.supported_admin_operations) == _FULL_MANAGEMENT_OPERATIONS
 
     polled = store.poll(agent_token, cursor=0, limit=10)
     assert len(polled.deliveries) == 1
@@ -160,19 +156,19 @@ async def test_registry_management_client_requires_connected_agent(postgres_db_u
 
 
 @pytest.mark.asyncio
-async def test_registry_management_client_requires_advertised_capability(postgres_db_url: str) -> None:
+async def test_registry_management_client_requires_advertised_admin_operation(postgres_db_url: str) -> None:
     store = RegistryPostgresStore(postgres_db_url)
-    agent_id, _agent_token = _register_agent(store, management_capabilities=["provider_guidance"])
+    agent_id, _agent_token = _register_agent(store, supported_admin_operations=["preview_provider_guidance"])
 
     client = RegistryManagementClient(store)
     with pytest.raises(ManagementClientError) as excinfo:
         await client.send(
             agent_id=agent_id,
             payload=ListCatalogSkillsRequest(query="github"),
-        )
+    )
 
     assert excinfo.value.status_code == 409
-    assert excinfo.value.error_code == "capability_not_available"
+    assert excinfo.value.error_code == "admin_operation_not_implemented"
 
 
 @pytest.mark.asyncio

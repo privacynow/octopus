@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.registry_capabilities import registry_authority_ref
+from app.agents.registry_projection_interfaces import registry_implementation_ref
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.task_routing import TaskResultReport
@@ -133,7 +133,7 @@ async def test_finalization_reports_routed_task_result() -> None:
             runtime_chat="registry:conv-3",
             conversation_ref="registry:conv-3",
             routed_task_id="task-3",
-            authority_ref=registry_authority_ref("default"),
+            authority_ref=registry_implementation_ref("default"),
             task_routing=FakeTaskRouting(),
         ),
     )
@@ -141,7 +141,7 @@ async def test_finalization_reports_routed_task_result() -> None:
     assert result.routed_result_status == "reported"
     assert len(reported) == 1
     assert reported[0]["routed_task_id"] == "task-3"
-    assert reported[0]["authority_ref"] == registry_authority_ref("default")
+    assert reported[0]["authority_ref"] == registry_implementation_ref("default")
     payload = reported[0]["result"]
     assert payload.status == "completed"
     assert "Partial completion" in payload.full_text
@@ -203,7 +203,7 @@ async def test_finalization_uses_execution_working_dir_for_protocol_artifacts(tm
             runtime_chat="registry:conv-artifacts",
             conversation_ref="registry:conv-artifacts",
             routed_task_id="task-artifacts",
-            authority_ref=registry_authority_ref("default"),
+            authority_ref=registry_implementation_ref("default"),
             task_routing=FakeTaskRouting(),
             registry_inspection=FakeInspection(),
             working_dir_resolver=lambda _chat: "",
@@ -245,7 +245,7 @@ async def test_finalization_uses_event_contract_and_working_dir_hint_without_reg
             runtime_chat="registry:conv-artifacts-local",
             conversation_ref="registry:conv-artifacts-local",
             routed_task_id="task-artifacts-local",
-            authority_ref=registry_authority_ref("default"),
+            authority_ref=registry_implementation_ref("default"),
             task_routing=FakeTaskRouting(),
             protocol_stage_contract={
                 "protocol_run_id": "run-1",
@@ -309,14 +309,14 @@ async def test_finalization_reports_routed_task_result_through_explicit_authorit
             runtime_chat="registry:prod:task:task-3b",
             conversation_ref="registry:prod:task:task-3b",
             routed_task_id="task-3b",
-            authority_ref=registry_authority_ref("prod"),
+            authority_ref=registry_implementation_ref("prod"),
             task_routing=FakeTaskRouting(),
         ),
     )
 
     assert result.routed_result_status == "reported"
     assert reported and reported[0]["routed_task_id"] == "task-3b"
-    assert reported[0]["authority_ref"] == registry_authority_ref("prod")
+    assert reported[0]["authority_ref"] == registry_implementation_ref("prod")
 
 
 @pytest.mark.asyncio
@@ -348,7 +348,7 @@ async def test_finalization_skips_completion_webhook_for_routed_task() -> None:
             runtime_chat="registry:prod:task:task-3c",
             conversation_ref="registry:prod:task:task-3c",
             routed_task_id="task-3c",
-            authority_ref=registry_authority_ref("prod"),
+            authority_ref=registry_implementation_ref("prod"),
             task_routing=FakeTaskRouting(),
             completion_webhook_sender=fake_webhook,
         ),
@@ -403,7 +403,7 @@ async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
             runtime_chat="registry:prod:task:task-4b",
             conversation_ref="registry:prod:task:task-4b",
             routed_task_id="task-4b",
-            authority_ref=registry_authority_ref("prod"),
+            authority_ref=registry_implementation_ref("prod"),
         ),
     )
 
@@ -443,7 +443,7 @@ async def test_finalization_report_failure_emits_failed_fallback(caplog) -> None
                 runtime_chat="registry:conv-5",
                 conversation_ref="registry:conv-5",
                 routed_task_id="task-5",
-                authority_ref=registry_authority_ref("default"),
+                authority_ref=registry_implementation_ref("default"),
                 task_routing=FailingTaskRouting(),
             ),
         )
@@ -452,7 +452,7 @@ async def test_finalization_report_failure_emits_failed_fallback(caplog) -> None
     assert any("Failed to report routed task result" in record.message for record in caplog.records)
     assert len(status_updates) == 1
     authority_ref, update = status_updates[0]
-    assert authority_ref == registry_authority_ref("default")
+    assert authority_ref == registry_implementation_ref("default")
     assert update.routed_task_id == "task-5"
     assert update.status == "failed"
     assert "could not be delivered" in update.summary

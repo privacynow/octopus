@@ -25,7 +25,7 @@ The registry UI is grouped by job:
 | Area | Current entries | Purpose |
 | --- | --- | --- |
 | Work | Conversations, Runs, Agents | Day-to-day collaboration, protocol run inspection, and agent contact/health. |
-| Build | Protocols, Capabilities, Guidance | Reusable workflow authoring, skill/capability management, and provider policy. |
+| Build | Protocols, Skills, Guidance | Reusable workflow authoring, skill management, and provider policy. |
 | Operations | Dashboard, Routing, Usage | Stack overview, routing diagnostics, and usage visibility. |
 
 Important current details:
@@ -104,7 +104,7 @@ Use the registry to:
 - send registry-origin messages
 - inspect protocol runs
 - inspect agents and agent-generated work
-- manage capabilities/skills
+- manage skills
 - manage provider guidance
 - author and publish protocols/templates
 - inspect routing and usage
@@ -182,10 +182,7 @@ For Telegram behavior, use
 ./octopus clean
 ```
 
-## Skills And Capabilities
-
-The registry UI labels the main build surface as `Capabilities`. The underlying
-runtime model still uses `skills`.
+## Skills
 
 Use this vocabulary:
 

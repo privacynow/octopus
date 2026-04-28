@@ -10,8 +10,8 @@ from app.runtime.session_runtime import LocalSessionRuntime
 from app.skill_inspection_service import SkillInspectionService
 from app.skill_activation_service import get_skill_activation_service
 from tests.support.config_support import make_config
-from app.agents.registry_capabilities import registry_authority_capabilities
-from app.agents.registry_capabilities import registry_id_from_authority_ref
+from app.agents.registry_projection_interfaces import registry_projection_interfaces_by_implementation_ref
+from app.agents.registry_projection_interfaces import registry_id_from_implementation_ref
 from app.agents.state import load_registry_connection_state
 from app.access import get_authorization
 from app.control_plane.bus import ControlPlaneBus
@@ -81,7 +81,7 @@ def build_test_bot_services(
     *,
     config=None,
     control_plane: ControlPlaneServices | None = None,
-    agent_id_for_authority=None,
+    agent_id_for_implementation=None,
 ) -> BotServices:
     effective_config = config or make_config()
     runtime_backend.init(effective_config)
@@ -92,12 +92,12 @@ def build_test_bot_services(
             control_plane=effective_control_plane,
         )
     if config is not None:
-        authority_capabilities = registry_authority_capabilities(config.agent_registries)
-        directory = build_control_plane_directory(authority_capabilities)
+        implemented_admin_interfaces = registry_projection_interfaces_by_implementation_ref(config.agent_registries)
+        directory = build_control_plane_directory(implemented_admin_interfaces)
 
-        def _default_agent_id_for_authority(authority_ref: str) -> str:
+        def _default_agent_id_for_implementation(implementation_ref: str) -> str:
             try:
-                registry_id = registry_id_from_authority_ref(authority_ref)
+                registry_id = registry_id_from_implementation_ref(implementation_ref)
             except ValueError:
                 return ""
             return load_registry_connection_state(config.data_dir, registry_id).agent_id
@@ -112,7 +112,7 @@ def build_test_bot_services(
             ControlPlaneBus(config.data_dir),
             directory,
             config=config,
-            agent_id_for_authority=agent_id_for_authority or _default_agent_id_for_authority,
+            agent_id_for_implementation=agent_id_for_implementation or _default_agent_id_for_implementation,
             sessions=sessions,
         )
         holder["workflows"] = services.workflows

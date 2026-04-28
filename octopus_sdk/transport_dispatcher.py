@@ -19,7 +19,7 @@ class TransportDispatcher(TransportImplementation):
         display_name="Composite transport dispatcher",
         supports_multiple=True,
         inbound_model="composite",
-        contributes_transport_capability=False,
+        report_in_agent_status=False,
         accepts_transport_input=False,
         supports_conversation_binding=False,
         supports_timeline=False,
@@ -86,12 +86,12 @@ class TransportDispatcher(TransportImplementation):
             return None
         return transport.descriptor.transport_type
 
-    def active_transport_types(self) -> list[str]:
+    def reported_transport_implementations(self) -> list[str]:
         seen: list[str] = []
         for transport in self._transports_by_prefix.values():
             transport_type = transport.descriptor.transport_type
             if (
-                not transport.descriptor.contributes_transport_capability
+                not transport.descriptor.report_in_agent_status
                 or transport_type in seen
             ):
                 continue

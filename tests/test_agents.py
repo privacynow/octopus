@@ -20,7 +20,7 @@ from app.runtime.registry_participant import AgentRuntime, _registered_card_hash
 from app.agents.state import RegistryConnectionState
 from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
-from app.agents.registry_capabilities import registry_authority_ref
+from app.agents.registry_projection_interfaces import registry_implementation_ref
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.config import derive_agent_slug
@@ -172,9 +172,9 @@ def test_registry_channel_services_resolve_runtime_agent_id_after_enrollment(tmp
     )
     services = build_test_bot_services(
         config=config,
-        agent_id_for_authority=lambda authority_ref: load_runtime_registry_connection_state(
+        agent_id_for_implementation=lambda implementation_ref: load_runtime_registry_connection_state(
             tmp_path,
-            authority_ref.rsplit(":", 1)[-1],
+            implementation_ref.rsplit(":", 1)[-1],
         ).agent_id,
     )
 
@@ -190,7 +190,7 @@ def test_registry_channel_services_resolve_runtime_agent_id_after_enrollment(tmp
 
     projection = services.control_plane.conversation_projection
 
-    assert projection._agent_id_for_authority("registry:local") == "agent-live"
+    assert projection._agent_id_for_implementation("registry:local") == "agent-live"
 
 
 def test_bot_identity_preserves_existing_file_when_atomic_replace_fails(
@@ -2052,7 +2052,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
             provider="codex",
             mode="registry",
             connectivity_state="connected",
-            channel_capabilities=["telegram", "registry"],
+            transport_implementations=["telegram", "registry"],
             bot_key=f"bot:{slug}",
         )
         enrolled = store.enroll(card)

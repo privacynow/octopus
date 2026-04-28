@@ -25,12 +25,12 @@ _DEFAULT_PROVIDER_GUIDANCE = {
     "claude": (
         "# Claude Runtime Guidance\n\n"
         "The runtime composes the final Claude system prompt the session role, "
-        "active runtime skills, and provider-specific capability settings."
+        "active runtime skills, and provider-specific guidance settings."
     ),
     "codex": (
         "# Codex Runtime Guidance\n\n"
         "The runtime composes the final Codex prompt and helper-script staging plan "
-        "the session role, active runtime skills, and provider-specific capability settings."
+        "the session role, active runtime skills, and provider-specific guidance settings."
     ),
 }
 def track_from_skill_dir(

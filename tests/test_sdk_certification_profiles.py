@@ -59,7 +59,7 @@ def _agent_card(*, slug: str, display_name: str) -> AgentCard:
         slug=slug,
         display_name=display_name,
         registry_scope="full",
-        channel_capabilities=["telegram", "registry"],
+        transport_implementations=["telegram", "registry"],
     )
 
 
@@ -490,7 +490,7 @@ async def test_telegram_runtime_passes_transport_participant_and_workflow_profil
     try:
         runtime_process = build_runtime(config, FakeProvider())
         dispatcher = runtime_process.bot_runtime.transport
-        assert dispatcher.active_transport_types() == ["telegram", "registry"]
+        assert dispatcher.reported_transport_implementations() == ["telegram", "registry"]
 
         egress = dispatcher.create_egress(
             "telegram:test:12345",

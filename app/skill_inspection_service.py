@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.agents.registry_capabilities import registry_authority_ref
+from app.agents.registry_projection_interfaces import registry_implementation_ref
 from app.channels.registry.refs import parse_registry_ref
 from octopus_sdk.bot_runtime import WorkflowComposition
 from octopus_sdk.config import BotConfigBase
@@ -289,7 +289,7 @@ class SkillInspectionService(SkillInspectionPort):
                     routed_task_id=intent.subject_routed_task_id,
                 ),
             )
-        authority_ref = registry_authority_ref(parsed_ref[0])
+        authority_ref = registry_implementation_ref(parsed_ref[0])
         task_record = None
         try:
             if inspect_current_bot:

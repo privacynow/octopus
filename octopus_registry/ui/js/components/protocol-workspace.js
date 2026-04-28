@@ -211,7 +211,12 @@ function _selectorFromFields(kind, value, preferredAgentId = '') {
 function _selectorModeFromKind(kind, fallback = 'skill') {
     const normalized = String(kind || '').trim().toLowerCase();
     if (normalized === 'unassigned') return 'unassigned';
-    if (normalized === 'new_capability' || normalized === 'new-capability') return 'new_capability';
+    if (
+        normalized === 'new_skill'
+        || normalized === 'new-skill'
+        || normalized === 'new_capability'
+        || normalized === 'new-capability'
+    ) return 'new_skill';
     if (normalized === 'agent' || normalized === 'skill') return normalized;
     if (normalized) return 'advanced';
     return String(fallback || 'skill');
@@ -725,7 +730,7 @@ function renderProtocolWorkspace(container) {
         return JSON.parse(JSON.stringify(doc || _blankDocument()));
     }
 
-    function _normalizeStageWriteCapability(stage) {
+    function _normalizeStageWriteAccess(stage) {
         const outputs = Array.isArray(stage?.outputs) ? stage.outputs.filter(Boolean) : [];
         return {
             ...stage,
@@ -743,7 +748,7 @@ function renderProtocolWorkspace(container) {
         });
         doc.participants = Array.isArray(doc.participants) ? doc.participants : [];
         doc.artifacts = Array.isArray(doc.artifacts) ? doc.artifacts : [];
-        doc.stages = Array.isArray(doc.stages) ? doc.stages.map((stage) => _normalizeStageWriteCapability(stage)) : [];
+        doc.stages = Array.isArray(doc.stages) ? doc.stages.map((stage) => _normalizeStageWriteAccess(stage)) : [];
         return doc;
     }
 
@@ -1959,7 +1964,7 @@ function renderProtocolWorkspace(container) {
         } else if (key === 'inputs' || key === 'outputs') {
             next[key] = Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : [];
             if (kind === 'stage') {
-                Object.assign(next, _normalizeStageWriteCapability(next));
+                Object.assign(next, _normalizeStageWriteAccess(next));
             }
         } else if (key === 'max_rounds' || key === 'timeout_seconds') {
             next[key] = Number.parseInt(String(value || '0'), 10) || 0;
@@ -2026,9 +2031,9 @@ function renderProtocolWorkspace(container) {
 
     function _commitPendingStageSelector(selectorKind, selectorValue, selectorPreferredAgentId = '') {
         const normalizedKind = String(selectorKind || '').trim().toLowerCase();
-        const keepNeededCapabilityMode = normalizedKind === 'skill'
-            && String(pendingStage.selector_mode || '') === 'new_capability';
-        if (normalizedKind && !keepNeededCapabilityMode) {
+        const keepNeededSkillMode = normalizedKind === 'skill'
+            && String(pendingStage.selector_mode || '') === 'new_skill';
+        if (normalizedKind && !keepNeededSkillMode) {
             pendingStage.selector_mode = _selectorModeFromKind(selectorKind, pendingStage.selector_mode || 'skill');
         }
         pendingStage.selector_kind = String(selectorKind || '');
@@ -2064,11 +2069,11 @@ function renderProtocolWorkspace(container) {
         );
         const advancedKind = readValue('select[aria-label="Custom selector type"]', pendingStage.selector_kind);
         const selector = _selectorFromEditorFields({
-            requiredSkill: readValue('[aria-label="Required capability"]', ''),
+            requiredSkill: readValue('[aria-label="Required skill"]', ''),
             pinnedAgent: readValue('[aria-label="Pin matching agent (optional)"]')
                 || readValue('[aria-label="Pinned agent"]')
                 || readValue('[aria-label="Agent"]', pendingStage.selector_kind === 'agent' ? pendingStage.selector_value : pendingStage.selector_preferred_agent_id),
-            capabilityNeed: readValue('[aria-label="Needed capability"]', ''),
+            neededSkill: readValue('[aria-label="Needed skill"]', ''),
             advancedKind,
             advancedValue: advancedKind === 'role'
                 ? (readValue('[aria-label="Choose runtime role tag"]', pendingStage.selector_value) || readValue('[aria-label="Custom value"]', pendingStage.selector_value))
@@ -2126,12 +2131,12 @@ function renderProtocolWorkspace(container) {
             button.__pendingStageBound = true;
             button.addEventListener('click', () => _commitPendingStageField(null, 'selector_mode', button.dataset.value || ''));
         });
-        bindAssignmentControl('[aria-label="Required capability"]');
-        bindAssignmentControl('[aria-label="Needed capability"]', 'input');
-        bindAssignmentControl('[aria-label="Needed capability"]', 'change');
+        bindAssignmentControl('[aria-label="Required skill"]');
+        bindAssignmentControl('[aria-label="Needed skill"]', 'input');
+        bindAssignmentControl('[aria-label="Needed skill"]', 'change');
         bindAssignmentControl('[aria-label="Pin matching agent (optional)"]');
         bindAssignmentControl('[aria-label="Agent"]');
-        bindAssignmentControl('[aria-label="Limit to one of this agent\'s capabilities (optional)"]');
+        bindAssignmentControl('[aria-label="Limit to one of this agent\'s skills (optional)"]');
         bindAssignmentControl('[aria-label="Custom selector type"]');
         bindAssignmentControl('[aria-label="Choose runtime role tag"]');
         bindAssignmentControl('[aria-label="Custom value"]', 'input');
@@ -2168,12 +2173,12 @@ function renderProtocolWorkspace(container) {
         const idx = items.findIndex((item) => String(item.stage_key || '') === String(nodeKey || ''));
         if (idx < 0) return;
         const normalizedKind = String(selectorKind || '').trim().toLowerCase();
-        const keepNeededCapabilityMode = normalizedKind === 'skill'
-            && String(stageAssignmentEditor.mode || '') === 'new_capability';
+        const keepNeededSkillMode = normalizedKind === 'skill'
+            && String(stageAssignmentEditor.mode || '') === 'new_skill';
         stageAssignmentEditor = {
             stageKey: String(nodeKey || ''),
-            mode: keepNeededCapabilityMode
-                ? 'new_capability'
+            mode: keepNeededSkillMode
+                ? 'new_skill'
                 : _selectorModeFromKind(selectorKind, stageAssignmentEditor.mode || 'unassigned'),
         };
         const next = Object.assign({}, items[idx], {
@@ -2304,7 +2309,7 @@ function renderProtocolWorkspace(container) {
             'stage_key',
             String(pendingStage.stage_key || displayName || 'step'),
         );
-        const nextStage = _normalizeStageWriteCapability({
+        const nextStage = _normalizeStageWriteAccess({
             stage_key: stageKey,
             display_name: displayName,
             participant_key: participantKey,
@@ -2598,12 +2603,12 @@ function renderProtocolWorkspace(container) {
     }
 
     function _isAuthoringRoutingSkill(item) {
-        return UI.isHumanAssignableCapabilityName(item?.skill_name || item);
+        return UI.isHumanAssignableSkillName(item?.skill_name || item);
     }
 
     function _supportsSkillCatalog(agent) {
-        const capabilities = Array.isArray(agent?.management_capabilities) ? agent.management_capabilities : [];
-        return capabilities.includes('skill_catalog') || capabilities.includes('skill_lifecycle');
+        const operations = Array.isArray(agent?.supported_admin_operations) ? agent.supported_admin_operations : [];
+        return operations.includes('list_catalog_skills') || operations.includes('catalog_skill_lifecycle_detail');
     }
 
     function _skillCatalogSummary(skillName = '') {
@@ -2743,7 +2748,7 @@ function renderProtocolWorkspace(container) {
     function _selectorKindLabel(kind) {
         const normalized = String(kind || '').trim().toLowerCase();
         if (normalized === 'agent') return 'Specific agent';
-        if (normalized === 'skill') return 'Required capability';
+        if (normalized === 'skill') return 'Required skill';
         if (normalized === 'role') return 'Runtime role tag';
         return _titleCaseWords(normalized);
     }
@@ -2751,7 +2756,7 @@ function renderProtocolWorkspace(container) {
     function _selectorValueLabel(kind) {
         const normalized = String(kind || '').trim().toLowerCase();
         if (normalized === 'agent') return 'agent';
-        if (normalized === 'skill') return 'capability';
+        if (normalized === 'skill') return 'skill';
         if (normalized === 'role') return 'runtime role tag';
         return normalized || 'value';
     }
@@ -2904,7 +2909,7 @@ function renderProtocolWorkspace(container) {
             return 'No available agents were loaded from the registry. Enter an agent slug only if you need to pin one anyway.';
         }
         if (normalized === 'skill') {
-            return 'No available capabilities were loaded from the registry. Use New capability needed if the capability does not exist yet.';
+            return 'No available skills were loaded from the registry. Use New skill needed if the skill does not exist yet.';
         }
         if (normalized === 'role') {
             return 'No runtime role tags were loaded from the registry. Enter one manually only if you need this advanced path.';
@@ -2978,15 +2983,15 @@ function renderProtocolWorkspace(container) {
         const primaryMode = requestedMode === 'advanced' ? 'skill' : requestedMode;
         if (normalizedKind === 'skill') {
             const skillValue = String(selectorValue || '').trim();
-            const skillMode = primaryMode === 'new_capability' || primaryMode === 'agent'
+            const skillMode = primaryMode === 'new_skill' || primaryMode === 'agent'
                 ? primaryMode
                 : skillValue
                     ? 'skill'
                     : primaryMode;
             return {
                 mode: skillMode,
-                requiredSkill: skillMode === 'new_capability' ? '' : skillValue,
-                capabilityNeed: skillMode === 'new_capability' ? skillValue : '',
+                requiredSkill: skillMode === 'new_skill' ? '' : skillValue,
+                neededSkill: skillMode === 'new_skill' ? skillValue : '',
                 pinnedAgent: _selectorAgentControlValue(selectorPreferredAgentId),
                 advancedKind: '',
                 advancedValue: '',
@@ -2996,7 +3001,7 @@ function renderProtocolWorkspace(container) {
             return {
                 mode: primaryMode,
                 requiredSkill: '',
-                capabilityNeed: '',
+                neededSkill: '',
                 pinnedAgent: _selectorAgentControlValue(selectorValue),
                 advancedKind: '',
                 advancedValue: '',
@@ -3005,7 +3010,7 @@ function renderProtocolWorkspace(container) {
         return {
             mode: primaryMode,
             requiredSkill: '',
-            capabilityNeed: '',
+            neededSkill: '',
             pinnedAgent: '',
             advancedKind: normalizedKind,
             advancedValue: String(selectorValue || '').trim(),
@@ -3015,7 +3020,7 @@ function renderProtocolWorkspace(container) {
     function _selectorFromEditorFields({
         requiredSkill = '',
         pinnedAgent = '',
-        capabilityNeed = '',
+        neededSkill = '',
         advancedKind = '',
         advancedValue = '',
     } = {}) {
@@ -3033,9 +3038,9 @@ function renderProtocolWorkspace(container) {
         if (agentKey) {
             return _selectorFromFields('agent', agentKey);
         }
-        const neededSkill = _slugSuggestion(capabilityNeed) || String(capabilityNeed || '').trim();
-        if (neededSkill) {
-            return _selectorFromFields('skill', neededSkill);
+        const neededSkillSlug = _slugSuggestion(neededSkill) || String(neededSkill || '').trim();
+        if (neededSkillSlug) {
+            return _selectorFromFields('skill', neededSkillSlug);
         }
         return null;
     }
@@ -3115,8 +3120,8 @@ function renderProtocolWorkspace(container) {
             help = `Available now: ${matchLabels.join(', ')}.`;
         } else {
             help = readOnly
-                ? 'No connected agents currently advertise this capability.'
-                : 'No connected agents currently advertise this capability yet.';
+                ? 'No connected agents currently advertise this skill.'
+                : 'No connected agents currently advertise this skill yet.';
         }
         if (preferredAgent) {
             help += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
@@ -3153,7 +3158,7 @@ function renderProtocolWorkspace(container) {
         const title = document.createElement('strong');
         title.className = 'kit-selector-editor-context-title';
         title.dataset.key = `${section.dataset.key}:title`;
-        title.textContent = 'Available capabilities';
+        title.textContent = 'Available skills';
         section.appendChild(title);
         const note = document.createElement('p');
         note.className = 'kit-selector-editor-note';
@@ -3164,12 +3169,12 @@ function renderProtocolWorkspace(container) {
             : '';
         if (skills.length) {
             note.textContent = agentLabel
-                ? `${agentLabel} currently advertises these capabilities.`
-                : 'This agent currently advertises these capabilities.';
+                ? `${agentLabel} currently advertises these skills.`
+                : 'This agent currently advertises these skills.';
         } else {
             note.textContent = readOnly
-                ? 'No advertised capabilities are currently available for this agent.'
-                : 'No advertised capabilities are currently available for this agent right now.';
+                ? 'No advertised skills are currently available for this agent.'
+                : 'No advertised skills are currently available for this agent right now.';
         }
         if (agentLabel && selectedSkillLabel) {
             note.textContent += ` Selected: ${selectedSkillLabel} on ${agentLabel}.`;
@@ -3415,7 +3420,7 @@ function renderProtocolWorkspace(container) {
         const {
             mode,
             requiredSkill,
-            capabilityNeed,
+            neededSkill,
             pinnedAgent,
             advancedKind,
             advancedValue,
@@ -3430,7 +3435,7 @@ function renderProtocolWorkspace(container) {
             String(stageKey || 'new'),
             String(mode || ''),
             String(requiredSkill || '').trim().toLowerCase(),
-            String(capabilityNeed || '').trim().toLowerCase(),
+            String(neededSkill || '').trim().toLowerCase(),
             String(pinnedAgent || '').trim().toLowerCase(),
             String(advancedKind || '').trim().toLowerCase(),
             String(advancedValue || '').trim().toLowerCase(),
@@ -3453,14 +3458,14 @@ function renderProtocolWorkspace(container) {
         const emitAssignment = ({
             nextSkill = requiredSkill,
             nextAgent = pinnedAgent,
-            nextCapabilityNeed = capabilityNeed,
+            nextNeededSkill = neededSkill,
             nextAdvancedKind = '',
             nextAdvancedValue = '',
         } = {}) => {
             const selector = _selectorFromEditorFields({
                 requiredSkill: nextSkill,
                 pinnedAgent: nextAgent,
-                capabilityNeed: nextCapabilityNeed,
+                neededSkill: nextNeededSkill,
                 advancedKind: nextAdvancedKind,
                 advancedValue: nextAdvancedValue,
             });
@@ -3486,24 +3491,24 @@ function renderProtocolWorkspace(container) {
         }
         const modeControl = UI.createSegmentedControl([
             { value: 'unassigned', label: 'No assignment yet' },
-            { value: 'skill', label: 'Existing capability' },
+            { value: 'skill', label: 'Existing skill' },
             { value: 'agent', label: 'Specific agent' },
-            { value: 'new_capability', label: 'New capability needed' },
+            { value: 'new_skill', label: 'New skill needed' },
         ], (nextMode) => {
             emitMode(nextMode);
             if (nextMode === 'unassigned') {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
-            } else if (nextMode === 'new_capability') {
+            } else if (nextMode === 'new_skill') {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: capabilityNeed,
+                    nextNeededSkill: neededSkill,
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
@@ -3511,7 +3516,7 @@ function renderProtocolWorkspace(container) {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
@@ -3519,7 +3524,7 @@ function renderProtocolWorkspace(container) {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
@@ -3540,7 +3545,7 @@ function renderProtocolWorkspace(container) {
         if (mode === 'unassigned') {
             const note = document.createElement('p');
             note.className = 'kit-selector-editor-note';
-            note.textContent = 'Leave this step unassigned while shaping the workflow. Choose a capability or a specific agent before publishing when this step needs to execute.';
+            note.textContent = 'Leave this step unassigned while shaping the workflow. Choose a skill or a specific agent before publishing when this step needs to execute.';
             wrap.appendChild(note);
         } else if (mode === 'skill') {
             skillField = _buildSelectorValueField({
@@ -3550,9 +3555,9 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: String(nextValue || ''),
                     nextAgent: requiredSkillMatches.some((item) => item.value === pinnedAgent) ? pinnedAgent : '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
-                label: 'Required capability',
+                label: 'Required skill',
                 allowCustom: false,
             });
             skillField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:skill:required`;
@@ -3565,7 +3570,7 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: requiredSkill,
                     nextAgent: String(nextValue || ''),
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
                 label: 'Pin matching agent (optional)',
                 catalogEntries: requiredSkillMatches,
@@ -3594,7 +3599,7 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: pinnedAgent === String(nextValue || '') ? requiredSkill : '',
                     nextAgent: String(nextValue || ''),
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
                 label: 'Agent',
                 allowCustom: false,
@@ -3609,12 +3614,12 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: String(nextValue || ''),
                     nextAgent: pinnedAgent,
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
-                label: 'Limit to one of this agent\'s capabilities (optional)',
+                label: 'Limit to one of this agent\'s skills (optional)',
                 catalogEntries: agentSkillEntries,
                 emptyHint: pinnedAgent
-                    ? 'No advertised capabilities are available for this agent right now.'
+                    ? 'No advertised skills are available for this agent right now.'
                     : 'Choose an agent first.',
                 placeholderText: pinnedAgent ? '(leave agent-only)' : '(choose an agent first)',
                 disabled: !pinnedAgent,
@@ -3630,25 +3635,25 @@ function renderProtocolWorkspace(container) {
                 String(pinnedAgent || '').trim().toLowerCase(),
             ].join(':');
             wrap.appendChild(skillField.element);
-        } else if (mode === 'new_capability') {
+        } else if (mode === 'new_skill') {
             const row = document.createElement('div');
             row.className = 'kit-details-row';
             const label = document.createElement('label');
             label.className = 'kit-details-label';
-            label.textContent = 'Needed capability';
+            label.textContent = 'Needed skill';
             row.appendChild(label);
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'kit-details-control';
             input.placeholder = 'e.g. dependency-upgrade, data-quality-review';
-            input.value = String(capabilityNeed || '');
+            input.value = String(neededSkill || '');
             input.readOnly = Boolean(readOnly);
             input.setAttribute('aria-label', label.textContent);
             if (!readOnly) {
                 const commit = () => emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: input.value,
+                    nextNeededSkill: input.value,
                 });
                 input.addEventListener('input', commit);
                 input.addEventListener('change', commit);
@@ -3658,17 +3663,17 @@ function renderProtocolWorkspace(container) {
             wrap.appendChild(row);
             const note = document.createElement('p');
             note.className = 'kit-selector-editor-note';
-            note.textContent = 'Use this when the workflow needs a capability that is not available yet. The step can be authored now and resolved before execution.';
+            note.textContent = 'Use this when the workflow needs a skill that is not available yet. The step can be authored now and resolved before execution.';
             wrap.appendChild(note);
         }
 
-        if (requiredSkill || pinnedAgent || capabilityNeed) {
+        if (requiredSkill || pinnedAgent || neededSkill) {
             const summary = document.createElement('p');
             summary.className = 'kit-selector-editor-note';
             const requiredSkillLabel = _standardSkillLabel({ value: requiredSkill, name: requiredSkill });
-            const capabilityNeedLabel = _standardSkillLabel({ value: capabilityNeed, name: capabilityNeed });
-            if (capabilityNeed) {
-                summary.textContent = `Current assignment: needs new capability ${capabilityNeedLabel || capabilityNeed}.`;
+            const neededSkillLabel = _standardSkillLabel({ value: neededSkill, name: neededSkill });
+            if (neededSkill) {
+                summary.textContent = `Current assignment: needs new skill ${neededSkillLabel || neededSkill}.`;
             } else if (requiredSkill && activeAgentLabel) {
                 summary.textContent = `Current assignment: requires ${requiredSkillLabel} and pins the step to ${activeAgentLabel}.`;
             } else if (requiredSkill) {
@@ -4031,7 +4036,7 @@ function renderProtocolWorkspace(container) {
                         text: 'Open the workflow map only when you want route context or a spatial review of the whole flow.',
                     },
                 ],
-                note: 'For assistant-building flows, open the skills catalog to publish or install a capability first, then come back here and assign steps by skill.',
+                note: 'For assistant-building flows, open the skills catalog to publish or install a skill first, then come back here and assign steps by skill.',
                 actions: [
                     { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
                     { label: 'Define shared files', tone: '', onClick: () => _openArtifactCatalog() },

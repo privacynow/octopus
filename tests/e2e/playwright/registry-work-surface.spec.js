@@ -138,18 +138,18 @@ test('generated visibility controls use an obvious shared filter toggle', async 
   }
 });
 
-test('capabilities defaults to a human assignment catalog before bot management', async ({ page }) => {
+test('skills defaults to a human assignment catalog before bot management', async ({ page }) => {
   await login(page);
   await page.goto('/ui/skills');
 
-  await expect(page.getByRole('heading', { name: 'Capabilities', exact: true })).toBeVisible();
-  await expect(page.getByText('Capability catalog', { exact: true })).toBeVisible();
-  await expect(page.getByText('Available capabilities', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Skills', exact: true })).toBeVisible();
+  await expect(page.getByText('Skill catalog', { exact: true })).toBeVisible();
+  await expect(page.getByText('Available skills', { exact: true })).toBeVisible();
   await expect(page.getByText('Architecture', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('*', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Rehearsal', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Meta Protocol Composer \d{10,}/)).toHaveCount(0);
-  await expect(page.getByText('No connected bot advertises capability management.', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('No connected bot advertises skill management.', { exact: true })).toHaveCount(0);
 
   const architectureRow = page.locator('.list-row').filter({ hasText: 'Architecture' }).first();
   await expect(architectureRow).toBeVisible();
@@ -158,17 +158,17 @@ test('capabilities defaults to a human assignment catalog before bot management'
   await expect(architectureRow).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('.dashboard-board-stacked')).toHaveCount(1);
   await expect(page.locator('.editor-shell')).toBeHidden();
-  await expect(page.locator('.capability-inline-detail')).toHaveCount(1);
-  await expectDetailBelowRow(architectureRow, page.locator('.capability-inline-detail').first());
+  await expect(page.locator('.skill-inline-detail')).toHaveCount(1);
+  await expectDetailBelowRow(architectureRow, page.locator('.skill-inline-detail').first());
   await expect(page.getByRole('heading', { name: 'Architecture', exact: true })).toBeVisible();
   await expect(page.getByText('Assignment slug')).toBeVisible();
   await expect(page.getByText('Instructions preview')).toBeVisible();
-  await expect(page.getByText('Use this in a protocol stage by choosing Assignment, then Existing capability.')).toBeVisible();
+  await expect(page.getByText('Use this in a protocol stage by choosing Assignment, then Existing skill.')).toBeVisible();
   await architectureRow.click();
-  await expect(page.locator('.capability-inline-detail')).toHaveCount(0);
+  await expect(page.locator('.skill-inline-detail')).toHaveCount(0);
 });
 
-test('agents use inline details and share the capabilities workspace', async ({ page }) => {
+test('agents use inline details and share the skills workspace', async ({ page }) => {
   await login(page);
   await page.goto('/ui/agents');
 
@@ -183,7 +183,7 @@ test('agents use inline details and share the capabilities workspace', async ({ 
   await expect(agentRow).toHaveAttribute('aria-expanded', 'true');
   await expect(agentRow.locator('.agent-inline-detail')).toHaveCount(1);
   await expect(agentRow.locator('.agent-inline-detail')).toContainText('Open agent workspace');
-  await expect(agentRow.locator('.agent-inline-detail')).toContainText('Open capabilities');
+  await expect(agentRow.locator('.agent-inline-detail')).toContainText('Open skills');
 
   const agentWorkspaceHref = await agentRow.getByRole('link', { name: 'Open agent workspace', exact: true }).getAttribute('href');
   expect(agentWorkspaceHref).toMatch(/\/ui\/agents\//);
@@ -193,20 +193,20 @@ test('agents use inline details and share the capabilities workspace', async ({ 
   await page.goto(agentWorkspaceHref);
   await expect(page.getByRole('heading', { name: 'M1', exact: true })).toBeVisible();
   await expect(page.locator('.skills-drawer-dialog')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Open Capabilities workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Skills workspace', exact: true }).click();
   await expect(page).toHaveURL(/\/ui\/skills\?agent_id=/);
   await expect(page.locator('.skills-drawer-dialog')).toHaveCount(0);
   await expect(page.locator('.dashboard-board-stacked')).toHaveCount(1);
   await expect(page.locator('.editor-shell')).toBeHidden();
 
-  const architectureCapability = page.locator('.list-row').filter({ hasText: 'Architecture' }).first();
-  await architectureCapability.click();
-  await expect(architectureCapability).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.locator('.capability-inline-detail')).toHaveCount(1);
-  await expectDetailBelowRow(architectureCapability, page.locator('.capability-inline-detail').first());
+  const architectureSkill = page.locator('.list-row').filter({ hasText: 'Architecture' }).first();
+  await architectureSkill.click();
+  await expect(architectureSkill).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.skill-inline-detail')).toHaveCount(1);
+  await expectDetailBelowRow(architectureSkill, page.locator('.skill-inline-detail').first());
   await expect(page.getByText('Instructions preview')).toBeVisible();
-  await architectureCapability.click();
-  await expect(page.locator('.capability-inline-detail')).toHaveCount(0);
+  await architectureSkill.click();
+  await expect(page.locator('.skill-inline-detail')).toHaveCount(0);
 });
 
 test('runs use inline expansion instead of the old split detail board', async ({ page }) => {

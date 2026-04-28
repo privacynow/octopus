@@ -356,7 +356,7 @@ class ProviderGuidanceService:
 
         return ProviderConfigRecord()
 
-    def capability_summary(self, provider_name: str, active_skills: list[str]) -> str:
+    def active_skill_tools_summary(self, provider_name: str, active_skills: list[str]) -> str:
         lines: list[str] = []
         for record in self._tracks(active_skills):
             raw = record.revision.provider_config.get(provider_name, {})
@@ -447,7 +447,7 @@ class ProviderGuidanceService:
     ) -> RunContext:
         credential_env = credential_env or CredentialEnvRecord()
         provider_config = self.provider_config(provider_name, active_skills, credential_env) if provider_name else ProviderConfigRecord()
-        capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
+        active_skill_tools_summary = self.active_skill_tools_summary(provider_name, active_skills) if provider_name else ""
         return RunContext(
             extra_dirs=extra_dirs,
             system_prompt=self._apply_provider_semantics(
@@ -460,7 +460,7 @@ class ProviderGuidanceService:
                 ),
                 provider_name,
             ),
-            capability_summary=capability_summary,
+            active_skill_tools_summary=active_skill_tools_summary,
             provider_config=provider_config,
             credential_env=credential_env,
             working_dir=working_dir,
@@ -480,7 +480,7 @@ class ProviderGuidanceService:
         effective_model: str = "",
         guidance_override: str = "",
     ) -> PreflightContext:
-        capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
+        active_skill_tools_summary = self.active_skill_tools_summary(provider_name, active_skills) if provider_name else ""
         return PreflightContext(
             extra_dirs=extra_dirs,
             system_prompt=self._apply_provider_semantics(
@@ -492,7 +492,7 @@ class ProviderGuidanceService:
                 ),
                 provider_name,
             ),
-            capability_summary=capability_summary,
+            active_skill_tools_summary=active_skill_tools_summary,
             working_dir=working_dir,
             file_policy=file_policy,
             effective_model=effective_model,

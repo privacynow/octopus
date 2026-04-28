@@ -36,7 +36,7 @@ class TransportDescriptor:
     supports_multiple: bool
     inbound_model: str
     trust_tier: str = "untrusted"
-    contributes_transport_capability: bool = True
+    report_in_agent_status: bool = True
     accepts_transport_input: bool = True
     supports_conversation_binding: bool = True
     supports_timeline: bool = True
@@ -46,7 +46,7 @@ class TransportDescriptor:
 
 
 @dataclass(frozen=True)
-class TransportCapabilities:
+class TransportEgressFeatures:
     can_edit_message: bool = True
     can_answer_action: bool = True
     can_send_photo: bool = True
@@ -54,11 +54,11 @@ class TransportCapabilities:
     can_render_timeline: bool = False
     can_present_actions: bool = True
     can_share_conversation: bool = False
-    channel_name: str = "telegram"
+    transport_implementation: str = "telegram"
 
     @property
     def transport_name(self) -> str:
-        return self.channel_name
+        return self.transport_implementation
 
 
 @dataclass(frozen=True)
@@ -147,7 +147,7 @@ class TransportIdentityResolver(Protocol):
 class TransportEgress(ABC):
     @property
     @abstractmethod
-    def capabilities(self) -> TransportCapabilities:
+    def egress_features(self) -> TransportEgressFeatures:
         ...
 
     @abstractmethod

@@ -13,11 +13,11 @@ from app.control_plane.processor_base import ControlProcessor
 log = logging.getLogger(__name__)
 
 
-def _allowed_pairs(capabilities: dict[str, set[str]]) -> set[tuple[str, str]]:
+def _allowed_admin_targets(admin_interfaces: dict[str, set[str]]) -> set[tuple[str, str]]:
     pairs: set[tuple[str, str]] = set()
-    for authority_ref, authority_capabilities in capabilities.items():
-        for capability in authority_capabilities:
-            pairs.add((authority_ref, capability))
+    for implementation_ref, implemented_admin_interfaces in admin_interfaces.items():
+        for admin_interface in implemented_admin_interfaces:
+            pairs.add((implementation_ref, admin_interface))
     return pairs
 
 
@@ -50,8 +50,8 @@ class ProcessorRunner:
         self._stop_requested = asyncio.Event()
 
     def register(self, processor: ControlProcessor) -> None:
-        capabilities = processor.authority_capabilities()
-        for pair in _allowed_pairs(capabilities):
+        admin_interfaces = processor.implemented_admin_interfaces()
+        for pair in _allowed_admin_targets(admin_interfaces):
             existing = self._processor_by_pair.get(pair)
             if existing is not None and existing is not processor:
                 raise ValueError(f"duplicate control-plane processor ownership for {pair}")
@@ -75,7 +75,7 @@ class ProcessorRunner:
                     available_slots = self._claim_limit - len(self._inflight)
                     if available_slots > 0:
                         claimed = await self._bus.poll_commands(
-                            allowed_pairs=set(self._processor_by_pair.keys()),
+                            allowed_admin_targets=set(self._processor_by_pair.keys()),
                             limit=available_slots,
                         )
                         for command in claimed:
@@ -106,7 +106,7 @@ class ProcessorRunner:
         if self._inflight:
             await asyncio.gather(*self._inflight.values(), return_exceptions=True)
 
-    def allowed_pairs(self) -> set[tuple[str, str]]:
+    def allowed_admin_targets(self) -> set[tuple[str, str]]:
         return set(self._processor_by_pair.keys())
 
     def _should_stop(self, stop_event: asyncio.Event) -> bool:
@@ -132,20 +132,20 @@ class ProcessorRunner:
             await asyncio.gather(external_wait, local_wait, return_exceptions=True)
 
     async def _run_command(self, command: ControlCommand) -> None:
-        processor = self._processor_by_pair.get((command.authority_ref, command.capability))
+        processor = self._processor_by_pair.get((command.implementation_ref, command.admin_interface))
         if processor is None:
             log.warning(
                 "Dead-lettering control-plane command %s: no processor registered for %s/%s",
                 command.command_id,
-                command.authority_ref,
-                command.capability,
+                command.implementation_ref,
+                command.admin_interface,
             )
             await self._bus.dead_letter(
                 command.command_id,
                 claimed_at=command.claimed_at,
                 reason=(
                     "no control-plane processor registered for "
-                    f"{command.authority_ref}/{command.capability}"
+                    f"{command.implementation_ref}/{command.admin_interface}"
                 ),
             )
             return
@@ -164,8 +164,8 @@ class ProcessorRunner:
             log.exception(
                 "Control-plane processor crashed for command %s (%s/%s)",
                 command.command_id,
-                command.authority_ref,
-                command.capability,
+                command.implementation_ref,
+                command.admin_interface,
             )
             await self._bus.fail(
                 command.command_id,

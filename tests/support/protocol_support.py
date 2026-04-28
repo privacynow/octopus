@@ -25,8 +25,12 @@ def agent_card(*, bot_key: str = "m1") -> AgentCard:
         connectivity_state="connected",
         current_capacity=0,
         max_capacity=1,
-        channel_capabilities=["telegram"],
-        management_capabilities=["conversation_settings"],
+        transport_implementations=["telegram"],
+        supported_admin_operations=[
+            "conversation_settings_state",
+            "set_conversation_setting",
+            "reset_conversation",
+        ],
         version="test",
     )
 

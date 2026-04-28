@@ -230,7 +230,7 @@ class PreflightContext:
     """Sanitized context for approval planning — no secrets, no tool wiring."""
     extra_dirs: list[str]
     system_prompt: str
-    capability_summary: str  # Phase 3; empty string in Phase 1
+    active_skill_tools_summary: str  # Phase 3; empty string in Phase 1
     working_dir: str = ""  # Per-chat project override; empty = use config default
     file_policy: str = ""  # "inspect" or "edit"; empty = use config default
     effective_model: str = ""  # resolved from model profiles; empty = use config.model

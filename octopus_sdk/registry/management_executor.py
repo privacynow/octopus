@@ -701,7 +701,7 @@ async def execute_management_request(
                     request_id=request.request_id,
                     agent_id=request.agent_id,
                     success=False,
-                    error_code="capability_not_available",
+                    error_code="admin_operation_unavailable",
                     error_detail="Execution reset is not available on this bot.",
                 )
             return ManagementResult(

@@ -112,8 +112,8 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "await loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" not in skill_catalog
     assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
     assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
-    assert "renderLoadingState(message = 'Loading capabilities…')" in skill_catalog
-    assert "renderLoadingState(queryText.length >= 2 ? 'Searching capabilities…' : 'Loading capabilities…');" in skill_catalog
+    assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
+    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
@@ -142,8 +142,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
-    assert "return UI.isHumanAssignableCapabilityName(item?.skill_name || item);" in workspace
-    assert "Available capabilities" in workspace
+    assert "return UI.isHumanAssignableSkillName(item?.skill_name || item);" in workspace
+    assert "Available skills" in workspace
     assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
@@ -186,13 +186,13 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorEditor(" in workspace
     assert "_currentAuthoringSurface()" in workspace
     assert "operator_surface_available" in workspace
-    assert "_normalizeStageWriteCapability(" in workspace
+    assert "_normalizeStageWriteAccess(" in workspace
     assert "write_capable: Boolean(stage?.write_capable || outputs.length)" in workspace
     assert "Available now" in workspace
     assert "Preferred agent:" in workspace
     assert "quickstart-chip" in workspace
     assert "pins the step to" in workspace
-    assert "Required capability" in workspace
+    assert "Required skill" in workspace
     assert "Pin matching agent (optional)" in workspace
     assert "Specific agent" in workspace
     assert "Show workflow map" in workspace
@@ -454,21 +454,21 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Find reusable capabilities for conversations and protocol stages." in skill_catalog
-    assert "Capability catalog" in skill_catalog
+    assert "Find reusable skills for conversations and protocol stages." in skill_catalog
+    assert "Skill catalog" in skill_catalog
     assert "Choose a bot only when you need to manage installation or drafts." in skill_catalog
-    assert "UI.isHumanAssignableCapabilityName(name)" in skill_catalog
+    assert "UI.isHumanAssignableSkillName(name)" in skill_catalog
     assert "String(selectedSkillOrigin || '') === 'global'" in skill_catalog
-    assert "Use this in a protocol stage by choosing Assignment, then Existing capability." in skill_catalog
+    assert "Use this in a protocol stage by choosing Assignment, then Existing skill." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "workspace.classList.add('dashboard-board-stacked');" in skill_catalog
     assert "detailEl.hidden = true;" in skill_catalog
-    assert "capability-inline-detail" in skill_catalog
+    assert "skill-inline-detail" in skill_catalog
     assert "function _renderSelectedSkillInlineDetail(selected)" in skill_catalog
     assert "function _buildSelectedSkillDetailNodes(selected)" in skill_catalog
-    assert "function _renderAgentCapabilityIntro(agentLabel)" in skill_catalog
-    assert "agent-capability-intro" in skill_catalog
-    assert "Loading capability instructions…" in skill_catalog
+    assert "function _renderAgentSkillIntro(agentLabel)" in skill_catalog
+    assert "agent-skill-intro" in skill_catalog
+    assert "Loading skill instructions…" in skill_catalog
     assert "Instructions preview" in skill_catalog
     assert "API.getSkillDetail(agent.agent_id, skillName)" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
@@ -487,8 +487,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "'Custom'" in skill_catalog
     assert "'Installed on this bot'" in skill_catalog
     assert "'Store'" in skill_catalog
-    assert "'New capability'" in skill_catalog
-    assert "'No capabilities are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
+    assert "'New skill'" in skill_catalog
+    assert "'No skills are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
@@ -548,7 +548,7 @@ def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
     assert "selectedId: selectedAgentId" in agent_list
     assert "renderExpanded: _renderAgentInlineDetail" in agent_list
     assert "Open agent workspace" in agent_list
-    assert "Open capabilities" in agent_list
+    assert "Open skills" in agent_list
     assert "trustTier: String(agent.trust_tier" in agent_list
     assert "currentCapacity: Number(agent.current_capacity" in agent_list
     assert "softDeletedAt: String(agent.soft_deleted_at" in agent_list
@@ -593,13 +593,13 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
     assert "!_isGeneratedSkill(skill)" in skill_catalog
     assert "!UI.isGeneratedTimestampName(skill)" in kit
     assert "function buildSkillsCard(agent) {" in agent_detail
-    assert "Open Capabilities workspace" in agent_detail
+    assert "Open Skills workspace" in agent_detail
     assert "Router.navigate(skillsWorkspaceHref())" in agent_detail
     assert "Open a conversation with ${label}" in skill_catalog
     assert "function openSkillsDrawer(" not in agent_detail
-    assert "Open Capabilities page" not in agent_detail
+    assert "Open Skills page" not in agent_detail
     assert "Quick actions live here." not in agent_detail
-    assert "Available capabilities" in agent_detail
+    assert "Available skills" in agent_detail
     assert "buildSkillsCard(agent)," in agent_detail
     assert "buildOperationsCard(agent, workers)," in agent_detail
     assert "quickstart-chip static" in agent_detail
@@ -990,7 +990,7 @@ def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> No
     assert "function closeManagement(" in detail
     assert "function scheduleManagementIdleClose(" in detail
     assert "function scheduleManagementSuccessClose(" in detail
-    assert "skillsManageBtn.textContent = 'Capabilities';" in detail
+    assert "skillsManageBtn.textContent = 'Skills';" in detail
     assert "settingsManageBtn.textContent = 'Settings';" in detail
     assert "protocolsManageBtn.textContent = 'Protocols';" in detail
     assert "textContent = '×';" in detail
@@ -1077,7 +1077,7 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
 
     assert "function createArtifactActionRow({" in helper
     assert "function createArtifactListRow({" in helper
-    assert "function isHumanAssignableCapabilityName(value)" in helper
+    assert "function isHumanAssignableSkillName(value)" in helper
     assert "&& !isGeneratedOrRehearsalText(normalized)" in helper
     assert "function compactMarkdownReferences(text)" in helper
     assert "function _ensureArtifactPreviewDelegation()" in helper

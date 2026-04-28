@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.agents.registry_capabilities import (
-    registry_authority_capabilities,
+from app.agents.registry_projection_interfaces import (
+    registry_projection_interfaces_by_implementation_ref,
 )
 from octopus_sdk.config import RegistryConnectionConfig
 from app.channels.registry.egress import RegistryChannelEgress
@@ -101,7 +101,7 @@ class RegistryConversationChannel(_RegistryChannel):
                 supports_multiple=True,
                 inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_transport_capability=True,
+                report_in_agent_status=True,
                 accepts_transport_input=True,
                 supports_conversation_binding=True,
                 supports_timeline=True,
@@ -128,7 +128,7 @@ class RegistryTaskChannel(_RegistryChannel):
                 supports_multiple=True,
                 inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_transport_capability=False,
+                report_in_agent_status=False,
                 accepts_transport_input=False,
                 supports_conversation_binding=False,
                 supports_timeline=False,
@@ -144,11 +144,11 @@ def register_registry_channels(
     *,
     services: BotServices,
 ) -> None:
-    authority_capabilities = registry_authority_capabilities(registries)
+    projection_interfaces_by_implementation = registry_projection_interfaces_by_implementation_ref(registries)
     for registry in registries:
-        authority_ref = f"registry:{registry.registry_id}"
-        capabilities = authority_capabilities.get(authority_ref, set())
-        if not capabilities:
+        implementation_ref = f"registry:{registry.registry_id}"
+        projection_interfaces = projection_interfaces_by_implementation.get(implementation_ref, set())
+        if not projection_interfaces:
             continue
         if registry.registry_scope in {"channel", "full"}:
             dispatcher.register(

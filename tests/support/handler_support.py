@@ -17,7 +17,7 @@ from app.agents.state import RegistryConnectionState, save_registry_connection_s
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.channels.registry.delivery_transport import build_registry_delivery_runtime
-from app.agents.registry_capabilities import registry_authority_capabilities, registry_id_from_authority_ref
+from app.agents.registry_projection_interfaces import registry_projection_interfaces_by_implementation_ref, registry_id_from_implementation_ref
 import app.runtime.telegram_execution as _telegram_execution
 import app.runtime.telegram_ingress as _th
 import app.runtime.telegram_worker as _telegram_worker
@@ -637,18 +637,18 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
                     )
                 )
     test_bot = bot_instance if bot_instance is not None else MinimalFakeBot()
-    authority_capabilities = (
-        registry_authority_capabilities(config.agent_registries)
+    implemented_admin_interfaces = (
+        registry_projection_interfaces_by_implementation_ref(config.agent_registries)
         if config.agent_registries
         else {}
     )
-    directory = build_control_plane_directory(authority_capabilities)
+    directory = build_control_plane_directory(implemented_admin_interfaces)
 
-    def _agent_id_for_authority(authority_ref: str) -> str:
+    def _agent_id_for_implementation(implementation_ref: str) -> str:
         from app.agents.state import load_registry_connection_state
 
         try:
-            rid = registry_id_from_authority_ref(authority_ref)
+            rid = registry_id_from_implementation_ref(implementation_ref)
         except ValueError:
             return ""
         return load_registry_connection_state(config.data_dir, rid).agent_id
@@ -663,7 +663,7 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         ControlPlaneBus(config.data_dir),
         directory,
         config=config,
-        agent_id_for_authority=_agent_id_for_authority,
+        agent_id_for_implementation=_agent_id_for_implementation,
         sessions=sessions,
     )
     workflow_holder["workflows"] = services.workflows

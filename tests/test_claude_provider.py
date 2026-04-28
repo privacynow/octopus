@@ -228,7 +228,7 @@ def test_file_policy_inspect_appends_system_prompt():
     cmd = p._build_run_cmd(state, "analyze the code")
     context = RunContext(
         extra_dirs=[], system_prompt="You are a reviewer.",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         file_policy="inspect",
@@ -278,7 +278,7 @@ async def test_mcp_temp_file_exists_during_run_and_is_removed_after_success():
         context=RunContext(
             extra_dirs=[],
             system_prompt="",
-            capability_summary="",
+            active_skill_tools_summary="",
             provider_config=ProviderConfigRecord({
                 "mcp_servers": {
                     "github": {
@@ -317,7 +317,7 @@ async def test_mcp_temp_file_is_removed_after_timeout_result():
         context=RunContext(
             extra_dirs=[],
             system_prompt="",
-            capability_summary="",
+            active_skill_tools_summary="",
             provider_config=ProviderConfigRecord({"mcp_servers": {"github": {"command": "npx", "args": []}}}),
             credential_env=CredentialEnvRecord(),
         ),
@@ -351,7 +351,7 @@ async def test_mcp_temp_file_is_removed_after_run_exception():
             context=RunContext(
                 extra_dirs=[],
                 system_prompt="",
-                capability_summary="",
+                active_skill_tools_summary="",
                 provider_config=ProviderConfigRecord({"mcp_servers": {"github": {"command": "npx", "args": []}}}),
                 credential_env=CredentialEnvRecord(),
             ),
@@ -391,7 +391,7 @@ async def test_run_maps_cached_prompt_usage_when_available():
         context=RunContext(
             extra_dirs=[],
             system_prompt="",
-            capability_summary="",
+            active_skill_tools_summary="",
             provider_config=ProviderConfigRecord(),
             credential_env=CredentialEnvRecord(),
         ),
@@ -430,7 +430,7 @@ async def test_run_surfaces_structured_error_detail():
         context=RunContext(
             extra_dirs=[],
             system_prompt="",
-            capability_summary="",
+            active_skill_tools_summary="",
             provider_config=ProviderConfigRecord(),
             credential_env=CredentialEnvRecord(),
         ),
@@ -460,7 +460,7 @@ async def test_run_failed_fresh_session_promotes_retry_to_resume():
         context=RunContext(
             extra_dirs=[],
             system_prompt="",
-            capability_summary="",
+            active_skill_tools_summary="",
             provider_config=ProviderConfigRecord(),
             credential_env=CredentialEnvRecord(),
         ),
@@ -487,7 +487,7 @@ async def test_run_timed_out_fresh_session_promotes_retry_to_resume():
         context=RunContext(
             extra_dirs=[],
             system_prompt="",
-            capability_summary="",
+            active_skill_tools_summary="",
             provider_config=ProviderConfigRecord(),
             credential_env=CredentialEnvRecord(),
         ),
@@ -516,7 +516,7 @@ async def test_run_cancelled_fresh_session_promotes_retry_to_resume():
         context=RunContext(
             extra_dirs=[],
             system_prompt="",
-            capability_summary="",
+            active_skill_tools_summary="",
             provider_config=ProviderConfigRecord(),
             credential_env=CredentialEnvRecord(),
         ),

@@ -104,13 +104,13 @@ CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen
 CREATE TABLE IF NOT EXISTS bot_runtime.control_plane_commands (
     seq BIGSERIAL PRIMARY KEY,
     command_id TEXT NOT NULL UNIQUE,
-    capability TEXT NOT NULL,
-    operation TEXT NOT NULL,
+    admin_interface TEXT NOT NULL,
+    admin_operation TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'pending',
     priority INTEGER NOT NULL DEFAULT 0,
     correlation_id TEXT NOT NULL DEFAULT '',
-    authority_ref TEXT NOT NULL,
+    implementation_ref TEXT NOT NULL,
     idempotency_key TEXT NOT NULL DEFAULT '',
     result_json TEXT,
     error TEXT,
@@ -123,16 +123,56 @@ CREATE TABLE IF NOT EXISTS bot_runtime.control_plane_commands (
     next_attempt_at TIMESTAMPTZ,
     CONSTRAINT control_plane_commands_state_check
         CHECK (state IN ('pending', 'claimed', 'completed', 'failed', 'dead_letter')),
-    CONSTRAINT control_plane_commands_authority_ref_nonempty
-        CHECK (authority_ref <> '')
+    CONSTRAINT control_plane_commands_implementation_ref_nonempty
+        CHECK (implementation_ref <> '')
 );
+ALTER TABLE bot_runtime.control_plane_commands
+    ADD COLUMN IF NOT EXISTS admin_interface TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS admin_operation TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS implementation_ref TEXT NOT NULL DEFAULT '';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'bot_runtime'
+          AND table_name = 'control_plane_commands'
+          AND column_name = 'capability'
+    ) THEN
+        UPDATE bot_runtime.control_plane_commands
+        SET admin_interface = capability
+        WHERE admin_interface = ''
+          AND capability <> '';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'bot_runtime'
+          AND table_name = 'control_plane_commands'
+          AND column_name = 'operation'
+    ) THEN
+        UPDATE bot_runtime.control_plane_commands
+        SET admin_operation = operation
+        WHERE admin_operation = ''
+          AND operation <> '';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'bot_runtime'
+          AND table_name = 'control_plane_commands'
+          AND column_name = 'authority_ref'
+    ) THEN
+        UPDATE bot_runtime.control_plane_commands
+        SET implementation_ref = authority_ref
+        WHERE implementation_ref = ''
+          AND authority_ref <> '';
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_cp_state
     ON bot_runtime.control_plane_commands (state, next_attempt_at, priority DESC, seq);
 CREATE INDEX IF NOT EXISTS idx_cp_correlation
     ON bot_runtime.control_plane_commands (correlation_id)
     WHERE correlation_id <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cp_idempotency
-    ON bot_runtime.control_plane_commands (capability, operation, authority_ref, idempotency_key)
+    ON bot_runtime.control_plane_commands (admin_interface, admin_operation, implementation_ref, idempotency_key)
     WHERE idempotency_key <> '';
 
 CREATE TABLE IF NOT EXISTS bot_runtime.deferred_notifications (
@@ -172,8 +212,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     connectivity_state TEXT NOT NULL DEFAULT 'standalone',
     current_capacity INTEGER NOT NULL DEFAULT 0,
     max_capacity INTEGER NOT NULL DEFAULT 1,
-    channel_capabilities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-    management_capabilities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    transport_implementations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    supported_admin_operations JSONB NOT NULL DEFAULT '[]'::jsonb,
     version TEXT NOT NULL DEFAULT '',
     runtime_health_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     trust_tier TEXT NOT NULL DEFAULT 'community',
@@ -183,8 +223,35 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     last_heartbeat_at TEXT NOT NULL
 );
 ALTER TABLE agent_registry.agents
+    ADD COLUMN IF NOT EXISTS transport_implementations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS supported_admin_operations JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN IF NOT EXISTS trust_tier TEXT NOT NULL DEFAULT 'community',
     ADD COLUMN IF NOT EXISTS soft_deleted_at TEXT NOT NULL DEFAULT '';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'agent_registry'
+          AND table_name = 'agents'
+          AND column_name = 'transport_implementations_json'
+    ) THEN
+        UPDATE agent_registry.agents
+        SET transport_implementations = transport_implementations_json
+        WHERE transport_implementations = '[]'::jsonb
+          AND transport_implementations_json <> '[]'::jsonb;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'agent_registry'
+          AND table_name = 'agents'
+          AND column_name = 'management_capabilities_json'
+    ) THEN
+        UPDATE agent_registry.agents
+        SET supported_admin_operations = management_capabilities_json
+        WHERE supported_admin_operations = '[]'::jsonb
+          AND management_capabilities_json <> '[]'::jsonb;
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_registry_agents_state
     ON agent_registry.agents (connectivity_state);
 CREATE INDEX IF NOT EXISTS idx_registry_agents_name
@@ -232,7 +299,6 @@ CREATE TABLE IF NOT EXISTS agent_registry.management_requests (
     request_id TEXT PRIMARY KEY,
     target_agent_id TEXT NOT NULL,
     operation TEXT NOT NULL,
-    capability TEXT NOT NULL DEFAULT '',
     payload_json JSONB NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
     delivery_id TEXT NOT NULL DEFAULT '',

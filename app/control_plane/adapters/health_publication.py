@@ -23,28 +23,28 @@ class BusHealthPublication:
         self._connectivity_state_for_authority = connectivity_state_for_authority
 
     async def publish_health(self, *, report: HealthReport) -> None:
-        for authority_ref in sorted(
-            self._directory.authorities_for_capability("health_publication")
+        for implementation_ref in sorted(
+            self._directory.implementations_for_admin_interface("health_publication")
         ):
             await self._bus.submit(
                 ControlCommand(
                     command_id=uuid4().hex,
-                    capability="health_publication",
-                    operation="publish_health",
+                    admin_interface="health_publication",
+                    admin_operation="publish_health",
                     payload_json=report.model_dump_json(),
-                    authority_ref=authority_ref,
+                    implementation_ref=implementation_ref,
                 )
             )
 
     def connection_summary(self) -> ConnectionSummary:
         authorities = [
             AuthorityStatus(
-                authority_ref=authority_ref,
-                connectivity_state=self._connectivity_state_for_authority(authority_ref),
-                capabilities=sorted(
-                    self._directory.capabilities_for_authority(authority_ref)
+                implementation_ref=implementation_ref,
+                connectivity_state=self._connectivity_state_for_authority(implementation_ref),
+                admin_interfaces=sorted(
+                    self._directory.admin_interfaces_for_implementation(implementation_ref)
                 ),
             )
-            for authority_ref in sorted(self._directory.all_authorities())
+            for implementation_ref in sorted(self._directory.all_implementations())
         ]
         return ConnectionSummary(authorities=authorities)

@@ -41,10 +41,10 @@ Use Build to define reusable behavior.
 Current entries:
 
 - `Protocols`
-- `Capabilities`
+- `Skills`
 - `Guidance`
 
-Capabilities are the UI-facing catalog for runtime skills. Guidance is provider
+Skills are the UI-facing catalog for runtime skills. Guidance is provider
 policy, not a skill.
 
 Templates are managed inside Protocols. There is no separate gallery/templates
@@ -117,7 +117,7 @@ You can:
 - inspect advertised/routing skills
 - reveal generated work when needed
 
-The agent page should summarize skills/capabilities instead of showing a wall
+The agent page should summarize skills/skills instead of showing a wall
 of names. If generated/test agents dominate the list, use filters and treat the
 default list as needing cleanup.
 
@@ -155,9 +155,9 @@ controls must stay gated.
 Current publish validation still requires stages to resolve an assignment. Draft
 authoring may allow incomplete steps while the author is building.
 
-## Capabilities
+## Skills
 
-Use `Capabilities` to manage skills.
+Use `Skills` to manage skills.
 
 The same underlying skill model supports:
 
@@ -168,7 +168,7 @@ The same underlying skill model supports:
 - routing skill projection
 - custom skill drafts/lifecycle
 
-Generated capabilities should not dominate the default catalog. Use explicit
+Generated skills should not dominate the default catalog. Use explicit
 filters when you need generated/rehearsal entries.
 
 ## Guidance

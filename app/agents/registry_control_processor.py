@@ -6,9 +6,9 @@ import json
 import uuid
 from typing import Any, Protocol
 
-from app.agents.registry_capabilities import (
-    registry_authority_capabilities,
-    registry_id_from_authority_ref,
+from app.agents.registry_projection_interfaces import (
+    registry_projection_interfaces_by_implementation_ref,
+    registry_id_from_implementation_ref,
 )
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
@@ -53,12 +53,12 @@ class RegistryControlProcessor(ControlProcessor):
     def __init__(self, registry_access: RegistryControlAccess) -> None:
         self._access = registry_access
 
-    def authority_capabilities(self) -> dict[str, set[str]]:
-        return registry_authority_capabilities(self._access.registries)
+    def implemented_admin_interfaces(self) -> dict[str, set[str]]:
+        return registry_projection_interfaces_by_implementation_ref(self._access.registries)
 
     async def process(self, command: ControlCommand) -> ControlReply:
         try:
-            registry_id = registry_id_from_authority_ref(command.authority_ref)
+            registry_id = registry_id_from_implementation_ref(command.implementation_ref)
         except ValueError as exc:
             return ControlReply(command_id=command.command_id, status="failed", error=str(exc))
         client = self._access.client_for_registry(registry_id)
@@ -66,26 +66,24 @@ class RegistryControlProcessor(ControlProcessor):
             return ControlReply(
                 command_id=command.command_id,
                 status="failed",
-                error=f"no registry client for {command.authority_ref}",
+                error=f"no registry client for {command.implementation_ref}",
             )
 
         try:
-            if command.capability == "conversation_projection":
+            if command.admin_interface == "conversation_projection":
                 return await self._process_conversation_projection(command, client)
-            if command.capability == "mirror_retry":
-                return await self._process_mirror_retry(command, client)
-            if command.capability == "task_routing":
+            if command.admin_interface == "task_routing":
                 return await self._process_task_routing(command, client)
-            if command.capability == "agent_directory":
+            if command.admin_interface == "agent_directory":
                 return await self._process_agent_directory(command, client, registry_id)
-            if command.capability == "health_publication":
+            if command.admin_interface == "health_publication":
                 return await self._process_health_publication(command, client)
-            if command.capability == "registry_inspection":
+            if command.admin_interface == "registry_inspection":
                 return await self._process_registry_inspection(command, client)
             return ControlReply(
                 command_id=command.command_id,
                 status="failed",
-                error=f"unsupported control-plane capability {command.capability!r}",
+                error=f"unsupported control-plane admin_interface {command.admin_interface!r}",
             )
         except RegistryClientError as exc:
             return ControlReply(
@@ -95,7 +93,7 @@ class RegistryControlProcessor(ControlProcessor):
             )
 
     async def _process_conversation_projection(self, command: ControlCommand, client) -> ControlReply:
-        if command.operation == "create_conversation":
+        if command.admin_operation == "create_conversation":
             payload = json.loads(command.payload_json)
             response = await client.create_conversation(
                 target_agent_id=payload["target_agent_id"],
@@ -108,7 +106,7 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=response.model_dump_json(),
             )
-        if command.operation == "get_conversation":
+        if command.admin_operation == "get_conversation":
             payload = json.loads(command.payload_json)
             response = await client.get_conversation(payload["conversation_id"])
             return ControlReply(
@@ -116,14 +114,14 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=response.model_dump_json(),
             )
-        if command.operation == "publish_events":
+        if command.admin_operation == "publish_events":
             payload = json.loads(command.payload_json)
             conversation_id = payload["conversation_id"]
             from octopus_sdk.events import ConversationEvent as SdkConversationEvent
             events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
             await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
-        if command.operation == "add_message":
+        if command.admin_operation == "add_message":
             payload = AddConversationMessagePayload.model_validate_json(command.payload_json)
             response = await client.add_message(payload.conversation_id, payload.text)
             return ControlReply(
@@ -131,7 +129,7 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=response.model_dump_json(),
             )
-        if command.operation == "submit_action":
+        if command.admin_operation == "submit_action":
             payload = SubmitConversationActionPayload.model_validate_json(command.payload_json)
             response = await client.submit_action(
                 payload.conversation_id,
@@ -145,57 +143,11 @@ class RegistryControlProcessor(ControlProcessor):
         return ControlReply(
             command_id=command.command_id,
             status="failed",
-            error=f"unsupported conversation_projection operation {command.operation!r}",
-        )
-
-    async def _process_mirror_retry(self, command: ControlCommand, client) -> ControlReply:
-        if command.operation == "create_conversation":
-            payload = json.loads(command.payload_json)
-            response = await client.create_conversation(
-                target_agent_id=payload["target_agent_id"],
-                origin_channel=payload["origin_channel"],
-                external_conversation_ref=payload["external_conversation_ref"],
-                title=payload.get("title", ""),
-            )
-            return ControlReply(
-                command_id=command.command_id,
-                status="completed",
-                result_json=response.model_dump_json(),
-            )
-        if command.operation == "publish_events":
-            payload = json.loads(command.payload_json)
-            conversation_id = payload["conversation_id"]
-            from octopus_sdk.events import ConversationEvent as SdkConversationEvent
-            events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
-            await client.publish_events(conversation_id, events)
-            return ControlReply(command_id=command.command_id, status="completed")
-        if command.operation == "add_message":
-            payload = AddConversationMessagePayload.model_validate_json(command.payload_json)
-            response = await client.add_message(payload.conversation_id, payload.text)
-            return ControlReply(
-                command_id=command.command_id,
-                status="completed",
-                result_json=response.model_dump_json(),
-            )
-        if command.operation == "submit_action":
-            payload = SubmitConversationActionPayload.model_validate_json(command.payload_json)
-            response = await client.submit_action(
-                payload.conversation_id,
-                payload.envelope,
-            )
-            return ControlReply(
-                command_id=command.command_id,
-                status="completed",
-                result_json=response.model_dump_json(),
-            )
-        return ControlReply(
-            command_id=command.command_id,
-            status="failed",
-            error=f"unsupported mirror_retry operation {command.operation!r}",
+            error=f"unsupported conversation_projection admin_operation {command.admin_operation!r}",
         )
 
     async def _process_task_routing(self, command: ControlCommand, client) -> ControlReply:
-        if command.operation == "submit_routed_task":
+        if command.admin_operation == "submit_routed_task":
             payload = SubmitRoutedTaskPayload.model_validate_json(command.payload_json)
             request = RoutedTaskRequest.model_validate(payload.model_dump(mode="json"))
             response = await client.submit_routed_task(request)
@@ -208,7 +160,7 @@ class RegistryControlProcessor(ControlProcessor):
                     delivery_id=response.delivery_id,
                 ).model_dump_json(),
             )
-        if command.operation == "report_routed_task_result":
+        if command.admin_operation == "report_routed_task_result":
             payload = ReportTaskResultPayload.model_validate_json(command.payload_json)
             result = RoutedTaskResult.model_validate(payload.model_dump(mode="json"))
             response = await client.routed_task_result(payload.routed_task_id, result)
@@ -220,7 +172,7 @@ class RegistryControlProcessor(ControlProcessor):
                     routed_task_id=response.routed_task_id or payload.routed_task_id,
                 ).model_dump_json(),
             )
-        if command.operation == "update_routed_task_status":
+        if command.admin_operation == "update_routed_task_status":
             payload = UpdateRoutedTaskStatusPayload.model_validate_json(command.payload_json)
             update = RoutedTaskUpdate.model_validate(payload.model_dump(mode="json"))
             await client.routed_task_status(payload.routed_task_id, update)
@@ -228,18 +180,18 @@ class RegistryControlProcessor(ControlProcessor):
         return ControlReply(
             command_id=command.command_id,
             status="failed",
-            error=f"unsupported task_routing operation {command.operation!r}",
+            error=f"unsupported task_routing admin_operation {command.admin_operation!r}",
         )
 
     async def _process_agent_directory(self, command: ControlCommand, client, registry_id: str) -> ControlReply:
-        if command.operation == "search_agents":
+        if command.admin_operation == "search_agents":
             request = SearchAgentsRequest.model_validate_json(command.payload_json)
             query = AgentDiscoveryQuery.model_validate(request.model_dump(mode="json"))
             rows = await client.search(query)
             agents = [
                 DiscoveredAgentRef.model_validate(
                     {
-                        "authority_ref": command.authority_ref,
+                        "authority_ref": command.implementation_ref,
                         **row.model_dump(
                             mode="json",
                             include={
@@ -264,7 +216,7 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=AgentSearchResult(status="complete", agents=agents).model_dump_json(),
             )
-        if command.operation == "resolve_target_authority":
+        if command.admin_operation == "resolve_target_authority":
             request = ResolveTargetAuthorityRequest.model_validate_json(command.payload_json)
             local_agent_id = self._access.origin_agent_id(registry_id)
             query = AgentDiscoveryQuery(
@@ -284,7 +236,7 @@ class RegistryControlProcessor(ControlProcessor):
                         status="completed",
                         result_json=AuthorityResolution(
                             status="resolved",
-                            authority_ref=command.authority_ref,
+                            authority_ref=command.implementation_ref,
                         ).model_dump_json(),
                     )
             return ControlReply(
@@ -295,15 +247,15 @@ class RegistryControlProcessor(ControlProcessor):
         return ControlReply(
             command_id=command.command_id,
             status="failed",
-            error=f"unsupported agent_directory operation {command.operation!r}",
+            error=f"unsupported agent_directory admin_operation {command.admin_operation!r}",
         )
 
     async def _process_health_publication(self, command: ControlCommand, client) -> ControlReply:
-        if command.operation != "publish_health":
+        if command.admin_operation != "publish_health":
             return ControlReply(
                 command_id=command.command_id,
                 status="failed",
-                error=f"unsupported health_publication operation {command.operation!r}",
+                error=f"unsupported health_publication admin_operation {command.admin_operation!r}",
             )
         request = PublishHealthRequest.model_validate_json(command.payload_json)
         runtime_health: dict[str, Any] | None = None
@@ -318,7 +270,7 @@ class RegistryControlProcessor(ControlProcessor):
         return ControlReply(command_id=command.command_id, status="completed")
 
     async def _process_registry_inspection(self, command: ControlCommand, client) -> ControlReply:
-        if command.operation == "get_conversation":
+        if command.admin_operation == "get_conversation":
             request = GetConversationRequest.model_validate_json(command.payload_json)
             record = await client.get_conversation(request.conversation_id)
             return ControlReply(
@@ -326,7 +278,7 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=record.model_dump_json(),
             )
-        if command.operation == "get_task":
+        if command.admin_operation == "get_task":
             request = GetTaskRequest.model_validate_json(command.payload_json)
             record = await client.get_task(request.routed_task_id)
             return ControlReply(
@@ -334,7 +286,7 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=record.model_dump_json(),
             )
-        if command.operation == "list_events":
+        if command.admin_operation == "list_events":
             request = ListConversationEventsRequest.model_validate_json(command.payload_json)
             record = await client.list_events(
                 request.conversation_id,
@@ -351,5 +303,5 @@ class RegistryControlProcessor(ControlProcessor):
         return ControlReply(
             command_id=command.command_id,
             status="failed",
-            error=f"unsupported registry_inspection operation {command.operation!r}",
+            error=f"unsupported registry_inspection admin_operation {command.admin_operation!r}",
         )

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents.registry_capabilities import (
-    registry_authority_capabilities,
-    registry_authority_ref,
-    registry_id_from_authority_ref,
+from app.agents.registry_projection_interfaces import (
+    registry_projection_interfaces_by_implementation_ref,
+    registry_implementation_ref,
+    registry_id_from_implementation_ref,
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
 from octopus_sdk.config import RegistryConnectionConfig
@@ -115,21 +115,21 @@ class _FakeRegistryAccess:
 def _command(
     command_id: str,
     *,
-    capability: str,
-    operation: str,
-    authority_ref: str,
+    admin_interface: str,
+    admin_operation: str,
+    implementation_ref: str,
     payload_json: str,
 ) -> ControlCommand:
     return ControlCommand(
         command_id=command_id,
-        capability=capability,
-        operation=operation,
+        admin_interface=admin_interface,
+        admin_operation=admin_operation,
         payload_json=payload_json,
-        authority_ref=authority_ref,
+        implementation_ref=implementation_ref,
     )
 
 
-def test_registry_authority_capabilities_tracks_scope_in_one_builder() -> None:
+def test_registry_projection_interfaces_by_implementation_ref_tracks_scope_in_one_builder() -> None:
     channel = RegistryConnectionConfig(
         registry_id="channel",
         url="http://channel",
@@ -149,10 +149,10 @@ def test_registry_authority_capabilities_tracks_scope_in_one_builder() -> None:
         registry_scope="full",
     )
 
-    mapping = registry_authority_capabilities((channel, coordination, full))
+    mapping = registry_projection_interfaces_by_implementation_ref((channel, coordination, full))
 
     assert mapping == {
-        "registry:channel": {"conversation_projection", "health_publication", "mirror_retry"},
+        "registry:channel": {"conversation_projection", "health_publication"},
         "registry:coord": {
             "task_routing",
             "agent_directory",
@@ -164,14 +164,13 @@ def test_registry_authority_capabilities_tracks_scope_in_one_builder() -> None:
             "task_routing",
             "agent_directory",
             "health_publication",
-            "mirror_retry",
             "registry_inspection",
         },
     }
-    assert registry_authority_ref("channel") == "registry:channel"
-    assert registry_id_from_authority_ref("registry:coord") == "coord"
-    with pytest.raises(ValueError, match="unsupported registry authority_ref"):
-        registry_id_from_authority_ref("slack:workspace-1")
+    assert registry_implementation_ref("channel") == "registry:channel"
+    assert registry_id_from_implementation_ref("registry:coord") == "coord"
+    with pytest.raises(ValueError, match="unsupported registry implementation_ref"):
+        registry_id_from_implementation_ref("slack:workspace-1")
 
 
 @pytest.mark.asyncio
@@ -188,9 +187,9 @@ async def test_registry_control_processor_processes_health_commands() -> None:
     health_reply = await processor.process(
         _command(
             "cmd-health",
-            capability="health_publication",
-            operation="publish_health",
-            authority_ref="registry:alpha",
+            admin_interface="health_publication",
+            admin_operation="publish_health",
+            implementation_ref="registry:alpha",
             payload_json=PublishHealthRequest(
                 connectivity_state="connected",
                 current_capacity=1,
@@ -241,9 +240,9 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     submit_reply = await processor.process(
         _command(
             "cmd-submit",
-            capability="task_routing",
-            operation="submit_routed_task",
-            authority_ref="registry:alpha",
+            admin_interface="task_routing",
+            admin_operation="submit_routed_task",
+            implementation_ref="registry:alpha",
             payload_json=SubmitRoutedTaskPayload(
                 routed_task_id="task-1",
                 parent_conversation_id="parent-1",
@@ -264,9 +263,9 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     status_reply = await processor.process(
         _command(
             "cmd-status",
-            capability="task_routing",
-            operation="update_routed_task_status",
-            authority_ref="registry:alpha",
+            admin_interface="task_routing",
+            admin_operation="update_routed_task_status",
+            implementation_ref="registry:alpha",
             payload_json=UpdateRoutedTaskStatusPayload(
                 routed_task_id="task-1",
                 status="running",
@@ -290,9 +289,9 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     result_reply = await processor.process(
         _command(
             "cmd-result",
-            capability="task_routing",
-            operation="report_routed_task_result",
-            authority_ref="registry:alpha",
+            admin_interface="task_routing",
+            admin_operation="report_routed_task_result",
+            implementation_ref="registry:alpha",
             payload_json=ReportTaskResultPayload(
                 routed_task_id="task-1",
                 status="completed",
@@ -308,18 +307,18 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     search_reply = await processor.process(
         _command(
             "cmd-search",
-            capability="agent_directory",
-            operation="search_agents",
-            authority_ref="registry:alpha",
+            admin_interface="agent_directory",
+            admin_operation="search_agents",
+            implementation_ref="registry:alpha",
             payload_json=SearchAgentsRequest(role="ops").model_dump_json(),
         )
     )
     resolve_reply = await processor.process(
         _command(
             "cmd-resolve",
-            capability="agent_directory",
-            operation="resolve_target_authority",
-            authority_ref="registry:alpha",
+            admin_interface="agent_directory",
+            admin_operation="resolve_target_authority",
+            implementation_ref="registry:alpha",
             payload_json=ResolveTargetAuthorityRequest(target_agent_id="target-1").model_dump_json(),
         )
     )
@@ -384,9 +383,9 @@ async def test_registry_control_processor_resolves_target_authority_by_slug_alia
     reply = await processor.process(
         _command(
             "cmd-resolve-slug",
-            capability="agent_directory",
-            operation="resolve_target_authority",
-            authority_ref="registry:alpha",
+            admin_interface="agent_directory",
+            admin_operation="resolve_target_authority",
+            implementation_ref="registry:alpha",
             payload_json=ResolveTargetAuthorityRequest(target_agent_id="m1").model_dump_json(),
         )
     )
@@ -424,9 +423,9 @@ async def test_registry_control_processor_returns_failed_reply_without_blocking_
     failed = await processor.process(
         _command(
             "cmd-alpha",
-            capability="health_publication",
-            operation="publish_health",
-            authority_ref="registry:alpha",
+            admin_interface="health_publication",
+            admin_operation="publish_health",
+            implementation_ref="registry:alpha",
             payload_json=PublishHealthRequest(
                 connectivity_state="connected",
                 current_capacity=1,
@@ -437,9 +436,9 @@ async def test_registry_control_processor_returns_failed_reply_without_blocking_
     succeeded = await processor.process(
         _command(
             "cmd-beta",
-            capability="health_publication",
-            operation="publish_health",
-            authority_ref="registry:beta",
+            admin_interface="health_publication",
+            admin_operation="publish_health",
+            implementation_ref="registry:beta",
             payload_json=PublishHealthRequest(
                 connectivity_state="connected",
                 current_capacity=1,
@@ -469,9 +468,9 @@ async def test_registry_control_processor_processes_create_conversation() -> Non
     reply = await processor.process(
         _command(
             "cmd-create-conv",
-            capability="conversation_projection",
-            operation="create_conversation",
-            authority_ref="registry:alpha",
+            admin_interface="conversation_projection",
+            admin_operation="create_conversation",
+            implementation_ref="registry:alpha",
             payload_json=json.dumps({
                 "target_agent_id": "agent-1",
                 "origin_channel": "telegram",
@@ -505,9 +504,9 @@ async def test_registry_control_processor_processes_publish_events() -> None:
     reply = await processor.process(
         _command(
             "cmd-publish-events",
-            capability="conversation_projection",
-            operation="publish_events",
-            authority_ref="registry:alpha",
+            admin_interface="conversation_projection",
+            admin_operation="publish_events",
+            implementation_ref="registry:alpha",
             payload_json=json.dumps({
                 "conversation_id": "conv-1",
                 "events": [

@@ -25,7 +25,7 @@ from app.runtime.session_runtime import LocalSessionRuntime
 from octopus_sdk.transport import (
     EditableHandle,
     TransportBindingRecord,
-    TransportCapabilities,
+    TransportEgressFeatures,
     TransportEgress,
 )
 from octopus_sdk.workflows.delegation import (
@@ -103,8 +103,8 @@ class RegistryChannelEgress(TransportEgress):
         return normalized in {"Working…", "Working...", "Resuming…", "Resuming..."}
 
     @property
-    def capabilities(self) -> TransportCapabilities:
-        return TransportCapabilities(
+    def egress_features(self) -> TransportEgressFeatures:
+        return TransportEgressFeatures(
             can_edit_message=True,
             can_answer_action=True,
             can_send_photo=False,
@@ -112,7 +112,7 @@ class RegistryChannelEgress(TransportEgress):
             can_render_timeline=(self._ref_kind == "conversation"),
             can_present_actions=True,
             can_share_conversation=(self._ref_kind == "conversation"),
-            channel_name="registry",
+            transport_implementation="registry",
         )
 
     def _is_task_ref(self) -> bool:

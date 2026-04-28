@@ -31,7 +31,7 @@ def _card(*, slug: str, display_name: str) -> AgentCard:
         slug=slug,
         display_name=display_name,
         registry_scope="full",
-        channel_capabilities=["telegram", "registry"],
+        transport_implementations=["telegram", "registry"],
     )
 
 

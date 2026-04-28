@@ -10,7 +10,7 @@ import logging
 from typing import Any
 from collections.abc import Callable
 
-from app.agents.registry_capabilities import registry_authority_ref
+from app.agents.registry_projection_interfaces import registry_implementation_ref
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.state import load_runtime_registry_connection_state
 from app.channels.registry.refs import (
@@ -229,7 +229,7 @@ def build_registry_message_envelope(
         protocol_stage_contract=dict(protocol_stage_contract or {}),
         working_dir_hint=str(working_dir_hint or ""),
         authorized_actor_key=authorized_actor_key,
-        authority_ref=registry_authority_ref(registry_id),
+        authority_ref=registry_implementation_ref(registry_id),
         skip_approval=skip_approval,
         admission_class=admission_class,
     )
@@ -282,7 +282,7 @@ def build_registry_action_envelope(
         transport="registry",
         conversation_ref=conversation_ref,
         external_conversation_ref=resolved_external_ref,
-        authority_ref=registry_authority_ref(registry_id),
+        authority_ref=registry_implementation_ref(registry_id),
     )
     return InboundEnvelope(
         transport="registry",
@@ -593,7 +593,7 @@ async def handle_registry_delivery(
                         parent_external_conversation_ref or parent_target_ref
                     ),
                     routed_task_id=routed_task_id,
-                    authority_ref=registry_authority_ref(registry_id),
+                    authority_ref=registry_implementation_ref(registry_id),
                     result=routed_result,
                 )
             )
@@ -608,7 +608,7 @@ async def handle_registry_delivery(
             log.warning(
                 "Routed result for task %s authority %s did not match any pending delegation task",
                 routed_task_id,
-                registry_authority_ref(registry_id),
+                registry_implementation_ref(registry_id),
             )
         return "accepted"
 
@@ -703,7 +703,7 @@ class RegistryDeliveryTransport(TransportImplementation):
             supports_multiple=True,
             inbound_model="delivery",
             trust_tier="trusted",
-            contributes_transport_capability=False,
+            report_in_agent_status=False,
             accepts_transport_input=True,
             supports_conversation_binding=False,
             supports_timeline=False,
@@ -746,8 +746,8 @@ class RegistryDeliveryTransport(TransportImplementation):
                 provider=self._provider,
                 registry=registry,
                 routing_skills_resolver=self._advertised_routing_skills,
-                channel_capabilities_resolver=self._dispatcher.active_transport_types,
-                management_capabilities_resolver=lambda: self._services.workflows.management_capabilities,
+                transport_implementations_resolver=self._dispatcher.reported_transport_implementations,
+                supported_admin_operations_resolver=lambda: self._services.workflows.supported_admin_operations,
             )
             self._registry_runtimes[registry.registry_id] = runtime
             self._runtime_tasks[registry.registry_id] = asyncio.create_task(

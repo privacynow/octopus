@@ -24,7 +24,7 @@ def _register_agent(store: RegistryPostgresStore, *, name: str, slug: str, routi
         provider="codex",
         mode="registry",
         connectivity_state="connected",
-        channel_capabilities=["registry"],
+        transport_implementations=["registry"],
         version="test",
     )
     enrolled = store.enroll(card)

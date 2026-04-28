@@ -6,6 +6,9 @@ Telegram is a peer client over the same registry/runtime backend as the browser
 UI. It is not supposed to own a separate protocol, skill, artifact, or guidance
 model.
 
+For operator-level protocol concepts, see
+[operator-protocol-guide.md](operator-protocol-guide.md).
+
 ## First Use
 
 1. open Telegram

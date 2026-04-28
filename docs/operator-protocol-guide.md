@@ -184,8 +184,8 @@ Common issue responses:
 
 ## OpenAPI
 
-The checked-in registry OpenAPI artifact is:
+The generated registry OpenAPI artifact is checked in at:
 
-- [registry-openapi.json](registry-openapi.json)
+- [docs/registry-openapi.json](registry-openapi.json)
 
 Update it when protocol route contracts change.

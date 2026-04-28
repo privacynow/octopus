@@ -113,6 +113,27 @@ Use the registry to:
 For the browser workflow, use
 [docs/registry-user-guide.md](docs/registry-user-guide.md).
 
+## Demo Use Case: Local Data Analytics Without Uploading Raw CSVs
+
+One practical customer workflow is local data analytics and reporting.
+
+The intended pattern is:
+
+- keep customer CSVs in a local workspace
+- ask the bot to generate or revise Python/R/SQL scripts for the analysis
+- run those scripts locally against the CSVs
+- share only controlled schema summaries, aggregate profiles, logs, test
+  failures, or selected report outputs back into the conversation
+- keep generated code, reports, and charts as local artifacts
+
+This lets a customer use Octopus to build a repeatable analytics/reporting
+pipeline without pasting raw property records into the model prompt. The
+operator still controls the boundary: do not paste raw rows or attach private
+files to chat unless that is explicitly approved for the deployment.
+
+For a step-by-step demo, use
+[docs/local-data-analytics-demo.md](docs/local-data-analytics-demo.md).
+
 ## Use Telegram
 
 If Telegram is configured:

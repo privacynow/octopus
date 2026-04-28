@@ -9,8 +9,10 @@ import os
 import shutil
 import sys
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
+from http.cookiejar import CookieJar
 from pathlib import Path
 from typing import Any
 
@@ -66,20 +68,23 @@ class RegistryClient:
     def __init__(self, base_url: str, token: str) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.csrf_token = ""
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
 
     def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._ensure_session()
         payload = None if body is None else json.dumps(body).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if method.upper() in {"POST", "PUT", "DELETE", "PATCH"}:
+            headers["X-CSRF-Token"] = self.csrf_token
         request = urllib.request.Request(
             f"{self.base_url}{path}",
             data=payload,
             method=method,
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with self.opener.open(request, timeout=30) as response:
                 text = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -90,6 +95,29 @@ class RegistryClient:
         if not isinstance(loaded, dict):
             raise RuntimeError(f"{method} {path} returned non-object JSON")
         return loaded
+
+    def _ensure_session(self) -> None:
+        if self.csrf_token:
+            return
+        login_body = urllib.parse.urlencode({"password": self.token}).encode("utf-8")
+        login_request = urllib.request.Request(
+            f"{self.base_url}/ui/login",
+            data=login_body,
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            self.opener.open(login_request, timeout=30).read()
+            csrf_request = urllib.request.Request(f"{self.base_url}/v1/auth/csrf", method="GET")
+            with self.opener.open(csrf_request, timeout=30) as response:
+                csrf_payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Registry UI login failed with HTTP {exc.code}: {detail}") from exc
+        token = str(csrf_payload.get("csrf_token") or csrf_payload.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("Registry UI login did not return a CSRF token")
+        self.csrf_token = token
 
 
 def build_demo_workspace(workspace: Path) -> dict[str, Any]:

@@ -216,6 +216,7 @@ test('runs use inline expansion instead of the old split detail board', async ({
   await expect(page.locator('.protocol-runs-workbench')).toHaveCount(1);
   await expect(page.locator('.dashboard-board[data-route="protocol-runs"]')).toHaveCount(0);
   await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(1);
+  await expect(page.locator('.protocol-runs-workbench .pagination')).toHaveCount(0);
   await expect(page.getByRole('tablist', { name: 'Run evidence section' })).toHaveCount(1);
   await expect(page.locator('.protocol-lineage-card')).toHaveCount(0);
   await expect(page.getByText(/^Current step:/)).toBeVisible();
@@ -245,6 +246,7 @@ test('runs use inline expansion instead of the old split detail board', async ({
   await expect(page.locator('.protocol-lineage-title').first()).toContainText(lastDefinition.display_name || lastStage.stage_key || '');
 
   await sectionTabs.filter({ hasText: 'Artifacts' }).click();
+  await expect(page.getByRole('tablist', { name: 'Run artifact stage evidence' })).toHaveCount(1);
   await expect(page.locator('.artifact-list-row').first()).toBeVisible();
   await expect(page.locator('.kit-runs-list-row[aria-expanded="true"]')).toHaveCount(1);
   await page.locator('.kit-runs-list-row[aria-expanded="true"]').click();

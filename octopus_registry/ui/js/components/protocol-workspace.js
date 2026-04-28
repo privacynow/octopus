@@ -6193,6 +6193,7 @@ function renderProtocolRuns(container) {
     let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let activeRunDetailSection = '';
     let activeRunStageExecutionId = '';
+    let activeRunArtifactStageExecutionId = '';
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
     let runPaginator = null;
@@ -6235,6 +6236,7 @@ function renderProtocolRuns(container) {
             lastRunEvent = null;
             activeRunDetailSection = '';
             activeRunStageExecutionId = '';
+            activeRunArtifactStageExecutionId = '';
             runDetailLoading = false;
             runDetailRequestToken += 1;
             _bindRunSubscription();
@@ -6269,6 +6271,7 @@ function renderProtocolRuns(container) {
         lastRunEvent = null;
         activeRunDetailSection = '';
         activeRunStageExecutionId = '';
+        activeRunArtifactStageExecutionId = '';
         if (normalizedRunId && normalizedRunId !== String(currentRunId || '')) {
             currentRunId = normalizedRunId;
             runDetailLoading = true;
@@ -6658,6 +6661,7 @@ function renderProtocolRuns(container) {
                 lastRunEvent = null;
                 activeRunDetailSection = '';
                 activeRunStageExecutionId = '';
+                activeRunArtifactStageExecutionId = '';
                 runDetailLoading = false;
                 runDetailRequestToken += 1;
                 _bindRunSubscription();
@@ -6670,13 +6674,17 @@ function renderProtocolRuns(container) {
                 ? 'No generated or normal runs match this filter.'
                 : 'No normal runs match this filter. Use Show generated/audit runs to inspect test, rehearsal, and generated executions.',
         }));
-        panel.appendChild(runPaginationEl);
-        if (runPaginator) {
-            runPaginator.render({
-                hasMore: !!runsListData?.has_more,
-                nextCursor: runsListData?.next_cursor || 0,
-                info: `${listRuns.length} shown`,
-            });
+        if (currentRunId) {
+            if (runPaginator) runPaginator.clear();
+        } else {
+            panel.appendChild(runPaginationEl);
+            if (runPaginator) {
+                runPaginator.render({
+                    hasMore: !!runsListData?.has_more,
+                    nextCursor: runsListData?.next_cursor || 0,
+                    info: `${listRuns.length} shown`,
+                });
+            }
         }
         return panel;
     }
@@ -7012,6 +7020,7 @@ function renderProtocolRuns(container) {
                     badgeClass: pendingArtifactRows.length ? 'badge-blocked' : 'badge-connected',
                     onClick: () => {
                         activeRunDetailSection = 'artifacts';
+                        activeRunArtifactStageExecutionId = '';
                         renderRunsRoute();
                     },
                 }));
@@ -7039,6 +7048,9 @@ function renderProtocolRuns(container) {
             sectionOptions,
             (value) => {
                 activeRunDetailSection = value || 'overview';
+                if (activeRunDetailSection === 'artifacts') {
+                    activeRunArtifactStageExecutionId = '';
+                }
                 renderRunsRoute();
             },
             { label: 'Run evidence section', value: activeRunDetailSection || 'overview' },
@@ -7101,16 +7113,61 @@ function renderProtocolRuns(container) {
             }
         } else if (activeRunDetailSection === 'artifacts') {
             appendSectionTitle(sectionPanel, 'Artifacts', 'This is the same artifact evidence shown under each stage, grouped by the stage that produced it.');
-            stageRows.forEach((stage, index) => {
-                const producedArtifacts = artifactsByProducer.get(String(stage.protocol_stage_execution_id || '')) || [];
-                if (!producedArtifacts.length) return;
-                const stageDef = stageDefinitionByKey.get(String(stage.stage_key || '')) || {};
-                appendSectionTitle(sectionPanel, `${index + 1}. ${stageDef.display_name || stage.stage_key || 'Stage'}`);
-                sectionPanel.appendChild(createArtifactList(producedArtifacts, {
+            const artifactStageGroups = stageRows
+                .map((stage, index) => {
+                    const producedArtifacts = artifactsByProducer.get(String(stage.protocol_stage_execution_id || '')) || [];
+                    const stageDef = stageDefinitionByKey.get(String(stage.stage_key || '')) || {};
+                    return {
+                        value: String(stage.protocol_stage_execution_id || stage.stage_key || `artifact-stage-${index}`),
+                        stage,
+                        index,
+                        stageDef,
+                        producedArtifacts,
+                    };
+                })
+                .filter((item) => item.producedArtifacts.length);
+            if (artifactStageGroups.length) {
+                const groupValues = new Set(artifactStageGroups.map((item) => item.value));
+                if (!groupValues.has(String(activeRunArtifactStageExecutionId || ''))) {
+                    const currentStageKey = String(currentRun.run.current_stage_key || '').trim();
+                    const currentGroup = artifactStageGroups.find((item) =>
+                        String(item.stage.stage_key || '') === currentStageKey);
+                    const defaultGroup = currentGroup || artifactStageGroups.reduce((best, item) => {
+                        if (!best) return item;
+                        if (item.producedArtifacts.length > best.producedArtifacts.length) return item;
+                        if (item.producedArtifacts.length === best.producedArtifacts.length && item.index > best.index) return item;
+                        return best;
+                    }, null);
+                    activeRunArtifactStageExecutionId = String(defaultGroup?.value || artifactStageGroups[0].value || '');
+                }
+                const artifactStageControl = UI.createSegmentedControl(
+                    artifactStageGroups.map((item) => ({
+                        value: item.value,
+                        label: `${item.index + 1}. ${item.stageDef.display_name || item.stage.stage_key || 'Stage'} (${item.producedArtifacts.length})`,
+                    })),
+                    (value) => {
+                        activeRunArtifactStageExecutionId = String(value || '');
+                        renderRunsRoute();
+                    },
+                    { label: 'Run artifact stage evidence', value: activeRunArtifactStageExecutionId },
+                );
+                artifactStageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
+                const artifactStageToolbar = document.createElement('div');
+                artifactStageToolbar.className = 'kit-stage-workspace-toolbar';
+                artifactStageToolbar.appendChild(artifactStageControl.element);
+                sectionPanel.appendChild(artifactStageToolbar);
+
+                const selectedGroup = artifactStageGroups.find((item) =>
+                    item.value === String(activeRunArtifactStageExecutionId || '')) || artifactStageGroups[0];
+                appendSectionTitle(
+                    sectionPanel,
+                    `${selectedGroup.index + 1}. ${selectedGroup.stageDef.display_name || selectedGroup.stage.stage_key || 'Stage'}`,
+                    `${selectedGroup.producedArtifacts.length} output${selectedGroup.producedArtifacts.length === 1 ? '' : 's'} produced by this stage.`,
+                );
+                sectionPanel.appendChild(createArtifactList(selectedGroup.producedArtifacts, {
                     relationshipFor: () => 'Produced by this stage',
                 }));
-            });
-            if (!artifactRows.length) {
+            } else {
                 sectionPanel.appendChild(UI.renderEmptyState('No produced outputs recorded yet.', true));
             }
             if (pendingArtifactRows.length) {
@@ -7174,6 +7231,7 @@ function renderProtocolRuns(container) {
             includeGenerated,
             activeRunDetailSection,
             activeRunStageExecutionId,
+            activeRunArtifactStageExecutionId,
         }, () => {
             const workbench = document.createElement('div');
             workbench.className = 'protocol-runs-workbench';

@@ -1,32 +1,20 @@
 # Protocol Operator Guide
 
-This guide is for operators, team leads, and compliance reviewers using
-protocols from the registry UI or Telegram.
+This guide is for operators, team leads, and reviewers inspecting or
+intervening in protocol runs.
 
-## Who Uses Protocols
-
-- Platform operator: use protocols when work needs a durable, auditable,
-  multi-stage workflow instead of a one-off conversation.
-- Team lead: use protocols when you want predictable stage sequencing,
-  review loops, and visible progress against a problem statement.
-- Compliance reviewer: use protocols when you need exportable run history,
-  intervention reasons, artifact metadata, and role-gated access.
-- Bot developer: use protocols when you need to verify how a shared workflow
-  behaves across the registry, Telegram, and routed-task runtime.
-
-Normal conversations are still the right tool for ad hoc work. Protocols are
-for repeatable workflows where stage order, artifacts, review decisions, and
-operator intervention must be explicit.
+Protocols are for repeatable work where stage order, artifacts, review
+decisions, and intervention history matter. Normal conversations are still the
+right surface for ad hoc work.
 
 ## Starting A Run
 
 From the registry UI:
 
 1. open `Protocols`
-2. choose a published definition
-3. pick the target bot
-4. provide workspace and problem statement
-5. start the run
+2. choose a published protocol
+3. start a run with the required problem/workspace context
+4. inspect the run from `Runs`
 
 From Telegram:
 
@@ -35,50 +23,50 @@ From Telegram:
 /protocol start <slug> <problem statement>
 ```
 
-Telegram automatically watches runs it starts. Operators can also enable or
-disable run notifications explicitly:
+Telegram automatically watches runs it starts.
+
+## Reading Runs
+
+Open:
 
 ```text
-/protocol watch <run_id>
-/protocol unwatch <run_id>
+Work -> Runs
 ```
 
-## Reading Run State
+Run detail should be read through:
 
-Every run has the same canonical state across the registry UI, Telegram, and
-the API:
+- Overview
+- Stages
+- Artifacts
+- Audit
 
-- `queued`
-- `running`
-- `blocked`
-- `completed`
-- `failed`
-- `cancelled`
+Expected questions:
 
-Important fields:
+- what protocol/version is running?
+- what stage is active?
+- what routed work/task records were created?
+- what artifacts were declared?
+- what artifacts were produced?
+- what approvals or decisions are pending?
+- is the run running, blocked, stale, failed, completed, or canceled?
 
-- `current stage`: the active stage key
-- `version`: optimistic concurrency token for operator actions
-- `blocked detail`: the actionable reason when the run is blocked
-- `participants`: who the current and past stages resolved to
-- `artifacts`: current artifact manifest, hashes, and verification state
-- `transitions`: append-only lifecycle history
+## Runs And Routed Work
 
-## Support Issues And Admin Views
+Protocol stage execution currently uses routed tasks as the execution
+substrate.
 
-The registry exposes protocol issue views for:
+Product interpretation:
 
-- blocked runs
-- invalid protocol contracts
-- expired timeouts
-- stuck leases
+- a protocol Run is the workflow execution
+- a Stage Execution is one step in that run
+- a routed Task is the executable work item created for a stage
 
-Use `Dashboard` for summary-level issue detection and `Protocols` for run-level
-detail, transitions, participants, and artifacts.
+The UI should show this as lineage, not as unrelated concepts. If operators
+must jump between unrelated pages to understand one run, that is a UX gap.
 
 ## Operator Actions
 
-Typed operator actions are:
+Supported protocol actions:
 
 - `retry`
 - `accept`
@@ -87,89 +75,117 @@ Typed operator actions are:
 
 Rules:
 
-- actions are versioned and concurrency-checked
-- `retry` is allowed only from blocked, failed, or cancelled stage executions
-- `send-back` and `cancel` require a short reason
-- Telegram requires explicit confirmation for destructive actions
-- every action is recorded in the audit trail
+- actions are permission-gated
+- actions are version/concurrency checked
+- reasons are required for destructive or corrective actions where applicable
+- every action is recorded in run/audit history
+- Telegram may require explicit confirmation
 
-Registry UI and Telegram both use the same backend action contract. If an
-action returns a version conflict, refresh and review the current run state
-before retrying.
+Actions should appear in context. If global run buttons are unclear or look
+available when they are not meaningful, the UI should be fixed rather than
+documenting confusion as normal behavior.
+
+## Artifacts
+
+Operators should be able to inspect produced artifacts from:
+
+- run overview
+- run artifacts
+- stage detail
+- linked routed work/task
+- conversation context
+- Telegram artifact commands
+
+Artifact states:
+
+- declared but not produced yet
+- available
+- unavailable on this host
+- expired/deleted
+
+The intended action model is consistent preview/open/download/copy behavior
+where the artifact is available. Missing action coverage is a product gap.
+
+## Protocol Issues
+
+The registry exposes protocol issue information for:
+
+- blocked runs
+- invalid contracts
+- expired timeouts
+- stuck leases
+- missing artifacts
+- participant/assignment resolution failures
+
+Use Dashboard for summary-level detection and Runs/Protocols for detailed
+inspection.
 
 ## Metrics
 
-The registry summary and dashboard expose protocol metrics from the same
-control-plane source:
+Registry summary paths expose protocol metrics such as:
 
-- `runs_started_24h`: runs created in the last 24 hours
-- `runs_completed_24h`: runs that reached `completed` in the last 24 hours
-- `runs_blocked_24h`: runs that entered `blocked` in the last 24 hours
-- `completion_rate_24h`: completed / started over the last 24 hours
-- `blocked_rate_24h`: blocked / started over the last 24 hours
-- `intervention_rate_24h`: operator actions / started over the last 24 hours
-- `operator_interventions_24h`: count of operator actions in the last 24 hours
-- `mean_completion_seconds_24h`: mean run duration for completed runs
-- `mean_stage_executions_per_terminal_run_24h`: average number of stage
-  executions for terminal runs
-- `mean_review_revisions_per_terminal_run_24h`: average number of `revise`
-  decisions for terminal runs
+- runs started
+- runs completed
+- blocked runs
+- completion rate
+- blocked rate
+- intervention rate
+- operator intervention count
+- mean completion time
+- stage execution counts
+- review revision counts
 
-Use these to answer:
-
-- are runs finishing?
-- are review loops healthy or oscillating?
-- are operators intervening too often?
-- are timeouts or blocked runs rising?
+Metrics should come from registry control-plane state, not browser-only
+calculation.
 
 ## Security, Visibility, Export, And Retention
 
-Protocol definitions and runs are org-scoped by default.
-
-- `org_private`: only the owning org can read
-- `org_shared`: readable inside the owning org
-- `registry_template`: cross-org readable only when the deployment enables it
-
-Exports are allowed only for:
-
-- `operator`
-- `auditor`
-- `admin`
+Exports are operator/auditor/admin functionality.
 
 Protocol exports include:
 
 - definition metadata and version
 - run state
-- participant resolution
+- participant/stage resolution
 - artifact metadata and hashes
-- transitions
+- transitions/actions/audit context
 
-They do not expose artifact file contents.
-
-Default retention is 90 days unless deployment policy overrides it.
+Exports should not expose artifact file contents unless explicitly requested
+through artifact download/export functionality.
 
 ## Runbook
 
-Use these first responses:
+Start here:
 
-- `protocol_contract_invalid`: inspect the stage result and contract lines,
-  then `retry` or `send-back`
-- `artifact_missing` / `artifact_integrity_failed`: inspect artifact metadata,
-  workspace path, and hash-producing stage output before retrying
-- `participant_resolution_failed`: inspect participant selector, required
-  skills, and connected agents
-- `lease_held`: inspect the conflicting running write stage or stuck lease issue
-- `stage_timeout`: inspect the stage timeout, worker health, and routed-task
-  outcome
-- `max_review_rounds_exceeded`: inspect review feedback quality and decide
-  whether to `accept`, `send-back`, or end the run
+```bash
+./octopus status
+./octopus doctor <bot>
+./octopus logs <target> --follow
+```
 
-## OpenAPI And API Consumers
+Then inspect:
 
-The generated registry OpenAPI artifact is checked in at:
+- affected run
+- active stage
+- linked routed work/task
+- artifact state
+- assignment/participant resolution
+- provider execution fault state
+- stuck lease or timeout issue
 
-- [docs/registry-openapi.json](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-openapi.json)
+Common issue responses:
 
-That artifact is generated from the FastAPI registry app and locked by tests so
-client integrations can rely on a checked-in contract, not only the live
-endpoint.
+- `artifact_missing`: inspect producing stage output and artifact metadata.
+- `artifact_integrity_failed`: inspect hash/path/verification.
+- `participant_resolution_failed`: inspect stage assignment and connected agents.
+- `lease_held`: inspect active/stale work lease.
+- `stage_timeout`: inspect worker health and provider result.
+- `max_review_rounds_exceeded`: decide whether to accept, send back, or cancel.
+
+## OpenAPI
+
+The checked-in registry OpenAPI artifact is:
+
+- [registry-openapi.json](registry-openapi.json)
+
+Update it when protocol route contracts change.

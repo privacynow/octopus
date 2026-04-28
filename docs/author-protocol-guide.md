@@ -1,126 +1,162 @@
 # Protocol Author Guide
 
-This guide is for authors and publishers defining protocol workflows in the
-registry.
+This guide describes the current protocol authoring model in the registry UI.
+
+Protocols are reusable staged workflows. Templates are protocols marked
+reusable as starter definitions; they are managed inside the Protocols surface.
+
+## Current Authoring Surface
+
+Open:
+
+```text
+Build -> Protocols
+```
+
+You can currently:
+
+- create a protocol from blank
+- create a protocol from a starter template
+- edit stages inline
+- add a stage below the current stage
+- remove stages
+- configure assignment
+- declare artifacts
+- define transitions/routing
+- show the workflow map on demand
+- validate and publish
+- publish a protocol as a template
+
+The UI is being consolidated around one progressive stage editor. If a change
+introduces a separate drawer, duplicate editor, or disconnected assignment
+surface, that is not the intended product direction.
 
 ## Definition Model
 
 A protocol definition contains:
 
-- metadata: `slug`, `display_name`, `description`
-- participants: reusable role identities with shared instructions
-- artifacts: named workflow outputs or inputs
-- stages: ordered work, review, or acceptance steps with owner roles and
-  runtime assignment rules
-- policies: shared lifecycle rules such as single active writer and max review
-  rounds
+- metadata: slug/display name/description
+- participants: reusable role identity and shared instructions
+- stages: ordered steps
+- stage assignment: the runtime target selector for that stage
+- artifacts: named inputs/outputs
+- transitions: routing decisions between stages
+- policies: review limits and lifecycle behavior
 
-Definitions are versioned. Drafts can change; published versions are immutable.
+Drafts can change. Published versions are immutable execution contracts.
 
-## Stage Kinds
+## Stages
 
-V1 stage kinds are:
+Stage kinds:
 
 - `work`
 - `review`
 - `acceptance`
 
-`work` stages default to `completed` if their transitions omit decisions.
-`review` and `acceptance` stages require explicit decisions from their declared
-transition map.
+Standard authoring should expose:
 
-## Roles And Resolution
+- title
+- instructions
+- assignment
+- artifacts
+- routing/transitions
+- rehearsal or validation feedback
 
-Each stage references one `participant_key`.
+Standard authoring should not expose:
 
-Resolution order is:
+- raw `stage_key` editing
+- custom runtime selector internals
+- `max_rounds`
+- `timeout_seconds`
+- low-level operator controls
 
-1. explicit `stage.selector`
-2. runtime may prefer the run entry agent for `skill` selectors when the
-   authored selector does not already pin a `preferred_agent_id`
+Those fields may still exist in the protocol document/runtime model. They are
+operator/internal controls and must remain gated.
 
-Legacy `participants[].selector` and `required_skills` are migration inputs
-only during canonicalization. They are not canonical authored fields anymore.
+## Assignment
 
-Ambiguity is an error. Multiple matches without a preferred agent do not fall
-through to “pick one.” Fix the selector or the registry data instead.
+Assignment is stage-owned.
+
+Current stage assignment forms:
+
+- no assignment while drafting
+- agent-oriented assignment
+- skill/capability-oriented assignment
+- skill/capability with a preferred matching agent
+- role/participant-based assignment where the role carries shared instructions
+
+Current publish validation still expects stages to resolve an assignment before
+publication. Draft editing may permit incomplete stages so authors can build
+progressively.
+
+Important distinction:
+
+- participant/role records define reusable identity and shared instructions
+- stage assignment decides who or what executes a specific stage
+
+Do not treat the role editor as the primary assignment editor.
 
 ## Artifacts
 
-Artifacts are the durable contract between stages.
+Artifacts are the contract between stages and the visible output of runs.
 
-For `workspace_file` artifacts:
+For workspace file artifacts:
 
-- `path` must be relative to the workspace root
+- paths must be relative to the workspace root
 - absolute paths are rejected
 - parent traversal such as `../` is rejected
-- verification is required in this release
+- declared outputs may be visible before they are produced
+- produced outputs should offer preview/open/download/copy actions wherever
+  artifact actions are implemented
 
-The current release is in waiver mode A:
+If an artifact appears in a protocol/run/stage but cannot be opened or
+downloaded after production, that is a product gap to fix.
 
-- `artifact.verify: false` is rejected at validation/publish time
+## Transitions And Review Loops
 
-Runtime artifact observations supply:
+Review and acceptance stages require explicit decisions from their transition
+map.
 
-- path
-- existence
-- size
-- content hash
-- modified time
-- verification state
+Common decisions:
 
-The registry keeps the latest non-superseded observation per `artifact_key` as
-the current manifest view.
+- approve
+- revise
+- reject
+- accept
 
-## Strict Completion
-
-Use these stage controls intentionally:
-
-- `strict_completion: true`
-  requires explicit protocol completion lines for work stages
-- `require_output_verification: true`
-  requires artifact observation success before advancement
-- `timeout_seconds`
-  sets wall-clock stage timeout handled by registry maintenance
-
-## Review Loops And Policies
-
-`policies.max_review_rounds` caps revise loops. Exceeding the cap blocks the
-run with `max_review_rounds_exceeded`; it does not loop forever.
-
-`policies.single_active_writer` enforces one write-capable running stage at a
-time through the shared lease path.
+Review loops are bounded by policy. Exceeding review limits blocks the run
+rather than looping forever.
 
 ## Draft Workflow
 
-Recommended authoring flow:
+Recommended workflow:
 
-1. create or import a draft in `Protocols`
-2. add the first step and create its owner role inline if needed
-3. configure assignment on the step itself
-4. connect routes, artifacts, and review flow
-5. validate
-6. publish
-7. archive when retiring the definition
-
-The registry UI and API share the same document parser and validator logic. Do
-not author a separate browser-only or script-only format.
+1. open `Protocols`
+2. create from blank or template
+3. name the protocol
+4. add/edit stages in order
+5. configure each stage assignment
+6. declare inputs/outputs
+7. connect routing/transitions
+8. show the workflow map only when spatial context helps
+9. validate
+10. publish
+11. optionally publish as template
 
 ## JSON/YAML Contract
 
-JSON and YAML are two text views over the same canonical protocol document
-model. The registry UI, API, SDK client, and checked-in OpenAPI contract all
-use the same shared conversion helpers from `octopus_sdk/protocols/`.
+JSON/YAML import/export are text views over the shared protocol document model
+in `octopus_sdk/protocols/`.
 
-## Software Engineering Template
+Do not add a browser-only protocol format or a script-only format. Registry UI,
+registry API, SDK helpers, and Telegram-facing protocol commands must converge
+on the shared model.
 
-The built-in `software-engineering` protocol is the seeded baseline template.
-Use it when you want:
+## Built-In Software Engineering Template
 
-- planning and review
-- architecture and review
-- implementation and review
-- acceptance
+The built-in `software-engineering` template is the current baseline for staged
+software work. It models planning, architecture, implementation, review, and
+acceptance over durable artifacts.
 
-Clone it into a draft, then specialize roles, step assignments, artifacts, instructions,
-and review policies rather than inventing a parallel lifecycle.
+Use it as a starting point when the workflow needs reviewable outputs rather
+than a one-off conversation.

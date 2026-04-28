@@ -1,246 +1,242 @@
 # Registry User Guide
 
-This guide is for operators using the browser UI.
+This guide describes the current browser registry UI.
 
-The registry is where you manage bots, inspect conversations, review work, and
-control skills and guidance.
-
-## Open The Registry
-
-Start with:
+Open the registry URL printed by:
 
 ```bash
 ./octopus status
 ```
 
-Open the `ui:` URL from the output. In a default local deployment that is:
+Default local URL:
 
 - [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui)
 
-## Main Areas
+## Navigation
 
-### Dashboard
+The registry is grouped by job.
 
-Use `Dashboard` to get oriented quickly.
+### Work
 
-It shows:
+Use Work for active collaboration and execution state.
 
-- open conversations
-- recent work
+Current entries:
+
+- `Conversations`
+- `Runs`
+- `Agents`
+
+`Tasks` still exists as routed work behind the scenes, but it is not a primary
+navigation item. Open linked work from conversations, runs, dashboard cards, or
+direct task links.
+
+### Build
+
+Use Build to define reusable behavior.
+
+Current entries:
+
+- `Protocols`
+- `Capabilities`
+- `Guidance`
+
+Capabilities are the UI-facing catalog for runtime skills. Guidance is provider
+policy, not a skill.
+
+Templates are managed inside Protocols. There is no separate gallery/templates
+menu in the current UI.
+
+### Operations
+
+Use Operations for platform inspection.
+
+Current entries:
+
+- `Dashboard`
+- `Routing`
+- `Usage`
+
+Approvals still exist, but are surfaced from Dashboard or direct links rather
+than as primary navigation.
+
+## Conversations
+
+Use `Conversations` to inspect and continue registry-origin or bot-origin
+threads.
+
+You can:
+
+- open existing conversations
+- inspect timeline activity
+- send registry-origin messages where supported
+- see linked work and linked protocol runs
+- switch to conversation task/work views when a thread has delegated or routed
+  work
+- manage conversation-specific skill activation
+
+If a conversation appears empty while work or runs are linked, treat that as a
+product bug. The intended model is that related work and outputs are visible
+from the conversation.
+
+## Runs
+
+Use `Runs` to inspect protocol executions.
+
+Run detail is organized around:
+
+- Overview
+- Stages
+- Artifacts
+- Audit
+
+Use Runs when you need to answer:
+
+- what protocol is executing?
+- what stage is active?
+- what work was created?
+- what artifacts were declared or produced?
+- is the run blocked, stale, failed, completed, or waiting?
+- what operator actions are available?
+
+Actions such as retry, accept, send-back, cancel, and export are contextual.
+If an action appears where its purpose is unclear, that is a UI issue to fix.
+
+## Agents
+
+Use `Agents` to inspect bots/agents.
+
+You can:
+
+- see connection and execution health
+- open an agent detail
+- start or open conversations for the agent
+- inspect advertised/routing skills
+- reveal generated work when needed
+
+The agent page should summarize skills/capabilities instead of showing a wall
+of names. If generated/test agents dominate the list, use filters and treat the
+default list as needing cleanup.
+
+## Protocols
+
+Use `Protocols` for authoring reusable workflows and managing templates.
+
+You can:
+
+- create from blank
+- create from starter template
+- edit stages
+- add a stage below the current stage
+- remove stages
+- configure assignment
+- declare artifacts
+- inspect routing/transition flow
+- show the workflow map on demand
+- publish a protocol
+- publish a protocol as a template
+- start or inspect runs
+
+Standard authoring should focus on:
+
+- stage title/instructions
+- assignment
+- routing
+- artifacts
+- rehearsal/run feedback
+
+Standard authors should not see internal runtime controls such as custom
+runtime selectors, raw stage keys, max rounds, or timeout fields. Operator-only
+controls must stay gated.
+
+Current publish validation still requires stages to resolve an assignment. Draft
+authoring may allow incomplete steps while the author is building.
+
+## Capabilities
+
+Use `Capabilities` to manage skills.
+
+The same underlying skill model supports:
+
+- catalog browsing
+- bot availability
+- defaults for new conversations
+- active conversation skills
+- routing skill projection
+- custom skill drafts/lifecycle
+
+Generated capabilities should not dominate the default catalog. Use explicit
+filters when you need generated/rehearsal entries.
+
+## Guidance
+
+Use `Guidance` to manage provider baseline policy.
+
+Guidance affects provider/runtime behavior once published. It is not activated
+like a conversation skill.
+
+Typical flow:
+
+1. choose agent/provider context
+2. edit draft guidance
+3. preview composed runtime prompt
+4. submit/approve/publish where permitted
+
+## Dashboard
+
+Use `Dashboard` for operational orientation.
+
+It summarizes:
+
 - approvals
+- active work
+- work needing follow-up
+- recent completed work
+- protocol runs
+- protocol issues
 - agent health
-- summary-level activity
 
-Use this page when you want to answer:
+Dashboard cards can link into hidden-but-valid surfaces such as Approvals and
+Tasks.
 
-- is the stack healthy?
-- is work moving?
-- is anything waiting for operator action?
+## Routing
 
-### Agents
+Use `Routing` to inspect routing policy and skill-derived routing availability.
 
-Use `Agents` to inspect each bot.
+Routing is operational. It should explain why an agent can or cannot receive
+delegated work.
 
-You can:
+## Usage
 
-- see whether a bot is connected
-- see execution health
-- inspect routing skills
-- jump into that bot’s conversations
-
-### Conversations
-
-Use `Conversations` to find active threads.
-
-You can:
-
-- open an existing conversation
-- inspect activity
-- see provider responses and task history
-
-### Conversation Detail
-
-This is the main working screen once a conversation exists.
-
-Use it to:
-
-- read the timeline
-- send replies
-- inspect tasks and routed work
-- manage active conversation skills
-- change conversation settings
-
-If a bot needs a skill in one specific chat, activate it from that
-conversation’s `Skills` panel.
-
-### Approvals
-
-Use `Approvals` when approval mode is enabled.
-
-You can:
-
-- review pending requests
-- approve
-- reject
-
-### Tasks
-
-Use `Tasks` to inspect routed or delegated work across conversations.
-
-This is useful when:
-
-- work was routed to another bot
-- you need to see cross-conversation progress
-- you want to inspect failures or stuck work
-
-### Usage
-
-Use `Usage` for token and cost rollups by conversation.
-
-### Routing
-
-Use `Routing` to inspect skill-derived routing availability and routing policy.
-
-This is where you verify what bots are advertising for cross-bot delegation.
-
-### Skills
-
-Use `Skills` to manage what bots can do.
-
-You can:
-
-- see what skills exist
-- see what is installed on a specific bot
-- install store skills
-- create or import custom skills from the same page
-- manage defaults for new conversations
-- author custom skills
-
-Important distinction:
-
-- `Installed on this bot` is bot-level
-- `Active in this conversation` is conversation-level
-
-Making a skill available on a bot does not turn it on in every conversation.
-
-### Guidance
-
-Use `Guidance` to control provider baseline policy for a bot.
-
-This is not a skill.
-
-You can:
-
-- inspect published guidance
-- edit draft guidance
-- preview the composed runtime prompt
-- publish provider guidance for Claude or Codex
-
-### Protocols
-
-Use `Protocols` when the work is a reusable multi-stage workflow instead of a
-one-off conversation.
-
-You can:
-
-- create or import protocol drafts
-- validate, diff, publish, and archive protocol definitions
-- start runs against a connected bot
-- inspect participants, artifacts, transitions, and blocked reasons
-- intervene with typed actions: `retry`, `accept`, `send-back`, `cancel`
-- inspect protocol issues for blocked runs, invalid contracts, expired
-  timeouts, and stuck leases
-
-For the full workflow and runbook, use
-[operator-protocol-guide.md](operator-protocol-guide.md).
-
-## Typical Operator Workflows
-
-### Review A New Conversation
-
-1. open `Dashboard` or `Conversations`
-2. open the conversation
-3. read the timeline
-4. if approval is pending, approve or reject
-
-### Add A Skill To A Conversation
-
-1. open the conversation
-2. open the `Skills` panel
-3. activate the skill
-4. if setup is required, submit the requested credential values
-
-### Make A Skill Available On A Bot
-
-1. open `Skills`
-2. choose the bot
-3. find the skill
-4. install or enable it on that bot
-
-### Author A Custom Skill
-
-1. open `Skills`
-2. choose the target bot if it is not already implied by the route
-3. create a draft or import a package from the main `Skills` page
-4. use `Write` for title, description, and instructions
-5. use `Setup` for credential requirements
-6. use `Review` for validation and lifecycle actions
-7. use `Advanced` only for package import/export, provider config, files, and revision history
-
-For the full skills workflow, use
-[skills-guide.md](skills-guide.md).
-
-### Update Provider Guidance
-
-1. open `Guidance`
-2. choose the provider
-3. edit the draft
-4. review the runtime preview
-5. publish
-
-### Run A Protocol
-
-1. open `Protocols`
-2. choose a published definition
-3. pick a target bot
-4. enter workspace and problem statement
-5. start the run
-6. monitor the run detail and support-issues views
-7. intervene only when the run is blocked or policy requires it
-
-### Author A Protocol
-
-1. open `Protocols`
-2. create a draft or import JSON/YAML
-3. edit participants, artifacts, stages, and policies
-4. validate the draft
-5. diff against the published version
-6. publish when ready
-
-For authoring details, use
-[author-protocol-guide.md](author-protocol-guide.md).
+Use `Usage` for usage rollups.
 
 ## Reading Status Correctly
 
-When looking at the registry, keep these distinctions in mind:
+Keep these distinctions in mind:
 
-- a bot can be `connected` but still have an execution fault
-- a skill can be `available on this bot` but not active in the current conversation
-- a skill can be a default for new conversations without being active in older ones
-- guidance is always-on provider policy once published; it is not activated like a skill
+- connected does not always mean execution-healthy
+- running must mean actual active work; stale or stuck work should be labeled
+  honestly
+- a skill can be available on a bot but inactive in a conversation
+- a skill default applies to new conversations, not old ones
+- a protocol run can create routed tasks as stage execution work
+- a declared artifact may not be produced yet
+- a produced artifact should be previewable/downloadable wherever it is linked
 
 ## If Something Looks Wrong
 
-Start with:
+Start in the registry:
 
-1. `Dashboard`
-2. `Agents`
-3. the affected `Conversation`
-4. `Approvals` if work is waiting
+1. Dashboard
+2. affected Conversation
+3. affected Run
+4. affected Agent
+5. linked Work/Task detail
+6. Artifacts section
 
-Then verify on the CLI:
+Then use CLI:
 
 ```bash
 ./octopus status
 ./octopus doctor <bot>
+./octopus logs <target> --follow
 ```

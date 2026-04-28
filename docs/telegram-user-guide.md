@@ -1,90 +1,65 @@
 # Telegram User Guide
 
-This guide is for people using Octopus through Telegram.
+This guide describes the current Telegram surface.
 
-For most users, Octopus is just a bot in a chat. You send a message, the bot
-does work, and the reply comes back in the same conversation.
+Telegram is a peer client over the same registry/runtime backend as the browser
+UI. It is not supposed to own a separate protocol, skill, artifact, or guidance
+model.
 
 ## First Use
 
 1. open Telegram
-2. find your bot
+2. find your configured bot
 3. send a normal message
 
 Examples:
 
-- "summarize this repo"
-- "help me debug this error"
-- "draft a response to this issue"
+- `summarize this repo`
+- `help me debug this error`
+- `draft a response to this issue`
 
-If the bot is in approval mode, the request may pause until an operator
-approves it.
+If approval mode is enabled, execution may pause until approval is granted in
+Telegram or the registry UI.
 
-## Basic Commands
+## Help
 
-Start with:
+Use:
 
-- `/help`
+```text
+/help
+```
 
-Common commands you may see:
+The live command set depends on bot configuration and permissions.
 
-- `/project <name>`
-- `/skills ...`
-- `/guidance ...`
-- `/protocol ...`
+Common command families:
 
-The exact command set depends on how the bot is configured, but `/help` is the
-entrypoint.
+- `/project`
+- `/skills`
+- `/guidance`
+- `/protocol`
 
-## Working With Projects
+## Projects
 
-If the bot has multiple workspaces or projects attached, switch with:
+If the bot has multiple workspaces/projects:
 
 ```text
 /project <name>
 ```
 
-Use this when you want the bot to work in a specific mounted workspace.
-
-## Approvals
-
-If approval mode is enabled:
-
-- your request may pause
-- an approval request appears
-- execution starts only after approval
-
-Approvals may be handled:
-
-- in Telegram
-- in the registry UI
+Use this before asking the bot to work in a specific mounted workspace.
 
 ## Skills In Telegram
 
-Telegram exposes the same shared skill backend as the registry UI.
+Telegram uses the same skill backend as the registry UI.
 
-The most important ideas are:
+Important distinctions:
 
-- a skill can be available on the bot
-- a skill can be active in the current conversation
-- those are not the same thing
+- available on this bot
+- default for new conversations
+- active in this conversation
+- routing skills
 
-Typical skill operations in chat include:
-
-- inspect skills
-- add or remove a skill from the conversation
-- install store skills
-- export a custom skill package
-- import a custom skill package into a draft
-
-Permission and capability gating still matters:
-
-- `list`, `add`, `remove`, `clear`, `export`, and `import` are the normal
-  conversation and draft-oriented operations when the bot exposes them
-- store install, uninstall, and update actions are admin-only
-- custom-skill approve, reject, publish, and archive actions are admin-only
-
-Examples you may use:
+Examples:
 
 ```text
 /skills
@@ -97,38 +72,29 @@ Examples you may use:
 /skills import <target-name>
 ```
 
-The exact subcommands may evolve, so use `/help` or `/skills` to see the live
-shape.
+Admin permissions are required for store install/update/uninstall and custom
+skill approval/publish/archive operations.
 
 ## Guidance In Telegram
 
-Guidance is provider baseline policy, not a skill.
+Guidance is provider baseline policy. It is not a skill.
 
-Telegram can expose guidance flows such as:
-
-- show published guidance
-- edit a draft
-- preview the composed runtime prompt
-- publish the draft
-
-In the shipped Telegram surface:
-
-- `show`, `preview`, `history`, `edit`, and `submit` use the shared backend
-  lifecycle directly
-- `approve`, `reject`, `publish`, and `archive` are admin-only
-
-Typical examples:
+Examples:
 
 ```text
 /guidance show codex
 /guidance preview codex
 ```
 
+Depending on permissions, Telegram may expose draft edit, submit, approve,
+reject, publish, and archive flows. These must use the same backend lifecycle
+as the registry UI.
+
 ## Protocols In Telegram
 
-Telegram exposes the same shared protocol backend as the registry UI.
+Telegram exposes protocol operations backed by the registry protocol service.
 
-Current commands:
+Current command shape:
 
 ```text
 /protocol list
@@ -144,50 +110,51 @@ Current commands:
 /protocol cancel <run_id> [reason]
 ```
 
-Important behavior:
+Behavior:
 
-- `start` automatically begins watching the new run in that Telegram chat
-- `watch` and `unwatch` control follow-up notifications explicitly
-- `status` includes the registry deep link when one is available
-- `artifacts` lists declared and generated run artifacts, marks missing outputs,
-  and includes download links for artifacts the registry can serve
-- `export` sends a JSON document with the run, stages, participants, artifacts,
-  tasks, and transitions
-- `send-back` and `cancel` require an explicit `confirm` token plus a short
-  reason before the action is applied
-- stage-change and terminal notifications come from the shared registry run
-  state, not a Telegram-only state machine
-
-Examples:
-
-```text
-/protocol start software-engineering Build a secure review workflow for this repo
-/protocol status run-123
-/protocol artifacts run-123
-/protocol send-back run-123 confirm tighten the artifact contract for plan.md
-```
-
-For the full operator workflow and runbook, use
-[operator-protocol-guide.md](operator-protocol-guide.md).
+- `start` creates a registry protocol run and starts watching it from the chat.
+- `status` reports registry run state and deep links when available.
+- `artifacts` lists declared and produced artifacts and should expose download
+  links for artifacts the registry can serve.
+- `export` returns a JSON run export.
+- destructive or high-impact actions may require confirmation.
+- stage and terminal notifications come from registry run state, not
+  Telegram-only state.
 
 ## Routed Work
 
-If one bot delegates work to another, the parent conversation still stays in
-the same Telegram thread. You do not need to chase separate child threads just
-to get the main answer.
+If one bot delegates work to another, the parent Telegram thread remains the
+main user-facing thread. Registry work/task records may exist underneath, but
+users should not have to chase unrelated child conversations to understand the
+main result.
+
+## Artifacts
+
+If a command reports produced artifacts, users should be able to download them
+through registry artifact routes when available. If a document is declared but
+not produced yet, Telegram should say that clearly.
+
+Any artifact that appears as available in Telegram but cannot be opened from
+the registry is a product gap to fix.
 
 ## If The Bot Seems Broken
 
-What you should tell an operator:
+Tell an operator:
 
-- what bot you used
-- which Telegram chat it happened in
-- whether the request is waiting for approval
-- whether the bot stopped replying entirely
-- whether it looks like a provider-auth problem
+- which bot you used
+- which Telegram chat
+- what command/message you sent
+- whether approval was pending
+- whether a protocol run id was shown
+- whether artifacts were expected
 
-Operators should then check:
+Operators should check:
 
-- the registry UI
-- `./octopus status`
-- `./octopus doctor <bot>`
+```bash
+./octopus status
+./octopus doctor <bot>
+./octopus logs <target> --follow
+```
+
+They should also inspect the registry conversation, run, linked work, and
+artifacts.

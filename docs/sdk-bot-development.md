@@ -1,60 +1,45 @@
 # SDK Bot Development Guide
 
-This guide is for developers building or extending bots on top of the Octopus
-SDK.
+This guide is for developers extending the current Python SDK/runtime and bot
+platform in this repo.
 
-## What Lives Where
+The Java rebuild plan is separate planning material. This guide describes the
+current shipped codebase.
 
-The repo has three main code areas:
+## Code Areas
 
-- `octopus_sdk/`
-  shared contracts, workflows, registry protocol, composition seams
-- `app/`
-  shipped Telegram bot runtime, provider integrations, deployment CLI
-- `octopus_registry/`
-  registry service and browser UI
+| Area | Purpose |
+| --- | --- |
+| `octopus_sdk/` | Shared contracts, workflow logic, protocol models/engine, registry client, runtime ports. |
+| `app/` | Bot runtime, Telegram channel, provider integration, local DB state, deployment CLI. |
+| `octopus_registry/` | Registry FastAPI app, registry store, protocol store/runtime, UI assets. |
 
-The important rule is:
+Rules:
 
-- shared behavior belongs in the SDK
-- product clients call shared workflows
-- do not duplicate business logic in the registry UI or Telegram layer
+- shared behavior belongs in `octopus_sdk/`
+- registry and Telegram are clients over shared rules
+- do not create a second lifecycle/validation path in UI or Telegram
+- do not create a second skill/capability model
+- do not create a second protocol runtime model
+- do not create direct DB shortcuts as proof of product behavior
 
 ## Runtime Shape
 
 An Octopus bot is composed from:
 
 - provider integration
-- transport(s)
+- transport/channel
 - session runtime
 - work queue
 - shared workflows
 - registry participant implementation
+- skill/guidance runtime composition
 
-Use [ARCHITECTURE.md](ARCHITECTURE.md)
-for the full system view.
-
-## Development Principles
-
-When adding behavior:
-
-- put shared rules in `octopus_sdk/`
-- keep registry and Telegram as thin wrappers over those rules
-- do not create a second lifecycle or validation path
-- do not create a second skill model
-- do not create a second guidance model
-
-The current product model assumes:
-
-- skills are the primary capability concept
-- routing is skill-derived
-- guidance is provider policy
-- protocols are Registry-owned workflow definitions/runs, exposed to bot
-  channels through the SDK protocol service
+Use [ARCHITECTURE.md](ARCHITECTURE.md) for the full system view.
 
 ## Where To Extend
 
-### New shared workflow behavior
+### Shared workflow behavior
 
 Start in:
 
@@ -64,74 +49,105 @@ Start in:
 
 Examples:
 
-- skill lifecycle rules
-- guidance preview rules
+- skill/capability lifecycle rules
+- guidance preview/composition rules
 - routing decisions
 - conversation workflow logic
-- protocol listing, launch, run actions, artifact inspection, and export
+- protocol list/start/status/actions/artifacts/export behavior
 
-For protocol work, keep HTTP APIs and persistence in `octopus_registry/`.
-Extend `octopus_sdk/protocols/` so Telegram, Slack, and future bots use one
-shared interface over those Registry APIs instead of copying protocol workflow
-logic into each channel.
+### Protocol behavior
 
-### Bot runtime or provider behavior
+Start in:
+
+- `octopus_sdk/protocols/`
+- `octopus_registry/protocol_store.py`
+- `octopus_registry/protocol_http.py`
+- `octopus_registry/protocol_runtime.py`
+
+Rules:
+
+- protocol state decisions live in SDK protocol engine/model code
+- registry owns protocol persistence and API
+- Telegram and UI call shared protocol service paths
+- stage execution uses routed work/task paths
+- artifact observations must feed the canonical run state
+
+### Bot runtime/provider behavior
 
 Start in:
 
 - `app/runtime/`
 - `app/providers/`
 - `app/channels/`
+- `app/db/`
 
 Examples:
 
-- transport behavior
-- provider integration
-- startup and deployment wiring
+- provider request/response handling
+- Telegram command handling
+- registry delivery transport
+- runtime session state
+- work queue behavior
 
-### Registry UI or registry service behavior
+### Registry service/UI behavior
 
 Start in:
 
-- `octopus_registry/`
+- `octopus_registry/server.py`
+- `octopus_registry/store_postgres.py`
+- `octopus_registry/store_shared/`
+- `octopus_registry/ui/js/components/`
+- `octopus_registry/ui/js/helpers/`
+- `octopus_registry/ui/css/main.css`
 
-Examples:
+Rules:
 
-- browser workflows
-- registry API handlers
-- cache/invalidation behavior
-- operator presentation
+- UI should use shared helpers/primitives before creating new ones
+- UI must not invent its own protocol/skill/guidance state machine
+- route changes must update docs and OpenAPI where applicable
+- artifact actions should use shared artifact helpers
 
-## Skills
+## Skills And Capabilities
 
-If you are extending skills:
+The UI label is `Capabilities`; runtime code still says `skills`.
 
-- keep the shared model in the SDK
-- keep validation backend-owned
-- keep file policy backend-owned
-- treat registry and chat as peer clients
+When extending:
 
-For practical skills behavior, use
-[skills-guide.md](skills-guide.md).
+- keep backend validation authoritative
+- keep registry and Telegram as peer clients
+- keep generated entries filterable
+- keep routing skill derivation separate from conversation activation
 
-For the lower-level model, use
-[skills-model.md](skills-model.md).
+Use:
+
+- [skills-guide.md](skills-guide.md)
+- [skills-model.md](skills-model.md)
 
 ## Guidance
 
-Guidance is not a skill.
+Guidance is provider baseline policy, not a skill.
 
-It is provider-scoped baseline policy.
+When extending:
 
-If you extend guidance:
+- keep preview and runtime composition aligned
+- make published guidance affect live runs
+- keep lifecycle permissions consistent across registry and Telegram
 
-- keep runtime composition and preview aligned
-- ensure published guidance actually affects live runs
-- keep registry and Telegram on the same backend operations
+## Protocols
+
+Protocols are registry-owned workflow definitions/runs exposed to channels
+through SDK service paths.
+
+When extending:
+
+- do not put protocol state rules in Telegram
+- do not put protocol state rules only in browser JS
+- keep standard/operator authoring separation enforced in backend and UI
+- update `docs/protocol_assignment_audit.md` if assignment behavior changes
 
 ## Local Development
 
-For the normal local workflow:
+Common workflow:
 
 ```bash
 ./octopus
@@ -141,31 +157,33 @@ For the normal local workflow:
 ./octopus doctor <bot>
 ```
 
-For the shipped local deployment:
+Default local deployment:
 
-- the registry runs in its own stack
-- each bot runs in its own stack
-- each stack has its own Postgres container
+- registry stack has its own Postgres
+- each bot stack has its own Postgres
+- bot and registry connect through registry enrollment/heartbeat/delivery
 
-This matters because cross-stack wiring bugs can look like runtime logic bugs.
-When debugging connectivity or state corruption, confirm the effective
-`OCTOPUS_DATABASE_URL` inside the live container before changing code.
+When debugging state issues, check the effective `OCTOPUS_DATABASE_URL` inside
+the live container before changing logic.
 
 ## Testing
 
-Prefer focused tests around the layer you changed.
+Use the smallest test layer that proves the invariant, then add product-flow
+coverage for cross-surface behavior.
 
 Typical areas:
 
-- SDK workflow tests for shared logic
-- registry service tests for API behavior
-- CLI manager tests for deploy wiring
-- UI contract tests for browser surface changes
+- SDK workflow tests
+- registry service/API tests
+- protocol engine/store/runtime tests
+- Telegram command tests
+- UI contract tests
+- Playwright registry UI flows
+- live registry smoke tests
 
-If you change deploy or compose wiring, add a regression test that protects the
-actual invariant you need.
+Database inspection is allowed for diagnosis. It is not a substitute for
+testing UI/API/Telegram behavior.
 
-## Recommended Reading
+## Documentation Rule
 
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [skills-model.md](skills-model.md)
+If behavior changes, update the relevant guide in the same change.

@@ -1,195 +1,154 @@
-# Skills Guide
+# Capabilities And Skills Guide
 
-This guide explains how skills work in practice and how to add or author them.
+The registry UI labels the build surface as `Capabilities`. The underlying
+runtime model still uses `skills`.
 
-## What A Skill Is
+Use this guide when managing what agents can do.
 
-A skill changes what a bot can do for a task.
+## Vocabulary
 
-Skills can include:
+| UI/Product term | Runtime term | Meaning |
+| --- | --- | --- |
+| Capability | Skill | A reusable ability/instruction/tool package. |
+| Available on this bot | Bot skill availability | The agent can use this skill. |
+| Default for new conversations | Conversation seed list | New conversations start with this skill active. |
+| Active in this conversation | Session skill activation | This one conversation currently uses the skill. |
+| Routing skills | Routing projection | Skills this agent advertises for delegated work. |
 
-- instructions
-- setup requirements
-- provider-specific extensions
-- supporting files
+Do not treat routing skills as a second skill system. They are derived from
+normal skill availability, runtime readiness, and registry routing policy.
 
-## The Important Skill States
+## Sources
 
-You will see the same states in the registry UI and in chat:
+Skills/capabilities can come from:
 
-- `Catalog`
-  what skills exist
-- `Available on this bot`
-  what that bot can use
-- `Default for new conversations`
-  what gets seeded into new chats for that bot
-- `Active in this conversation`
-  what is currently turned on in one chat
+- `Core`: built into the runtime image
+- `Store`: installed from the skill store
+- `Custom`: authored inside Octopus
+- `Generated`: created by protocol/rehearsal/test flows
 
-These are different.
+Generated entries should not dominate default human lists. Use filters when you
+need them.
+
+## Kinds
+
+Current execution kinds:
+
+- `prompt`: adds selected instructions to the provider context
+- `executable`: participates in runtime orchestration, not only prompt text
+
+Both kinds share the same availability/default/active model.
+
+## Common Workflows
+
+### Browse Capabilities
+
+Open:
+
+```text
+Build -> Capabilities
+```
+
+Use search and filters rather than scanning long skill walls.
+
+### Make A Skill Available On A Bot
+
+1. open `Capabilities`
+2. choose the agent/bot context
+3. find the skill
+4. install or enable it
+
+This does not activate it in every existing conversation.
+
+### Activate A Skill In One Conversation
+
+1. open the conversation
+2. open its skill/capability controls
+3. activate the skill
+4. complete setup if required
+
+This affects only that conversation.
+
+### Make A Skill Default
+
+Use bot-level controls to make a skill a default for new conversations.
+
+This affects future conversations only.
+
+### Author A Custom Skill
+
+Custom skills are authored from the unified Capabilities/Skills backend.
+
+Typical registry flow:
+
+1. create a draft
+2. write title, description, and instructions
+3. define setup requirements
+4. validate
+5. submit/review/publish where permitted
+6. export/import package content when needed
+
+The UI may group low-level package details under an advanced/detail section,
+but normal users should not be forced through internal package fields for basic
+skill creation.
+
+## Package Model
+
+A skill package can include:
+
+- `skill.md`
+- `requires.yaml`
+- `claude.yaml`
+- `codex.yaml`
+- supporting files/scripts
+
+Policy:
+
+- safe relative paths only
+- reserved package filenames may not be reused
+- only `.sh` files may be executable
+- file count and size limits are backend-enforced
+- registry and chat mutations use the same validation rules
+
+## Telegram
+
+Telegram exposes text-oriented operations over the same backend model.
 
 Examples:
 
-- making a skill available on a bot does not activate it everywhere
-- making a skill a default does not turn it on in older conversations
-- activating a skill in one conversation does not change bot-wide availability
+```text
+/skills
+/skills list
+/skills add <name>
+/skills remove <name>
+/skills export <name>
+/skills import
+```
 
-## Skill Sources
+Admin lifecycle actions require permissions.
 
-### Core
+## Routing
 
-Built into the runtime image.
+Routing is operational.
 
-These are part of the shipped bot environment.
-
-### Store
-
-Installed from the remote skill store onto a bot.
-
-### Custom
-
-Authored inside Octopus and managed through the draft / review / publish
-lifecycle.
-
-## Skill Kinds
-
-Skills also have an execution kind:
-
-- `prompt`
-  active in a conversation as operator-selected instructions composed into the
-  provider run context
-- `executable`
-  active in a conversation as runtime-orchestrated behavior, not only extra
-  prompt text
-
-Both kinds use the same bot-level availability and conversation-level
-activation model. The difference is how the runtime applies them once active.
-
-## Add A Store Or Core Skill To A Bot
-
-Use the registry UI:
-
-1. open `Skills`
-2. choose the bot
-3. find the skill
-4. install or enable it so it becomes `Available on this bot`
-
-After that, decide whether to:
-
-- make it a default for new conversations
-- activate it only in one conversation
-
-## Activate A Skill In One Conversation
-
-Use the conversation’s `Skills` panel:
-
-1. open the conversation
-2. open `Skills`
-3. activate the skill
-4. if setup is required, submit the requested credential values
-
-This is the right move when the skill is needed only for one chat.
-
-## Make A Skill Default For New Conversations
-
-Use the bot-level skill controls in the registry UI.
-
-This affects:
-
-- future conversations for that bot
-
-It does not automatically update existing chats.
-
-## Skill Setup
-
-Some skills are `Ready` immediately.
-
-Some show `Needs setup`, which usually means credentials or configuration are
-required before the skill can be used.
-
-Setup is shared across registry and chat clients. The browser may present the
-flow more comfortably, but the underlying rules are the same.
-
-## Author A Custom Skill
-
-Custom skills are authored from the unified registry `Skills` page.
-
-The workspace is still bot-scoped, so you choose the target bot first unless
-you opened `Skills` from an agent page and the bot is already bound. Drafts,
-publish state, and package export/import all belong to that bot's mutable skill
-catalog.
-
-Typical flow:
-
-1. create a draft
-2. use `Write` for title, description, and instructions
-3. use `Setup` for credential requirements
-4. use `Review` to fix validation problems and move the draft through lifecycle
-5. use `Advanced` only for package import/export, provider config, files, and revision details
-
-The shared draft package can include:
-
-- `name`
-- `display_name`
-- `description`
-- `body`
-- `requirements`
-- `provider_config`
-- `files`
-
-## Custom Skill Files
-
-Attached files are governed by shared backend policy:
-
-- safe relative paths only
-- reserved filenames may not be reused
-- only `.sh` files may be executable
-- at most 16 files
-- 64 KB per file
-- 256 KB total
-
-Registry uploads and chat-side file mutations go through the same validation
-rules.
-
-## Validation And Publishing
-
-Validation is backend-owned.
-
-That means:
-
-- clients do not invent their own rules
-- submit and publish both invoke shared validation
-- publish readiness is derived from the draft content
-
-If a draft is invalid, it may still be editable, but submit or publish remain
-blocked until the validation problems are fixed.
-
-## Routing Skills
-
-Routing is derived from skills. It is not a second skill system.
-
-A routing skill is a skill that is:
+A routing skill is:
 
 - available on the bot
 - runtime-ready
 - allowed by routing policy
 
-That derived set is what other bots can discover for delegation.
+Routing diagnostics belong under Operations -> Routing, not as a second skill
+catalog.
 
-## Registry And Chat
+## Current Product Gaps To Watch
 
-The registry and Telegram are peer clients over the same backend operations.
+- The UI should not show intimidating unfiltered walls of generated skills.
+- Agent pages should summarize capabilities instead of duplicating the full
+  catalog.
+- Any operation available in Telegram should use the same backend lifecycle as
+  the registry UI.
+- If a skill/capability is needed while authoring a protocol stage and does not
+  exist, the product direction is to allow creating it through the UI instead
+  of blocking the author.
 
-The registry is the richer wrapper:
-
-- easier editing
-- `Write`, `Setup`, `Review`, and `Advanced` workspace stages
-- validation panels and lifecycle actions in `Review`
-- package import/export and low-level package details in `Advanced`
-
-Telegram exposes smaller text-oriented operations against the same model.
-
-## If You Need The Lower-Level Model
-
-For the technical package/lifecycle model, use
-[skills-model.md](skills-model.md).
+For the lower-level model, use [skills-model.md](skills-model.md).

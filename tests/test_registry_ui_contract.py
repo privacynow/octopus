@@ -893,7 +893,28 @@ def test_conversation_composer_enter_submits_exact_direct_assignments() -> None:
 
     assert "function currentComposerRoutingState()" in detail
     assert "routingState.exactSuggestionMatch && routingState.instructions" in detail
+    assert "API.conversationAction(convoId, 'direct_assign'" in detail
+    assert "selector: directAssignSelector(routingState.exactSuggestionMatch)" in detail
+    assert "message_text: routingState.text" in detail
     assert "sendMessage();" in detail.split("function handleComposerKeydown(e) {", 1)[1].split("if (!suggestionList.hidden && suggestionMatches.length) {", 1)[0]
+
+
+def test_start_conversation_entrypoints_create_new_threads() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    agent_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
+    ).read_text(encoding="utf-8")
+    agent_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-detail.js"
+    ).read_text(encoding="utf-8")
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "API.openConversationForAgent(agent.id, { preferExisting: false })" in agent_list
+    assert "preferExisting: false" in agent_detail.split("async function openAgentConversation", 1)[1].split("function createAgentActionButton", 1)[0]
+    assert "Start a new conversation with" in conversation_list
+    assert "preferExisting: false" in conversation_list.split("const conversation = await API.openConversationForAgent", 1)[1].split("});", 1)[0]
 
 
 def test_conversation_route_owns_scroll_on_wide_viewports() -> None:

@@ -1870,6 +1870,7 @@ function renderConversationDetail(container, params) {
     async function sendMessage() {
         const text = textarea.value.trim();
         if (!text) return;
+        const routingState = currentComposerRoutingState();
         if (activeView !== 'conversation') {
             setActiveView('conversation', {
                 explicit: true,
@@ -1881,7 +1882,17 @@ function renderConversationDetail(container, params) {
         clearSuggestions();
         suggestionList.hidden = true;
         try {
-            await API.sendMessage(convoId, text);
+            if (routingState.exactSuggestionMatch && routingState.instructions) {
+                await API.conversationAction(convoId, 'direct_assign', {
+                    selector: directAssignSelector(routingState.exactSuggestionMatch),
+                    title: directAssignTitle(routingState.instructions),
+                    instructions: routingState.instructions,
+                    message_text: routingState.text,
+                });
+                void loadRelatedTasks({ soft: true });
+            } else {
+                await API.sendMessage(convoId, text);
+            }
             textarea.value = '';
             updateComposerAssist();
             await reloadEvents();
@@ -1905,6 +1916,31 @@ function renderConversationDetail(container, params) {
                 ? text.slice(selectorToken.length).trim()
                 : '',
         };
+    }
+
+    function directAssignSelector(target) {
+        const kind = String(target?.kind || 'agent').trim() || 'agent';
+        const label = String(target?.label || '').trim().replace(/^@/, '');
+        let value = label;
+        if (kind === 'skill' && value.toLowerCase().startsWith('skill:')) {
+            value = value.slice(6);
+        } else if (kind === 'role' && value.toLowerCase().startsWith('role:')) {
+            value = value.slice(5);
+        }
+        const selector = {
+            kind,
+            value: String(value || target?.key || '').trim(),
+        };
+        if (kind === 'agent' && target?.key) {
+            selector.preferred_agent_id = String(target.key);
+        }
+        return selector;
+    }
+
+    function directAssignTitle(instructions) {
+        const normalized = String(instructions || '').trim().replace(/\s+/g, ' ');
+        if (!normalized) return 'Direct assignment';
+        return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
     }
 
     function handleComposerKeydown(e) {

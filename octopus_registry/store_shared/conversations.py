@@ -683,6 +683,20 @@ def add_conversation_action(
                 """,
                 (json_param(message_metadata), conversation_id, parent_event_id),
             )
+        elif str(assignment.message_text or "").strip():
+            inserted_message = _operator_event(
+                conn,
+                dialect=dialect,
+                json_param=json_param,
+                event_id=f"direct-assign-message:{validated_envelope.action_id}",
+                conversation_id=conversation_id,
+                kind="message.user",
+                content=str(assignment.message_text or "").strip(),
+                metadata=message_metadata,
+                created_at=now,
+            )
+            if inserted_message is not None:
+                inserted_events.append(inserted_message)
         request = {
             "routed_task_id": routed_task_id,
             "parent_conversation_id": conversation_id,

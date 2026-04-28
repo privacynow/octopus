@@ -51,6 +51,7 @@ function renderAgentDetail(container, params) {
         openConversationBusy = true;
         try {
             const conversation = await API.openConversationForAgent(agentId, {
+                preferExisting: false,
                 title: `Conversation with ${agentDisplayName || agent.display_name || agent.slug || agentId}`,
             });
             const conversationId = String(conversation.conversation_id || conversation.id || '');

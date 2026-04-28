@@ -190,7 +190,7 @@ function renderConversationList(container) {
                 button.type = 'button';
                 button.className = 'quickstart-chip';
                 button.dataset.key = agent.agent_id;
-                button.setAttribute('aria-label', `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
+                button.setAttribute('aria-label', `Start a new conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
                 button.textContent = agent.display_name || agent.slug || agent.agent_id;
                 button.addEventListener('click', async () => {
                     if (openingConversationFor === agent.agent_id) return;
@@ -199,6 +199,7 @@ function renderConversationList(container) {
                     button.classList.add('busy');
                     try {
                         const conversation = await API.openConversationForAgent(agent.agent_id, {
+                            preferExisting: false,
                             title: `Conversation with ${agent.display_name || agent.slug || agent.agent_id}`,
                         });
                         Router.navigate(UI.conversationHref(conversation.conversation_id, {

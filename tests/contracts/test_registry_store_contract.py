@@ -1079,6 +1079,49 @@ def test_direct_assign_reuses_existing_operator_message_as_the_parent_narrative(
     )
 
 
+def test_direct_assign_without_parent_event_mirrors_visible_user_message(store):
+    origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
+    target_id, _target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Registry direct assignment from UI",
+        origin_channel="registry",
+        external_conversation_ref="direct-assign-ui-message",
+    )
+
+    result = store.add_conversation_action(
+        conversation.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="direct-assign-ui-message",
+            action="direct_assign",
+            payload=DirectAssignActionPayload(
+                selector=TargetSelector(kind="agent", value="m2", preferred_agent_id=target_id),
+                title="Add numbers",
+                instructions="Add 2 and 2 and return the result only.",
+                message_text="@m2 add 2 and 2",
+            ),
+        ),
+    )
+
+    events = store.list_events(conversation.conversation_id).events
+    messages = [event for event in events if event.kind == "message.user"]
+
+    assert result.accepted is True
+    assert result.routed_tasks[0].target_agent_id == target_id
+    assert len(messages) == 1
+    assert messages[0].content == "@m2 add 2 and 2"
+    assert messages[0].metadata["source_action"] == "direct_assign"
+    assert messages[0].metadata["selector_kind"] == "agent"
+    assert messages[0].metadata["selector_value"] == "m2"
+    assert messages[0].metadata["routed_task_id"] == result.routed_tasks[0].routed_task_id
+    assert any(
+        event.kind == "task.status"
+        and event.metadata["status"] == "queued"
+        and event.metadata["routed_task_id"] == result.routed_tasks[0].routed_task_id
+        for event in events
+    )
+
+
 def test_delegation_approval_prefers_explicit_origin_transport_ref_from_proposal(store):
     origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
     target_id, _target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")

@@ -155,7 +155,7 @@ function renderAgentList(container) {
             },
             onStartConversation: async (agent) => {
                 try {
-                    const result = await API.openConversationForAgent(agent.id, {});
+                    const result = await API.openConversationForAgent(agent.id, { preferExisting: false });
                     const conversationId = String(result.conversation_id || result.id || '');
                     if (conversationId) {
                         Router.navigate('/ui/conversations/' + encodeURIComponent(conversationId));

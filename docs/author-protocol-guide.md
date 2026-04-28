@@ -44,6 +44,7 @@ A protocol definition contains:
 - policies: review limits and lifecycle behavior
 
 Drafts can change. Published versions are immutable execution contracts.
+JSON and YAML are two text views over the same canonical protocol document.
 
 ## Stages
 

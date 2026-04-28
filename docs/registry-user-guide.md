@@ -2,6 +2,10 @@
 
 This guide describes the current browser registry UI.
 
+For protocol-specific operator and author workflows, see
+[operator-protocol-guide.md](operator-protocol-guide.md) and
+[author-protocol-guide.md](author-protocol-guide.md).
+
 Open the registry URL printed by:
 
 ```bash

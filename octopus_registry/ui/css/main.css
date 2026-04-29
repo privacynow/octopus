@@ -5223,6 +5223,137 @@ select {
     font-size: 0.85rem;
 }
 
+.kit-run-stage-progress {
+    --stage-progress-line: var(--border);
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: var(--space-2);
+    margin: 0;
+    padding: var(--space-1) 0 0;
+}
+
+.kit-run-stage-progress.is-compact {
+    grid-auto-columns: minmax(5.5rem, 1fr);
+    padding: 0;
+    gap: var(--space-1);
+}
+
+.kit-run-stage-progress-node,
+.kit-run-stage-progress-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: var(--space-1-5);
+    padding: var(--space-1-5) var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+    color: var(--text-secondary);
+}
+
+.kit-run-stage-progress-group {
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0;
+}
+
+.kit-run-stage-progress-marker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.35rem;
+    height: 1.35rem;
+    flex: 0 0 auto;
+    border-radius: var(--radius-pill);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 700;
+}
+
+.kit-run-stage-progress-copy {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+}
+
+.kit-run-stage-progress-label,
+.kit-run-stage-progress-state {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.kit-run-stage-progress-label {
+    color: var(--text);
+    font-size: var(--text-sm);
+    font-weight: 600;
+}
+
+.kit-run-stage-progress-state {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0;
+}
+
+.kit-run-stage-progress-node.is-completed .kit-run-stage-progress-marker {
+    background: color-mix(in srgb, var(--success) 20%, transparent);
+    color: var(--success);
+}
+
+.kit-run-stage-progress-node.is-current {
+    border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+    box-shadow: var(--focus-ring);
+}
+
+.kit-run-stage-progress-node.is-current .kit-run-stage-progress-marker {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    color: var(--accent);
+}
+
+.kit-run-stage-progress-node.is-failed,
+.kit-run-stage-progress-node.is-attention {
+    border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+}
+
+.kit-run-stage-progress-node.is-failed .kit-run-stage-progress-marker,
+.kit-run-stage-progress-node.is-attention .kit-run-stage-progress-marker {
+    background: color-mix(in srgb, var(--danger) 20%, transparent);
+    color: var(--danger);
+}
+
+.kit-run-stage-progress-node.is-skipped {
+    opacity: 0.68;
+}
+
+.conversation-linked-run-card {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+}
+
+.conversation-linked-run-card .kit-run-stage-progress {
+    margin: 0 var(--space-2) var(--space-2);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .kit-run-stage-progress-node.is-current .kit-run-stage-progress-marker {
+        animation: kit-run-stage-pulse 1.8s ease-in-out infinite;
+    }
+}
+
+@keyframes kit-run-stage-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+}
+
 /* --- Kit agents widgets (Step 8) ------------------------------------- */
 .kit-agents-list {
     display: flex;

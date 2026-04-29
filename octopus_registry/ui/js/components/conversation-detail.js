@@ -1633,6 +1633,15 @@ function renderConversationDetail(container, params) {
                     const row = document.createElement('div');
                     row.className = 'settings-row';
                     row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(protocolDisplayName(run.protocolId))}</strong><span class="settings-row-sublabel">${UI.esc([protocolRunSummary({ current_stage_key: run.stage, status: run.status }), run.updatedLabel].filter(Boolean).join(' • ') || `run ${run.id.slice(0, 8)}`)}</span></div>`;
+                    const main = row.querySelector('.settings-row-main');
+                    if (main && run.stage) {
+                        main.appendChild(Kit.runStageProgressRail({
+                            stages: [{ stage_key: run.stage, display_name: run.stage }],
+                            currentStageKey: run.stage,
+                            runStatus: run.status,
+                            compact: true,
+                        }));
+                    }
                     const actions = document.createElement('div');
                     actions.className = 'event-card-actions';
                     const openRun = document.createElement('a');

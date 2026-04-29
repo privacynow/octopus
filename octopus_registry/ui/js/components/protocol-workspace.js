@@ -3480,6 +3480,7 @@ function renderProtocolWorkspace(container) {
         block.className = 'kit-selector-editor-field';
         const row = document.createElement('div');
         row.className = 'kit-details-row';
+        let preControlRow = null;
         const valueLabel = document.createElement('label');
         valueLabel.className = 'kit-details-label';
         valueLabel.textContent = label || `Choose ${_selectorValueLabel(normalized)}`;
@@ -3542,23 +3543,59 @@ function renderProtocolWorkspace(container) {
         } else if (catalog.length || shouldRenderSelect) {
             const select = document.createElement('select');
             select.className = 'kit-details-control';
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = placeholderText || `(choose ${_selectorValueLabel(normalized)})`;
-            select.appendChild(placeholder);
-            catalog.forEach((item) => {
+            const searchable = normalized === 'skill' && catalog.length > 8 && !readOnly && !disabled;
+            let searchInput = null;
+            const appendOption = (item) => {
                 const option = document.createElement('option');
                 option.value = String(item.value || '');
                 option.textContent = item.meta ? `${item.label} · ${item.meta}` : item.label;
                 if (String(selectorValue || '') === String(item.value || '')) option.selected = true;
                 select.appendChild(option);
-            });
-            if (allowCustom && selectorValue && !catalog.some((item) => item.value === String(selectorValue || ''))) {
-                const custom = document.createElement('option');
-                custom.value = String(selectorValue || '');
-                custom.textContent = `Custom · ${String(selectorValue || '')}`;
-                custom.selected = true;
-                select.appendChild(custom);
+            };
+            const renderOptions = (filterText = '') => {
+                const filter = String(filterText || '').trim().toLowerCase();
+                select.replaceChildren();
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = placeholderText || `(choose ${_selectorValueLabel(normalized)})`;
+                select.appendChild(placeholder);
+                catalog
+                    .filter((item) => {
+                        const value = String(item.value || '');
+                        if (value === String(selectorValue || '')) return true;
+                        if (!filter) return true;
+                        return [
+                            value,
+                            String(item.label || ''),
+                            String(item.meta || ''),
+                        ].join(' ').toLowerCase().includes(filter);
+                    })
+                    .forEach(appendOption);
+                if (allowCustom && selectorValue && !catalog.some((item) => item.value === String(selectorValue || ''))) {
+                    const custom = document.createElement('option');
+                    custom.value = String(selectorValue || '');
+                    custom.textContent = `Custom · ${String(selectorValue || '')}`;
+                    custom.selected = true;
+                    select.appendChild(custom);
+                }
+                select.value = String(selectorValue || '');
+            };
+            renderOptions('');
+            if (searchable) {
+                const searchRow = document.createElement('div');
+                searchRow.className = 'kit-details-row';
+                const searchLabel = document.createElement('label');
+                searchLabel.className = 'kit-details-label';
+                searchLabel.textContent = 'Search skills';
+                searchRow.appendChild(searchLabel);
+                searchInput = document.createElement('input');
+                searchInput.type = 'search';
+                searchInput.className = 'kit-details-control';
+                searchInput.placeholder = 'Type to filter available skills';
+                searchInput.setAttribute('aria-label', searchLabel.textContent);
+                searchInput.addEventListener('input', () => renderOptions(searchInput.value));
+                searchRow.appendChild(searchInput);
+                preControlRow = searchRow;
             }
             select.disabled = Boolean(readOnly || disabled);
             if (!readOnly) {
@@ -3611,6 +3648,7 @@ function renderProtocolWorkspace(container) {
             block.appendChild(hint);
         }
         block.prepend(row);
+        if (preControlRow) block.prepend(preControlRow);
         return { element: block, catalog, presentation: canRenderPills ? 'pills' : (catalog.length || shouldRenderSelect ? 'select' : 'input') };
     }
 
@@ -6666,11 +6704,24 @@ function renderProtocolRuns(container) {
                 workspace_ref: run.workspace_ref || 'default',
                 root_conversation_id: run.root_conversation_id,
                 notes: run.termination_summary || run.blocked_detail || '',
+                stageProgress: _runStageProgressData(currentRun),
             },
             liveEventText: (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || ''))
                 ? `Live update: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')} · ${lastRunEvent.reason || ''}`
                 : '',
         });
+    }
+
+    function _runStageProgressData(runDetail = currentRun) {
+        const detail = runDetail || {};
+        const run = detail.run || detail || {};
+        return {
+            stages: detail.version?.definition_json?.stages || [],
+            stageExecutions: detail.stage_executions || [],
+            currentStageKey: String(run.current_stage_key || ''),
+            runStatus: String(run.status || ''),
+            issues: currentIssues || [],
+        };
     }
 
     function _currentRunAllowedDecisions() {
@@ -6939,6 +6990,9 @@ function renderProtocolRuns(container) {
         }).map((item) => {
             const runId = _runRecordId(item);
             const issue = issuesByRunId.get(String(runId || '').trim()) || null;
+            const selectedDetail = currentRun && _runRecordId(currentRun.run) === String(runId || '')
+                ? currentRun
+                : null;
             return {
                 id: runId,
                 status: item.status,
@@ -6949,6 +7003,16 @@ function renderProtocolRuns(container) {
                     : (item.status || 'queued'),
                 subtitle: item.problem_statement || item.protocol_run_id,
                 badge: item.protocol_id || '',
+                stageProgress: selectedDetail
+                    ? _runStageProgressData(selectedDetail)
+                    : {
+                        stages: item.current_stage_key
+                            ? [{ stage_key: item.current_stage_key, display_name: item.current_stage_key }]
+                            : [],
+                        currentStageKey: item.current_stage_key || '',
+                        runStatus: item.status || '',
+                        issues: issue ? [issue] : [],
+                    },
                 raw: item,
             };
         });

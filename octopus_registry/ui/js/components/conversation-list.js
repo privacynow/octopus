@@ -359,19 +359,32 @@ function renderConversationList(container) {
 
         const runList = document.createElement('div');
         runList.className = 'task-artifact-list';
-        const runRows = linkedRuns.map((run) => UI.renderListRow({
-            href: `/ui/runs?run_id=${encodeURIComponent(run.protocol_run_id || '')}`,
-            label: [
-                run.protocol_display_name || run.protocol_name || 'Protocol run',
-                run.current_stage_key || '',
-            ].filter(Boolean).join(' · '),
-            sublabel: [
-                run.problem_statement || '',
-                run.protocol_run_id ? `run ${String(run.protocol_run_id).slice(0, 8)}` : '',
-            ].filter(Boolean).join(' · '),
-            badgeText: run.status || '',
-            badgeClass: `badge-${run.status || 'open'}`,
-        }));
+        const runRows = linkedRuns.map((run) => {
+            const wrap = document.createElement('article');
+            wrap.className = 'conversation-linked-run-card';
+            wrap.appendChild(UI.renderListRow({
+                href: `/ui/runs?run_id=${encodeURIComponent(run.protocol_run_id || '')}`,
+                label: [
+                    run.protocol_display_name || run.protocol_name || 'Protocol run',
+                    run.current_stage_key || '',
+                ].filter(Boolean).join(' · '),
+                sublabel: [
+                    run.problem_statement || '',
+                    run.protocol_run_id ? `run ${String(run.protocol_run_id).slice(0, 8)}` : '',
+                ].filter(Boolean).join(' · '),
+                badgeText: run.status || '',
+                badgeClass: `badge-${run.status || 'open'}`,
+            }));
+            if (run.current_stage_key) {
+                wrap.appendChild(Kit.runStageProgressRail({
+                    stages: [{ stage_key: run.current_stage_key, display_name: run.current_stage_key }],
+                    currentStageKey: run.current_stage_key,
+                    runStatus: run.status,
+                    compact: true,
+                }));
+            }
+            return wrap;
+        });
         UI.reconcileChildren(runList, runRows.length ? runRows : [UI.renderEmptyState('No protocol runs linked to this conversation yet.', true)]);
         panel.appendChild(runList);
         return panel;

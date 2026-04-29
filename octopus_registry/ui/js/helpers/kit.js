@@ -2516,6 +2516,12 @@ window.Kit = (() => {
                     sub.textContent = String(run.subtitle);
                     row.appendChild(sub);
                 }
+                if (run.stageProgress) {
+                    row.appendChild(runStageProgressRail({
+                        ...run.stageProgress,
+                        compact: true,
+                    }));
+                }
 
                 if (typeof onSelect === 'function') {
                     row.addEventListener('click', () => onSelect({
@@ -2573,7 +2579,152 @@ window.Kit = (() => {
             live.textContent = String(liveEventText);
             root.appendChild(live);
         }
+        if (run.stageProgress) {
+            root.appendChild(runStageProgressRail(run.stageProgress));
+        }
 
+        return root;
+    }
+
+    function _runStageKey(stage = {}) {
+        return String(stage.stage_key || stage.key || stage.id || '').trim();
+    }
+
+    function _runStageLabel(stage = {}) {
+        return String(stage.display_name || stage.label || stage.stage_key || stage.key || 'Stage').trim();
+    }
+
+    function _latestStageExecutions(stageExecutions = []) {
+        const byStage = new Map();
+        (Array.isArray(stageExecutions) ? stageExecutions : []).forEach((item) => {
+            const key = String(item?.stage_key || '').trim();
+            if (!key) return;
+            const previous = byStage.get(key);
+            const previousAttempt = Number(previous?.attempt || 0);
+            const nextAttempt = Number(item?.attempt || 0);
+            const previousTime = Date.parse(String(previous?.updated_at || previous?.completed_at || previous?.started_at || '')) || 0;
+            const nextTime = Date.parse(String(item?.updated_at || item?.completed_at || item?.started_at || '')) || 0;
+            if (!previous || nextAttempt > previousAttempt || (nextAttempt === previousAttempt && nextTime >= previousTime)) {
+                byStage.set(key, item);
+            }
+        });
+        return byStage;
+    }
+
+    function _compressedStageProgressItems(items, currentIndex, maxVisible = 5) {
+        if (items.length <= maxVisible) return items.map((item) => ({ kind: 'stage', item }));
+        const safeIndex = Math.min(Math.max(Number(currentIndex || 0), 0), items.length - 1);
+        const firstVisible = Math.max(0, safeIndex - 1);
+        const lastVisible = Math.min(items.length - 1, safeIndex + 1);
+        const result = [];
+        if (firstVisible > 0) result.push({ kind: 'group', count: firstVisible, label: `${firstVisible} earlier` });
+        for (let index = firstVisible; index <= lastVisible; index += 1) {
+            result.push({ kind: 'stage', item: items[index] });
+        }
+        const remaining = items.length - lastVisible - 1;
+        if (remaining > 0) result.push({ kind: 'group', count: remaining, label: `${remaining} later` });
+        return result;
+    }
+
+    function runStageProgressRail({
+        stages = [],
+        stageExecutions = [],
+        currentStageKey = '',
+        runStatus = '',
+        issues = [],
+        compact = false,
+    } = {}) {
+        const executionByStage = _latestStageExecutions(stageExecutions);
+        const issueByStage = new Map();
+        (Array.isArray(issues) ? issues : []).forEach((issue) => {
+            const key = String(issue?.stage_key || '').trim();
+            if (key && !issueByStage.has(key)) issueByStage.set(key, issue);
+        });
+        const knownStages = (Array.isArray(stages) ? stages : [])
+            .map((stage) => ({ ...stage, stage_key: _runStageKey(stage) }))
+            .filter((stage) => stage.stage_key);
+        if (!knownStages.length) {
+            Array.from(executionByStage.keys()).forEach((stageKey) => {
+                knownStages.push({ stage_key: stageKey, display_name: stageKey });
+            });
+        }
+        if (!knownStages.length && currentStageKey) {
+            knownStages.push({ stage_key: String(currentStageKey || ''), display_name: String(currentStageKey || '') });
+        }
+
+        const normalizedRunStatus = String(runStatus || '').trim().toLowerCase();
+        const activeRun = !['completed', 'failed', 'cancelled'].includes(normalizedRunStatus);
+        let currentIndex = knownStages.findIndex((stage) => stage.stage_key === String(currentStageKey || ''));
+        if (currentIndex < 0) {
+            const executionKeys = Array.from(executionByStage.keys());
+            currentIndex = knownStages.findIndex((stage) => executionKeys.includes(stage.stage_key));
+        }
+        if (currentIndex < 0) currentIndex = 0;
+
+        const items = knownStages.map((stage, index) => {
+            const execution = executionByStage.get(stage.stage_key) || null;
+            const executionStatus = String(execution?.status || '').trim().toLowerCase();
+            const issue = issueByStage.get(stage.stage_key) || null;
+            let state = 'waiting';
+            if (issue) {
+                state = 'attention';
+            } else if (executionStatus === 'failed' || executionStatus === 'blocked') {
+                state = 'failed';
+            } else if (stage.stage_key === String(currentStageKey || '') && activeRun) {
+                state = 'current';
+            } else if (executionStatus === 'completed' || execution?.completed_at) {
+                state = 'completed';
+            } else if (executionStatus === 'cancelled' || (index < currentIndex && !execution)) {
+                state = 'skipped';
+            }
+            return {
+                index,
+                key: stage.stage_key,
+                label: _runStageLabel(stage),
+                state,
+                status: executionStatus || (stage.stage_key === String(currentStageKey || '') ? normalizedRunStatus : ''),
+            };
+        });
+
+        const root = document.createElement('span');
+        root.className = `kit-run-stage-progress${compact ? ' is-compact' : ''}`;
+        root.setAttribute('aria-label', 'Run stage progress');
+        root.setAttribute('role', 'list');
+        _compressedStageProgressItems(items, currentIndex).forEach((entry) => {
+            const li = document.createElement('span');
+            li.setAttribute('role', 'listitem');
+            if (entry.kind === 'group') {
+                li.className = 'kit-run-stage-progress-group';
+                li.textContent = entry.label;
+                root.appendChild(li);
+                return;
+            }
+            const item = entry.item;
+            li.className = `kit-run-stage-progress-node is-${item.state}`;
+            li.dataset.stageKey = item.key;
+            li.dataset.state = item.state;
+            const marker = document.createElement('span');
+            marker.className = 'kit-run-stage-progress-marker';
+            marker.textContent = String(item.index + 1);
+            li.appendChild(marker);
+            const copy = document.createElement('span');
+            copy.className = 'kit-run-stage-progress-copy';
+            const label = document.createElement('span');
+            label.className = 'kit-run-stage-progress-label';
+            label.textContent = item.label;
+            copy.appendChild(label);
+            const state = document.createElement('span');
+            state.className = 'kit-run-stage-progress-state';
+            state.textContent = item.state === 'current'
+                ? 'running'
+                : item.state === 'attention'
+                    ? 'needs attention'
+                    : item.state;
+            copy.appendChild(state);
+            li.appendChild(copy);
+            li.setAttribute('aria-label', `${item.index + 1}. ${item.label}: ${state.textContent}`);
+            root.appendChild(li);
+        });
         return root;
     }
 
@@ -3000,6 +3151,7 @@ window.Kit = (() => {
         rehearsalPanel,
         runsList,
         runSummary,
+        runStageProgressRail,
         agentsList,
         agentSummary,
         selectorResolutionPreview,

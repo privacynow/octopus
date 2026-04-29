@@ -243,6 +243,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
+    assert "stageProgress: _runStageProgressData(currentRun)" in workspace
+    assert "stageProgress: selectedDetail" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
@@ -1085,6 +1087,9 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "'protocol.action.run': 'Run protocol'" in kit
     assert "primaryActions = ['validate', 'publish', 'run']" in kit
     assert "function protocolRunLaunchForm(" in kit
+    assert "function runStageProgressRail(" in kit
+    assert "runStageProgressRail," in kit
+    assert "_compressedStageProgressItems(items, currentIndex)" in kit
     assert "fields = null" in kit
     assert "field.default_value" in kit
     assert "function protocolRunLaunchFields()" in kit
@@ -1101,6 +1106,19 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "fields: _protocolRunLaunchFields()" in workspace
     assert "includeWorkspace: true" in workspace
     assert "Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`)" in workspace
+
+
+def test_protocol_assignment_keeps_skill_selection_scoped_and_searchable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    assert "{ value: 'skill', label: 'Existing skill' }" in workspace
+    assert "{ value: 'new_skill', label: 'New skill needed' }" in workspace
+    assert "searchLabel.textContent = 'Search skills';" in workspace
+    assert "searchInput.addEventListener('input', () => renderOptions(searchInput.value));" in workspace
+    assert "Use this when the workflow needs a skill that is not available yet." in workspace
 
 
 def test_artifact_preview_actions_have_link_fallbacks() -> None:

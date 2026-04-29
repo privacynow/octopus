@@ -7089,7 +7089,8 @@ function renderProtocolRuns(container) {
                     stageOptions,
                     (value) => {
                         activeRunStageExecutionId = String(value || '');
-                        renderSelectedStageEvidence(activeRunStageExecutionId);
+                        UI.clearMemoizedRender(contentEl);
+                        renderRunsRoute();
                     },
                     { label: 'Run stage evidence', value: activeRunStageExecutionId },
                 );
@@ -7099,17 +7100,14 @@ function renderProtocolRuns(container) {
                 stageToolbar.appendChild(stageControl.element);
                 sectionPanel.appendChild(stageToolbar);
 
+                const selectedStageIndex = Math.max(
+                    stageRows.findIndex((item, index) => stageValueFor(item, index) === String(activeRunStageExecutionId || '')),
+                    0,
+                );
+                const selectedStage = stageRows[selectedStageIndex] || stageRows[0];
                 const stageList = document.createElement('div');
                 stageList.className = 'protocol-lineage-list';
-                function renderSelectedStageEvidence(value) {
-                    const selectedStageIndex = Math.max(
-                        stageRows.findIndex((item, index) => stageValueFor(item, index) === String(value || '')),
-                        0,
-                    );
-                    const selectedStage = stageRows[selectedStageIndex] || stageRows[0];
-                    UI.reconcileChildren(stageList, [buildStageEvidenceCard(selectedStage, selectedStageIndex)]);
-                }
-                renderSelectedStageEvidence(activeRunStageExecutionId);
+                UI.reconcileChildren(stageList, [buildStageEvidenceCard(selectedStage, selectedStageIndex)]);
                 sectionPanel.appendChild(stageList);
             } else {
                 sectionPanel.appendChild(UI.renderEmptyState('No stage executions recorded for this run yet.', true));
@@ -7150,7 +7148,8 @@ function renderProtocolRuns(container) {
                     })),
                     (value) => {
                         activeRunArtifactStageExecutionId = String(value || '');
-                        renderSelectedArtifactGroup(activeRunArtifactStageExecutionId);
+                        UI.clearMemoizedRender(contentEl);
+                        renderRunsRoute();
                     },
                     { label: 'Run artifact stage evidence', value: activeRunArtifactStageExecutionId },
                 );
@@ -7160,25 +7159,16 @@ function renderProtocolRuns(container) {
                 artifactStageToolbar.appendChild(artifactStageControl.element);
                 sectionPanel.appendChild(artifactStageToolbar);
 
-                const artifactStageBody = document.createElement('div');
-                artifactStageBody.className = 'studio-stack';
-                function renderSelectedArtifactGroup(value) {
-                    const selectedGroup = artifactStageGroups.find((item) =>
-                        item.value === String(value || '')) || artifactStageGroups[0];
-                    const groupPanel = document.createElement('div');
-                    groupPanel.className = 'studio-stack';
-                    appendSectionTitle(
-                        groupPanel,
-                        `${selectedGroup.index + 1}. ${selectedGroup.stageDef.display_name || selectedGroup.stage.stage_key || 'Stage'}`,
-                        `${selectedGroup.producedArtifacts.length} output${selectedGroup.producedArtifacts.length === 1 ? '' : 's'} produced by this stage.`,
-                    );
-                    groupPanel.appendChild(createArtifactList(selectedGroup.producedArtifacts, {
-                        relationshipFor: () => 'Produced by this stage',
-                    }));
-                    UI.reconcileChildren(artifactStageBody, [groupPanel]);
-                }
-                renderSelectedArtifactGroup(activeRunArtifactStageExecutionId);
-                sectionPanel.appendChild(artifactStageBody);
+                const selectedGroup = artifactStageGroups.find((item) =>
+                    item.value === String(activeRunArtifactStageExecutionId || '')) || artifactStageGroups[0];
+                appendSectionTitle(
+                    sectionPanel,
+                    `${selectedGroup.index + 1}. ${selectedGroup.stageDef.display_name || selectedGroup.stage.stage_key || 'Stage'}`,
+                    `${selectedGroup.producedArtifacts.length} output${selectedGroup.producedArtifacts.length === 1 ? '' : 's'} produced by this stage.`,
+                );
+                sectionPanel.appendChild(createArtifactList(selectedGroup.producedArtifacts, {
+                    relationshipFor: () => 'Produced by this stage',
+                }));
             } else {
                 sectionPanel.appendChild(UI.renderEmptyState('No produced outputs recorded yet.', true));
             }

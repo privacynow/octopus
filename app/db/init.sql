@@ -331,6 +331,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.conversations (
 ALTER TABLE agent_registry.conversations
     ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'human',
     ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_registry.conversations
+    ALTER COLUMN hidden_from_default_views SET DEFAULT FALSE;
 UPDATE agent_registry.conversations
 SET
     source_kind = CASE
@@ -340,11 +342,13 @@ SET
         WHEN lower(title) LIKE '%test%' OR lower(external_conversation_ref) LIKE '%test%' THEN 'test'
         ELSE source_kind
     END,
-    hidden_from_default_views = hidden_from_default_views
+    hidden_from_default_views = COALESCE(hidden_from_default_views, FALSE)
         OR lower(title) LIKE '%rehearsal%'
         OR lower(external_conversation_ref) LIKE '%rehearsal%'
         OR lower(title) LIKE '%test%'
         OR lower(external_conversation_ref) LIKE '%test%';
+ALTER TABLE agent_registry.conversations
+    ALTER COLUMN hidden_from_default_views SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_registry_conversations_updated
     ON agent_registry.conversations (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_registry_conversations_default_updated
@@ -374,18 +378,22 @@ CREATE TABLE IF NOT EXISTS agent_registry.routed_tasks (
 ALTER TABLE agent_registry.routed_tasks
     ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'delegation',
     ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_registry.routed_tasks
+    ALTER COLUMN hidden_from_default_views SET DEFAULT FALSE;
 UPDATE agent_registry.routed_tasks
 SET
     source_kind = CASE
-        WHEN (request_json #>> '{context,protocol_run_id}') <> '' THEN 'protocol_stage'
+        WHEN COALESCE(request_json #>> '{context,protocol_run_id}', '') <> '' THEN 'protocol_stage'
         WHEN lower(title) LIKE '%rehearsal%' THEN 'rehearsal'
         WHEN lower(title) LIKE '%test%' THEN 'test'
         ELSE source_kind
     END,
-    hidden_from_default_views = hidden_from_default_views
-        OR (request_json #>> '{context,protocol_run_id}') <> ''
+    hidden_from_default_views = COALESCE(hidden_from_default_views, FALSE)
+        OR COALESCE(request_json #>> '{context,protocol_run_id}', '') <> ''
         OR lower(title) LIKE '%rehearsal%'
         OR lower(title) LIKE '%test%';
+ALTER TABLE agent_registry.routed_tasks
+    ALTER COLUMN hidden_from_default_views SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_updated
     ON agent_registry.routed_tasks (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_default_updated
@@ -507,6 +515,8 @@ ALTER TABLE agent_registry.protocol_runs
     ADD COLUMN IF NOT EXISTS retention_until TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS last_transition_at TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_registry.protocol_runs
+    ALTER COLUMN hidden_from_default_views SET DEFAULT FALSE;
 UPDATE agent_registry.protocol_runs
 SET
     source_kind = CASE
@@ -514,9 +524,11 @@ SET
         WHEN lower(problem_statement) LIKE '%test%' THEN 'test'
         ELSE source_kind
     END,
-    hidden_from_default_views = hidden_from_default_views
+    hidden_from_default_views = COALESCE(hidden_from_default_views, FALSE)
         OR is_rehearsal
         OR lower(problem_statement) LIKE '%test%';
+ALTER TABLE agent_registry.protocol_runs
+    ALTER COLUMN hidden_from_default_views SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_updated
     ON agent_registry.protocol_runs (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_status

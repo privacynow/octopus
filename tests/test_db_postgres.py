@@ -58,6 +58,87 @@ def test_run_init_is_noop_on_current_db(postgres_truncated):
     assert errors == []
 
 
+def test_run_init_backfills_nullable_default_visibility_columns(postgres_truncated):
+    """DB init repairs current deployments that have nullable default-visibility flags."""
+    from app.db.postgres import get_connection
+
+    touched_tables = ("conversations", "routed_tasks", "protocol_runs")
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            for table in touched_tables:
+                cur.execute(
+                    f"ALTER TABLE agent_registry.{table} "
+                    "ALTER COLUMN hidden_from_default_views DROP NOT NULL"
+                )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.conversations (
+                    conversation_id, target_agent_id, hidden_from_default_views, title, created_at, updated_at
+                )
+                VALUES ('legacy-null-conversation', 'agent-m1', NULL, 'Legacy conversation', '2026-04-29T00:00:00Z', '2026-04-29T00:00:00Z')
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.routed_tasks (
+                    routed_task_id, parent_conversation_id, origin_agent_id, target_agent_id,
+                    hidden_from_default_views, title, request_json, created_at, updated_at
+                )
+                VALUES (
+                    'legacy-null-task', 'legacy-null-conversation', 'agent-m1', 'agent-m2',
+                    NULL, 'Legacy routed task', '{}'::jsonb, '2026-04-29T00:00:00Z', '2026-04-29T00:00:00Z'
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.protocol_runs (
+                    protocol_run_id, protocol_id, protocol_definition_version_id,
+                    hidden_from_default_views, created_at, updated_at
+                )
+                VALUES (
+                    'legacy-null-run', 'protocol-demo', 'version-demo',
+                    NULL, '2026-04-29T00:00:00Z', '2026-04-29T00:00:00Z'
+                )
+                """
+            )
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+
+        with conn.cursor() as cur:
+            for table, key_column, key_value in (
+                ("conversations", "conversation_id", "legacy-null-conversation"),
+                ("routed_tasks", "routed_task_id", "legacy-null-task"),
+                ("protocol_runs", "protocol_run_id", "legacy-null-run"),
+            ):
+                cur.execute(
+                    f"""
+                    SELECT hidden_from_default_views
+                    FROM agent_registry.{table}
+                    WHERE {key_column} = %s
+                    """,
+                    (key_value,),
+                )
+                assert cur.fetchone()[0] is False
+            cur.execute(
+                """
+                SELECT table_name, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'agent_registry'
+                  AND table_name = ANY(%s)
+                  AND column_name = 'hidden_from_default_views'
+                """,
+                (list(touched_tables),),
+            )
+            constraints = {row[0]: (row[1], row[2] or "") for row in cur.fetchall()}
+
+    for table in touched_tables:
+        assert constraints[table][0] == "NO"
+        assert constraints[table][1].lower() == "false"
+
+
 def test_protocol_responsiveness_indexes_exist(postgres_truncated):
     """Run and issue list filters have matching indexes for UI-scale history."""
     from app.db.postgres import get_connection

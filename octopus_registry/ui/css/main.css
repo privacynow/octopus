@@ -3771,6 +3771,10 @@ select {
     backdrop-filter: blur(4px);
 }
 
+[data-theme="dark"] .kit-protocol-stage-focus-head {
+    background: linear-gradient(180deg, rgba(18, 20, 23, 0.96) 0%, rgba(18, 20, 23, 0.84) 78%, rgba(18, 20, 23, 0) 100%);
+}
+
 .kit-protocol-segment-step-actions,
 .kit-protocol-segment-head-actions {
     display: flex;
@@ -4006,6 +4010,31 @@ select {
     background: rgba(255, 255, 255, 0.96);
 }
 
+[data-theme="dark"] .kit-protocol-segment-step {
+    border-color: rgba(244, 236, 228, 0.12);
+    background: rgba(255, 255, 255, 0.045);
+    color: var(--text);
+}
+
+[data-theme="dark"] .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step,
+[data-theme="dark"] .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step {
+    background: rgba(255, 255, 255, 0.035);
+    border-color: rgba(244, 236, 228, 0.08);
+}
+
+[data-theme="dark"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:hover,
+[data-theme="dark"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(221, 160, 126, 0.28);
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24);
+}
+
+[data-theme="dark"] .kit-protocol-segment-step.is-selected {
+    border-color: rgba(221, 160, 126, 0.38);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+    background: linear-gradient(180deg, rgba(221, 160, 126, 0.13), rgba(255, 255, 255, 0.055));
+}
+
 .kit-protocol-segment-entry.is-active .kit-protocol-segment-step {
     gap: var(--space-2);
     padding: 1.3rem 1.38rem;
@@ -4047,6 +4076,14 @@ select {
 
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step-meta {
     color: rgba(79, 68, 63, 0.62);
+}
+
+[data-theme="dark"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step-title {
+    color: var(--text-secondary);
+}
+
+[data-theme="dark"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step-meta {
+    color: var(--text-muted);
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-step-meta {

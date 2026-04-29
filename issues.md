@@ -783,6 +783,7 @@ For any handoff claim:
 | H12 | Running protocol stages did not explain liveness/current state to the user. | Implemented run Overview liveness guidance with current stage, elapsed time, event update, output counts, and completed-run estimate when history exists; verify in real Safari during a live run. |
 | H13 | Workspace reset required container/database intervention outside the product. | Implemented Dashboard workspace-data cleanup guarded by Registry UI password and `CLEAN` confirmation; verify it preserves agents/skills/guidance while removing workspace work records. |
 | H14 | Run list could advance to a newer stage while the expanded run detail still showed the previous stage. | Runs now queue a selected-detail refresh whenever the list row has a newer status, stage, version, or timestamp; verify live run list, Overview, Stages, and Artifacts agree in real Safari. |
+| H15 | Redeploying while a protocol stage task is running can leave the Registry task/run shown as running even when no provider command remains active in the bot container. | SDK routed-work recovery now reports interrupted routed tasks as failed results instead of leaving them hidden in pending recovery; redeploy and verify the UI shows terminal retryable state. |
 
 ## Non-Goals For Handoff
 

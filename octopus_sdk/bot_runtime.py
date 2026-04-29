@@ -41,6 +41,7 @@ from octopus_sdk.runtime.skills import (
 from octopus_sdk.registry.models import (
     DiscoveredAgentRef,
     ExecutionStateRecord,
+    RoutedTaskResult,
     RoutedTaskUpdate,
     extract_leading_requested_skills,
     extract_target_selector_message,
@@ -830,6 +831,39 @@ class BotRuntime:
             authority_ref=authority_ref,
         )
 
+    async def _report_interrupted_routed_task_recovery(
+        self,
+        *,
+        routed_task_id: str,
+        authority_ref: str,
+        event: InboundMessage,
+        item: WorkItemRecord,
+    ) -> None:
+        if self.control_plane is None or not routed_task_id or not authority_ref:
+            return
+        summary = "Routed work was interrupted and needs operator retry."
+        full_text = (
+            "This routed task was interrupted and recovered after the worker "
+            "restarted before the provider result was durably reported. The "
+            "runtime marked the task failed instead of leaving it indefinitely "
+            "running. Retry the run or stage after checking any partial local files."
+        )
+        await self.control_plane.task_routing.report_routed_task_result(
+            routed_task_id=routed_task_id,
+            authority_ref=authority_ref,
+            result=RoutedTaskResult(
+                routed_task_id=routed_task_id,
+                status="failed",
+                transition_id=uuid4().hex,
+                summary=summary,
+                full_text=full_text,
+                artifacts=[],
+                follow_up_questions=(),
+                provider=self.provider.name,
+                working_dir=str(event.working_dir_hint or ""),
+            ),
+        )
+
     def _build_transport_identity(
         self,
         *,
@@ -1573,6 +1607,14 @@ class BotRuntime:
         authority_ref = str(getattr(event, "authority_ref", "") or "")
 
         if item.dispatch_mode == "recovery":
+            if routed_task_id:
+                await self._report_interrupted_routed_task_recovery(
+                    routed_task_id=routed_task_id,
+                    authority_ref=authority_ref,
+                    event=event,
+                    item=item,
+                )
+                return
             transport_identity = self._build_transport_identity(
                 event=event,
                 conversation_ref=conversation_ref,

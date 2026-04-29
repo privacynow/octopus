@@ -2252,9 +2252,7 @@ function renderProtocolWorkspace(container) {
     function _commitPendingStageField(_target, key, value) {
         if (key === 'display_name') {
             pendingStage.display_name = String(value || '');
-            if (!String(pendingStage.stage_key || '').trim()) {
-                pendingStage.stage_key = _slugSuggestion(pendingStage.display_name);
-            }
+            pendingStage.stage_key = _slugSuggestion(pendingStage.display_name);
         } else if (key === 'stage_key') {
             pendingStage.stage_key = _slugSuggestion(value);
         } else if (key === 'stage_kind') {
@@ -2569,7 +2567,7 @@ function renderProtocolWorkspace(container) {
         const stageKey = _nextAvailableKey(
             doc.stages || [],
             'stage_key',
-            String(pendingStage.stage_key || displayName || 'step'),
+            String(_slugSuggestion(displayName) || pendingStage.stage_key || 'step'),
         );
         const nextStage = _normalizeStageWriteAccess({
             stage_key: stageKey,

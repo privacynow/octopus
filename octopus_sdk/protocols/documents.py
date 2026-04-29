@@ -339,7 +339,7 @@ def _draft_validation_issues(
     for index, stage in enumerate(stages):
         stage_key = str(stage.get("stage_key", "") or "").strip()
         participant_key = str(stage.get("participant_key", "") or "").strip()
-        stage_label = stage_key or f"stage {index + 1}"
+        stage_label = str(stage.get("display_name", "") or "").strip() or stage_key or f"stage {index + 1}"
         source_stage = source_stages[index] if index < len(source_stages) else stage
         has_raw_selector, selector_kind, selector_value = _source_selector_parts(source_stage)
         effective_selector = _stage_selector_from_source(source_stage, participant_selectors=participant_selector_sources)

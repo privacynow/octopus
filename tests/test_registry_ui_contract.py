@@ -186,6 +186,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorCatalogEntries(" in workspace
     assert "_documentSelectorValues(" in workspace
     assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
+    assert "pendingStage.stage_key = _slugSuggestion(pendingStage.display_name);" in workspace
+    assert "String(_slugSuggestion(displayName) || pendingStage.stage_key || 'step')" in workspace
     assert "_selectorEditor(" in workspace
     assert "_currentAuthoringSurface()" in workspace
     assert "operator_surface_available" in workspace

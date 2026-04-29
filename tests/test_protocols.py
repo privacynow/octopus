@@ -379,13 +379,16 @@ def test_canonical_protocol_document_migrates_participant_selector_to_stage_sele
 
 def test_validate_protocol_document_requires_assignment_rule_for_stages() -> None:
     invalid = protocol_document()
+    invalid["stages"][0]["display_name"] = "Planning stage"
     invalid["stages"][0].pop("selector", None)
 
     result = validate_protocol_document(invalid)
 
     assert result.ok is False
     assert result.issues
-    assert any(item.code == "stage.selector_required" for item in result.issues)
+    issue = next(item for item in result.issues if item.code == "stage.selector_required")
+    assert "Planning stage" in issue.message
+    assert "planning" not in issue.message
 
 
 def test_validate_protocol_document_warns_when_legacy_required_skills_has_multiple_values() -> None:

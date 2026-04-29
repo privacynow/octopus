@@ -696,6 +696,30 @@ def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) ->
     )
 
 
+def _render_run_constraints(constraints: object) -> str:
+    data = _coerce_mapping(constraints)
+    if not data:
+        return ""
+    labels = {
+        "source_context": "Files or data context",
+        "relationship_context": "Keys and relationships",
+        "desired_outputs": "Expected outputs",
+        "privacy_constraints": "Privacy or execution constraints",
+    }
+    lines: list[str] = []
+    for key, value in data.items():
+        if value in (None, "", [], {}):
+            continue
+        label = labels.get(str(key), str(key).replace("_", " ").strip().title())
+        if isinstance(value, str):
+            text = value.strip()
+        else:
+            text = json.dumps(value, indent=2, sort_keys=True)
+        if text:
+            lines.append(f"{label}:\n{text}")
+    return "\n\n".join(lines)
+
+
 def render_protocol_stage_prompt(
     *,
     document: ProtocolDefinitionDocumentRecord,
@@ -731,6 +755,9 @@ def render_protocol_stage_prompt(
     ]
     if run.workspace_ref:
         lines.append(f"Workspace/project: {run.workspace_ref}")
+    rendered_constraints = _render_run_constraints(run.constraints_json)
+    if rendered_constraints:
+        lines.append("Run context and constraints:\n" + rendered_constraints)
     if artifact_lines:
         lines.append("Artifacts for this stage:\n" + "\n".join(artifact_lines))
     if participant.instructions:

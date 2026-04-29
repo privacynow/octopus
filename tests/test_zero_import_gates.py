@@ -1498,6 +1498,15 @@ def test_registry_delivery_transport_is_the_only_live_owner_of_agent_runtime_lif
         assert "AgentRuntime" not in text, f"live AgentRuntime ownership leaked into {path}"
 
 
+def test_registry_delivery_starts_control_processor_with_bus_contract() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    delivery_path = repo_root / "app" / "channels" / "registry" / "delivery_transport.py"
+    text = delivery_path.read_text()
+    assert "reconcile_orphans(allowed_admin_targets=self._directory.all_pairs())" in text
+    assert "reconcile_orphans(allowed_pairs=" not in text
+    assert "self._processor_runner.run(stop_event=stop_event)" in text
+
+
 def test_registry_delivery_helpers_are_confined_to_registry_delivery_path() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     app_root = repo_root / "app"

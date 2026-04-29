@@ -78,6 +78,15 @@ def test_control_plane_command_uses_interface_operation_and_implementation_terms
     assert "\n    authority_ref:" not in model
 
 
+def test_control_plane_schema_removes_obsolete_command_columns_after_backfill() -> None:
+    schema = _read("app/db/init.sql")
+    backfill = schema.index("UPDATE bot_runtime.control_plane_commands")
+    cleanup = schema.index("DROP COLUMN IF EXISTS capability")
+    assert backfill < cleanup
+    assert "DROP COLUMN IF EXISTS operation" in schema
+    assert "DROP COLUMN IF EXISTS authority_ref" in schema
+
+
 def test_agent_status_uses_transport_implementations_and_admin_operations() -> None:
     models = _read("octopus_sdk/registry/models.py")
     assert "transport_implementations" in models

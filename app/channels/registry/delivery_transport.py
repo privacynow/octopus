@@ -767,7 +767,7 @@ class RegistryDeliveryTransport(TransportImplementation):
                 await self.stop()
             finally:
                 raise startup_errors[0]
-        await self._bus.reconcile_orphans(allowed_pairs=self._directory.all_pairs())
+        await self._bus.reconcile_orphans(allowed_admin_targets=self._directory.all_pairs())
         self._processor_task = asyncio.create_task(
             self._processor_runner.run(stop_event=stop_event)
         )

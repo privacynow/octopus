@@ -39,6 +39,7 @@ window.Kit = (() => {
         // Protocol — actions
         'protocol.action.validate': 'Validate',
         'protocol.action.publish': 'Publish',
+        'protocol.action.run': 'Run protocol',
         'protocol.action.archive': 'Archive',
         'protocol.action.discard': 'Delete draft',
         'protocol.action.rehearse': 'Rehearse',
@@ -307,6 +308,123 @@ window.Kit = (() => {
         },
     };
 
+    const PROTOCOL_RUN_LAUNCH_FIELDS = [
+        {
+            key: 'problem_statement',
+            label: 'What should this run accomplish?',
+            help: 'Concrete goal for the run. This is visible to assigned agents.',
+            placeholder: 'Build a self-contained manufacturing analytics app that processes local CSV files in the browser.',
+            rows: 4,
+            required: true,
+        },
+        {
+            key: 'source_context',
+            label: 'Files or data context',
+            help: 'Describe local files, tables, repositories, or source material. Do not paste private rows unless this run explicitly allows it.',
+            placeholder: 'CSV files in ./data: panels.csv, cells.csv, panel_cells.csv, test_results.csv.',
+            rows: 3,
+        },
+        {
+            key: 'relationship_context',
+            label: 'Keys and relationships',
+            help: 'List primary keys, foreign keys, repo paths, or other relationships the workflow should use.',
+            placeholder: 'panels.panel_id -> test_results.panel_id; cells.cell_id -> panel_cells.cell_id.',
+            rows: 3,
+        },
+        {
+            key: 'desired_outputs',
+            label: 'Expected outputs',
+            help: 'Name the scripts, documents, reports, apps, charts, or other artifacts this run should produce.',
+            placeholder: 'Self-contained index.html, findings report, summary CSV, and downloadable analysis output.',
+            rows: 3,
+        },
+        {
+            key: 'privacy_constraints',
+            label: 'Privacy or execution constraints',
+            help: 'State anything that must stay local or must not be shown to the model provider.',
+            placeholder: 'Do not upload raw CSV rows; use schemas, aggregates, and local scripts.',
+            rows: 3,
+            defaultValue: 'Do not include raw private data rows in model-visible context. Generate tools that process private data locally when needed.',
+        },
+    ];
+
+    function protocolRunLaunchFields() {
+        return PROTOCOL_RUN_LAUNCH_FIELDS.map((field) => ({ ...field }));
+    }
+
+    function protocolRunLaunchForm({
+        values = {},
+        includeWorkspace = true,
+        onInput = null,
+    } = {}) {
+        const form = document.createElement('div');
+        form.className = 'conversation-management-form protocol-run-launch-form';
+        const controls = new Map();
+        let focusTarget = null;
+
+        function appendControl(field, control) {
+            const group = document.createElement('label');
+            group.className = 'kit-details-field';
+            const labelEl = document.createElement('span');
+            labelEl.className = 'kit-details-label';
+            labelEl.textContent = field.label;
+            group.appendChild(labelEl);
+            control.className = 'input';
+            control.dataset.runInputKey = field.key;
+            control.required = Boolean(field.required);
+            control.setAttribute('aria-label', field.label);
+            control.placeholder = field.placeholder || '';
+            const current = values[field.key] !== undefined
+                ? values[field.key]
+                : field.defaultValue !== undefined
+                    ? field.defaultValue
+                    : '';
+            control.value = String(current || '');
+            control.addEventListener('input', () => {
+                if (typeof onInput === 'function') onInput(field.key, control.value);
+            });
+            group.appendChild(control);
+            if (field.help) {
+                const helpEl = document.createElement('span');
+                helpEl.className = 'kit-details-help';
+                helpEl.textContent = field.help;
+                group.appendChild(helpEl);
+            }
+            form.appendChild(group);
+            controls.set(field.key, control);
+            if (!focusTarget) focusTarget = control;
+        }
+
+        if (includeWorkspace) {
+            const workspace = document.createElement('input');
+            workspace.type = 'text';
+            appendControl({
+                key: 'workspace_ref',
+                label: 'Workspace',
+                help: 'Optional workspace/project reference for files and generated artifacts.',
+                placeholder: 'default',
+            }, workspace);
+        }
+
+        protocolRunLaunchFields().forEach((field) => {
+            const textarea = document.createElement('textarea');
+            textarea.rows = Number(field.rows || 3);
+            appendControl(field, textarea);
+        });
+
+        return {
+            element: form,
+            focusTarget,
+            readValues: () => {
+                const result = {};
+                controls.forEach((control, key) => {
+                    result[key] = String(control.value || '').trim();
+                });
+                return result;
+            },
+        };
+    }
+
     // -----------------------------------------------------------------------
     // Draft-state chip
     //
@@ -362,7 +480,7 @@ window.Kit = (() => {
         onTitleCommit = null,
         onSlugCommit = null,
         compact = false,
-        primaryActions = ['validate', 'publish', 'rehearse'],
+        primaryActions = ['validate', 'publish', 'run'],
         secondaryActions = ['archive', 'discard'],
     } = {}) {
         const header = document.createElement('header');
@@ -371,6 +489,7 @@ window.Kit = (() => {
         const availableActions = [
             permissions.canValidate !== false ? 'validate' : '',
             permissions.canPublish !== false ? 'publish' : '',
+            permissions.canRun !== false ? 'run' : '',
             permissions.canRehearse !== false ? 'rehearse' : '',
             permissions.canArchive !== false ? 'archive' : '',
             permissions.canDiscard !== false ? 'discard' : '',
@@ -413,6 +532,7 @@ window.Kit = (() => {
         const buttonSpec = [
             { key: 'validate', tone: '', permissionKey: 'canValidate' },
             { key: 'publish', tone: 'btn-primary', permissionKey: 'canPublish' },
+            { key: 'run', tone: 'btn-primary', permissionKey: 'canRun' },
             { key: 'rehearse', tone: '', permissionKey: 'canRehearse' },
             { key: 'archive', tone: 'btn-secondary', permissionKey: 'canArchive' },
             { key: 'discard', tone: 'btn-danger', permissionKey: 'canDiscard' },
@@ -2840,6 +2960,8 @@ window.Kit = (() => {
         dict,
         draftStateChip,
         lifecycleHeader,
+        protocolRunLaunchFields,
+        protocolRunLaunchForm,
         validationSurface,
         detailsPanel,
         authoredCatalog,

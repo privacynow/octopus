@@ -1066,6 +1066,24 @@ _OBSERVATION_METHODS = (
     "list_run_timeline",
     "export_run",
 )
+_AUTHORING_METHODS = (
+    "get_protocol_authoring_options",
+    "list_protocol_templates",
+    "get_protocol_template",
+    "get_protocol",
+    "get_protocol_version",
+    "save_protocol",
+    "create_protocol_draft",
+    "create_protocol_template",
+    "delete_protocol",
+    "validate_protocol",
+    "publish_protocol",
+    "archive_protocol",
+    "parse_protocol_document_text",
+    "export_protocol_draft",
+    "diff_protocol_draft",
+)
+_ARTIFACT_ACCESS_METHODS = ("get_run_artifact_content",)
 
 
 def test_registry_client_satisfies_invocation_port():
@@ -1085,6 +1103,17 @@ def test_registry_client_satisfies_observation_port():
     client = RegistryClient("http://test:8787", "test-token")
     assert isinstance(client, ProtocolObservationPort)
     for name in _OBSERVATION_METHODS:
+        assert callable(getattr(client, name))
+
+
+def test_registry_client_satisfies_authoring_and_artifact_ports():
+    from octopus_sdk.protocols import ProtocolArtifactAccessPort, ProtocolAuthoringPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    assert isinstance(client, ProtocolAuthoringPort)
+    assert isinstance(client, ProtocolArtifactAccessPort)
+    for name in (*_AUTHORING_METHODS, *_ARTIFACT_ACCESS_METHODS):
         assert callable(getattr(client, name))
 
 
@@ -1138,6 +1167,39 @@ def test_invocation_port_invoke_protocol_roundtrips_idempotency_and_origin():
     assert captured["url"].endswith("/v1/protocol-runs")
     assert captured["headers"].get("Idempotency-Key") == "abc-123"
     assert captured["json"]["protocol_id"] == "protocol-1"
+
+
+def test_artifact_access_port_downloads_bytes_from_canonical_path():
+    from unittest.mock import patch
+
+    from octopus_sdk.protocols import ProtocolArtifactAccessPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client: ProtocolArtifactAccessPort = RegistryClient("http://test:8787", "test-token")
+    captured: dict = {}
+
+    async def mock_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+
+        class FakeResp:
+            status_code = 200
+            content = b"# Plan\n"
+
+            @property
+            def headers(self):
+                return {"content-type": "text/markdown"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        content = asyncio.run(client.get_run_artifact_content("run-1", "plan", download=True))
+
+    assert content == b"# Plan\n"
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/v1/protocol-runs/run-1/artifacts/plan/content")
+    assert captured["params"] == {"download": "1"}
 
 
 def test_observation_port_methods_hit_expected_paths():

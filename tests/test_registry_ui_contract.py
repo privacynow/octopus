@@ -1040,19 +1040,40 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "API.createProtocolRun({" in detail
     assert "root_conversation_id: convoId" in detail
     assert "entry_agent_id: agentId" in detail
-    assert "protocolProblemStatement = String(textarea.value || '').trim();" in detail
+    assert "Kit.protocolRunLaunchForm({" in detail
+    assert "includeWorkspace: false" in detail
+    assert "problem_statement: state.problemStatement" in detail
+    assert "const launchValues = launchForm.readValues();" in detail
+    assert "const problemStatement = String(launchValues.problem_statement || '').trim();" in detail
+    assert "constraints_json: constraints" in detail
     assert "requestedManagementMode === 'protocols'" in detail
     assert "value === 'skills' || value === 'settings' || value === 'protocols'" in detail
-    assert "Started protocol run" in detail
-    assert "Open run" in detail
-    assert "function generatedTimestamp(" in helper
-    assert "function compactGeneratedName(" in helper
-    assert "compactGeneratedFamilies: true" in (
+
+
+def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
-    assert "Latest of ${Number(record._catalogCollapsedCount || 0)} generated variants" in (
+    kit = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
+
+    assert "'protocol.action.run': 'Run protocol'" in kit
+    assert "primaryActions = ['validate', 'publish', 'run']" in kit
+    assert "function protocolRunLaunchForm(" in kit
+    assert "function protocolRunLaunchFields()" in kit
+    assert "source_context" in kit
+    assert "relationship_context" in kit
+    assert "desired_outputs" in kit
+    assert "privacy_constraints" in kit
+    assert "function _openRunProtocolDialog()" in workspace
+    assert "Start a real run from the latest published version." in workspace
+    assert "Dry-run rehearsal" in workspace
+    assert "is_rehearsal: true" in workspace
+    assert "Kit.protocolRunLaunchForm({" in workspace
+    assert "includeWorkspace: true" in workspace
+    assert "Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`)" in workspace
 
 
 def test_artifact_preview_actions_have_link_fallbacks() -> None:

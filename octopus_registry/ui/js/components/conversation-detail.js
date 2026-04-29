@@ -45,6 +45,12 @@ function renderConversationDetail(container, params) {
     let selectedActivationSkill = requestedActivationSkill;
     let selectedProtocolId = '';
     let protocolProblemStatement = '';
+    let protocolLaunchContext = {
+        source_context: '',
+        relationship_context: '',
+        desired_outputs: '',
+        privacy_constraints: 'Do not include raw private data rows in model-visible context. Generate tools that process private data locally when needed.',
+    };
     let protocolSearchQuery = '';
     let managementReloadDebounce = null;
     let pendingSkillSetup = null;
@@ -1479,16 +1485,25 @@ function renderConversationDetail(container, params) {
                 form.appendChild(scope);
             }
 
-            const problem = document.createElement('textarea');
-            problem.className = 'input';
-            problem.rows = 4;
-            problem.placeholder = 'Describe the concrete run context for this protocol';
-            problem.setAttribute('aria-label', 'Describe what this protocol should accomplish');
-            problem.value = state.problemStatement;
-            problem.addEventListener('input', () => {
-                protocolProblemStatement = String(problem.value || '');
+            const launchForm = Kit.protocolRunLaunchForm({
+                values: {
+                    problem_statement: state.problemStatement,
+                    ...(protocolLaunchContext || {}),
+                },
+                includeWorkspace: false,
+                onInput: (key, value) => {
+                    const text = String(value || '');
+                    if (key === 'problem_statement') {
+                        protocolProblemStatement = text;
+                        return;
+                    }
+                    protocolLaunchContext = {
+                        ...(protocolLaunchContext || {}),
+                        [key]: text,
+                    };
+                },
             });
-            form.appendChild(problem);
+            form.appendChild(launchForm.element);
 
             const actions = document.createElement('div');
             actions.className = 'event-card-actions';
@@ -1498,7 +1513,8 @@ function renderConversationDetail(container, params) {
             start.textContent = 'Start protocol';
             start.addEventListener('click', async () => {
                 const protocolId = String(select.value || selectedProtocolId || '').trim();
-                const problemStatement = String(problem.value || '').trim();
+                const launchValues = launchForm.readValues();
+                const problemStatement = String(launchValues.problem_statement || '').trim();
                 if (!protocolId || !problemStatement) {
                     protocolsStatusMessage = 'Select a published protocol and describe the problem to solve.';
                     renderProtocolsPanel();
@@ -1507,6 +1523,11 @@ function renderConversationDetail(container, params) {
                 }
                 start.disabled = true;
                 try {
+                    const constraints = {};
+                    ['source_context', 'relationship_context', 'desired_outputs', 'privacy_constraints'].forEach((key) => {
+                        const text = String(launchValues[key] || '').trim();
+                        if (text) constraints[key] = text;
+                    });
                     const response = await runManagementRequest(() => API.createProtocolRun({
                         protocol_id: protocolId,
                         entry_agent_id: agentId,
@@ -1514,7 +1535,7 @@ function renderConversationDetail(container, params) {
                         origin_channel: String((meta && meta.origin_channel) || 'registry'),
                         workspace_ref: protocolWorkspaceRef(),
                         problem_statement: problemStatement,
-                        constraints_json: {},
+                        constraints_json: constraints,
                     }));
                     const run = response.run || null;
                     const launched = state.availableProtocols.find((item) => item.id === protocolId);

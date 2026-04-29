@@ -166,6 +166,10 @@ BEGIN
           AND authority_ref <> '';
     END IF;
 END $$;
+ALTER TABLE bot_runtime.control_plane_commands
+    DROP COLUMN IF EXISTS capability,
+    DROP COLUMN IF EXISTS operation,
+    DROP COLUMN IF EXISTS authority_ref;
 CREATE INDEX IF NOT EXISTS idx_cp_state
     ON bot_runtime.control_plane_commands (state, next_attempt_at, priority DESC, seq);
 CREATE INDEX IF NOT EXISTS idx_cp_correlation

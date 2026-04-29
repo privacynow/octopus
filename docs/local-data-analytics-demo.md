@@ -35,9 +35,63 @@ The files have primary and foreign keys such as `panel_id` and `cell_id`.
 The user wants to detect how parameters change across stages, identify defect
 signals, and produce a daily repeatable report without uploading raw data.
 
-## Built-In Protocol
+## UI-First Protocol Build
 
-The starter protocol is:
+The customer-facing proof is not the built-in template and not a database seed.
+Build a protocol manually in the Registry UI so the customer can repeat the
+same steps.
+
+Create a protocol named:
+
+```text
+Manufacturing Analytics App Builder
+```
+
+Suggested stages:
+
+1. define browser app contract
+2. build self-contained browser app
+3. review browser app
+
+Suggested artifacts:
+
+- `apps/manufacturing-analytics/index.html`
+- `reports/app-review.md`
+
+Stage instructions should ask the agent to generate a single self-contained
+HTML/CSS/JavaScript app. The app must let a user generate synthetic
+manufacturing data, upload local CSVs, define primary/foreign keys, run
+in-browser analytics, view findings, and export reports. The app must not make
+network calls for uploaded data.
+
+From the protocol page, click `Run protocol`, choose an entry agent, and fill:
+
+- `What should this run accomplish?`: build a self-contained manufacturing
+  analytics browser app for process-stage CSVs.
+- `Files or data context`: panels, cells, panel-to-cell mapping, and test
+  result CSV files may exist locally, but raw customer rows must not be pasted
+  into chat.
+- `Keys and relationships`: `panels.panel_id -> test_results.panel_id`,
+  `panels.panel_id -> panel_cells.panel_id`, `cells.cell_id ->
+  panel_cells.cell_id`.
+- `Expected outputs`: self-contained `index.html`, app review notes, exportable
+  findings.
+- `Privacy or execution constraints`: raw private rows stay local; the model
+  may receive schema, aggregate summaries, and app requirements only.
+
+Open the run from the Runs page, then use the artifact actions to open or
+download `apps/manufacturing-analytics/index.html`. In the opened app, generate
+synthetic data or upload local sample CSVs, run analytics, and export the
+findings.
+
+## Starter Template And Golden Script
+
+The repository also contains a starter manufacturing analytics template and a
+deterministic local script. These are useful for regression testing and for a
+known-good reference, but they are not a substitute for the UI-first customer
+flow above.
+
+The starter template is:
 
 ```text
 Manufacturing Local Analytics
@@ -45,7 +99,7 @@ Manufacturing Local Analytics
 
 It is available from `Build -> Protocols -> New protocol -> Use template`.
 
-The protocol stages are:
+The starter template stages are:
 
 1. define input contract
 2. generate profile script
@@ -55,7 +109,7 @@ The protocol stages are:
 6. validate outputs
 7. review report
 
-The protocol artifacts are:
+The starter template artifacts are:
 
 - `protocol/input_contract.json`
 - `scripts/profile_manufacturing_data.py`
@@ -114,6 +168,22 @@ Open the run shown in `reports/run_manifest.json` and review the artifacts.
 This is a rehearsal run: external transports are gated, but the run, stages,
 and artifact content use the same protocol/run/artifact surfaces as normal
 authoring.
+
+For customer acceptance, prefer the UI-first `Run protocol` flow. Rehearsal is
+for authoring validation, not proof of provider-backed execution.
+
+## Telegram Inspection
+
+After a run exists, Telegram can inspect it through the same protocol service:
+
+```text
+/protocol status <run_id>
+/protocol artifacts <run_id>
+/protocol artifacts <run_id> download <artifact_key>
+```
+
+Use the download command for concrete artifacts when the bot should send the
+file into the chat instead of only linking back to Registry.
 
 ## Live Conversation Script
 

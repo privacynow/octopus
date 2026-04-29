@@ -19,13 +19,16 @@ from octopus_sdk.protocols import (
     ProtocolStageDefinitionRecord,
     TargetSelector,
     build_conversation_protocol_run_request,
+    build_protocol_run_request_from_inputs,
     canonical_protocol_document,
     filter_launchable_protocols,
     launch_protocol_from_conversation,
     list_launchable_protocols,
     parse_protocol_stage_decision,
+    protocol_run_launch_form,
     protocol_document_to_text,
     protocol_review_edge_key,
+    render_protocol_stage_prompt,
     resolve_launchable_protocol,
     validate_protocol_document,
 )
@@ -161,6 +164,84 @@ async def test_conversation_protocol_launch_helpers_filter_resolve_and_build_req
     assert request.root_conversation_id == "conv-1"
     assert request.workspace_ref == "workspace-a"
     assert request.constraints_json == {"priority": "high"}
+
+
+def test_protocol_launch_form_and_input_request_are_transport_neutral():
+    definition = _launchable_definition()
+    document = protocol_document()
+    document["metadata"]["run_inputs"] = [
+        {
+            "key": "problem_statement",
+            "label": "Goal",
+            "kind": "textarea",
+            "required": True,
+        },
+        {
+            "key": "privacy_constraints",
+            "label": "Privacy",
+            "kind": "textarea",
+            "default_value": "Keep raw data local.",
+        },
+    ]
+
+    form = protocol_run_launch_form(definition, canonical_protocol_document(document))
+
+    assert form.protocol_id == "protocol-1"
+    assert [field.key for field in form.fields] == ["problem_statement", "privacy_constraints"]
+    assert form.fields[1].default_value == "Keep raw data local."
+
+    request = build_protocol_run_request_from_inputs(
+        definition,
+        {
+            "problem_statement": "Create a local analytics app.",
+            "workspace_ref": "workspace-a",
+            "source_context": "CSV files stay local.",
+            "privacy_constraints": "Do not send raw rows.",
+        },
+        entry_agent_id="agent-1",
+        origin_channel="registry",
+    )
+
+    assert request.protocol_id == "protocol-1"
+    assert request.entry_agent_id == "agent-1"
+    assert request.workspace_ref == "workspace-a"
+    assert request.problem_statement == "Create a local analytics app."
+    assert request.constraints_json["source_context"] == "CSV files stay local."
+    assert request.constraints_json["privacy_constraints"] == "Do not send raw rows."
+
+
+def test_protocol_stage_prompt_includes_typed_run_context_without_special_surface_logic():
+    document = canonical_protocol_document(protocol_document())
+    run = ProtocolRunRecord.model_validate(
+        {
+            "protocol_run_id": "run-1",
+            "protocol_id": "protocol-1",
+            "protocol_definition_version_id": "version-1",
+            "entry_agent_id": "agent-1",
+            "status": "running",
+            "current_stage_key": "planning",
+            "problem_statement": "Create the local analytics app.",
+            "constraints_json": {
+                "source_context": "Synthetic CSV files only.",
+                "relationship_context": "panels.panel_id -> test_results.panel_id",
+                "desired_outputs": "index.html and findings report",
+                "privacy_constraints": "Do not send raw rows.",
+            },
+        }
+    )
+
+    prompt = render_protocol_stage_prompt(
+        document=document,
+        run=run,
+        stage=document.stage("planning"),
+        artifacts=[],
+    )
+
+    assert "Run context and constraints:" in prompt
+    assert "Files or data context:\nSynthetic CSV files only." in prompt
+    assert "Keys and relationships:\npanels.panel_id -> test_results.panel_id" in prompt
+    assert "Expected outputs:\nindex.html and findings report" in prompt
+    assert "Privacy or execution constraints:\nDo not send raw rows." in prompt
 
 
 @pytest.mark.asyncio

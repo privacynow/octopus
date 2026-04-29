@@ -1770,6 +1770,127 @@ function renderProtocolWorkspace(container) {
         await _refreshRehearsalSessions();
     }
 
+    function _defaultProtocolRunAgentId() {
+        const agents = _authoringAssignableAgents();
+        const preferred = agents.find((agent) => {
+            const execution = String(agent?.execution_state || agent?.execution_status || '').trim().toLowerCase();
+            const connectivity = String(agent?.connectivity_state || '').trim().toLowerCase();
+            return connectivity === 'connected' && !['faulted', 'stopped', 'disconnected'].includes(execution);
+        }) || agents[0] || _availableAuthoringAgents()[0] || null;
+        return String(preferred?.agent_id || '').trim();
+    }
+
+    function _openRunProtocolDialog() {
+        if (_blockConflictAction('Run protocol')) return;
+        if (!currentProtocolId) return;
+        const agents = _authoringAssignableAgents();
+        const defaultAgentId = _defaultProtocolRunAgentId();
+        const body = document.createElement('div');
+        body.className = 'conversation-management-form';
+
+        const summary = document.createElement('p');
+        summary.className = 'quiet-note';
+        summary.textContent = 'Start a real run from the latest published version. Rehearsal is the dry-run path; this dispatches work to runtime agents and records produced artifacts.';
+        body.appendChild(summary);
+
+        if (saveState.state === 'editing' || saveState.state === 'saving') {
+            const draftNote = document.createElement('p');
+            draftNote.className = 'quiet-note';
+            draftNote.textContent = 'You have unpublished draft edits. This run uses the latest published protocol, not unsaved or unpublished changes.';
+            body.appendChild(draftNote);
+        }
+
+        const agentLabel = document.createElement('label');
+        agentLabel.className = 'kit-details-field';
+        const agentTitle = document.createElement('span');
+        agentTitle.className = 'kit-details-label';
+        agentTitle.textContent = 'Entry agent';
+        agentLabel.appendChild(agentTitle);
+        const agentSelect = document.createElement('select');
+        agentSelect.className = 'input';
+        agentSelect.setAttribute('aria-label', 'Entry agent');
+        if (!agents.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No connected agents available';
+            agentSelect.appendChild(option);
+            agentSelect.disabled = true;
+        } else {
+            agents.forEach((agent) => {
+                const option = document.createElement('option');
+                option.value = String(agent.agent_id || '');
+                option.textContent = UI.visibleLabel(agent.display_name, agent.slug || agent.agent_id, 'Agent');
+                if (String(agent.agent_id || '') === defaultAgentId) option.selected = true;
+                agentSelect.appendChild(option);
+            });
+        }
+        agentLabel.appendChild(agentSelect);
+        const agentHelp = document.createElement('span');
+        agentHelp.className = 'kit-details-help';
+        agentHelp.textContent = 'The entry agent owns the root conversation for this run. Stage assignment rules still decide which agent receives each step.';
+        agentLabel.appendChild(agentHelp);
+        body.appendChild(agentLabel);
+
+        const launchForm = Kit.protocolRunLaunchForm({
+            values: {
+                problem_statement: draft.description,
+            },
+            includeWorkspace: true,
+        });
+        body.appendChild(launchForm.element);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const startBtn = document.createElement('button');
+        startBtn.type = 'button';
+        startBtn.className = 'btn btn-primary';
+        startBtn.textContent = 'Start run';
+        startBtn.disabled = !agents.length;
+
+        const view = UI.showDialog('Run protocol', body, {
+            actions: [cancelBtn, startBtn],
+            maxWidth: '720px',
+            initialFocus: launchForm.focusTarget,
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        startBtn.addEventListener('click', async () => {
+            const entryAgentId = String(agentSelect.value || '').trim();
+            const values = launchForm.readValues();
+            if (!entryAgentId || !values.problem_statement) {
+                UI.notify('Choose an entry agent and describe what this run should accomplish.', 'error');
+                return;
+            }
+            startBtn.disabled = true;
+            try {
+                const constraints = {};
+                ['source_context', 'relationship_context', 'desired_outputs', 'privacy_constraints'].forEach((key) => {
+                    if (String(values[key] || '').trim()) constraints[key] = String(values[key] || '').trim();
+                });
+                const created = await API.createProtocolRun({
+                    protocol_id: currentProtocolId,
+                    entry_agent_id: entryAgentId,
+                    origin_channel: 'registry',
+                    workspace_ref: String(values.workspace_ref || ''),
+                    problem_statement: String(values.problem_statement || ''),
+                    constraints_json: constraints,
+                });
+                const runId = String(created?.run?.protocol_run_id || '').trim();
+                view.close();
+                if (runId) {
+                    UI.notify('Protocol run started.', 'success');
+                    Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
+                } else {
+                    UI.notify('Protocol run started, but no run id was returned.', 'success');
+                }
+            } catch (err) {
+                UI.reportError('Failed to start protocol run', err, { context: 'Protocol authoring run launch failed' });
+                startBtn.disabled = false;
+            }
+        });
+    }
+
     function _updateRehearsalDraft({ routedTaskId, responseText, decision, decisionSummary, scenarioId, artifactContents = {} } = {}) {
         const taskId = String(routedTaskId || '').trim();
         if (!taskId) return;
@@ -3919,6 +4040,7 @@ function renderProtocolWorkspace(container) {
             canValidate: Boolean(currentProtocolId) && progress.stageCount > 0 && saveState.state !== 'conflict',
             canPublish: Boolean(currentProtocolId) && progress.stageCount > 0 && saveState.state !== 'conflict',
             canArchive: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
+            canRun: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState === 'published' && saveState.state !== 'conflict',
             canRehearse: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
             canDiscard: Boolean(currentProtocolId) && !hasPublishedVersion && saveState.state !== 'conflict',
         };
@@ -3935,6 +4057,10 @@ function renderProtocolWorkspace(container) {
                     async () => { await _publishTemplateNow(); },
                 ),
             });
+            utilityActions.push({
+                label: 'Dry-run rehearsal',
+                onClick: () => void _startRehearsal().catch((err) => UI.reportError('Rehearsal failed to start', err)),
+            });
         }
         return Kit.lifecycleHeader({
             surfaceKey: 'protocol',
@@ -3942,12 +4068,13 @@ function renderProtocolWorkspace(container) {
             saveState,
             permissions,
             compact: true,
-            primaryActions: ['validate', 'publish', 'rehearse'],
+            primaryActions: ['validate', 'publish', 'run'],
             secondaryActions: ['archive', 'discard'],
             utilityActions,
             actions: {
                 validate: () => void _validateNow().catch((err) => UI.reportError('Validation failed', err)),
                 publish: () => void _publishNow().catch((err) => UI.reportError('Publish failed', err)),
+                run: () => _openRunProtocolDialog(),
                 rehearse: () => void _startRehearsal().catch((err) => UI.reportError('Rehearsal failed to start', err)),
                 archive: () => UI.showConfirm(
                     'Archive protocol',

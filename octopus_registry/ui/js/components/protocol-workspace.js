@@ -741,8 +741,58 @@ function renderProtocolWorkspace(container) {
         };
     }
 
+    function _assignmentParticipantKey(selector) {
+        const kind = String(selector?.kind || '').trim().toLowerCase();
+        const value = String(selector?.value || '').trim();
+        if (!kind || !value || !PRIMARY_SELECTOR_KINDS.includes(kind)) return '';
+        return _slugSuggestion(`${kind}-${value}`) || '';
+    }
+
+    function _assignmentParticipantLabel(selector) {
+        const kind = String(selector?.kind || '').trim().toLowerCase();
+        const value = String(selector?.value || '').trim();
+        if (!kind || !value) return '';
+        if (kind === 'agent') {
+            const agent = _selectorAgentRecord(value);
+            return UI.visibleLabel(agent?.display_name, agent?.slug || value, value);
+        }
+        if (kind === 'skill') {
+            return `${_titleCaseWords(value)} skill`;
+        }
+        return _titleCaseWords(value);
+    }
+
+    function _ensureStageAssignmentParticipants(doc) {
+        const normalized = _cloneDoc(doc || _blankDocument());
+        const participants = Array.isArray(normalized.participants) ? [...normalized.participants] : [];
+        const participantKeys = new Set(
+            participants.map((item) => String(item?.participant_key || '').trim()).filter(Boolean),
+        );
+        normalized.stages = (Array.isArray(normalized.stages) ? normalized.stages : [])
+            .map((stage) => {
+                const nextStage = _normalizeStageWriteAccess(stage);
+                if (String(nextStage.participant_key || '').trim()) return nextStage;
+                const participantKey = _assignmentParticipantKey(nextStage.selector);
+                if (!participantKey) return nextStage;
+                if (!participantKeys.has(participantKey)) {
+                    participants.push({
+                        participant_key: participantKey,
+                        display_name: _assignmentParticipantLabel(nextStage.selector) || participantKey,
+                        instructions: '',
+                    });
+                    participantKeys.add(participantKey);
+                }
+                return {
+                    ...nextStage,
+                    participant_key: participantKey,
+                };
+            });
+        normalized.participants = participants;
+        return normalized;
+    }
+
     function _docFromDraft() {
-        const doc = _cloneDoc(draft.document);
+        const doc = _ensureStageAssignmentParticipants(draft.document);
         doc.schema_version = Number(doc.schema_version || 1) || 1;
         doc.metadata = Object.assign({}, doc.metadata || {}, {
             slug: String(draft.slug || '').trim(),
@@ -4927,7 +4977,7 @@ function renderProtocolWorkspace(container) {
                 { key: 'kind', kind: 'select', label: 'What it represents', options: kindOptions, help: 'Most datasets, code files, documents, and reports should stay as workspace files.' },
                 ...(String(artifact?.kind || 'workspace_file').trim().toLowerCase() === 'control_plane_text'
                     ? []
-                    : [{ key: 'path', kind: 'text', label: 'Workspace path', help: Kit.dict.label('protocol.artifact.path.help'), placeholder: Kit.dict.label('protocol.artifact.path.placeholder') }]),
+                    : [{ key: 'path', kind: 'text', label: 'Workspace path', help: Kit.dict.label('protocol.artifact.path.help'), placeholder: Kit.dict.label('protocol.artifact.path.placeholder'), commitOnInput: true }]),
             ]),
             actions: context.readOnly
                 ? []

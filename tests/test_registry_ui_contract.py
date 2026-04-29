@@ -190,7 +190,11 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_currentAuthoringSurface()" in workspace
     assert "operator_surface_available" in workspace
     assert "_normalizeStageWriteAccess(" in workspace
+    assert "_ensureStageAssignmentParticipants(" in workspace
+    assert "participant_key: participantKey" in workspace
+    assert "display_name: _assignmentParticipantLabel(nextStage.selector) || participantKey" in workspace
     assert "write_capable: Boolean(stage?.write_capable || outputs.length)" in workspace
+    assert "label: 'Workspace path', help: Kit.dict.label('protocol.artifact.path.help'), placeholder: Kit.dict.label('protocol.artifact.path.placeholder'), commitOnInput: true" in workspace
     assert "Available now" in workspace
     assert "Preferred agent:" in workspace
     assert "quickstart-chip" in workspace

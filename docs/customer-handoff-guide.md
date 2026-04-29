@@ -4,6 +4,12 @@ This guide is built from tested product paths. Do not add a step here unless it
 has been exercised from a customer-facing surface: Registry UI, Telegram,
 Octopus CLI, or a documented command.
 
+This guide is repository documentation. It is not a protocol artifact, and a
+customer protocol run should not be asked to generate or update this file. A
+protocol run should produce the customer's working outputs: tool files, local
+README files, validation reports, findings reports, and other artifacts that
+belong to that run.
+
 Current status: in progress. Use this guide as the working handoff script while
 the remaining blockers in `issues.md` are being closed. Steps marked
 `Verified` were exercised from a customer-facing UI surface, not by direct
@@ -236,7 +242,10 @@ Remaining steps:
 - Confirm synthetic demo mode generates deterministic local fixture CSVs when
   customer files are absent.
 - Confirm aggregate findings are visible.
-- Confirm the handoff README/report artifact is downloadable.
+- Confirm the local tool README, validation report, and findings report are
+  downloadable.
+- Confirm no generated artifact is presented as the repository customer
+  handoff guide.
 
 ### Dashboard Cleanup
 

@@ -6565,6 +6565,43 @@ function renderProtocolRuns(container) {
         return String(item?.protocol_run_id || item?.id || item?.run_id || '').trim();
     }
 
+    function _selectedRunListRecord() {
+        const selectedId = String(currentRunId || '');
+        if (!selectedId) return null;
+        return (runs || []).find((item) => _runRecordId(item) === selectedId) || null;
+    }
+
+    function _runListRecordChangedSinceDetail(listRecord) {
+        const detail = currentRun?.run || null;
+        if (!listRecord || !detail) return false;
+        const changedFields = [
+            'status',
+            'current_stage_execution_id',
+            'current_stage_key',
+            'updated_at',
+            'completed_at',
+        ];
+        if (changedFields.some((field) => String(listRecord[field] || '') !== String(detail[field] || ''))) {
+            return true;
+        }
+        const listVersion = Number(listRecord.version || 0);
+        const detailVersion = Number(detail.version || 0);
+        return Number.isFinite(listVersion)
+            && Number.isFinite(detailVersion)
+            && listVersion > 0
+            && detailVersion > 0
+            && listVersion !== detailVersion;
+    }
+
+    function _queueSelectedRunDetailRefreshFromList() {
+        if (!currentRunId || runDetailLoading) return false;
+        const selectedListRecord = _selectedRunListRecord();
+        if (!_runListRecordChangedSinceDetail(selectedListRecord)) return false;
+        runDetailLoading = true;
+        void loadRunDetail({ soft: true });
+        return true;
+    }
+
     function _filteredIssues() {
         return UI.defaultVisibleRecords(protocolIssues || [], { includeHidden: includeGenerated }).filter((item) => {
             const haystack = [
@@ -7619,6 +7656,7 @@ function renderProtocolRuns(container) {
         });
         runsListData = response || null;
         runs = response.runs || response || [];
+        _queueSelectedRunDetailRefreshFromList();
         _writeState();
         renderRunsRoute();
     }
@@ -7650,7 +7688,9 @@ function renderProtocolRuns(container) {
         const requestToken = runDetailRequestToken + 1;
         runDetailRequestToken = requestToken;
         try {
-            runDetailLoading = true;
+            if (!soft || !currentRun) {
+                runDetailLoading = true;
+            }
             const [runDetail, issues] = await Promise.all([
                 API.getProtocolRun(requestedRunId),
                 API.listProtocolIssues({ protocol_run_id: requestedRunId, limit: 50 }),

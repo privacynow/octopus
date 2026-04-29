@@ -84,6 +84,12 @@ download `apps/manufacturing-analytics/index.html`. In the opened app, generate
 synthetic data or upload local sample CSVs, run analytics, and export the
 findings.
 
+Do not add a `Customer handoff guide` output to the protocol. The customer
+handoff script is repository documentation in `docs/customer-handoff-guide.md`.
+The protocol's generated documentation should be scoped to the generated local
+tool, for example `apps/manufacturing-analytics/README.md` and
+`reports/local-tool-validation.md`.
+
 ## Internal Regression Fixture
 
 The repository contains a deterministic local script that verifies the

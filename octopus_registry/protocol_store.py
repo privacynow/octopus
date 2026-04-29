@@ -48,7 +48,6 @@ from octopus_sdk.protocols import (
     ProtocolTransitionRecord,
     RegistryJsonRecord,
     TargetSelector,
-    builtin_protocol_template_summaries,
     canonical_protocol_document,
     normalize_protocol_document_format,
     protocol_current_review_state,
@@ -62,7 +61,6 @@ from octopus_sdk.protocols import (
     validate_protocol_document,
 )
 from octopus_sdk.protocols.documents import draft_protocol_document_data
-from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 
@@ -461,18 +459,12 @@ class ProtocolPostgresAdapter:
 
     def _unique_protocol_slug(self, conn, base_slug: str, *, protocol_id: str = "") -> str:
         normalized = str(base_slug or "").strip().lower() or f"protocol-{uuid.uuid4().hex[:8]}"
-        builtin_slugs = {
-            str(item.slug or "").strip()
-            for item in builtin_protocol_template_summaries()
-            if str(item.slug or "").strip()
-        }
         candidate = normalized
         suffix = 1
         while True:
             row = self._protocol_row_for_slug(conn, candidate)
             if (
-                candidate not in builtin_slugs
-                and (row is None or str(row.get("protocol_id", "") or "") == str(protocol_id or ""))
+                row is None or str(row.get("protocol_id", "") or "") == str(protocol_id or "")
             ):
                 return candidate
             suffix += 1
@@ -1475,19 +1467,11 @@ class ProtocolPostgresAdapter:
         created_after: str = "",
         include_drafts: bool | None = None,
     ) -> list[ProtocolDefinitionRecord]:
-        builtin_slugs = [
-            str(item.slug or "").strip()
-            for item in builtin_protocol_template_summaries()
-            if str(item.slug or "").strip()
-        ]
         if include_drafts is None:
             include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         clauses: list[str] = []
         params: list[object] = []
         clauses.append("visibility <> 'registry_template'")
-        for builtin_slug in builtin_slugs:
-            clauses.append("slug <> %s")
-            params.append(builtin_slug)
         if lifecycle_state:
             params.append(lifecycle_state)
             clauses.append("lifecycle_state = %s")
@@ -1536,7 +1520,7 @@ class ProtocolPostgresAdapter:
                 if not self._protocol_visible_to_access(row, access=access, include_drafts=False):
                     raise PermissionError(normalized_slug)
                 return self._protocol_template_document_from_row(conn, row)
-        return builtin_protocol_document(normalized_slug)
+        raise KeyError(normalized_slug)
 
     def list_protocol_templates(
         self,
@@ -1547,8 +1531,6 @@ class ProtocolPostgresAdapter:
             return []
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             return []
-        builtin_summaries = list(builtin_protocol_template_summaries())
-        builtin_slugs = {str(item.slug or "").strip() for item in builtin_summaries if str(item.slug or "").strip()}
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
@@ -1563,9 +1545,8 @@ class ProtocolPostgresAdapter:
                 self._protocol_template_summary_from_row(conn, row)
                 for row in rows
                 if self._protocol_visible_to_access(row, access=access, include_drafts=False)
-                and str(row.get("slug", "") or "").strip() not in builtin_slugs
             ]
-        return builtin_summaries + authored_summaries
+        return authored_summaries
 
     def get_protocol_authoring_options(
         self,
@@ -2127,7 +2108,7 @@ class ProtocolPostgresAdapter:
         if not loaded.ok or loaded.protocol is None:
             return loaded
         if str(loaded.protocol.visibility or "") == "registry_template":
-            return ProtocolMutationRecord(ok=False, status="invalid_action", message="Protocol templates are already reusable starters.")
+            return ProtocolMutationRecord(ok=False, status="invalid_action", message="Protocol templates are already reusable.")
         current_version_id = str(loaded.protocol.current_version_id or "").strip()
         if str(loaded.protocol.lifecycle_state or "") != "published" or not current_version_id:
             return ProtocolMutationRecord(

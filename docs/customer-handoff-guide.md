@@ -15,10 +15,10 @@ Current customer-ready entry point under test:
 2. use `Workspace maintenance -> Clean workspace data` only when resetting a
    demo environment,
 3. open `Build -> Protocols`,
-4. choose the local analytics starter,
-5. review the starter workflow,
-6. create an editable protocol,
-7. publish and run it from the UI.
+4. create a blank protocol,
+5. define stages, files, assignments, and routing from the UI,
+6. publish and run it from the UI,
+7. inspect outputs and artifacts from the run UI.
 
 ## Handoff Goal
 
@@ -134,20 +134,16 @@ Observed result:
 Status: implementation updated; real Safari verification must be rerun after
 redeploy.
 
-Expected template flow:
+Expected blank-authoring flow:
 
 1. Go to `Build -> Protocols`.
 2. Click `New protocol`.
-3. Confirm the starter chooser opens without generated timestamp test starters.
-4. Find `Manufacturing Local Analytics`.
-5. Click `Review customer startup`.
-6. Confirm the review dialog shows stages and artifacts before creating
-   anything.
-7. Click `Create editable draft`.
-8. Confirm a draft opens with seven stages:
-   `Define Input Contract`, `Generate Profile Script`, `Run Profile Locally`,
-   `Generate Analysis Script`, `Run Analysis Locally`, `Validate Outputs`, and
-   `Review Report`.
+3. Confirm a blank draft opens immediately.
+4. Name the protocol.
+5. Define shared files/artifacts.
+6. Add stages from scratch.
+7. Assign each stage by agent, by skill, or leave it dynamic.
+8. Define routing between stages and terminal outcomes.
 9. Click `Validate`.
 10. Confirm the toast says `Protocol validated.`
 11. Click `Publish`.
@@ -156,10 +152,9 @@ Expected template flow:
 
 Observed result:
 
-- Earlier Safari runs created and published a Manufacturing Local Analytics
-  draft from the UI.
-- The flow has since changed from one-click `Use template` to review-before-
-  create, so acceptance must be rerun.
+- Earlier Safari runs used a prepackaged local analytics starter. That is no
+  longer an acceptable proof path.
+- Acceptance must be rerun by building the workflow from blank in real Safari.
 
 Remaining authoring verification:
 
@@ -173,8 +168,7 @@ Status: partially verified with a real protocol run in real Safari.
 
 Verified run-start steps:
 
-1. On the published Manufacturing Local Analytics protocol, click
-   `Run protocol`.
+1. On the published blank-authored analytics protocol, click `Run protocol`.
 2. Confirm the run dialog opens with these fields:
    `Entry agent`, `Workspace`, `Customer analytics goal`, `Data mode`,
    `Local files or synthetic fixture shape`, `Keys and joins`,
@@ -219,15 +213,15 @@ Planned steps:
 5. Open the Registry run link.
 6. Confirm Telegram and Registry show the same run state and artifacts.
 
-### Local Manufacturing Analytics
+### Local Analytics Workflow
 
-Status: in progress through a UI-created protocol run.
+Status: must be rerun through a blank-authored protocol.
 
 Verified steps so far:
 
 1. Start from `Build -> Protocols`.
 2. Click `New protocol`.
-3. Choose `Manufacturing Local Analytics`.
+3. Build the analytics workflow from blank.
 4. Validate and publish the draft.
 5. Click `Run protocol`.
 6. Confirm the run dialog asks for goal, file/data context, key

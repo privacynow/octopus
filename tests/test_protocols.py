@@ -32,7 +32,6 @@ from octopus_sdk.protocols import (
     resolve_launchable_protocol,
     validate_protocol_document,
 )
-from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.protocols.launch import ProtocolConversationLaunchRequestRecord
 from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
@@ -398,17 +397,6 @@ def test_validate_protocol_document_warns_when_legacy_required_skills_has_multip
 
     assert result.ok is True
     assert any(item.code == "participant.legacy_multi_skill" and item.blocking is False for item in result.issues)
-
-
-def test_builtin_protocol_templates_use_selector_backed_assignment() -> None:
-    for slug in ("software-engineering", "document-approval", "manufacturing-local-analytics"):
-        document = builtin_protocol_document(slug)
-        assert document.participants
-        for participant in document.participants:
-            assert "selector" not in participant.model_dump(mode="json")
-            assert "required_skills" not in participant.model_dump(mode="json")
-        for stage in document.stages:
-            assert stage.selector is not None, f"{slug} stage {stage.stage_key} must declare a selector"
 
 
 def test_runtime_protocol_selector_prefers_entry_agent_for_skill_selectors() -> None:
@@ -1222,7 +1210,7 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
     assert store.list_protocol_issues(access=operator_access(), issue_kind="not-a-real-issue-kind") == []
 
 
-def test_registry_store_sources_builtin_protocol_templates_from_code_not_authored_rows(postgres_registry_truncated: str) -> None:
+def test_registry_store_does_not_seed_protocol_templates_from_code(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -1239,21 +1227,9 @@ def test_registry_store_sources_builtin_protocol_templates_from_code_not_authore
             row = cur.fetchone()
             assert row is None
 
-    template = store.get_protocol_template("software-engineering", access=operator_access())
-    assert template.slug == "software-engineering"
-    assert template.display_name
-    approval = store.get_protocol_template("document-approval", access=operator_access())
-    assert approval.slug == "document-approval"
-    assert approval.display_name == "Document Approval"
-    analytics = store.get_protocol_template("manufacturing-local-analytics", access=operator_access())
-    assert analytics.slug == "manufacturing-local-analytics"
-    assert analytics.display_name == "Manufacturing Local Analytics"
-    analytics_inputs = analytics.model_dump(mode="json")["metadata"]["run_inputs"]
-    assert [item["key"] for item in analytics_inputs][:2] == ["problem_statement", "data_mode"]
-    assert "synthetic demo" in analytics_inputs[1]["options"]
-    validate_stage = next(stage for stage in analytics.stages if stage.stage_key == "validate_outputs")
-    assert "not generated" in validate_stage.instructions
-    assert "validation_passed true" in validate_stage.instructions
+    assert store.list_protocol_templates(access=operator_access()) == []
+    with pytest.raises(KeyError):
+        store.get_protocol_template("software-engineering", access=operator_access())
 
 
 def test_registry_store_authoring_options_and_templates_are_separate_resources(postgres_registry_truncated: str) -> None:
@@ -1267,9 +1243,7 @@ def test_registry_store_authoring_options_and_templates_are_separate_resources(p
     options = store.get_protocol_authoring_options(access=operator_access())
     templates = store.list_protocol_templates(access=operator_access())
 
-    assert templates
-    assert any(item.slug == "software-engineering" for item in templates)
-    assert any(item.slug == "document-approval" for item in templates)
+    assert templates == []
     assert "design" in options.sections
     assert "advanced" not in options.sections
     assert "review" in options.stage_kind_options
@@ -1417,7 +1391,7 @@ def test_registry_store_standard_surface_preserves_existing_operator_only_fields
     assert saved.draft_definition_json["stages"][0]["timeout_seconds"] == 300
 
 
-def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_starter(postgres_registry_truncated: str) -> None:
+def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_draft(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
 
     created = store.create_protocol_draft(
@@ -1438,7 +1412,7 @@ def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_st
     assert "Add at least one stage before review or publish." in created.validation.errors
 
 
-def test_registry_store_create_template_protocol_draft_clones_builtin_template(postgres_registry_truncated: str) -> None:
+def test_registry_store_create_template_protocol_draft_requires_user_published_template(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -1446,44 +1420,32 @@ def test_registry_store_create_template_protocol_draft_clones_builtin_template(p
         assert run_init(conn) == []
         conn.commit()
 
-    created = store.create_protocol_draft(
+    missing = store.create_protocol_draft(
         ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "software-engineering"}),
+        access=operator_access(),
+    )
+
+    assert missing.ok is False
+    assert missing.status == "not_found"
+
+    published = published_protocol(store, slug="template-source-for-draft")
+    assert published.protocol is not None
+    template_result = store.publish_protocol_template(published.protocol.protocol_id, access=operator_access())
+    assert template_result.ok is True
+    assert template_result.protocol is not None
+
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": template_result.protocol.slug}),
         access=operator_access(),
     )
 
     assert created.ok is True
     assert created.protocol is not None
-    assert created.protocol.slug != "software-engineering"
+    assert created.protocol.slug != template_result.protocol.slug
     assert created.draft_definition_json["metadata"]["display_name"].endswith("Draft")
     assert created.draft_definition_json["stages"]
     assert created.validation is not None
     assert created.validation.ok is True
-
-    approval_created = store.create_protocol_draft(
-        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "document-approval"}),
-        access=operator_access(),
-    )
-
-    assert approval_created.ok is True
-    assert approval_created.protocol is not None
-    assert approval_created.protocol.slug != "document-approval"
-    assert approval_created.draft_definition_json["metadata"]["display_name"].startswith("Document Approval")
-    assert approval_created.draft_definition_json["stages"]
-    assert approval_created.validation is not None
-    assert approval_created.validation.ok is True
-
-    analytics_created = store.create_protocol_draft(
-        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "manufacturing-local-analytics"}),
-        access=operator_access(),
-    )
-
-    assert analytics_created.ok is True
-    assert analytics_created.protocol is not None
-    assert analytics_created.protocol.slug != "manufacturing-local-analytics"
-    assert analytics_created.draft_definition_json["metadata"]["display_name"].startswith("Manufacturing Local Analytics")
-    assert analytics_created.draft_definition_json["stages"]
-    assert analytics_created.validation is not None
-    assert analytics_created.validation.ok is True
 
 
 def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_registry_truncated: str) -> None:
@@ -1507,7 +1469,7 @@ def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_
     assert cloned.validation.ok is True
 
 
-def test_registry_store_cleanup_workspace_data_preserves_builtin_templates(postgres_registry_truncated: str) -> None:
+def test_registry_store_cleanup_workspace_data_removes_authored_work_records(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -1515,10 +1477,7 @@ def test_registry_store_cleanup_workspace_data_preserves_builtin_templates(postg
         assert run_init(conn) == []
         conn.commit()
 
-    created = store.create_protocol_draft(
-        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "manufacturing-local-analytics"}),
-        access=operator_access(),
-    )
+    created = store.create_protocol_draft(ProtocolDraftCreateRecord.model_validate({"source_kind": "blank"}), access=operator_access())
     assert created.protocol is not None
     assert store.list_protocols(access=operator_access())
 
@@ -1526,8 +1485,7 @@ def test_registry_store_cleanup_workspace_data_preserves_builtin_templates(postg
 
     assert result["cleaned"] is True
     assert store.list_protocols(access=operator_access()) == []
-    analytics = store.get_protocol_template("manufacturing-local-analytics", access=operator_access())
-    assert analytics.display_name == "Manufacturing Local Analytics"
+    assert store.list_protocol_templates(access=operator_access()) == []
 
 
 def test_registry_store_delete_protocol_discards_unpublished_draft(postgres_registry_truncated: str) -> None:

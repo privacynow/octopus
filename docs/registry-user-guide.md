@@ -128,7 +128,7 @@ Use `Protocols` for authoring reusable workflows and managing templates.
 You can:
 
 - create from blank
-- create from starter template
+- copy from a saved user-authored template when one exists
 - edit stages
 - add a stage below the current stage
 - remove stages
@@ -137,17 +137,13 @@ You can:
 - inspect routing/transition flow
 - show the workflow map on demand
 - publish a protocol
-- publish a protocol as a template
+- publish a protocol as a user-authored template
 - start or inspect runs
 
-Built-in starter templates include:
-
-- `Software Engineering` for staged software planning, architecture,
-  implementation, review, and acceptance.
-- `Document Approval` for draft/review/approval document workflows.
-- `Manufacturing Local Analytics` for local CSV profiling, script generation,
-  repeatable analysis, artifact validation, and report review without raw row
-  prompts.
+Protocols do not ship with prepackaged starter workflows in the default
+customer path. To reuse a workflow, create it from blank, publish it, then use
+`Publish as template` from the protocol actions. That saved template can be
+copied into a new editable protocol later without changing the original.
 
 Standard authoring should focus on:
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scripts.demo.manufacturing_local_analytics.run_demo import (
     ARTIFACT_PATHS,
-    TEMPLATE_SLUG,
+    DEMO_KEY,
     build_demo_workspace,
 )
 
@@ -15,7 +15,7 @@ def test_manufacturing_local_analytics_demo_generates_expected_artifacts(tmp_pat
 
     manifest = build_demo_workspace(workspace)
 
-    assert manifest["demo"] == TEMPLATE_SLUG
+    assert manifest["demo"] == DEMO_KEY
     for relative_path in ARTIFACT_PATHS.values():
         assert (workspace / relative_path).is_file(), relative_path
 

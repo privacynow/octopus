@@ -699,7 +699,7 @@ class AbstractRegistryStore(Protocol):
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolDefinitionDocumentRecord:
-        """Return one builtin protocol template document by slug."""
+        """Return one user-authored protocol template document by slug."""
 
     def list_protocol_templates(
         self,
@@ -747,7 +747,7 @@ class AbstractRegistryStore(Protocol):
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolMutationRecord:
-        """Create one persisted draft from a blank starter, template, or existing protocol."""
+        """Create one persisted draft from blank, a template, or an existing protocol."""
 
     def delete_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Discard one unpublished protocol draft."""

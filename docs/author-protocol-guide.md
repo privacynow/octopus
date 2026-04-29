@@ -2,8 +2,8 @@
 
 This guide describes the current protocol authoring model in the registry UI.
 
-Protocols are reusable staged workflows. Templates are protocols marked
-reusable as starter definitions; they are managed inside the Protocols surface.
+Protocols are reusable staged workflows. Templates are user-authored protocols
+published as reusable snapshots; they are managed inside the Protocols surface.
 
 ## Current Authoring Surface
 
@@ -16,7 +16,7 @@ Build -> Protocols
 You can currently:
 
 - create a protocol from blank
-- create a protocol from a starter template
+- copy a saved user-authored template when one exists
 - edit stages inline
 - add a stage below the current stage
 - remove stages
@@ -25,7 +25,7 @@ You can currently:
 - define transitions/routing
 - show the workflow map on demand
 - validate and publish
-- publish a protocol as a template
+- publish a protocol as a user-authored template
 
 The UI is being consolidated around one progressive stage editor. If a change
 introduces a separate drawer, duplicate editor, or disconnected assignment
@@ -133,7 +133,7 @@ rather than looping forever.
 Recommended workflow:
 
 1. open `Protocols`
-2. create from blank or template
+2. create from blank, or copy a saved user-authored template when one exists
 3. name the protocol
 4. add/edit stages in order
 5. configure each stage assignment
@@ -153,22 +153,12 @@ Do not add a browser-only protocol format or a script-only format. Registry UI,
 registry API, SDK helpers, and Telegram-facing protocol commands must converge
 on the shared model.
 
-## Built-In Software Engineering Template
+## Templates
 
-The built-in `software-engineering` template is the current baseline for staged
-software work. It models planning, architecture, implementation, review, and
-acceptance over durable artifacts.
+Templates are not built into the default product path. A template exists only
+after a user publishes a protocol and chooses `Publish as template`. Copying a
+template creates a separate editable protocol; it does not mutate the saved
+template.
 
-Use it as a starting point when the workflow needs reviewable outputs rather
-than a one-off conversation.
-
-## Built-In Manufacturing Local Analytics Template
-
-The built-in `manufacturing-local-analytics` template is the customer-safe data
-analytics starter. It models local CSV contract definition, local profiling,
-analysis script generation, local execution, validation, and report review.
-
-Use it when the user needs repeatable analytics over private CSV or database
-extracts without pasting raw rows into the model prompt. The stage contract
-keeps model-visible context to schema, counts, relationship checks, and
-aggregates, while scripts and reports remain workspace artifacts.
+Use templates for workflows your team has already authored and wants to reuse.
+Use `New protocol` for new workflow design.

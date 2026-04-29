@@ -1444,7 +1444,7 @@ def test_protocol_authoring_options_and_template_routes_use_consistent_resources
                 {
                     "slug": "demo-template",
                     "display_name": "Demo Template",
-                    "description": "Reusable workflow starter.",
+                    "description": "Reusable protocol template.",
                     "featured": False,
                     "participant_count": 2,
                     "artifact_count": 1,
@@ -1460,7 +1460,7 @@ def test_protocol_authoring_options_and_template_routes_use_consistent_resources
                 "metadata": {
                     "slug": "demo-template",
                     "display_name": "Demo Template",
-                    "description": "Reusable workflow starter.",
+                    "description": "Reusable protocol template.",
                 },
                 "participants": [],
                 "artifacts": [],

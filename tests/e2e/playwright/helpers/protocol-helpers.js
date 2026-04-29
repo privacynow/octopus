@@ -188,8 +188,6 @@ async function setSelectValue(control, value) {
 async function openBlankDraft(page) {
   await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'New protocol' }).click();
-  await expect(page.locator('[data-testid="protocol-starter"]')).toBeVisible();
-  await page.getByRole('button', { name: 'Start blank' }).click();
   await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
   await expect(page.locator('.kit-authoring-primary-column')).toBeVisible();
 }
@@ -207,7 +205,8 @@ async function openTemplateDraft(page, templateName, { expectedStageKeys = [], r
   await page.goto('/ui/protocols?new=template', { waitUntil: 'domcontentloaded' });
   const templateCard = page.locator('.protocol-template-card').filter({ hasText: templateName }).first();
   await expect(templateCard).toBeVisible();
-  await templateCard.getByRole('button', { name: 'Use template' }).click();
+  await templateCard.getByRole('button', { name: 'Review and create' }).click();
+  await page.getByRole('button', { name: 'Create editable draft' }).click();
   await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
   if (expectedStageKeys.length) {
     await expect(page.locator('[data-testid^="workflow-stage-"]').first()).toBeVisible({ timeout: 15000 });

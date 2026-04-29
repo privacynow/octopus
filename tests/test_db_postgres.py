@@ -168,13 +168,13 @@ def test_protocol_responsiveness_indexes_exist(postgres_truncated):
     assert expected_indexes <= actual_indexes
 
 
-def test_run_init_does_not_seed_builtin_protocols_into_authored_definitions(postgres_base_url, request):
-    """DB init leaves builtin protocol examples out of authored protocol rows."""
+def test_run_init_does_not_seed_protocol_examples_into_authored_definitions(postgres_base_url, request):
+    """DB init leaves protocol examples out of authored protocol rows."""
     from app.db.postgres import get_connection
     from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
 
     worker_id = get_worker_id(request.config)
-    db_name = f"test_bot_registry_builtin_seed_{worker_id}".replace("-", "_")
+    db_name = f"test_bot_registry_protocol_seed_{worker_id}".replace("-", "_")
     db_url = _replace_db_in_url(postgres_base_url, db_name)
     create_test_database(postgres_base_url, db_name)
 

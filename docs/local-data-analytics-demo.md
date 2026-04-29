@@ -37,7 +37,7 @@ signals, and produce a daily repeatable report without uploading raw data.
 
 ## UI-First Protocol Build
 
-The customer-facing proof is not the built-in template and not a database seed.
+The customer-facing proof is not a prepackaged template and not a database seed.
 Build a protocol manually in the Registry UI so the customer can repeat the
 same steps.
 
@@ -84,47 +84,14 @@ download `apps/manufacturing-analytics/index.html`. In the opened app, generate
 synthetic data or upload local sample CSVs, run analytics, and export the
 findings.
 
-## Starter Template And Golden Script
+## Internal Regression Fixture
 
-The repository also contains a starter manufacturing analytics template and a
-deterministic local script. These are useful for regression testing and for a
-known-good reference, but they are not a substitute for the UI-first customer
-flow above.
+The repository contains a deterministic local script that verifies the
+analytics artifact expectations. This is useful for development and regression
+testing, but it is not the customer path and does not prove that the product UI
+is handoff-ready.
 
-The starter template is:
-
-```text
-Manufacturing Local Analytics
-```
-
-It is available from `Build -> Protocols -> New protocol -> Use template`.
-
-The starter template stages are:
-
-1. define input contract
-2. generate profile script
-3. run profile locally
-4. generate analysis script
-5. run analysis locally
-6. validate outputs
-7. review report
-
-The starter template artifacts are:
-
-- `protocol/input_contract.json`
-- `scripts/profile_manufacturing_data.py`
-- `reports/profile_summary.md`
-- `reports/model_visible_context.md`
-- `scripts/analyze_manufacturing_quality.py`
-- `reports/quality_flags.csv`
-- `reports/defect_summary.csv`
-- `reports/manufacturing_findings.md`
-- `reports/defect_heatmap.html`
-- `reports/run_manifest.json`
-
-## Automated Golden Demo
-
-Run the deterministic local demo from a fresh clone:
+Run the deterministic local fixture from a fresh clone:
 
 ```bash
 ./.venv/bin/python scripts/demo/manufacturing_local_analytics/run_demo.py \
@@ -149,28 +116,9 @@ Known deterministic findings:
 - High lamination temperature appears in the flagged population.
 - Night-shift records contain missing final test rows.
 
-## Registry Rehearsal Demo
-
-If the registry is running and you have the UI token, the same command can
-create a real protocol draft from the built-in template, publish it, start a
-rehearsal run, and attach the generated local artifacts through the run artifact
-APIs:
-
-```bash
-REGISTRY_UI_TOKEN=<token> \
-OCTOPUS_REGISTRY_URL=http://127.0.0.1:8787 \
-./.venv/bin/python scripts/demo/manufacturing_local_analytics/run_demo.py \
-  --workspace .tmp/demo/manufacturing-local-analytics \
-  --require-registry
-```
-
-Open the run shown in `reports/run_manifest.json` and review the artifacts.
-This is a rehearsal run: external transports are gated, but the run, stages,
-and artifact content use the same protocol/run/artifact surfaces as normal
-authoring.
-
-For customer acceptance, prefer the UI-first `Run protocol` flow. Rehearsal is
-for authoring validation, not proof of provider-backed execution.
+The fixture must stay separate from customer acceptance. Customer acceptance
+requires building the protocol from blank in `Build -> Protocols`, publishing
+it, running it, and opening/downloading the produced artifacts from the UI.
 
 ## Telegram Inspection
 

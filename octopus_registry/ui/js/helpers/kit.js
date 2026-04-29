@@ -169,7 +169,7 @@ window.Kit = (() => {
         'protocol.canvas.empty.title': 'Start the workflow',
         'protocol.canvas.empty.body': 'Add the first step in the workflow and create its owner role inline if needed.',
         'protocol.catalog.empty.title': 'No protocols yet',
-        'protocol.catalog.empty.body': 'Create a blank protocol, or start from a reusable template.',
+        'protocol.catalog.empty.body': 'Create a blank protocol from scratch. Saved templates appear here only after you publish one.',
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',

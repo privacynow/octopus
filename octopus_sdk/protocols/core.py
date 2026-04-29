@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from . import builtins as _builtins
 from . import documents as _documents
 from . import models as _models
-from .builtins import *  # noqa: F401,F403
 from .documents import *  # noqa: F401,F403
 from .models import *  # noqa: F401,F403
 
-__all__ = [*_models.__all__, *_documents.__all__, *_builtins.__all__]
+__all__ = [*_models.__all__, *_documents.__all__]

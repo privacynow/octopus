@@ -110,10 +110,11 @@ The manufacturing analytics customer path must specifically support:
 - Do not create parallel implementations for the same product behavior.
 - Do not seed database state as a substitute for testing the UI and bot paths.
 - Do not make curated generated artifacts the acceptance target.
-- Do not treat code-defined starter templates as proof that users can create
-  the workflow. Customer startup must create the workflow through a visible
-  product onboarding path; manual authoring remains a documented escape hatch
-  and regression test.
+- Do not treat code-defined templates, starters, accelerators, or demo scripts
+  as proof that users can create the workflow. The default customer path is
+  blank protocol authoring in the Protocols UI. Templates are allowed only when
+  a user publishes a protocol as a reusable template and later copies that
+  user-authored template.
 - Do not treat `scripts/demo/.../run_demo.py` as a customer path. It is an
   internal regression fixture only.
 - Do not make skills mandatory for stage creation.
@@ -172,21 +173,21 @@ Implementation:
 6. Ensure demo data is not required for the first meaningful path.
 7. Add troubleshooting for stale containers, cache, ports, missing auth, and
    failed agent enrollment.
-8. Add a customer startup/onboarding path for the local analytics use case:
-   - user chooses `Local manufacturing analytics`,
-   - user reviews the stages/artifacts/privacy boundary before creation,
-   - product creates the protocol through the same Registry protocol authoring
-     API/UI pipeline used by normal authors,
-   - user can immediately publish/run or edit before publishing.
+8. Document the blank-authoring path for the local analytics use case:
+   - user opens `Build -> Protocols`,
+   - user clicks `New protocol`,
+   - user creates stages, files, assignments, and routing from scratch,
+   - user publishes and runs the protocol through the same UI/API pipeline used
+     by every normal author.
 
 Acceptance:
 
 - A fresh clone can start the system using only the documented path.
 - UI health, `./octopus status`, and API health agree.
 - The docs do not mention stale setup paths or removed root planning files.
-- A customer can create the local analytics protocol during startup without
-  editing code, running `run_demo.py`, or manually entering every advanced
-  stage field.
+- A customer can create the local analytics protocol from blank without editing
+  code, running `run_demo.py`, using a hidden built-in, or touching advanced
+  runtime fields.
 
 ### W1: Navigation And Product Information Architecture
 
@@ -249,9 +250,9 @@ Implementation:
 Acceptance:
 
 - User creates a protocol from blank using UI only.
-- User can create the Manufacturing Local Analytics workflow through the
-  customer startup/onboarding UI without editing code or relying on a silent
-  pre-seeded built-in template.
+- User can create the manufacturing/local analytics workflow from a blank
+  protocol in the Protocols UI without editing code or relying on a silent
+  pre-seeded template.
 - User can still manually inspect/edit the generated stages and artifacts after
   creation.
 - User adds, removes, edits, and reorders stages without lost input.
@@ -376,26 +377,26 @@ must guide the user to generate local tooling that operates on local files.
 
 Implementation:
 
-1. Create a customer-facing startup/onboarding flow that creates the protocol
-   through UI-visible product actions:
-   - present the workflow purpose,
-   - present stages and artifacts before creation,
-   - explain the privacy boundary,
-   - create a draft using the same protocol draft API used by normal UI
-     authors,
-   - route the user to the created draft for edit/publish/run.
-2. Do not make users hand-enter every stage during first startup. The product
-   may provide a recommended blueprint, but the user must see, approve, and
-   own the created protocol from the UI.
-3. Document the manual construction path as a fallback and regression test:
+1. Support this use case through the normal blank protocol authoring flow. Do
+   not add a customer-specific starter, accelerator, hidden template, database
+   seed, dashboard shortcut, or code-defined blueprint.
+2. Document the manual construction path as the primary customer path:
    - protocol name and description,
-   - seven stage names or the simplified customer-ready stage sequence,
+   - customer-ready stage sequence,
    - assignment options,
    - artifact keys, paths, and descriptions,
    - transitions,
    - run dialog input fields,
    - review acceptance criteria.
-4. Create a customer-facing protocol flow that asks for:
+3. Ensure the Protocols UI supports the authoring mechanics needed to build the
+   workflow from blank:
+   - stage creation does not require a skill,
+   - stage creation does not require an agent,
+   - file/artifact declarations are stage-aware and reusable,
+   - routing can be expressed without internal runtime controls,
+   - run input prompts can be configured from protocol metadata through UI or
+     another standard authoring surface.
+4. Create a customer-authored protocol flow that asks for:
    - data source type: CSV extracts, Oracle tables, or synthetic demo,
    - table/file names,
    - key relationships,
@@ -423,10 +424,9 @@ Implementation:
 9. Keep `scripts/demo/manufacturing_local_analytics/run_demo.py` only as an
    internal deterministic regression fixture. It may validate artifact quality,
    but it must not be referenced as the customer acceptance path.
-10. Treat `octopus_sdk/protocols/builtins.py` starter definitions as internal
-    blueprint data that can power onboarding, not as a hidden customer action.
-    Protocols startup must surface the blueprint and create the editable protocol
-    through product UI.
+10. Remove code-defined protocol templates from product surfaces. If an
+    internal fixture remains for tests, it must not be loaded by Registry
+    template APIs, shown in Protocols, or described as a customer path.
 
 Recommended protocol stages:
 
@@ -438,7 +438,7 @@ Recommended protocol stages:
 
 Acceptance:
 
-- User creates/runs this workflow through customer startup/onboarding UI only.
+- User creates/runs this workflow from a blank protocol in Protocols UI only.
 - The workflow produces a local tool artifact and a human README.
 - Raw customer rows are not required or transmitted to the model.
 - Synthetic demo mode produces visible findings.
@@ -455,7 +455,7 @@ The product needs review criteria that fail the run or mark it needing revision.
 
 Implementation:
 
-1. Add protocol guidance/templates that require explicit acceptance criteria for
+1. Add protocol instructions that require explicit acceptance criteria for
    generated apps/scripts.
 2. For local analytics tools, require checks for:
    - tunable synthetic data levers,
@@ -646,18 +646,22 @@ Pass criteria:
 
 ### Scenario F: Local-Only Manufacturing Analytics
 
-1. Start from a fresh customer startup screen or first-run guide.
-2. Choose `Local manufacturing analytics`.
-3. Review the proposed stages, artifacts, and privacy boundary.
-4. Click the visible action to create the editable protocol draft.
-5. Edit if needed, then publish.
-6. Start the protocol from UI.
-7. State the privacy constraint: raw CSVs must not be sent to model provider.
-8. Provide schema/table names and relationships manually through UI.
-9. Generate local tool artifacts.
-10. Open/download generated local tool and README.
-11. Run synthetic demo mode.
-12. Verify aggregate findings and downloadable report.
+1. Open `Build -> Protocols`.
+2. Click `New protocol`.
+3. Name the blank protocol for local manufacturing analytics.
+4. Define files/artifacts for the app or script, README, report, validation
+   manifest, and generated aggregate outputs.
+5. Add the stages from scratch.
+6. Assign stages by skill, by agent, both, or neither where appropriate.
+7. Define transitions and terminal success/failure outcomes.
+8. Publish the protocol.
+9. Start the protocol from UI.
+10. State the privacy constraint: raw CSVs must not be sent to model provider.
+11. Provide schema/table names and relationships manually through UI.
+12. Generate local tool artifacts.
+13. Open/download generated local tool and README.
+14. Run synthetic demo mode.
+15. Verify aggregate findings and downloadable report.
 
 Pass criteria:
 
@@ -699,8 +703,9 @@ green.
 
 ### Phase 5: Local Analytics Workflow
 
-- Build the workflow through product primitives.
-- Add protocol/template/guidance only through normal product paths.
+- Build the workflow from blank through product primitives.
+- Do not add built-in templates, starters, accelerators, hidden shortcuts, or
+  database seeds.
 - Ensure generated artifact review criteria are explicit.
 - Verify no direct database setup.
 
@@ -770,10 +775,10 @@ For any handoff claim:
 | H4 | Artifact access must be verified across all references. | Run artifact drill-through from run, stage, task, conversation, Telegram. |
 | H5 | Conversation-launched protocols need customer-obvious flow and lineage. | Execute Scenario D and fix missing linked-work presentation. |
 | H6 | Telegram protocol parity must be rechecked after SDK/service work. | Execute Scenario E against live/stub topology. |
-| H7 | Local-only analytics workflow is not yet a repeatable UI-created product path. | Implement and verify Scenario F. |
+| H7 | Local-only analytics workflow is not yet a repeatable blank-authored product path. | Implement and verify Scenario F. |
 | H8 | Customer docs/manual are not yet acceptance-tested. | Update docs and run every documented step. |
 | H9 | Full real Safari desktop/narrow audit has not been completed after known blockers. | Run audit only after H1-H8 are addressed. |
-| H10 | Manufacturing analytics acceptance still relied on code-defined starter/script references. | Implemented review-before-create startup path; verify in real Safari that customer creates the protocol from UI and that `run_demo.py` is not part of acceptance. |
+| H10 | Manufacturing analytics acceptance still relied on code-defined starter/script references. | Remove built-in starter exposure; verify in real Safari that customer creates the protocol from blank UI and that `run_demo.py` is not part of acceptance. |
 | H11 | UI-created manufacturing run accepted a placeholder heatmap that said validation did not pass. | Protocol instructions and launch defaults now reject placeholder/render-failed artifacts; rerun from UI and verify terminal artifacts. |
 | H12 | Running protocol stages did not explain liveness/current state to the user. | Implemented run Overview liveness guidance with current stage, elapsed time, event update, output counts, and completed-run estimate when history exists; verify in real Safari during a live run. |
 | H13 | Workspace reset required container/database intervention outside the product. | Implemented Dashboard workspace-data cleanup guarded by Registry UI password and `CLEAN` confirmation; verify it preserves agents/skills/guidance while removing workspace work records. |
@@ -781,14 +786,15 @@ For any handoff claim:
 ## Non-Goals For Handoff
 
 - Hand-editing a generated artifact and calling the product ready.
-- Using `run_demo.py` or a hidden built-in template action as the customer proof
-  instead of startup/onboarding-created workflow.
+- Using `run_demo.py`, a hidden built-in template, a seeded template, or a
+  customer-specific shortcut as the customer proof instead of blank UI
+  authoring.
 - Requiring a customer to use hidden URLs or direct API calls.
 - Requiring direct database writes.
 - Presenting M3/Claude as required when auth is not configured.
 - Exposing operator-only authoring internals to normal users.
-- Shipping a separate template/gallery UI when Protocols already owns reusable
-  starters.
+- Shipping a separate template/gallery UI when Protocols already owns
+  user-authored reusable templates.
 
 ## Decision Log
 
@@ -803,3 +809,8 @@ For any handoff claim:
   implementation.
 - Customer acceptance is based on repeatable product flows, not curated output
   files.
+- Blank protocol authoring is the default product path.
+- User-authored templates remain supported: publish a protocol as a template,
+  then copy that saved template into a new editable protocol.
+- Code-defined built-in protocol templates/starters are not part of the product
+  surface.

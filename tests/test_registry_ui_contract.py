@@ -161,6 +161,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.saveProtocolDraft(" in workspace
     assert "API.publishProtocol(" in workspace
     assert "API.createProtocolTemplate(" in workspace
+    assert "protocol-template-chooser" in workspace
+    assert "onClick: () => void _createBlankDraft()" in workspace
+    assert "protocolTemplates.length" in workspace
     assert "API.archiveProtocol(" in workspace
     assert "API.deleteProtocol(" in workspace
     assert "API.validateProtocol(" in workspace

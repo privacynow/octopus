@@ -36,7 +36,8 @@ Important current details:
 - `Approvals` still exists as a route and API. It is surfaced from Dashboard
   or direct links rather than as a primary menu item.
 - `Templates` are managed inside Protocols. There is no separate template
-  gallery product surface in the main navigation.
+  gallery product surface in the main navigation, and no prepackaged starter
+  protocols are exposed by default.
 - Protocol authoring, run detail, artifacts, and linked work are actively being
   consolidated around one lineage model. Treat the docs in this repo as the
   source of truth for current behavior, not old screenshots or prior plans.
@@ -131,7 +132,7 @@ pipeline without pasting raw manufacturing records into the model prompt. The
 operator still controls the boundary: do not paste raw rows or attach private
 files to chat unless that is explicitly approved for the deployment.
 
-Run the deterministic demo:
+For development regression checks, run the deterministic local fixture:
 
 ```bash
 ./.venv/bin/python scripts/demo/manufacturing_local_analytics/run_demo.py \
@@ -210,9 +211,10 @@ plane and executed through routed work.
 Current behavior:
 
 - author drafts in the Protocols UI
-- create from blank or starter templates
+- create new protocols from blank
+- publish a protocol as a user-authored template and later copy from that saved
+  template
 - publish protocol definitions
-- publish a protocol as a template
 - start runs from registry UI or Telegram
 - inspect run overview, stages, artifacts, and audit data
 - intervene with `retry`, `accept`, `send-back`, and `cancel` where permitted

@@ -502,13 +502,13 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('starter deep link can create a blank draft after generated catalog render', async ({ page }) => {
+  test('template deep link without saved templates falls back to blank catalog', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
     await page.goto('/ui/protocols?workflow_map=auto&include_generated=1&new=template', { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('[data-testid="protocol-starter"]')).toBeVisible();
-    await page.getByRole('button', { name: 'Start blank', exact: true }).click();
+    await expect(page.locator('[data-testid="protocol-template-chooser"]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'New protocol', exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
     await expect(page.locator('.kit-authoring-primary-column')).toBeVisible({ timeout: 15000 });
 
@@ -886,7 +886,7 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
-  test('published protocol can be copied into the protocol starter chooser', async ({ page }) => {
+  test('published protocol can be copied through the saved-template chooser', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 
     await login(page);
@@ -909,7 +909,8 @@ test.describe('protocol authoring live', () => {
     await page.goto('/ui/protocols?new=template', { waitUntil: 'domcontentloaded' });
     const templateCard = page.locator('.protocol-template-card').filter({ hasText: sourceName });
     await expect(templateCard).toBeVisible({ timeout: 15000 });
-    await templateCard.getByRole('button', { name: 'Use template', exact: true }).click();
+    await templateCard.getByRole('button', { name: 'Review and create', exact: true }).click();
+    await page.getByRole('button', { name: 'Create editable draft', exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/protocols\?.*protocol_id=/);
     await expect(page.locator('.kit-lifecycle-header').getByLabel('Name')).toHaveValue(`${sourceName} Template Draft`, { timeout: 15000 });
 

@@ -251,6 +251,11 @@ test('runs use inline expansion instead of the old split detail board', async ({
   await sectionTabs.filter({ hasText: 'Artifacts' }).click();
   await expect(page.getByRole('tablist', { name: 'Run artifact stage evidence' })).toHaveCount(1);
   await expect(page.locator('.artifact-list-row').first()).toBeVisible();
+  await sectionTabs.filter({ hasText: 'Stages' }).click();
+  await expect(page.getByRole('tablist', { name: 'Run stage evidence' })).toHaveCount(1);
+  await stageTabs.first().click();
+  await expect(stageTabs.first()).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.protocol-lineage-title').first()).toContainText(firstDefinition.display_name || firstStage.stage_key || '');
   await expect(page.locator('.kit-runs-list-row[aria-expanded="true"]')).toHaveCount(1);
   await page.locator('.kit-runs-list-row[aria-expanded="true"]').click();
   await expect(page.locator('.kit-runs-inline-detail')).toHaveCount(0);

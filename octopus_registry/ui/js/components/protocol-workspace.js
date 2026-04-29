@@ -7055,6 +7055,7 @@ function renderProtocolRuns(container) {
             },
             { label: 'Run evidence section', value: activeRunDetailSection || 'overview' },
         );
+        sectionControl.element.dataset.key = 'run-evidence-section-nav';
         sectionControl.element.classList.add('kit-stage-workspace-nav');
         const sectionToolbar = document.createElement('div');
         sectionToolbar.className = 'kit-stage-workspace-toolbar';
@@ -7080,8 +7081,10 @@ function renderProtocolRuns(container) {
                 }
                 const stageOptions = stageRows.map((item, index) => {
                     const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
+                    const value = stageValueFor(item, index);
                     return {
-                        value: stageValueFor(item, index),
+                        key: `run-stage-evidence:${value}`,
+                        value,
                         label: `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'}`,
                     };
                 });
@@ -7094,6 +7097,7 @@ function renderProtocolRuns(container) {
                     },
                     { label: 'Run stage evidence', value: activeRunStageExecutionId },
                 );
+                stageControl.element.dataset.key = 'run-stage-evidence-nav';
                 stageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
                 const stageToolbar = document.createElement('div');
                 stageToolbar.className = 'kit-stage-workspace-toolbar';
@@ -7143,6 +7147,7 @@ function renderProtocolRuns(container) {
                 }
                 const artifactStageControl = UI.createSegmentedControl(
                     artifactStageGroups.map((item) => ({
+                        key: `run-artifact-stage-evidence:${item.value}`,
                         value: item.value,
                         label: `${item.index + 1}. ${item.stageDef.display_name || item.stage.stage_key || 'Stage'} (${item.producedArtifacts.length})`,
                     })),
@@ -7153,6 +7158,7 @@ function renderProtocolRuns(container) {
                     },
                     { label: 'Run artifact stage evidence', value: activeRunArtifactStageExecutionId },
                 );
+                artifactStageControl.element.dataset.key = 'run-artifact-stage-evidence-nav';
                 artifactStageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
                 const artifactStageToolbar = document.createElement('div');
                 artifactStageToolbar.className = 'kit-stage-workspace-toolbar';

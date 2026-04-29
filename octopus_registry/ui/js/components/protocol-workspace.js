@@ -6013,6 +6013,15 @@ function renderProtocolWorkspace(container) {
             slug.textContent = String(template.slug || '');
             copyBlock.appendChild(slug);
             top.appendChild(copyBlock);
+            const cardActions = document.createElement('div');
+            cardActions.className = 'editor-actions';
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'btn btn-primary';
+            use.textContent = 'Use template';
+            use.dataset.protocolTemplateSlug = String(template.slug || '');
+            cardActions.appendChild(use);
+            top.appendChild(cardActions);
             card.appendChild(top);
 
             const description = document.createElement('p');
@@ -6033,16 +6042,6 @@ function renderProtocolWorkspace(container) {
                 meta.appendChild(item);
             });
             card.appendChild(meta);
-
-            const cardActions = document.createElement('div');
-            cardActions.className = 'editor-actions';
-            const use = document.createElement('button');
-            use.type = 'button';
-            use.className = 'btn btn-primary';
-            use.textContent = 'Use template';
-            use.dataset.protocolTemplateSlug = String(template.slug || '');
-            cardActions.appendChild(use);
-            card.appendChild(cardActions);
             list.appendChild(card);
         });
         shell.appendChild(list);

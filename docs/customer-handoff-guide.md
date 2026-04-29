@@ -11,13 +11,14 @@ database writes.
 
 Current customer-ready entry point under test:
 
-1. open `Work -> Dashboard`,
-2. use `Customer handoff -> Clean customer work data` only when resetting a
-   demo/customer environment,
-3. use `Customer handoff -> Create local analytics protocol`,
-4. review the starter workflow,
-5. create a customer-owned draft,
-6. publish and run it from the UI.
+1. open `Operations -> Dashboard`,
+2. use `Workspace maintenance -> Clean workspace data` only when resetting a
+   demo environment,
+3. open `Build -> Protocols`,
+4. choose the local analytics starter,
+5. review the starter workflow,
+6. create an editable protocol,
+7. publish and run it from the UI.
 
 ## Handoff Goal
 
@@ -250,8 +251,8 @@ redeploy.
 
 Expected steps:
 
-1. Go to `Work -> Dashboard`.
-2. In `Customer handoff`, click `Clean customer work data`.
+1. Go to `Operations -> Dashboard`.
+2. In `Workspace maintenance`, click `Clean workspace data`.
 3. Enter the Registry UI password.
 4. Type `CLEAN`.
 5. Confirm the action removes conversations, tasks, protocols, runs, artifacts,

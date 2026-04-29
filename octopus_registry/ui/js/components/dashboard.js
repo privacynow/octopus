@@ -549,7 +549,7 @@ function renderDashboard(container) {
         form.className = 'conversation-management-form';
         const note = document.createElement('p');
         note.className = 'quiet-note';
-        note.textContent = 'This removes customer work records from the registry database: conversations, tasks, protocol definitions, runs, artifacts, events, and deliveries. Registered agents, skill catalog entries, guidance, and tokens are preserved so bots can keep running.';
+        note.textContent = 'This removes workspace work records from the registry database: conversations, tasks, protocol definitions, runs, artifacts, events, and deliveries. Registered agents, skill catalog entries, guidance, and tokens are preserved so bots can keep running.';
         form.appendChild(note);
 
         const passwordLabel = document.createElement('label');
@@ -586,8 +586,8 @@ function renderDashboard(container) {
         const cleanBtn = document.createElement('button');
         cleanBtn.type = 'button';
         cleanBtn.className = 'btn';
-        cleanBtn.textContent = 'Clean customer data';
-        const view = UI.showDialog('Clean customer data', form, {
+        cleanBtn.textContent = 'Clean workspace data';
+        const view = UI.showDialog('Clean workspace data', form, {
             actions: [cancelBtn, cleanBtn],
             role: 'alertdialog',
             initialFocus: passwordInput,
@@ -597,16 +597,16 @@ function renderDashboard(container) {
         cleanBtn.addEventListener('click', async () => {
             cleanBtn.disabled = true;
             try {
-                await API.cleanupCustomerData({
+                await API.cleanupWorkspaceData({
                     password: passwordInput.value || '',
                     confirm: confirmInput.value || '',
                 });
                 view.close();
-                UI.notify('Customer work data cleaned. Agents and skills were preserved.', 'success');
+                UI.notify('Workspace data cleaned. Agents and skills were preserved.', 'success');
                 await refreshSnapshot({ soft: true });
             } catch (err) {
-                UI.reportError('Failed to clean customer data', err, {
-                    context: 'Dashboard customer-data cleanup failed',
+                UI.reportError('Failed to clean workspace data', err, {
+                    context: 'Dashboard workspace-data cleanup failed',
                 });
                 cleanBtn.disabled = false;
             }
@@ -620,19 +620,13 @@ function renderDashboard(container) {
         const head = document.createElement('div');
         head.className = 'section-header';
         const title = document.createElement('strong');
-        title.textContent = 'Customer handoff';
+        title.textContent = 'Workspace maintenance';
         head.appendChild(title);
         section.appendChild(head);
         const body = document.createElement('div');
         body.className = 'list-container';
-        body.appendChild(UI.renderListRow({
-            label: 'Create local analytics protocol',
-            sublabel: 'Open the starter workflow, review the stages and artifacts, then create a customer-owned draft.',
-            badgeText: 'startup',
-            href: '/ui/protocols?new=template&workflow_map=auto',
-        }));
         const cleanupRow = UI.renderListRow({
-            label: 'Clean customer work data',
+            label: 'Clean workspace data',
             sublabel: 'Preserves agents and skills; removes conversations, tasks, protocols, runs, artifacts, and events.',
             badgeText: 'requires password',
             onClick: openCleanupDialog,

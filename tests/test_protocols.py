@@ -1507,7 +1507,7 @@ def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_
     assert cloned.validation.ok is True
 
 
-def test_registry_store_cleanup_customer_data_preserves_builtin_templates(postgres_registry_truncated: str) -> None:
+def test_registry_store_cleanup_workspace_data_preserves_builtin_templates(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -1522,7 +1522,7 @@ def test_registry_store_cleanup_customer_data_preserves_builtin_templates(postgr
     assert created.protocol is not None
     assert store.list_protocols(access=operator_access())
 
-    result = store.cleanup_customer_data()
+    result = store.cleanup_workspace_data()
 
     assert result["cleaned"] is True
     assert store.list_protocols(access=operator_access()) == []

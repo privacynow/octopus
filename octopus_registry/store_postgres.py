@@ -1074,7 +1074,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now_iso=now_iso,
             )
 
-    def cleanup_customer_data(self) -> dict[str, object]:
+    def cleanup_workspace_data(self) -> dict[str, object]:
         tables = (
             "deliveries",
             "management_requests",

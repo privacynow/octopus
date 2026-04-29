@@ -193,8 +193,8 @@ const API = (() => {
         // Agents
         getSummary: () =>
             request('GET', '/v1/summary'),
-        cleanupCustomerData: (body = {}) =>
-            request('POST', '/v1/admin/customer-data/cleanup', { body }),
+        cleanupWorkspaceData: (body = {}) =>
+            request('POST', '/v1/admin/workspace-data/cleanup', { body }),
         listApprovals: (opts = {}) =>
             request('GET', '/v1/approvals', { params: opts }),
         listAgents: (opts = {}) =>

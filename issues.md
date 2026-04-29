@@ -131,7 +131,7 @@ The manufacturing analytics customer path must specifically support:
 
 ## Definition Of Done
 
-Customer handoff is done only when every item below passes from a clean checkout
+Customer-ready handoff is done only when every item below passes from a clean checkout
 without direct database setup:
 
 | Gate | Required Result |
@@ -425,7 +425,7 @@ Implementation:
    but it must not be referenced as the customer acceptance path.
 10. Treat `octopus_sdk/protocols/builtins.py` starter definitions as internal
     blueprint data that can power onboarding, not as a hidden customer action.
-    Startup must surface the blueprint and create the customer-owned protocol
+    Protocols startup must surface the blueprint and create the editable protocol
     through product UI.
 
 Recommended protocol stages:
@@ -649,7 +649,7 @@ Pass criteria:
 1. Start from a fresh customer startup screen or first-run guide.
 2. Choose `Local manufacturing analytics`.
 3. Review the proposed stages, artifacts, and privacy boundary.
-4. Click the visible action to create the customer-owned protocol draft.
+4. Click the visible action to create the editable protocol draft.
 5. Edit if needed, then publish.
 6. Start the protocol from UI.
 7. State the privacy constraint: raw CSVs must not be sent to model provider.
@@ -776,7 +776,7 @@ For any handoff claim:
 | H10 | Manufacturing analytics acceptance still relied on code-defined starter/script references. | Implemented review-before-create startup path; verify in real Safari that customer creates the protocol from UI and that `run_demo.py` is not part of acceptance. |
 | H11 | UI-created manufacturing run accepted a placeholder heatmap that said validation did not pass. | Protocol instructions and launch defaults now reject placeholder/render-failed artifacts; rerun from UI and verify terminal artifacts. |
 | H12 | Running protocol stages did not explain liveness/current state to the user. | Implemented run Overview liveness guidance with current stage, elapsed time, event update, output counts, and completed-run estimate when history exists; verify in real Safari during a live run. |
-| H13 | Customer reset required container/database intervention outside the product. | Implemented Dashboard customer-data cleanup guarded by Registry UI password and `CLEAN` confirmation; verify it preserves agents/skills/guidance while removing customer work records. |
+| H13 | Workspace reset required container/database intervention outside the product. | Implemented Dashboard workspace-data cleanup guarded by Registry UI password and `CLEAN` confirmation; verify it preserves agents/skills/guidance while removing workspace work records. |
 
 ## Non-Goals For Handoff
 

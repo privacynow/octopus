@@ -1399,8 +1399,8 @@ def resource_summary(
     return _json_payload(store.get_summary(now_iso=now_iso))
 
 
-@app.post("/v1/admin/customer-data/cleanup")
-async def resource_cleanup_customer_data(
+@app.post("/v1/admin/workspace-data/cleanup")
+async def resource_cleanup_workspace_data(
     request: Request,
     store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_write_access),
@@ -1412,13 +1412,13 @@ async def resource_cleanup_customer_data(
     password = str((payload or {}).get("password") or "")
     confirm = str((payload or {}).get("confirm") or "").strip().upper()
     if confirm != "CLEAN":
-        raise HTTPException(status_code=400, detail="Type CLEAN to confirm customer-data cleanup.")
+        raise HTTPException(status_code=400, detail="Type CLEAN to confirm workspace-data cleanup.")
     if not ui_password_matches(password, settings=load_settings()):
         raise HTTPException(status_code=403, detail="Registry UI password did not match.")
-    result = store.cleanup_customer_data()
+    result = store.cleanup_workspace_data()
     await _broadcast_invalidations(
         topics=("summary", "conversations", "tasks", "approvals", "protocols"),
-        reason="admin.customer_data.cleanup",
+        reason="admin.workspace_data.cleanup",
     )
     return _json_payload(result)
 

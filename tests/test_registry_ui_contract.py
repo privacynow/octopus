@@ -788,9 +788,8 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert "secondaryColumn.className = 'dashboard-column';" in dashboard
     assert "function refreshSnapshot(" in dashboard
     assert "function openCleanupDialog()" in dashboard
-    assert "API.cleanupCustomerData({" in dashboard
-    assert "'Create local analytics protocol'" in dashboard
-    assert "'Clean customer work data'" in dashboard
+    assert "API.cleanupWorkspaceData({" in dashboard
+    assert "'Clean workspace data'" in dashboard
     assert "refreshSummaryOnly" not in dashboard
     assert "refreshAgents" not in dashboard
     assert "refreshConversations" not in dashboard

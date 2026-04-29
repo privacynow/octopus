@@ -1670,7 +1670,7 @@ function renderProtocolWorkspace(container) {
             body.textContent = '';
             const summary = document.createElement('p');
             summary.className = 'quiet-note';
-            summary.textContent = `${metadata.display_name || template?.display_name || templateSlug} will be copied into a separate editable protocol. The starter is not mutated; the customer-owned draft can be changed, published, and run from the UI.`;
+            summary.textContent = `${metadata.display_name || template?.display_name || templateSlug} will be copied into a separate editable protocol. The starter is not mutated; the new protocol can be changed, published, and run from the UI.`;
             body.appendChild(summary);
             const stageList = document.createElement('div');
             stageList.className = 'protocol-lineage-list';

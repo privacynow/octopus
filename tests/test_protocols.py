@@ -761,6 +761,46 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     assert detail.run.termination_summary == "Accepted."
 
 
+def test_registry_store_protocol_run_completes_single_work_stage_without_transition(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    document = {
+        **protocol_document(),
+        "artifacts": [],
+        "stages": [
+            {
+                **protocol_document()["stages"][0],
+                "stage_key": "release-readiness",
+                "display_name": "Release readiness",
+                "inputs": [],
+                "outputs": [],
+                "transitions": {},
+            }
+        ],
+    }
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    token = enroll.agent_token
+    first_stage = detail.stage_executions[0]
+
+    store.update_routed_task_result(
+        token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "single-stage-complete",
+            "summary": "Ready.",
+            "full_text": "Ready to proceed.\nPROTOCOL_SUMMARY: Ready.",
+        },
+    )
+
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert detail.run.status == "completed"
+    assert detail.run.blocked_code == ""
+    assert detail.run.termination_summary == "Ready."
+    assert any(item.transition_kind == "terminal" for item in detail.transitions)
+
+
 def test_registry_store_protocol_run_detail_projects_latest_artifact_once(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     document = {

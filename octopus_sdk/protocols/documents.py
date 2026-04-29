@@ -829,7 +829,7 @@ def parse_protocol_stage_decision(
 def stage_target_for_decision(stage: ProtocolStageDefinitionRecord, decision: str) -> str:
     normalized = str(decision or "").strip().lower()
     if stage.stage_kind == "work" and not stage.transitions.as_dict():
-        return ""
+        return "__complete__" if normalized == "completed" else ""
     target = stage.transition_target(normalized)
     if not target and stage.stage_kind == "work" and normalized == "completed":
         return ""

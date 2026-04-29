@@ -5951,7 +5951,10 @@ function renderProtocolWorkspace(container) {
     }
 
     function _starterChooserEl() {
-        const templates = Array.isArray(protocolTemplates) ? protocolTemplates : [];
+        const templates = UI.defaultVisibleRecords(
+            Array.isArray(protocolTemplates) ? protocolTemplates : [],
+            { includeHidden: includeGeneratedCatalog },
+        );
         const shell = document.createElement('section');
         shell.className = 'editor-panel protocol-panel';
         shell.dataset.testid = 'protocol-starter';

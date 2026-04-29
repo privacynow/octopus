@@ -306,6 +306,7 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "API.getProtocolTemplate(" not in workspace
     assert "API.getProtocolAuthoringManifest(" not in workspace
     assert "loadDefaultTemplate" not in workspace
+    assert "UI.defaultVisibleRecords(\n            Array.isArray(protocolTemplates) ? protocolTemplates : []" in workspace
 
     # Protocol authoring lifecycle subscription is retained
     assert "UI.subscribeWithRefresh(cleanups, 'agents'" in workspace

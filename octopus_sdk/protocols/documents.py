@@ -711,6 +711,9 @@ def _render_run_constraints(constraints: object) -> str:
     if not data:
         return ""
     labels = {
+        "context": "Context",
+        "constraints": "Constraints",
+        "expected_outputs": "Expected outputs",
         "source_context": "Files or data context",
         "relationship_context": "Keys and relationships",
         "desired_outputs": "Expected outputs",

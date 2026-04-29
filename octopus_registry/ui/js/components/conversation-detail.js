@@ -45,12 +45,9 @@ function renderConversationDetail(container, params) {
     let selectedActivationSkill = requestedActivationSkill;
     let selectedProtocolId = '';
     let protocolProblemStatement = '';
-    let protocolLaunchContext = {
-        source_context: '',
-        relationship_context: '',
-        desired_outputs: '',
-        privacy_constraints: 'Do not include raw private data rows in model-visible context. Generate tools that process private data locally when needed.',
-    };
+    let protocolLaunchContext = {};
+    let protocolLaunchFieldsByProtocolId = {};
+    const protocolLaunchFieldLoads = new Set();
     let protocolSearchQuery = '';
     let managementReloadDebounce = null;
     let pendingSkillSetup = null;
@@ -1331,6 +1328,57 @@ function renderConversationDetail(container, params) {
         };
     }
 
+    function protocolRunInputFieldsFromDefinitionJson(definitionJson) {
+        const rawDocument = definitionJson && typeof definitionJson === 'object'
+            ? definitionJson
+            : {};
+        const document = rawDocument.root && typeof rawDocument.root === 'object'
+            ? rawDocument.root
+            : rawDocument;
+        const metadata = document.metadata && typeof document.metadata === 'object'
+            ? document.metadata
+            : {};
+        const fields = metadata.run_inputs;
+        return Array.isArray(fields) && fields.length
+            ? fields
+                .filter((field) => field && typeof field === 'object')
+                .map((field) => ({ ...field }))
+            : [];
+    }
+
+    function conversationProtocolLaunchFields(protocolId) {
+        const key = String(protocolId || '').trim();
+        const fields = key ? protocolLaunchFieldsByProtocolId[key] : null;
+        return Array.isArray(fields) && fields.length
+            ? fields.map((field) => ({ ...field }))
+            : null;
+    }
+
+    async function ensureConversationProtocolLaunchFields(protocol) {
+        const protocolId = String(protocol?.id || protocol?.protocol_id || '').trim();
+        const versionId = String(protocol?.versionId || protocol?.current_version_id || '').trim();
+        if (!protocolId || !versionId) return;
+        if (Object.prototype.hasOwnProperty.call(protocolLaunchFieldsByProtocolId, protocolId)) return;
+        if (protocolLaunchFieldLoads.has(protocolId)) return;
+        protocolLaunchFieldLoads.add(protocolId);
+        try {
+            const version = await API.getProtocolVersion(protocolId, versionId);
+            protocolLaunchFieldsByProtocolId = {
+                ...protocolLaunchFieldsByProtocolId,
+                [protocolId]: protocolRunInputFieldsFromDefinitionJson(version?.definition_json),
+            };
+        } catch (err) {
+            protocolLaunchFieldsByProtocolId = {
+                ...protocolLaunchFieldsByProtocolId,
+                [protocolId]: [],
+            };
+            UI.reportError('Failed to load protocol run inputs', err, { context: 'Conversation protocol launch inputs failed' });
+        } finally {
+            protocolLaunchFieldLoads.delete(protocolId);
+            renderProtocolsPanel();
+        }
+    }
+
     function renderProtocolsPanel() {
         const agentId = managementAgentId();
         syncManagementControls();
@@ -1363,8 +1411,10 @@ function renderConversationDetail(container, params) {
                 label: conversationProtocolLabel(item),
                 rawLabel: String(item.display_name || item.slug || item.protocol_id || ''),
                 slug: String(item.slug || ''),
+                versionId: String(item.current_version_id || ''),
                 generated: Boolean(conversationProtocolTimestamp(item)),
                 timestamp: conversationProtocolTimestamp(item),
+                launchFields: conversationProtocolLaunchFields(item.protocol_id),
             })),
             linkedRuns: (linkedProtocolRuns || []).map((run) => ({
                 id: String(run.protocol_run_id || ''),
@@ -1473,6 +1523,7 @@ function renderConversationDetail(container, params) {
 
             const selectedProtocol = state.availableProtocols.find((item) => item.id === state.selectedProtocolId) || state.availableProtocols[0] || null;
             if (selectedProtocol) {
+                ensureConversationProtocolLaunchFields(selectedProtocol);
                 const scope = document.createElement('div');
                 scope.className = 'settings-row';
                 let rawScope = '';
@@ -1490,6 +1541,7 @@ function renderConversationDetail(container, params) {
                     problem_statement: state.problemStatement,
                     ...(protocolLaunchContext || {}),
                 },
+                fields: selectedProtocol?.launchFields || null,
                 includeWorkspace: false,
                 onInput: (key, value) => {
                     const text = String(value || '');
@@ -1524,7 +1576,8 @@ function renderConversationDetail(container, params) {
                 start.disabled = true;
                 try {
                     const constraints = {};
-                    ['source_context', 'relationship_context', 'desired_outputs', 'privacy_constraints'].forEach((key) => {
+                    Object.keys(launchValues).forEach((key) => {
+                        if (['problem_statement', 'workspace_ref'].includes(key)) return;
                         const text = String(launchValues[key] || '').trim();
                         if (text) constraints[key] = text;
                     });

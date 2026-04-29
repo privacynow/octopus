@@ -1048,6 +1048,8 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Start a published protocol" in detail
     assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
     assert "API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 })" in detail
+    assert "function ensureConversationProtocolLaunchFields(" in detail
+    assert "API.getProtocolVersion(protocolId, versionId)" in detail
     assert "function loadConversationLinkedRuns(" in detail
     assert "requestedManagementMode !== 'protocols'" in detail
     assert "API.listConversationProtocolRuns(key, meta, { limit: 5 })" in conversation_list
@@ -1060,10 +1062,13 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "entry_agent_id: agentId" in detail
     assert "Kit.protocolRunLaunchForm({" in detail
     assert "includeWorkspace: false" in detail
+    assert "fields: selectedProtocol?.launchFields || null" in detail
     assert "problem_statement: state.problemStatement" in detail
     assert "const launchValues = launchForm.readValues();" in detail
     assert "const problemStatement = String(launchValues.problem_statement || '').trim();" in detail
+    assert "Object.keys(launchValues).forEach((key) => {" in detail
     assert "constraints_json: constraints" in detail
+    assert "raw private data" not in detail
     assert "requestedManagementMode === 'protocols'" in detail
     assert "value === 'skills' || value === 'settings' || value === 'protocols'" in detail
 
@@ -1083,10 +1088,11 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "fields = null" in kit
     assert "field.default_value" in kit
     assert "function protocolRunLaunchFields()" in kit
-    assert "source_context" in kit
-    assert "relationship_context" in kit
-    assert "desired_outputs" in kit
-    assert "privacy_constraints" in kit
+    assert "context" in kit
+    assert "constraints" in kit
+    assert "expected_outputs" in kit
+    assert "manufacturing analytics" not in kit
+    assert "raw private data" not in kit
     assert "function _openRunProtocolDialog()" in workspace
     assert "Start a real run from the latest published version." in workspace
     assert "Dry-run rehearsal" in workspace

@@ -167,6 +167,30 @@ async def test_conversation_protocol_launch_helpers_filter_resolve_and_build_req
 
 def test_protocol_launch_form_and_input_request_are_transport_neutral():
     definition = _launchable_definition()
+
+    default_form = protocol_run_launch_form(definition, canonical_protocol_document(protocol_document()))
+    assert [field.key for field in default_form.fields] == [
+        "problem_statement",
+        "workspace_ref",
+        "context",
+        "constraints",
+        "expected_outputs",
+    ]
+    default_text = " ".join(
+        " ".join(
+            [
+                field.label,
+                field.help,
+                field.default_value,
+                field.placeholder,
+            ]
+        )
+        for field in default_form.fields
+    ).lower()
+    assert "analytics" not in default_text
+    assert "manufacturing" not in default_text
+    assert "raw private data" not in default_text
+
     document = protocol_document()
     document["metadata"]["run_inputs"] = [
         {
@@ -192,10 +216,11 @@ def test_protocol_launch_form_and_input_request_are_transport_neutral():
     request = build_protocol_run_request_from_inputs(
         definition,
         {
-            "problem_statement": "Create a local analytics app.",
+            "problem_statement": "Prepare a release review.",
             "workspace_ref": "workspace-a",
-            "source_context": "CSV files stay local.",
-            "privacy_constraints": "Do not send raw rows.",
+            "context": "Review the repository changes and release notes.",
+            "constraints": "Keep the review focused on release blockers.",
+            "expected_outputs": "Release readiness summary.",
         },
         entry_agent_id="agent-1",
         origin_channel="registry",
@@ -204,9 +229,10 @@ def test_protocol_launch_form_and_input_request_are_transport_neutral():
     assert request.protocol_id == "protocol-1"
     assert request.entry_agent_id == "agent-1"
     assert request.workspace_ref == "workspace-a"
-    assert request.problem_statement == "Create a local analytics app."
-    assert request.constraints_json["source_context"] == "CSV files stay local."
-    assert request.constraints_json["privacy_constraints"] == "Do not send raw rows."
+    assert request.problem_statement == "Prepare a release review."
+    assert request.constraints_json["context"] == "Review the repository changes and release notes."
+    assert request.constraints_json["constraints"] == "Keep the review focused on release blockers."
+    assert request.constraints_json["expected_outputs"] == "Release readiness summary."
 
 
 def test_protocol_stage_prompt_includes_typed_run_context_without_special_surface_logic():
@@ -219,12 +245,11 @@ def test_protocol_stage_prompt_includes_typed_run_context_without_special_surfac
             "entry_agent_id": "agent-1",
             "status": "running",
             "current_stage_key": "planning",
-            "problem_statement": "Create the local analytics app.",
+            "problem_statement": "Prepare the release review.",
             "constraints_json": {
-                "source_context": "Synthetic CSV files only.",
-                "relationship_context": "panels.panel_id -> test_results.panel_id",
-                "desired_outputs": "index.html and findings report",
-                "privacy_constraints": "Do not send raw rows.",
+                "context": "Review the repository changes and release notes.",
+                "constraints": "Keep the review focused on release blockers.",
+                "expected_outputs": "Release readiness summary.",
             },
         }
     )
@@ -237,10 +262,9 @@ def test_protocol_stage_prompt_includes_typed_run_context_without_special_surfac
     )
 
     assert "Run context and constraints:" in prompt
-    assert "Files or data context:\nSynthetic CSV files only." in prompt
-    assert "Keys and relationships:\npanels.panel_id -> test_results.panel_id" in prompt
-    assert "Expected outputs:\nindex.html and findings report" in prompt
-    assert "Privacy or execution constraints:\nDo not send raw rows." in prompt
+    assert "Context:\nReview the repository changes and release notes." in prompt
+    assert "Constraints:\nKeep the review focused on release blockers." in prompt
+    assert "Expected outputs:\nRelease readiness summary." in prompt
 
 
 def test_protocol_stage_prompt_limits_artifact_work_to_stage_outputs():

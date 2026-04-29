@@ -1074,6 +1074,39 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now_iso=now_iso,
             )
 
+    def cleanup_customer_data(self) -> dict[str, object]:
+        tables = (
+            "deliveries",
+            "management_requests",
+            "events",
+            "routed_tasks",
+            "protocol_compliance_events",
+            "protocol_idempotency",
+            "protocol_transitions",
+            "protocol_artifacts",
+            "protocol_stage_executions",
+            "protocol_run_participants",
+            "protocol_runs",
+            "protocol_scenarios",
+            "protocol_definition_versions",
+            "protocol_definitions",
+            "conversations",
+        )
+        with self._connect() as conn, _write_tx(conn):
+            counts: dict[str, int] = {}
+            with _cur(conn) as cur:
+                for table in tables:
+                    cur.execute(f"SELECT COUNT(*) AS count FROM {_SCHEMA}.{table}")
+                    row = cur.fetchone() or {}
+                    counts[table] = int(row.get("count") or 0)
+                table_sql = ", ".join(f"{_SCHEMA}.{table}" for table in tables)
+                cur.execute(f"TRUNCATE TABLE {table_sql} RESTART IDENTITY CASCADE")
+            return {
+                "cleaned": True,
+                "tables": counts,
+                "preserved": ["agents", "runtime_skills", "skills_override", "provider_guidance", "catalog content"],
+            }
+
     def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         with self._connect() as conn:
             return shared_list_approvals(

@@ -354,6 +354,7 @@ window.Kit = (() => {
 
     function protocolRunLaunchForm({
         values = {},
+        fields = null,
         includeWorkspace = true,
         onInput = null,
     } = {}) {
@@ -378,11 +379,15 @@ window.Kit = (() => {
                 ? values[field.key]
                 : field.defaultValue !== undefined
                     ? field.defaultValue
-                    : '';
+                    : field.default_value !== undefined
+                        ? field.default_value
+                        : '';
             control.value = String(current || '');
-            control.addEventListener('input', () => {
+            const emitInput = () => {
                 if (typeof onInput === 'function') onInput(field.key, control.value);
-            });
+            };
+            control.addEventListener('input', emitInput);
+            control.addEventListener('change', emitInput);
             group.appendChild(control);
             if (field.help) {
                 const helpEl = document.createElement('span');
@@ -406,7 +411,28 @@ window.Kit = (() => {
             }, workspace);
         }
 
-        protocolRunLaunchFields().forEach((field) => {
+        const launchFields = Array.isArray(fields) && fields.length
+            ? fields.map((field) => ({ ...field }))
+            : protocolRunLaunchFields();
+        launchFields.forEach((field) => {
+            const kind = String(field.kind || 'textarea').trim().toLowerCase();
+            if (kind === 'select' && Array.isArray(field.options) && field.options.length) {
+                const select = document.createElement('select');
+                field.options.forEach((optionValue) => {
+                    const option = document.createElement('option');
+                    option.value = String(optionValue || '');
+                    option.textContent = String(optionValue || '');
+                    select.appendChild(option);
+                });
+                appendControl(field, select);
+                return;
+            }
+            if (kind === 'text' || kind === 'input') {
+                const input = document.createElement('input');
+                input.type = 'text';
+                appendControl(field, input);
+                return;
+            }
             const textarea = document.createElement('textarea');
             textarea.rows = Number(field.rows || 3);
             appendControl(field, textarea);

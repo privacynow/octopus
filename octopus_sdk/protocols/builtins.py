@@ -244,6 +244,77 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "Build and validate local manufacturing analytics scripts while keeping raw CSV rows "
                     "inside the workspace."
                 ),
+                "run_inputs": [
+                    {
+                        "key": "problem_statement",
+                        "label": "Customer analytics goal",
+                        "help": "Describe the repeatable manufacturing analytics tool the run should produce.",
+                        "kind": "textarea",
+                        "required": True,
+                        "placeholder": (
+                            "Build a local-only manufacturing analytics package for staged CSV exports. "
+                            "Generate deterministic synthetic fixtures if no customer files are present."
+                        ),
+                        "default_value": (
+                            "Create a repeatable local-only manufacturing analytics package that can profile staged CSV exports, "
+                            "join panels/cells/tests by declared keys, flag quality risk, and generate reviewable reports without "
+                            "sending raw rows to the model provider."
+                        ),
+                    },
+                    {
+                        "key": "data_mode",
+                        "label": "Data mode",
+                        "help": "Choose whether the run should use existing local files or create safe synthetic fixtures for the demo.",
+                        "kind": "select",
+                        "required": True,
+                        "options": ["synthetic demo", "existing local files"],
+                        "default_value": "synthetic demo",
+                    },
+                    {
+                        "key": "source_context",
+                        "label": "Local files or synthetic fixture shape",
+                        "help": "List local CSV paths, or define the synthetic manufacturing tables the run should generate.",
+                        "kind": "textarea",
+                        "placeholder": "data/panels.csv, data/cells.csv, data/panel_cells.csv, data/test_results.csv",
+                        "default_value": (
+                            "Use data/panels.csv, data/cells.csv, data/panel_cells.csv, and data/test_results.csv when present. "
+                            "If they are absent, create deterministic synthetic fixtures with panel_id, cell_id, batch_id, line, "
+                            "station, shift, vendor, measured parameters, defect flags, and timestamps."
+                        ),
+                    },
+                    {
+                        "key": "relationship_context",
+                        "label": "Keys and joins",
+                        "help": "Describe primary keys, foreign keys, and grouping dimensions the local scripts must validate.",
+                        "kind": "textarea",
+                        "default_value": (
+                            "panels.panel_id joins test_results.panel_id and panel_cells.panel_id; "
+                            "cells.cell_id joins panel_cells.cell_id; group by line, station, shift, batch, and dominant vendor."
+                        ),
+                    },
+                    {
+                        "key": "desired_outputs",
+                        "label": "Required outputs",
+                        "help": "Name the concrete files the customer should be able to preview or download after the run.",
+                        "kind": "textarea",
+                        "default_value": (
+                            "Generate scripts/profile_manufacturing_data.py, reports/profile_summary.md, "
+                            "reports/model_visible_context.md, scripts/analyze_manufacturing_quality.py, "
+                            "reports/quality_flags.csv, reports/defect_summary.csv, reports/manufacturing_findings.md, "
+                            "reports/defect_heatmap.html, and reports/run_manifest.json."
+                        ),
+                    },
+                    {
+                        "key": "privacy_constraints",
+                        "label": "Privacy boundary",
+                        "help": "State what must stay local and how the model-visible context should be limited.",
+                        "kind": "textarea",
+                        "default_value": (
+                            "Do not include raw customer CSV rows in model-visible messages. Scripts may read local rows on disk; "
+                            "assistant-facing context must be schemas, counts, aggregates, validation status, and summarized findings only."
+                        ),
+                    },
+                ],
             },
             "participants": [
                 {"participant_key": "contract_author", "display_name": "Contract Author"},
@@ -340,7 +411,9 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "transitions": {"completed": "generate_profile_script"},
                     "instructions": (
                         "Define the expected local CSV files, join keys, privacy boundary, and output contract. "
-                        "Do not ask for raw rows; use only schema, counts, and aggregates as model-visible context."
+                        "Read the launch inputs. If data_mode is synthetic demo, or the listed files are absent, "
+                        "the contract must require deterministic synthetic CSV fixtures under data/. Do not ask for raw rows; "
+                        "use only schema, counts, and aggregates as model-visible context."
                     ),
                 },
                 {
@@ -358,7 +431,8 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "transitions": {"completed": "run_profile_locally"},
                     "instructions": (
                         "Create the local profiling script. It must inspect files on disk and write only "
-                        "schema, counts, missing values, relationship checks, and aggregates."
+                        "schema, counts, missing values, relationship checks, and aggregates. If the input contract "
+                        "uses synthetic demo mode, the script must create realistic deterministic fixture CSVs before profiling."
                     ),
                 },
                 {
@@ -375,8 +449,10 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "outputs": ["profile_summary", "model_visible_context"],
                     "transitions": {"completed": "generate_analysis_script"},
                     "instructions": (
-                        "Run the profile script against the local CSVs and attach only controlled summaries. "
-                        "Raw CSV rows must remain in the workspace."
+                        "Run the profile script against the local CSVs or generated deterministic fixtures and attach only "
+                        "controlled summaries. Raw CSV rows must remain in the workspace. Do not complete this stage unless "
+                        "profile_summary and model_visible_context are real files with schema, counts, relationship checks, "
+                        "and aggregate signal."
                     ),
                 },
                 {
@@ -394,7 +470,8 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "transitions": {"completed": "run_analysis_locally"},
                     "instructions": (
                         "Generate or revise the local analysis script using the controlled profile. The script "
-                        "must join the CSVs locally and produce repeatable reports."
+                        "must join the CSVs locally and produce repeatable reports. It must produce non-placeholder CSV, "
+                        "Markdown, and HTML artifacts that a customer can open after the run."
                     ),
                 },
                 {
@@ -412,7 +489,8 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "transitions": {"completed": "validate_outputs"},
                     "instructions": (
                         "Run the analysis script locally. Attach generated reports, flags, summaries, and heatmap "
-                        "as artifacts; do not paste raw source rows into the response."
+                        "as artifacts; do not paste raw source rows into the response. The heatmap must render visible "
+                        "manufacturing quality findings, not a placeholder, error page, or 'not generated' message."
                     ),
                 },
                 {
@@ -430,7 +508,9 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "transitions": {"completed": "review_report"},
                     "instructions": (
                         "Validate that all required artifacts exist, the known fixture findings are present, and "
-                        "the model-visible artifacts do not contain raw CSV rows."
+                        "the model-visible artifacts do not contain raw CSV rows. Inspect reports/defect_heatmap.html "
+                        "and fail or revise if it contains a placeholder, an error message, 'not generated', or says validation "
+                        "did not pass. The run_manifest must include validation_passed true only when every artifact is usable."
                     ),
                 },
                 {
@@ -445,7 +525,7 @@ def manufacturing_local_analytics_protocol_document() -> ProtocolDefinitionDocum
                     "transitions": {"accept": "__complete__", "revise": "run_analysis_locally", "fail": "__failed__"},
                     "instructions": (
                         "Approve the report when the local artifacts are complete, repeatable, and safe to share. "
-                        "Send it back if outputs are missing or the privacy boundary is violated."
+                        "Send it back if outputs are missing, placeholder-like, not downloadable, not renderable, or the privacy boundary is violated."
                     ),
                 },
             ],

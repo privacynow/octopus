@@ -1248,6 +1248,12 @@ def test_registry_store_sources_builtin_protocol_templates_from_code_not_authore
     analytics = store.get_protocol_template("manufacturing-local-analytics", access=operator_access())
     assert analytics.slug == "manufacturing-local-analytics"
     assert analytics.display_name == "Manufacturing Local Analytics"
+    analytics_inputs = analytics.model_dump(mode="json")["metadata"]["run_inputs"]
+    assert [item["key"] for item in analytics_inputs][:2] == ["problem_statement", "data_mode"]
+    assert "synthetic demo" in analytics_inputs[1]["options"]
+    validate_stage = next(stage for stage in analytics.stages if stage.stage_key == "validate_outputs")
+    assert "not generated" in validate_stage.instructions
+    assert "validation_passed true" in validate_stage.instructions
 
 
 def test_registry_store_authoring_options_and_templates_are_separate_resources(postgres_registry_truncated: str) -> None:
@@ -1499,6 +1505,29 @@ def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_
     assert cloned.draft_definition_json["stages"]
     assert cloned.validation is not None
     assert cloned.validation.ok is True
+
+
+def test_registry_store_cleanup_customer_data_preserves_builtin_templates(postgres_registry_truncated: str) -> None:
+    from app.db.postgres_init import run_init
+
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    with get_connection(postgres_registry_truncated) as conn:
+        assert run_init(conn) == []
+        conn.commit()
+
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "manufacturing-local-analytics"}),
+        access=operator_access(),
+    )
+    assert created.protocol is not None
+    assert store.list_protocols(access=operator_access())
+
+    result = store.cleanup_customer_data()
+
+    assert result["cleaned"] is True
+    assert store.list_protocols(access=operator_access()) == []
+    analytics = store.get_protocol_template("manufacturing-local-analytics", access=operator_access())
+    assert analytics.display_name == "Manufacturing Local Analytics"
 
 
 def test_registry_store_delete_protocol_discards_unpublished_draft(postgres_registry_truncated: str) -> None:

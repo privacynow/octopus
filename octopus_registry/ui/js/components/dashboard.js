@@ -65,6 +65,10 @@ function renderDashboard(container) {
     protocolIssuesHost.dataset.key = 'protocol-issues-host';
     secondaryColumn.appendChild(protocolIssuesHost);
 
+    const maintenanceHost = document.createElement('div');
+    maintenanceHost.dataset.key = 'maintenance-host';
+    secondaryColumn.appendChild(maintenanceHost);
+
     function createSection(key, title, href, rows, emptyText) {
         const section = document.createElement('section');
         section.className = 'workspace-section';
@@ -540,6 +544,104 @@ function renderDashboard(container) {
         ]);
     }
 
+    function openCleanupDialog() {
+        const form = document.createElement('div');
+        form.className = 'conversation-management-form';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'This removes customer work records from the registry database: conversations, tasks, protocol definitions, runs, artifacts, events, and deliveries. Registered agents, skill catalog entries, guidance, and tokens are preserved so bots can keep running.';
+        form.appendChild(note);
+
+        const passwordLabel = document.createElement('label');
+        passwordLabel.className = 'kit-details-field';
+        const passwordTitle = document.createElement('span');
+        passwordTitle.className = 'kit-details-label';
+        passwordTitle.textContent = 'Registry UI password';
+        passwordLabel.appendChild(passwordTitle);
+        const passwordInput = document.createElement('input');
+        passwordInput.type = 'password';
+        passwordInput.className = 'input';
+        passwordInput.autocomplete = 'current-password';
+        passwordInput.setAttribute('aria-label', 'Registry UI password');
+        passwordLabel.appendChild(passwordInput);
+        form.appendChild(passwordLabel);
+
+        const confirmLabel = document.createElement('label');
+        confirmLabel.className = 'kit-details-field';
+        const confirmTitle = document.createElement('span');
+        confirmTitle.className = 'kit-details-label';
+        confirmTitle.textContent = 'Type CLEAN to confirm';
+        confirmLabel.appendChild(confirmTitle);
+        const confirmInput = document.createElement('input');
+        confirmInput.type = 'text';
+        confirmInput.className = 'input';
+        confirmInput.setAttribute('aria-label', 'Type CLEAN to confirm');
+        confirmLabel.appendChild(confirmInput);
+        form.appendChild(confirmLabel);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const cleanBtn = document.createElement('button');
+        cleanBtn.type = 'button';
+        cleanBtn.className = 'btn';
+        cleanBtn.textContent = 'Clean customer data';
+        const view = UI.showDialog('Clean customer data', form, {
+            actions: [cancelBtn, cleanBtn],
+            role: 'alertdialog',
+            initialFocus: passwordInput,
+            maxWidth: '680px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        cleanBtn.addEventListener('click', async () => {
+            cleanBtn.disabled = true;
+            try {
+                await API.cleanupCustomerData({
+                    password: passwordInput.value || '',
+                    confirm: confirmInput.value || '',
+                });
+                view.close();
+                UI.notify('Customer work data cleaned. Agents and skills were preserved.', 'success');
+                await refreshSnapshot({ soft: true });
+            } catch (err) {
+                UI.reportError('Failed to clean customer data', err, {
+                    context: 'Dashboard customer-data cleanup failed',
+                });
+                cleanBtn.disabled = false;
+            }
+        });
+    }
+
+    function renderMaintenanceSection() {
+        const section = document.createElement('section');
+        section.className = 'workspace-section';
+        section.dataset.key = 'maintenance';
+        const head = document.createElement('div');
+        head.className = 'section-header';
+        const title = document.createElement('strong');
+        title.textContent = 'Customer handoff';
+        head.appendChild(title);
+        section.appendChild(head);
+        const body = document.createElement('div');
+        body.className = 'list-container';
+        body.appendChild(UI.renderListRow({
+            label: 'Create local analytics protocol',
+            sublabel: 'Open the starter workflow, review the stages and artifacts, then create a customer-owned draft.',
+            badgeText: 'startup',
+            href: '/ui/protocols?new=template&workflow_map=auto',
+        }));
+        const cleanupRow = UI.renderListRow({
+            label: 'Clean customer work data',
+            sublabel: 'Preserves agents and skills; removes conversations, tasks, protocols, runs, artifacts, and events.',
+            badgeText: 'requires password',
+            onClick: openCleanupDialog,
+        });
+        body.appendChild(cleanupRow);
+        section.appendChild(body);
+        UI.memoizedRender(maintenanceHost, { rendered: true }, () => [section]);
+    }
+
     function renderDashboardView() {
         const summary = dashboardState.summary || {};
         renderSummaryRail(summary);
@@ -548,6 +650,7 @@ function renderDashboard(container) {
         renderConversationSection();
         renderAgentSection();
         renderProtocolIssuesSection();
+        renderMaintenanceSection();
     }
 
     function hasPatchKey(patch, key) {

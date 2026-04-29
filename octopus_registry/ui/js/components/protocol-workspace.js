@@ -1642,6 +1642,85 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    async function _openTemplateReviewDialog(template) {
+        const templateSlug = String(template?.slug || '').trim();
+        if (!templateSlug) return;
+        const body = document.createElement('div');
+        body.className = 'conversation-management-form';
+        body.appendChild(UI.renderEmptyState('Loading starter workflow…', true));
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const createBtn = document.createElement('button');
+        createBtn.type = 'button';
+        createBtn.className = 'btn btn-primary';
+        createBtn.textContent = 'Create editable draft';
+        createBtn.disabled = true;
+        const view = UI.showDialog('Review starter workflow', body, {
+            actions: [cancelBtn, createBtn],
+            maxWidth: '780px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        try {
+            const documentRecord = await API.getProtocolTemplate(templateSlug);
+            const metadata = documentRecord?.metadata || {};
+            const stages = Array.isArray(documentRecord?.stages) ? documentRecord.stages : [];
+            const artifacts = Array.isArray(documentRecord?.artifacts) ? documentRecord.artifacts : [];
+            body.textContent = '';
+            const summary = document.createElement('p');
+            summary.className = 'quiet-note';
+            summary.textContent = `${metadata.display_name || template?.display_name || templateSlug} will be copied into a separate editable protocol. The starter is not mutated; the customer-owned draft can be changed, published, and run from the UI.`;
+            body.appendChild(summary);
+            const stageList = document.createElement('div');
+            stageList.className = 'protocol-lineage-list';
+            UI.reconcileChildren(stageList, stages.slice(0, 8).map((stage, index) => UI.renderListRow({
+                label: `${index + 1}. ${stage.display_name || stage.stage_key || 'Stage'}`,
+                sublabel: [
+                    stage.stage_kind || 'work',
+                    (stage.outputs || []).length ? `${stage.outputs.length} output${stage.outputs.length === 1 ? '' : 's'}` : 'no declared outputs',
+                ].join(' · '),
+                badgeText: stage.participant_key || '',
+            })));
+            const stageHead = document.createElement('div');
+            stageHead.className = 'detail-label';
+            stageHead.textContent = `Stages (${stages.length})`;
+            body.appendChild(stageHead);
+            body.appendChild(stageList);
+            const artifactList = document.createElement('div');
+            artifactList.className = 'task-artifact-list';
+            UI.reconcileChildren(artifactList, artifacts.slice(0, 10).map((artifact) => UI.createArtifactListRow({
+                label: artifact.description || artifact.artifact_key || 'Artifact',
+                sublabelParts: [
+                    artifact.path || artifact.location || '',
+                    artifact.kind || '',
+                    artifact.verify ? 'verified output' : '',
+                ],
+                badgeText: artifact.artifact_key || '',
+            })));
+            const artifactHead = document.createElement('div');
+            artifactHead.className = 'detail-label';
+            artifactHead.textContent = `Artifacts (${artifacts.length})`;
+            body.appendChild(artifactHead);
+            body.appendChild(artifactList);
+            if (artifacts.length > 10 || stages.length > 8) {
+                const note = document.createElement('p');
+                note.className = 'quiet-note';
+                note.textContent = 'Only the first items are shown here; the full draft opens after creation.';
+                body.appendChild(note);
+            }
+            createBtn.disabled = false;
+            createBtn.addEventListener('click', async () => {
+                createBtn.disabled = true;
+                await _createTemplateDraft(template || { slug: templateSlug });
+                view.close();
+            });
+        } catch (err) {
+            body.textContent = '';
+            body.appendChild(UI.createErrorCard(`Failed to load starter workflow: ${err.message}`, () => _openTemplateReviewDialog(template)));
+        }
+    }
+
     function _openStarterChooser() {
         currentProtocolId = '';
         currentProtocol = null;
@@ -1677,7 +1756,7 @@ function renderProtocolWorkspace(container) {
             button.onclick = () => {
                 const template = (Array.isArray(protocolTemplates) ? protocolTemplates : [])
                     .find((item) => String(item?.slug || '').trim() === templateSlug);
-                void _createTemplateDraft(template || { slug: templateSlug });
+                void _openTemplateReviewDialog(template || { slug: templateSlug });
             };
         });
     }
@@ -1780,6 +1859,13 @@ function renderProtocolWorkspace(container) {
         return String(preferred?.agent_id || '').trim();
     }
 
+    function _protocolRunLaunchFields() {
+        const fields = draft?.document?.metadata?.run_inputs;
+        return Array.isArray(fields) && fields.length
+            ? fields
+            : Kit.protocolRunLaunchFields();
+    }
+
     function _openRunProtocolDialog() {
         if (_blockConflictAction('Run protocol')) return;
         if (!currentProtocolId) return;
@@ -1835,6 +1921,7 @@ function renderProtocolWorkspace(container) {
             values: {
                 problem_statement: draft.description,
             },
+            fields: _protocolRunLaunchFields(),
             includeWorkspace: true,
         });
         body.appendChild(launchForm.element);
@@ -1865,7 +1952,8 @@ function renderProtocolWorkspace(container) {
             startBtn.disabled = true;
             try {
                 const constraints = {};
-                ['source_context', 'relationship_context', 'desired_outputs', 'privacy_constraints'].forEach((key) => {
+                Object.keys(values).forEach((key) => {
+                    if (['problem_statement', 'workspace_ref'].includes(key)) return;
                     if (String(values[key] || '').trim()) constraints[key] = String(values[key] || '').trim();
                 });
                 const created = await API.createProtocolRun({
@@ -6018,7 +6106,9 @@ function renderProtocolWorkspace(container) {
             const use = document.createElement('button');
             use.type = 'button';
             use.className = 'btn btn-primary';
-            use.textContent = 'Use template';
+            use.textContent = String(template.slug || '') === 'manufacturing-local-analytics'
+                ? 'Review customer startup'
+                : 'Review and create';
             use.dataset.protocolTemplateSlug = String(template.slug || '');
             cardActions.appendChild(use);
             top.appendChild(cardActions);
@@ -6980,6 +7070,93 @@ function renderProtocolRuns(container) {
             || String(item.from_stage_execution_id || '') === String(stageExecutionId || ''),
         );
 
+        const timestampMs = (value) => {
+            const parsed = Date.parse(String(value || ''));
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const durationLabel = (ms) => {
+            const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.round(seconds / 60);
+            if (minutes < 60) return `${minutes}m`;
+            const hours = Math.floor(minutes / 60);
+            const remainder = minutes % 60;
+            return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+        };
+
+        const runDurationMs = (run) => {
+            const start = timestampMs(run?.created_at || run?.started_at);
+            const end = timestampMs(run?.completed_at || run?.updated_at);
+            return start && end && end >= start ? end - start : 0;
+        };
+
+        const averageCompletedRunDurationMs = () => {
+            const protocolId = String(currentRun?.run?.protocol_id || '').trim();
+            const samples = (runs || [])
+                .filter((run) =>
+                    String(run.protocol_id || '').trim() === protocolId
+                    && String(run.status || '').trim().toLowerCase() === 'completed')
+                .map(runDurationMs)
+                .filter((value) => value > 0)
+                .slice(0, 3);
+            if (!samples.length) return 0;
+            return samples.reduce((sum, value) => sum + value, 0) / samples.length;
+        };
+
+        const buildRunLivenessCard = () => {
+            const run = currentRun.run || {};
+            const status = String(run.status || '').trim().toLowerCase();
+            const active = !['completed', 'failed', 'cancelled'].includes(status);
+            const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(run.current_stage_key || ''))
+                || stageRows[stageRows.length - 1]
+                || null;
+            const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : 0;
+            const currentStageDef = currentStage
+                ? stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {}
+                : {};
+            const startMs = timestampMs(run.created_at || currentStage?.started_at);
+            const elapsed = startMs ? durationLabel(Date.now() - startMs) : '';
+            const averageMs = averageCompletedRunDurationMs();
+            const card = document.createElement('article');
+            card.className = 'protocol-lineage-card';
+            card.dataset.key = 'run-liveness';
+
+            const label = active && currentStage
+                ? `Running stage ${currentStageIndex + 1} of ${Math.max(stageRows.length, currentRun.version?.definition_json?.stages?.length || 0)}: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`
+                : `Run ${status || 'state'}`;
+            card.appendChild(UI.renderListRow({
+                label,
+                sublabel: [
+                    active ? 'Work is being dispatched through the protocol runtime' : run.termination_summary || 'Execution is no longer active',
+                    elapsed ? `elapsed ${elapsed}` : '',
+                    averageMs ? `typical completed run ${durationLabel(averageMs)}` : 'estimate available after completed run history',
+                ].filter(Boolean).join(' · '),
+                badgeText: active ? 'live' : (run.status || ''),
+                badgeClass: active ? 'badge-running' : '',
+            }));
+            card.appendChild(UI.renderMetadataGrid([
+                { label: 'Current stage', value: currentStage ? (currentStageDef.display_name || currentStage.stage_key || 'Stage') : '—' },
+                { label: 'Stage state', value: currentStage?.status || run.status || '—' },
+                { label: 'Available outputs', value: String(artifactRows.length) },
+                { label: 'Missing declared outputs', value: String(pendingArtifactRows.length) },
+            ], { compact: true }));
+            if (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || '')) {
+                card.appendChild(UI.renderListRow({
+                    label: `Latest event: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')}`,
+                    sublabel: lastRunEvent.reason || 'Live event received from the registry.',
+                    badgeText: 'event',
+                }));
+            } else if (active) {
+                card.appendChild(UI.renderListRow({
+                    label: 'Waiting for the next runtime update',
+                    sublabel: 'The registry refreshes this run as agents create tasks, decisions, and artifacts.',
+                    badgeText: 'watching',
+                }));
+            }
+            return card;
+        };
+
         const buildStageEvidenceCard = (item, index) => {
             const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
             const task = taskById.get(String(item.routed_task_id || '')) || null;
@@ -7105,6 +7282,7 @@ function renderProtocolRuns(container) {
             section.className = 'studio-stack';
             appendSectionTitle(section, 'Overview', 'The run story starts with state, active issue, current stage, and next action.');
             section.appendChild(_buildRunSummaryGrid());
+            section.appendChild(buildRunLivenessCard());
             if (currentIssues.length) {
                 const issueSummary = document.createElement('div');
                 issueSummary.className = 'run-evidence-issue-list';

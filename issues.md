@@ -110,6 +110,12 @@ The manufacturing analytics customer path must specifically support:
 - Do not create parallel implementations for the same product behavior.
 - Do not seed database state as a substitute for testing the UI and bot paths.
 - Do not make curated generated artifacts the acceptance target.
+- Do not treat code-defined starter templates as proof that users can create
+  the workflow. Customer startup must create the workflow through a visible
+  product onboarding path; manual authoring remains a documented escape hatch
+  and regression test.
+- Do not treat `scripts/demo/.../run_demo.py` as a customer path. It is an
+  internal regression fixture only.
 - Do not make skills mandatory for stage creation.
 - Do not make agent selection mandatory for stage creation.
 - Do not lose draft stage data when switching panels, tabs, stages, filters, or
@@ -166,12 +172,21 @@ Implementation:
 6. Ensure demo data is not required for the first meaningful path.
 7. Add troubleshooting for stale containers, cache, ports, missing auth, and
    failed agent enrollment.
+8. Add a customer startup/onboarding path for the local analytics use case:
+   - user chooses `Local manufacturing analytics`,
+   - user reviews the stages/artifacts/privacy boundary before creation,
+   - product creates the protocol through the same Registry protocol authoring
+     API/UI pipeline used by normal authors,
+   - user can immediately publish/run or edit before publishing.
 
 Acceptance:
 
 - A fresh clone can start the system using only the documented path.
 - UI health, `./octopus status`, and API health agree.
 - The docs do not mention stale setup paths or removed root planning files.
+- A customer can create the local analytics protocol during startup without
+  editing code, running `run_demo.py`, or manually entering every advanced
+  stage field.
 
 ### W1: Navigation And Product Information Architecture
 
@@ -234,6 +249,11 @@ Implementation:
 Acceptance:
 
 - User creates a protocol from blank using UI only.
+- User can create the Manufacturing Local Analytics workflow through the
+  customer startup/onboarding UI without editing code or relying on a silent
+  pre-seeded built-in template.
+- User can still manually inspect/edit the generated stages and artifacts after
+  creation.
 - User adds, removes, edits, and reorders stages without lost input.
 - User creates a stage with no skill and no agent.
 - User creates a stage with only an agent.
@@ -356,31 +376,57 @@ must guide the user to generate local tooling that operates on local files.
 
 Implementation:
 
-1. Create a customer-facing protocol flow that asks for:
+1. Create a customer-facing startup/onboarding flow that creates the protocol
+   through UI-visible product actions:
+   - present the workflow purpose,
+   - present stages and artifacts before creation,
+   - explain the privacy boundary,
+   - create a draft using the same protocol draft API used by normal UI
+     authors,
+   - route the user to the created draft for edit/publish/run.
+2. Do not make users hand-enter every stage during first startup. The product
+   may provide a recommended blueprint, but the user must see, approve, and
+   own the created protocol from the UI.
+3. Document the manual construction path as a fallback and regression test:
+   - protocol name and description,
+   - seven stage names or the simplified customer-ready stage sequence,
+   - assignment options,
+   - artifact keys, paths, and descriptions,
+   - transitions,
+   - run dialog input fields,
+   - review acceptance criteria.
+4. Create a customer-facing protocol flow that asks for:
    - data source type: CSV extracts, Oracle tables, or synthetic demo,
    - table/file names,
    - key relationships,
    - business question,
    - privacy constraint,
    - desired output format: script, browser app, report, notebook, or all.
-2. Ensure the model receives only schema/intent/sample-safe descriptions unless
+5. Ensure the model receives only schema/intent/sample-safe descriptions unless
    the user explicitly provides sample data.
-3. Generate local artifacts:
+6. Generate local artifacts:
    - requirements,
    - data contract/schema map,
    - executable local script or browser app,
    - README/run instructions,
    - validation checklist,
    - aggregate-report output contract.
-4. Add an artifact review stage that checks:
+7. Add an artifact review stage that checks:
    - no network/model calls from generated local tooling,
    - local file loading works,
    - synthetic data generation is tunable enough,
    - schema/key relationships are editable,
    - outputs are aggregate by default,
    - raw export is separate and clearly local.
-5. Add a final handoff stage that produces customer instructions for running the
+8. Add a final handoff stage that produces customer instructions for running the
    generated tool locally.
+9. Keep `scripts/demo/manufacturing_local_analytics/run_demo.py` only as an
+   internal deterministic regression fixture. It may validate artifact quality,
+   but it must not be referenced as the customer acceptance path.
+10. Treat `octopus_sdk/protocols/builtins.py` starter definitions as internal
+    blueprint data that can power onboarding, not as a hidden customer action.
+    Startup must surface the blueprint and create the customer-owned protocol
+    through product UI.
 
 Recommended protocol stages:
 
@@ -392,11 +438,13 @@ Recommended protocol stages:
 
 Acceptance:
 
-- User creates/runs this workflow through UI only.
+- User creates/runs this workflow through customer startup/onboarding UI only.
 - The workflow produces a local tool artifact and a human README.
 - Raw customer rows are not required or transmitted to the model.
 - Synthetic demo mode produces visible findings.
 - The user can open/download the generated tool and instructions from the run.
+- A run cannot be accepted if a declared renderable artifact is only a
+  placeholder saying validation did not pass.
 
 ### W7: Generated Artifact Quality Gates
 
@@ -598,13 +646,18 @@ Pass criteria:
 
 ### Scenario F: Local-Only Manufacturing Analytics
 
-1. Start the local analytics protocol from UI.
-2. State the privacy constraint: raw CSVs must not be sent to model provider.
-3. Provide schema/table names and relationships manually through UI.
-4. Generate local tool artifacts.
-5. Open/download generated local tool and README.
-6. Run synthetic demo mode.
-7. Verify aggregate findings and downloadable report.
+1. Start from a fresh customer startup screen or first-run guide.
+2. Choose `Local manufacturing analytics`.
+3. Review the proposed stages, artifacts, and privacy boundary.
+4. Click the visible action to create the customer-owned protocol draft.
+5. Edit if needed, then publish.
+6. Start the protocol from UI.
+7. State the privacy constraint: raw CSVs must not be sent to model provider.
+8. Provide schema/table names and relationships manually through UI.
+9. Generate local tool artifacts.
+10. Open/download generated local tool and README.
+11. Run synthetic demo mode.
+12. Verify aggregate findings and downloadable report.
 
 Pass criteria:
 
@@ -720,10 +773,16 @@ For any handoff claim:
 | H7 | Local-only analytics workflow is not yet a repeatable UI-created product path. | Implement and verify Scenario F. |
 | H8 | Customer docs/manual are not yet acceptance-tested. | Update docs and run every documented step. |
 | H9 | Full real Safari desktop/narrow audit has not been completed after known blockers. | Run audit only after H1-H8 are addressed. |
+| H10 | Manufacturing analytics acceptance still relied on code-defined starter/script references. | Implemented review-before-create startup path; verify in real Safari that customer creates the protocol from UI and that `run_demo.py` is not part of acceptance. |
+| H11 | UI-created manufacturing run accepted a placeholder heatmap that said validation did not pass. | Protocol instructions and launch defaults now reject placeholder/render-failed artifacts; rerun from UI and verify terminal artifacts. |
+| H12 | Running protocol stages did not explain liveness/current state to the user. | Implemented run Overview liveness guidance with current stage, elapsed time, event update, output counts, and completed-run estimate when history exists; verify in real Safari during a live run. |
+| H13 | Customer reset required container/database intervention outside the product. | Implemented Dashboard customer-data cleanup guarded by Registry UI password and `CLEAN` confirmation; verify it preserves agents/skills/guidance while removing customer work records. |
 
 ## Non-Goals For Handoff
 
 - Hand-editing a generated artifact and calling the product ready.
+- Using `run_demo.py` or a hidden built-in template action as the customer proof
+  instead of startup/onboarding-created workflow.
 - Requiring a customer to use hidden URLs or direct API calls.
 - Requiring direct database writes.
 - Presenting M3/Claude as required when auth is not configured.

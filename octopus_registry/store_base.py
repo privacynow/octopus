@@ -610,6 +610,9 @@ class AbstractRegistryStore(Protocol):
     def get_summary(self, *, now_iso: str) -> RegistrySummaryRecord:
         """Return global dashboard aggregates for the registry UI."""
 
+    def cleanup_customer_data(self) -> dict[str, object]:
+        """Remove customer-authored work records while preserving registered agents and catalog content."""
+
     def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         """Return currently pending conversation approvals in UI-ready form with offset-based pagination."""
 

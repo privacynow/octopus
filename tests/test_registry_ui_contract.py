@@ -303,7 +303,7 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
     assert "UI.readQueryParam('protocol_view'" not in workspace
     assert "protocol_view:" in workspace  # kept in _writeState to clear legacy URLs
-    assert "API.getProtocolTemplate(" not in workspace
+    assert "API.getProtocolTemplate(" in workspace
     assert "API.getProtocolAuthoringManifest(" not in workspace
     assert "loadDefaultTemplate" not in workspace
     assert "UI.defaultVisibleRecords(\n            Array.isArray(protocolTemplates) ? protocolTemplates : []" in workspace
@@ -787,6 +787,10 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert "primaryColumn.className = 'dashboard-column';" in dashboard
     assert "secondaryColumn.className = 'dashboard-column';" in dashboard
     assert "function refreshSnapshot(" in dashboard
+    assert "function openCleanupDialog()" in dashboard
+    assert "API.cleanupCustomerData({" in dashboard
+    assert "'Create local analytics protocol'" in dashboard
+    assert "'Clean customer work data'" in dashboard
     assert "refreshSummaryOnly" not in dashboard
     assert "refreshAgents" not in dashboard
     assert "refreshConversations" not in dashboard
@@ -1068,6 +1072,8 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "'protocol.action.run': 'Run protocol'" in kit
     assert "primaryActions = ['validate', 'publish', 'run']" in kit
     assert "function protocolRunLaunchForm(" in kit
+    assert "fields = null" in kit
+    assert "field.default_value" in kit
     assert "function protocolRunLaunchFields()" in kit
     assert "source_context" in kit
     assert "relationship_context" in kit
@@ -1078,6 +1084,7 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "Dry-run rehearsal" in workspace
     assert "is_rehearsal: true" in workspace
     assert "Kit.protocolRunLaunchForm({" in workspace
+    assert "fields: _protocolRunLaunchFields()" in workspace
     assert "includeWorkspace: true" in workspace
     assert "Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`)" in workspace
 

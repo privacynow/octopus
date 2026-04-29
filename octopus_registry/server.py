@@ -1399,6 +1399,30 @@ def resource_summary(
     return _json_payload(store.get_summary(now_iso=now_iso))
 
 
+@app.post("/v1/admin/customer-data/cleanup")
+async def resource_cleanup_customer_data(
+    request: Request,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    password = str((payload or {}).get("password") or "")
+    confirm = str((payload or {}).get("confirm") or "").strip().upper()
+    if confirm != "CLEAN":
+        raise HTTPException(status_code=400, detail="Type CLEAN to confirm customer-data cleanup.")
+    if not ui_password_matches(password, settings=load_settings()):
+        raise HTTPException(status_code=403, detail="Registry UI password did not match.")
+    result = store.cleanup_customer_data()
+    await _broadcast_invalidations(
+        topics=("summary", "conversations", "tasks", "approvals", "protocols"),
+        reason="admin.customer_data.cleanup",
+    )
+    return _json_payload(result)
+
+
 @app.get("/v1/approvals")
 def resource_list_approvals(
     cursor: int = Query(default=0, ge=0),

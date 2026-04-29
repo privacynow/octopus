@@ -7230,6 +7230,33 @@ function renderProtocolRuns(container) {
             return Number.isFinite(parsed) ? parsed : 0;
         };
 
+        const latestStageExecution = (items = []) => {
+            const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+            return rows.reduce((best, item) => {
+                if (!best) return item;
+                const bestAttempt = Number(best.attempt || 0);
+                const itemAttempt = Number(item.attempt || 0);
+                if (itemAttempt !== bestAttempt) return itemAttempt > bestAttempt ? item : best;
+                const bestTime = timestampMs(best.updated_at || best.completed_at || best.started_at);
+                const itemTime = timestampMs(item.updated_at || item.completed_at || item.started_at);
+                return itemTime >= bestTime ? item : best;
+            }, null);
+        };
+
+        const currentRunStageExecution = () => {
+            const run = currentRun.run || {};
+            const executionId = String(run.current_stage_execution_id || '').trim();
+            if (executionId && stageById.has(executionId)) {
+                return stageById.get(executionId);
+            }
+            const currentStageKey = String(run.current_stage_key || '').trim();
+            if (currentStageKey) {
+                const matchingAttempts = stageRows.filter((item) => String(item.stage_key || '') === currentStageKey);
+                if (matchingAttempts.length) return latestStageExecution(matchingAttempts);
+            }
+            return latestStageExecution(stageRows);
+        };
+
         const durationLabel = (ms) => {
             const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
             if (seconds < 60) return `${seconds}s`;
@@ -7263,9 +7290,7 @@ function renderProtocolRuns(container) {
             const run = currentRun.run || {};
             const status = String(run.status || '').trim().toLowerCase();
             const active = !['completed', 'failed', 'cancelled'].includes(status);
-            const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(run.current_stage_key || ''))
-                || stageRows[stageRows.length - 1]
-                || null;
+            const currentStage = currentRunStageExecution();
             const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : 0;
             const currentStageDef = currentStage
                 ? stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {}
@@ -7449,7 +7474,7 @@ function renderProtocolRuns(container) {
                 })));
                 section.appendChild(issueSummary);
             }
-            const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')) || stageRows[stageRows.length - 1] || null;
+            const currentStage = currentRunStageExecution();
             if (currentStage) {
                 const currentStageIndex = Math.max(stageRows.indexOf(currentStage), 0);
                 const currentStageDef = stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {};
@@ -7533,10 +7558,8 @@ function renderProtocolRuns(container) {
             if (stageRows.length) {
                 const stageValueFor = (item, index = 0) => String(item?.protocol_stage_execution_id || item?.stage_key || `stage-${index}`);
                 const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
-                const currentStageIndex = Math.max(
-                    stageRows.findIndex((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')),
-                    0,
-                );
+                const preferredStage = currentRunStageExecution();
+                const currentStageIndex = Math.max(stageRows.indexOf(preferredStage), 0);
                 const currentStage = stageRows[currentStageIndex] || stageRows[0];
                 if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
                     activeRunStageExecutionId = stageValueFor(currentStage, currentStageIndex);

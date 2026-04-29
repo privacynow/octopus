@@ -245,6 +245,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.actOnProtocolRun(" in workspace
     assert "stageProgress: _runStageProgressData(currentRun)" in workspace
     assert "stageProgress: selectedDetail" in workspace
+    assert "const currentRunStageExecution = () =>" in workspace
+    assert "run.current_stage_execution_id" in workspace
+    assert "return latestStageExecution(matchingAttempts)" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace

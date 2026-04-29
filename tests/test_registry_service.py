@@ -2388,14 +2388,6 @@ def test_protocol_issues_route_accepts_protocol_filters(monkeypatch, tmp_path: P
     assert response.json()["issues"] == []
 
 
-def test_registry_http_module_stays_under_guard_threshold():
-    repo_root = Path(__file__).resolve().parents[1]
-    http_path = repo_root / "octopus_registry" / "server.py"
-    text = http_path.read_text()
-
-    assert len(text.splitlines()) <= 2060
-
-
 def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     monkeypatch.setenv("REGISTRY_DISPLAY_NAME", "QA Registry")

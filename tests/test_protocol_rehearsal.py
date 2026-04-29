@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 
-from octopus_sdk.protocols import REHEARSAL_AUTHORITY_REF, software_engineering_protocol_document
+from octopus_sdk.protocols import REHEARSAL_AUTHORITY_REF
 from octopus_registry.rehearsal import RehearsalSessionManager, REHEARSAL_AGENT_SLUG
 from octopus_registry.store_postgres import RegistryPostgresStore
 from tests.support.protocol_support import operator_access, published_protocol
@@ -67,6 +67,63 @@ def _simple_rehearsable_document() -> dict[str, object]:
                     "fail": "__failed__",
                 },
                 "instructions": "Review the plan.",
+            },
+        ],
+        "policies": {"single_active_writer": False, "max_review_rounds": 3},
+    }
+
+
+def _write_capable_rehearsable_document() -> dict[str, object]:
+    """Small explicit fixture for artifact synthesis coverage.
+
+    Keep this local to the test so rehearsal coverage does not depend on, or
+    recreate, product-visible built-in protocol templates.
+    """
+    return {
+        "metadata": {
+            "slug": "write-capable-rehearsable-protocol",
+            "display_name": "Write Capable Rehearsable Protocol",
+            "description": "Minimal protocol for rehearsal artifact synthesis coverage.",
+        },
+        "participants": [
+            {"participant_key": "planner", "display_name": "Planner"},
+            {"participant_key": "reviewer", "display_name": "Reviewer"},
+        ],
+        "artifacts": [
+            {
+                "artifact_key": "plan",
+                "kind": "workspace_file",
+                "path": "protocol/plan.md",
+                "verify": True,
+            }
+        ],
+        "stages": [
+            {
+                "stage_key": "planning",
+                "participant_key": "planner",
+                "selector": {"kind": "skill", "value": "planning"},
+                "stage_kind": "work",
+                "write_capable": True,
+                "require_output_verification": True,
+                "inputs": [],
+                "outputs": ["plan"],
+                "transitions": {"completed": "plan_review"},
+                "instructions": "Write the implementation plan.",
+            },
+            {
+                "stage_key": "plan_review",
+                "participant_key": "reviewer",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "review",
+                "write_capable": False,
+                "inputs": ["plan"],
+                "outputs": [],
+                "transitions": {
+                    "accept": "__complete__",
+                    "revise": "planning",
+                    "fail": "__failed__",
+                },
+                "instructions": "Review the implementation plan.",
             },
         ],
         "policies": {"single_active_writer": False, "max_review_rounds": 3},
@@ -319,7 +376,7 @@ def test_rehearsal_synthesizes_required_outputs_for_write_capable_stage(
 ) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     rehearsal_agent_id, _token, manager = _enrol_rehearsal_agent(store)
-    published = published_protocol(store, document=software_engineering_protocol_document().model_dump(mode="json"))
+    published = published_protocol(store, document=_write_capable_rehearsable_document())
 
     created = store.create_protocol_run(
         {

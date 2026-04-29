@@ -137,8 +137,8 @@ Observed result:
 
 ### Protocol Authoring
 
-Status: implementation updated; real Safari verification must be rerun after
-redeploy.
+Status: verified in real Safari for one blank-authored local analytics protocol;
+repeat after each redeploy before customer handoff.
 
 Expected blank-authoring flow:
 
@@ -158,19 +158,30 @@ Expected blank-authoring flow:
 
 Observed result:
 
-- Earlier Safari runs used a prepackaged local analytics starter. That is no
-  longer an acceptable proof path.
-- Acceptance must be rerun by building the workflow from blank in real Safari.
+- A protocol named `Customer Local Analytics Tool Builder` was created from a
+  blank protocol in real Safari using the Protocols UI.
+- The protocol used three customer-readable stages:
+  `Define local data contract`, `Build local browser analytics tool`, and
+  `Review local tool outputs`.
+- Stage assignments were entered from the normal assignment UI: M1 for data
+  contract/review and M2 for the implementation stage.
+- The implementation stage declared `apps/manufacturing-analytics/index.html`
+  and `apps/manufacturing-analytics/README.md`.
+- The review stage consumed the implementation artifacts and declared
+  `reports/local-tool-validation.md` and
+  `reports/manufacturing-analytics-findings.md`.
+- The protocol was validated, published, and started from the UI.
 
 Remaining authoring verification:
 
-- Blank protocol creation still needs a full pass for add/remove/reorder and
-  assignment variants: no assignment, skill only, agent only, skill plus
+- Blank protocol creation still needs a full matrix pass for add/remove/reorder
+  and assignment variants: no assignment, skill only, agent only, skill plus
   preferred agent, and needed new skill.
 
 ### Run And Artifact Inspection
 
-Status: partially verified with a real protocol run in real Safari.
+Status: verified for the UI-created local analytics run in real Safari; broader
+cross-surface artifact drill-through is still open.
 
 Verified run-start steps:
 
@@ -193,18 +204,19 @@ Verified run-start steps:
 
 Observed result:
 
-- Earlier run `b1c958a308b248a3838aff8022595767` started from the UI and
-  produced the first contract artifact.
-- Artifact actions were visible: `Preview`, `Open`, `Download`, and `Copy path`.
-- The run-launch form and liveness copy have since changed, so acceptance must
-  be rerun after redeploy.
+- Run `35f81d5e6bd741c2b16900fc7940ca71` was started from the UI-created
+  protocol and completed in real Safari.
+- Runs showed the terminal `completed` state, stage count, artifact count,
+  elapsed time, current-stage/history context, and completed-run estimate.
+- The Artifacts tab grouped outputs by producing stage.
+- The generated browser app opened from the artifact `Open` action.
+- Markdown report artifacts exposed preview/open/download/copy-path actions.
 
 Remaining verification:
 
-- The current run must finish or fail with a clear terminal state.
-- Final artifacts must be opened/downloaded from Runs.
 - The same artifact references still need verification from stage detail,
-  conversation-linked work, and Telegram.
+  conversation-linked work, dashboard references, and Telegram.
+- Downloaded files still need a clean handoff pass from a fresh deploy.
 
 ### Telegram Protocol Use
 
@@ -221,27 +233,31 @@ Planned steps:
 
 ### Local Analytics Workflow
 
-Status: must be rerun through a blank-authored protocol.
+Status: verified once through a blank-authored protocol in real Safari; repeat
+after the current prompt-contract fix is deployed.
 
 Verified steps so far:
 
 1. Start from `Build -> Protocols`.
 2. Click `New protocol`.
 3. Build the analytics workflow from blank.
-4. Validate and publish the draft.
-5. Click `Run protocol`.
-6. Confirm the run dialog asks for goal, file/data context, key
-   relationships, expected outputs, and privacy constraints.
-7. Start the run.
-8. Confirm the run begins and produces the first contract artifact.
+4. Define stage artifacts and stage-to-stage inputs/outputs.
+5. Validate and publish the draft.
+6. Click `Run protocol`.
+7. Fill the run dialog with goal, file/data context, key relationships,
+   expected outputs, and privacy constraints.
+8. Start the run.
+9. Wait for terminal completion.
+10. Open the generated browser app artifact.
+11. Set `Key faults` to `Clean relationships`.
+12. Click `Generate synthetic data`.
+13. Click `Validate keys`.
+14. Click `Run analytics`.
+15. Confirm validation passes, aggregate findings render, key lineage is shown,
+    and export controls are visible.
 
 Remaining steps:
 
-- Wait for the run to reach a terminal state.
-- Open/download the generated local tool artifact.
-- Confirm synthetic demo mode generates deterministic local fixture CSVs when
-  customer files are absent.
-- Confirm aggregate findings are visible.
 - Confirm the local tool README, validation report, and findings report are
   downloadable.
 - Confirm no generated artifact is presented as the repository customer

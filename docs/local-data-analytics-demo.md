@@ -44,19 +44,29 @@ same steps.
 Create a protocol named:
 
 ```text
-Manufacturing Analytics App Builder
+Customer Local Analytics Tool Builder
 ```
 
-Suggested stages:
+Use customer-readable stages. The verified real-Safari run used:
 
-1. define browser app contract
-2. build self-contained browser app
-3. review browser app
+1. `Define local data contract`
+2. `Build local browser analytics tool`
+3. `Review local tool outputs`
 
-Suggested artifacts:
+Use these stage outputs:
 
 - `apps/manufacturing-analytics/index.html`
-- `reports/app-review.md`
+- `apps/manufacturing-analytics/README.md`
+- `reports/local-tool-validation.md`
+- `reports/manufacturing-analytics-findings.md`
+
+Use these stage relationships:
+
+- `Build local browser analytics tool` produces the app and app README.
+- `Review local tool outputs` consumes the app and README, then produces the
+  validation report and findings report.
+- The review stage transitions to successful completion only when the generated
+  tool is local-only, usable, and produces aggregate outputs.
 
 Stage instructions should ask the agent to generate a single self-contained
 HTML/CSS/JavaScript app. The app must let a user generate synthetic
@@ -66,23 +76,37 @@ network calls for uploaded data.
 
 From the protocol page, click `Run protocol`, choose an entry agent, and fill:
 
-- `What should this run accomplish?`: build a self-contained manufacturing
-  analytics browser app for process-stage CSVs.
-- `Files or data context`: panels, cells, panel-to-cell mapping, and test
-  result CSV files may exist locally, but raw customer rows must not be pasted
-  into chat.
-- `Keys and relationships`: `panels.panel_id -> test_results.panel_id`,
-  `panels.panel_id -> panel_cells.panel_id`, `cells.cell_id ->
-  panel_cells.cell_id`.
-- `Expected outputs`: self-contained `index.html`, app review notes, exportable
-  findings.
-- `Privacy or execution constraints`: raw private rows stay local; the model
-  may receive schema, aggregate summaries, and app requirements only.
+- `What should this run accomplish?`: `Build a self-contained local
+  manufacturing analytics browser app and review its outputs for customer
+  handoff readiness without exposing raw customer data to a model provider.`
+- `Files or data context`: `Use schemas and synthetic examples for panels.csv,
+  cells.csv, panel_cells.csv, test_results.csv, and optional measurements.csv.
+  The generated tool must let the user upload real CSVs locally in the browser
+  later.`
+- `Keys and relationships`: `panels.panel_id joins test_results.panel_id and
+  panel_cells.panel_id; cells.cell_id joins panel_cells.cell_id; measurements
+  may join either panel_id or cell_id. Preserve key lineage in the generated app
+  outputs.`
+- `Expected outputs`: `Self-contained
+  apps/manufacturing-analytics/index.html,
+  apps/manufacturing-analytics/README.md,
+  reports/local-tool-validation.md, and
+  reports/manufacturing-analytics-findings.md. No customer handoff guide
+  artifact.`
+- `Privacy or execution constraints`: `Do not include raw private data rows in
+  model-visible context. Generate tools that process private data locally when
+  needed.`
 
 Open the run from the Runs page, then use the artifact actions to open or
-download `apps/manufacturing-analytics/index.html`. In the opened app, generate
-synthetic data or upload local sample CSVs, run analytics, and export the
-findings.
+download `apps/manufacturing-analytics/index.html`. In the opened app:
+
+1. set `Key faults` to `Clean relationships`,
+2. click `Generate synthetic data`,
+3. click `Validate keys`,
+4. click `Run analytics`,
+5. confirm validation passes,
+6. confirm findings and key lineage render,
+7. export aggregate findings from the app.
 
 Do not add a `Customer handoff guide` output to the protocol. The customer
 handoff script is repository documentation in `docs/customer-handoff-guide.md`.

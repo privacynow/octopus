@@ -675,21 +675,31 @@ def protocol_participant_session_key(run_id: str, participant_key: str) -> str:
 
 
 def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) -> str:
+    artifact_instruction = (
+        "update the assigned output artifacts in the workspace"
+        if stage.outputs
+        else "do not create or update protocol artifacts for this stage"
+    )
     if stage.stage_kind == "work":
         if stage.strict_completion:
             return (
-                "Complete the work for this stage, update the required artifacts in the workspace, "
+                f"Complete the work for this stage, {artifact_instruction}, "
                 "and end your final response with explicit protocol control lines:\n"
                 "PROTOCOL_DECISION: completed\n"
                 "PROTOCOL_SUMMARY: one short sentence describing the completed work"
             )
         return (
-            "Complete the work for this stage, update the required artifacts in the workspace, "
+            f"Complete the work for this stage, {artifact_instruction}, "
             "and end your final response with a short `PROTOCOL_SUMMARY:` line."
         )
     allowed = ", ".join(stage.allowed_decisions())
+    review_artifact_instruction = (
+        f"Complete the review, {artifact_instruction}, and end your final response with explicit protocol control lines:"
+        if stage.outputs
+        else "You must end your final response with explicit protocol control lines:"
+    )
     return (
-        "You must end your final response with explicit protocol control lines:\n"
+        f"{review_artifact_instruction}\n"
         f"PROTOCOL_DECISION: one of [{allowed}]\n"
         "PROTOCOL_SUMMARY: one short sentence explaining the decision\n"
         "Keep the rest of the response as the detailed review or acceptance rationale."

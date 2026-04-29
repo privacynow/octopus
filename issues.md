@@ -767,6 +767,22 @@ For any handoff claim:
 
 ## Open Blockers
 
+Latest evidence from real Safari:
+
+- Protocol `Customer Local Analytics Tool Builder`
+  (`a46ab3cb55a649f2b7c4354e4fb2ef23`) was created from a blank protocol in
+  the Protocols UI, validated, published, and run from the UI.
+- Run `35f81d5e6bd741c2b16900fc7940ca71` completed with three stages and four
+  artifacts.
+- The generated app artifact opened through the run artifact action and ran in
+  Safari.
+- Synthetic data with `Clean relationships` produced validation `passed`,
+  rendered aggregate findings, showed key lineage, and exposed aggregate export
+  controls.
+- The remaining blockers below are therefore about repeatability after deploy,
+  clean-clone/customer pass, assignment matrix breadth, cross-surface artifact
+  access, Telegram parity, and full audit breadth.
+
 | ID | Blocker | Required Fix |
 | --- | --- | --- |
 | H1 | Product is not clean-clone/customer-self-service proven. | Run and document clean-clone setup plus smoke. |
@@ -775,14 +791,14 @@ For any handoff claim:
 | H4 | Artifact access must be verified across all references. | Run artifact drill-through from run, stage, task, conversation, Telegram. |
 | H5 | Conversation-launched protocols need customer-obvious flow and lineage. | Execute Scenario D and fix missing linked-work presentation. |
 | H6 | Telegram protocol parity must be rechecked after SDK/service work. | Execute Scenario E against live/stub topology. |
-| H7 | Local-only analytics workflow is not yet a repeatable blank-authored product path. | Implement and verify Scenario F. |
+| H7 | Local-only analytics workflow is not yet clean-clone repeatable after deploy. | Repeat Scenario F after deploying the current prompt fix and record any remaining UI friction. |
 | H8 | Customer docs/manual are not yet acceptance-tested. | Update docs and run every documented step. |
 | H9 | Full real Safari desktop/narrow audit has not been completed after known blockers. | Run audit only after H1-H8 are addressed. |
-| H10 | Manufacturing analytics acceptance still relied on code-defined starter/script references. | Remove built-in starter exposure; verify in real Safari that customer creates the protocol from blank UI and that `run_demo.py` is not part of acceptance. |
-| H11 | UI-created manufacturing run accepted a placeholder heatmap that said validation did not pass. | Protocol instructions and launch defaults now reject placeholder/render-failed artifacts; rerun from UI and verify terminal artifacts. |
-| H12 | Running protocol stages did not explain liveness/current state to the user. | Implemented run Overview liveness guidance with current stage, elapsed time, event update, output counts, and completed-run estimate when history exists; verify in real Safari during a live run. |
+| H10 | Manufacturing analytics acceptance previously relied on code-defined starter/script references. | Keep starters hidden from product surfaces and keep acceptance based on blank UI authoring; rerun after deploy to ensure no starter shortcut is required. |
+| H11 | A previous UI-created manufacturing run accepted a placeholder heatmap that said validation did not pass. | Current real-Safari run produced a functioning app and reports; repeat after deploy and ensure review rejects placeholder/render-failed artifacts. |
+| H12 | Running protocol stages did not explain liveness/current state to the user. | Current run showed status, elapsed time, stage/artifact counts, and completed-run estimate; repeat during the next live run after deploy. |
 | H13 | Workspace reset required container/database intervention outside the product. | Implemented Dashboard workspace-data cleanup guarded by Registry UI password and `CLEAN` confirmation; verify it preserves agents/skills/guidance while removing workspace work records. |
-| H14 | Run list could advance to a newer stage while the expanded run detail still showed the previous stage. | Runs now queue a selected-detail refresh whenever the list row has a newer status, stage, version, or timestamp; verify live run list, Overview, Stages, and Artifacts agree in real Safari. |
+| H14 | Run list could advance to a newer stage while the expanded run detail still showed the previous stage. | Current completed run detail stayed coherent in Safari; repeat after deploy and add/confirm regression coverage for selected-detail refresh. |
 | H15 | Redeploying while a protocol stage task is running can leave the Registry task/run shown as running even when no provider command remains active in the bot container. | SDK routed-work recovery now reports interrupted routed tasks as failed results instead of leaving them hidden in pending recovery; redeploy and verify the UI shows terminal retryable state. |
 
 ## Non-Goals For Handoff

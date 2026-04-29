@@ -243,6 +243,73 @@ def test_protocol_stage_prompt_includes_typed_run_context_without_special_surfac
     assert "Privacy or execution constraints:\nDo not send raw rows." in prompt
 
 
+def test_protocol_stage_prompt_limits_artifact_work_to_stage_outputs():
+    payload = protocol_document()
+    planning = next(stage for stage in payload["stages"] if stage["stage_key"] == "planning")
+    planning["outputs"] = []
+    document = canonical_protocol_document(payload)
+    run = ProtocolRunRecord.model_validate(
+        {
+            "protocol_run_id": "run-1",
+            "protocol_id": "protocol-1",
+            "protocol_definition_version_id": "version-1",
+            "entry_agent_id": "agent-1",
+            "status": "running",
+            "current_stage_key": "planning",
+            "problem_statement": "Create the local analytics app.",
+            "constraints_json": {
+                "desired_outputs": "index.html and findings report",
+            },
+        }
+    )
+
+    prompt = render_protocol_stage_prompt(
+        document=document,
+        run=run,
+        stage=document.stage("planning"),
+        artifacts=[],
+    )
+
+    assert "do not create or update protocol artifacts for this stage" in prompt
+    assert "update the required artifacts" not in prompt
+
+
+def test_protocol_review_prompt_mentions_assigned_output_artifacts():
+    payload = protocol_document()
+    payload["artifacts"].append(
+        {
+            "artifact_key": "review_report",
+            "kind": "workspace_file",
+            "path": "protocol/review.md",
+        }
+    )
+    review = next(stage for stage in payload["stages"] if stage["stage_key"] == "review")
+    review["outputs"] = ["review_report"]
+    document = canonical_protocol_document(payload)
+    run = ProtocolRunRecord.model_validate(
+        {
+            "protocol_run_id": "run-1",
+            "protocol_id": "protocol-1",
+            "protocol_definition_version_id": "version-1",
+            "entry_agent_id": "agent-1",
+            "status": "running",
+            "current_stage_key": "review",
+            "problem_statement": "Review the local analytics app.",
+        }
+    )
+
+    prompt = render_protocol_stage_prompt(
+        document=document,
+        run=run,
+        stage=document.stage("review"),
+        artifacts=[],
+    )
+
+    assert "Artifacts for this stage:" in prompt
+    assert "- review_report: protocol/review.md" in prompt
+    assert "Complete the review, update the assigned output artifacts in the workspace" in prompt
+
+
 @pytest.mark.asyncio
 async def test_launch_protocol_from_conversation_invokes_shared_protocol_pipeline():
     definition = _launchable_definition()

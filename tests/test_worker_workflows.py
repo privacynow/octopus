@@ -359,7 +359,7 @@ async def test_recovery_workflow_binds_and_sends_notice_before_marking_pending_r
 
 
 @pytest.mark.asyncio
-async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch) -> None:
+async def test_worker_recovery_for_routed_task_reports_failure_without_bind_or_notice(monkeypatch) -> None:
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -400,6 +400,24 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
 
         monkeypatch.setattr(RegistryChannelEgress, "bind", fake_bind)
         monkeypatch.setattr(RegistryChannelEgress, "send_recovery_notice", fake_send_recovery_notice)
+        reported: list[tuple[str, str]] = []
+
+        async def fake_report_interrupted_routed_task_recovery(
+            self,
+            *,
+            routed_task_id,
+            authority_ref,
+            event,
+            item,
+        ):
+            del self, event, item
+            reported.append((routed_task_id, authority_ref))
+
+        monkeypatch.setattr(
+            type(current_runtime().submitter),
+            "_report_interrupted_routed_task_recovery",
+            fake_report_interrupted_routed_task_recovery,
+        )
 
         event = InboundMessage(
             user=InboundUser(id="registry:actor", username="registry"),
@@ -417,16 +435,16 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
             dispatch_mode="recovery",
         )
 
-        with pytest.raises(work_queue.PendingRecovery):
-            await telegram_worker.worker_dispatch(
-                "message",
-                event,
-                item,
-                runtime=current_runtime(),
-                execution_runtime=current_execution_runtime(),
-            )
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
 
         assert calls == []
+        assert reported == [("routed-task-recovery-1", "registry:default")]
 
 
 @pytest.mark.asyncio

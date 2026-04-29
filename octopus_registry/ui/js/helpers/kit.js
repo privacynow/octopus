@@ -2654,6 +2654,7 @@ window.Kit = (() => {
 
         const normalizedRunStatus = String(runStatus || '').trim().toLowerCase();
         const activeRun = !['completed', 'failed', 'cancelled'].includes(normalizedRunStatus);
+        const terminalRun = !activeRun && Boolean(normalizedRunStatus);
         let currentIndex = knownStages.findIndex((stage) => stage.stage_key === String(currentStageKey || ''));
         if (currentIndex < 0) {
             const executionKeys = Array.from(executionByStage.keys());
@@ -2674,6 +2675,16 @@ window.Kit = (() => {
                 state = 'current';
             } else if (executionStatus === 'completed' || execution?.completed_at) {
                 state = 'completed';
+            } else if (terminalRun && !execution) {
+                if (normalizedRunStatus === 'completed' && index <= currentIndex) {
+                    state = 'completed';
+                } else if (normalizedRunStatus === 'failed' && index === currentIndex) {
+                    state = 'failed';
+                } else if (index < currentIndex) {
+                    state = 'completed';
+                } else {
+                    state = 'skipped';
+                }
             } else if (executionStatus === 'cancelled' || (index < currentIndex && !execution)) {
                 state = 'skipped';
             }

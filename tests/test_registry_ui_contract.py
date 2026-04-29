@@ -1093,6 +1093,8 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "function runStageProgressRail(" in kit
     assert "runStageProgressRail," in kit
     assert "_compressedStageProgressItems(items, currentIndex)" in kit
+    assert "const terminalRun = !activeRun && Boolean(normalizedRunStatus);" in kit
+    assert "normalizedRunStatus === 'completed' && index <= currentIndex" in kit
     assert "fields = null" in kit
     assert "field.default_value" in kit
     assert "function protocolRunLaunchFields()" in kit

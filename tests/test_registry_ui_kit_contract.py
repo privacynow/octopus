@@ -140,6 +140,18 @@ def test_kit_details_panel_does_not_prefill_values_for_blank_records() -> None:
     assert "opacity: 0.7" in css or "opacity: .7" in css
 
 
+def test_kit_details_panel_debounces_live_text_commits() -> None:
+    """Live-committed text fields must not re-render on every keystroke."""
+    kit = _read("js", "helpers", "kit.js")
+
+    assert "let commitTimer = null;" in kit
+    assert "const scheduleCommit = () =>" in kit
+    assert "field.commitDelayMs || 350" in kit
+    assert "window.setTimeout(commit" in kit
+    assert "control.addEventListener('input', scheduleCommit);" in kit
+    assert "window.clearTimeout(commitTimer);" in kit
+
+
 def test_index_html_loads_kit_between_ui_helpers_and_components() -> None:
     html = _read("index.html")
     ui_idx = html.find("helpers/ui.js")

@@ -868,12 +868,22 @@ window.Kit = (() => {
             if (field.readOnly && kind !== 'checkbox' && kind !== 'select') control.readOnly = true;
 
             if (typeof onCommit === 'function' && kind !== 'checklist') {
+                let commitTimer = null;
                 const commit = () => {
+                    if (commitTimer) {
+                        window.clearTimeout(commitTimer);
+                        commitTimer = null;
+                    }
                     const value = kind === 'checkbox' ? control.checked : control.value;
                     onCommit(target, field.key, value);
                 };
                 if (field.commitOnInput && (kind === 'text' || kind === 'textarea')) {
-                    control.addEventListener('input', commit);
+                    const scheduleCommit = () => {
+                        if (commitTimer) window.clearTimeout(commitTimer);
+                        const delay = Number(field.commitDelayMs || 350);
+                        commitTimer = window.setTimeout(commit, Number.isFinite(delay) ? delay : 350);
+                    };
+                    control.addEventListener('input', scheduleCommit);
                 }
                 control.addEventListener('change', commit);
                 if (kind === 'text' || kind === 'textarea') {

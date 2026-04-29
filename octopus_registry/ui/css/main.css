@@ -3737,20 +3737,20 @@ select {
 
 .kit-protocol-stage-stack {
     display: grid;
-    gap: 0.9rem;
+    gap: 1.125rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] {
-    gap: 0.82rem;
+    gap: 1rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] {
-    gap: 0.72rem;
+    gap: 0.9rem;
 }
 
 .kit-protocol-segment-entry {
     display: grid;
-    gap: var(--space-1);
+    gap: var(--space-2);
 }
 
 .kit-protocol-segment-entry.is-active {
@@ -3764,11 +3764,11 @@ select {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
-    gap: var(--space-1-5);
-    padding: 0;
+    gap: var(--space-2);
+    padding: var(--space-2);
     border-radius: var(--radius-lg);
-    background: linear-gradient(180deg, rgba(247, 244, 238, 0.94) 0%, rgba(247, 244, 238, 0.8) 78%, rgba(247, 244, 238, 0) 100%);
-    backdrop-filter: blur(4px);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 96%, transparent) 0%, color-mix(in srgb, var(--bg) 88%, transparent) 78%, transparent 100%);
+    backdrop-filter: blur(8px);
 }
 
 .kit-protocol-segment-step-actions,
@@ -3822,7 +3822,7 @@ select {
 
 .kit-selector-editor {
     display: grid;
-    gap: var(--space-4);
+    gap: var(--space-3);
 }
 
 .kit-selector-editor-head {
@@ -3832,7 +3832,7 @@ select {
 
 .kit-selector-editor-field {
     display: grid;
-    gap: var(--space-2-5);
+    gap: var(--space-2);
 }
 
 .kit-selector-editor[data-show-all-primary="true"] [data-selector-kind] {
@@ -3884,11 +3884,11 @@ select {
 
 .kit-selector-editor-context {
     display: grid;
-    gap: var(--space-1);
-    padding: var(--space-2-5) var(--space-3);
-    border: 0;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.52);
+    background: var(--bg);
 }
 
 .kit-selector-editor-context-title {
@@ -3929,12 +3929,12 @@ select {
 
 .kit-protocol-segment-panel {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-2);
 }
 
 .kit-protocol-segment-panel[data-density="balanced"],
 .kit-protocol-segment-panel[data-density="dense"] {
-    gap: var(--space-2-5);
+    gap: var(--space-1-5);
 }
 
 .kit-protocol-segment-head {
@@ -3951,25 +3951,25 @@ select {
 
 .kit-protocol-segment-steps {
     display: grid;
-    gap: 0.9rem;
+    gap: var(--space-2);
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-steps {
-    gap: 0.82rem;
+    gap: var(--space-1-5);
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-steps {
-    gap: 0.72rem;
+    gap: var(--space-1);
 }
 
 .kit-protocol-segment-step {
     width: 100%;
     display: grid;
-    gap: var(--space-1-5);
-    padding: 1.08rem 1.16rem;
-    border: 1px solid rgba(17, 24, 39, 0.05);
+    gap: var(--space-1);
+    padding: 0.95rem 1rem;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.56);
+    background: color-mix(in srgb, var(--bg-secondary) 68%, transparent);
     color: var(--text);
     text-align: left;
     font: inherit;
@@ -3978,47 +3978,47 @@ select {
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-step {
-    gap: 0.46rem;
-    padding: 0.98rem 1.04rem;
+    gap: 0.35rem;
+    padding: 0.85rem 0.95rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-step {
-    gap: 0.36rem;
-    padding: 0.9rem 0.98rem;
+    gap: 0.25rem;
+    padding: 0.72rem 0.85rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step,
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step {
-    background: rgba(255, 255, 255, 0.22);
-    border-color: rgba(17, 24, 39, 0.035);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    border-color: var(--border);
 }
 
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:hover,
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step:focus-visible {
-    background: rgba(255, 255, 255, 0.74);
-    border-color: rgba(149, 76, 47, 0.14);
-    box-shadow: 0 8px 18px rgba(17, 24, 39, 0.035);
+    background: var(--surface-hover);
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+    box-shadow: var(--shadow-card);
 }
 
 .kit-protocol-segment-step.is-selected {
-    border-color: rgba(149, 76, 47, 0.28);
-    box-shadow: 0 12px 24px rgba(17, 24, 39, 0.055);
-    background: rgba(255, 255, 255, 0.96);
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+    background: var(--bg-secondary);
 }
 
 .kit-protocol-segment-entry.is-active .kit-protocol-segment-step {
-    gap: var(--space-2);
-    padding: 1.3rem 1.38rem;
+    gap: var(--space-1);
+    padding: 0.95rem 1rem;
 }
 
 .kit-protocol-stage-stack[data-density="balanced"] .kit-protocol-segment-entry.is-active .kit-protocol-segment-step {
-    gap: var(--space-1-5);
-    padding: 1.18rem 1.24rem;
+    gap: 0.35rem;
+    padding: 0.85rem 0.95rem;
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-entry.is-active .kit-protocol-segment-step {
-    gap: var(--space-1);
-    padding: 1.06rem 1.12rem;
+    gap: 0.25rem;
+    padding: 0.72rem 0.85rem;
 }
 
 .kit-protocol-segment-step-head {
@@ -4041,12 +4041,12 @@ select {
 }
 
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step-title {
+    color: var(--text-secondary);
     font-weight: 520;
-    color: rgba(45, 31, 24, 0.72);
 }
 
 .kit-protocol-segment-entry:not(.is-active) .kit-protocol-segment-step-meta {
-    color: rgba(79, 68, 63, 0.62);
+    color: var(--text-muted);
 }
 
 .kit-protocol-stage-stack[data-density="dense"] .kit-protocol-segment-step-meta {

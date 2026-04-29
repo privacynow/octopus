@@ -794,6 +794,7 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert ".dashboard-board {" in css
     assert ".dashboard-column {" in css
     assert ".dashboard-work-grid {" not in css
+    assert ".kit-catalog-search {\n        flex: 0 1 auto;" in css
 
 
 def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections() -> None:
@@ -806,7 +807,11 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "function renderNeedsAttentionSection(" not in dashboard
     assert "buildNeedsAttention" not in dashboard
     assert "label: 'Queued backlog'" in dashboard
-    assert "label: 'Unhealthy agents'" in dashboard
+    assert "label: 'Agents needing attention'" in dashboard
+    assert "function visibleDashboardAgents()" in dashboard
+    assert "function dashboardAgentHealth(summary)" in dashboard
+    assert "label: 'Active or stuck runs'" in dashboard
+    assert "with issues" in dashboard
     assert "label: 'Usage review'" in dashboard
     assert "label: 'Tokens · 24h'" not in dashboard
     assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" not in dashboard

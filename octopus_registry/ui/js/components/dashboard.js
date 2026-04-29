@@ -171,6 +171,10 @@ function renderDashboard(container) {
         return coerceList(payload, 'protocols');
     }
 
+    function coerceAgentList(payload) {
+        return coerceList(payload, 'agents');
+    }
+
     function coerceList(payload, key) {
         return payload && Array.isArray(payload[key])
             ? payload[key]
@@ -266,16 +270,46 @@ function renderDashboard(container) {
         return UI.defaultVisibleRecords(coerceProtocolList(dashboardState.protocols), { includeHidden: false });
     }
 
+    function visibleDashboardAgents() {
+        return UI.defaultVisibleRecords(coerceAgentList(dashboardState.agents), { includeHidden: false });
+    }
+
+    function dashboardAgentHealth(summary) {
+        const visibleAgents = visibleDashboardAgents();
+        if (visibleAgents.length) {
+            const connected = visibleAgents.filter((agent) =>
+                String(agent.connectivity_state || '').trim().toLowerCase() === 'connected',
+            ).length;
+            const executionFaulted = visibleAgents.filter((agent) =>
+                String(agent.execution_state || 'healthy').trim().toLowerCase() === 'faulted',
+            ).length;
+            const needsAttention = visibleAgents.filter((agent) => {
+                const connectivity = String(agent.connectivity_state || '').trim().toLowerCase();
+                const execution = String(agent.execution_state || 'healthy').trim().toLowerCase();
+                return connectivity !== 'connected' || execution === 'faulted';
+            }).length;
+            return { connected, executionFaulted, needsAttention };
+        }
+        return {
+            connected: Number(summary.agents?.connected || 0),
+            executionFaulted: Number(summary.agents?.execution_faulted || 0),
+            needsAttention: Number(summary.agents?.degraded || 0)
+                + Number(summary.agents?.disconnected || 0)
+                + Number(summary.agents?.execution_faulted || 0),
+        };
+    }
+
     function renderSummaryRail(summary) {
-        const unhealthyAgents = Number(summary.agents?.degraded || 0)
-            + Number(summary.agents?.disconnected || 0)
-            + Number(summary.agents?.execution_faulted || 0);
+        const agentHealth = dashboardAgentHealth(summary);
         const visibleActiveTasks = visibleDashboardTasks(dashboardState.activeTasks);
         const visibleRuns = visibleDashboardRuns();
         const visibleProtocols = visibleDashboardProtocols();
         const activeRuns = visibleRuns.filter((run) =>
             ['queued', 'running', 'blocked'].includes(String(run.status || '').trim().toLowerCase()));
         const blockedRuns = visibleRuns.filter((run) => String(run.status || '').trim().toLowerCase() === 'blocked');
+        const issueRuns = new Set(coerceList(dashboardState.protocolIssues, 'issues')
+            .map((issue) => String(issue.protocol_run_id || '').trim())
+            .filter(Boolean));
         const publishedProtocols = visibleProtocols.filter((item) =>
             String(item.lifecycle_state || '').trim().toLowerCase() === 'published');
         const items = [
@@ -288,17 +322,18 @@ function renderDashboard(container) {
             },
             {
                 key: 'unhealthy-agents',
-                value: String(unhealthyAgents),
-                label: 'Unhealthy agents',
-                detail: `${summary.agents?.connected || 0} connected · ${summary.agents?.execution_faulted || 0} execution faulted`,
+                value: String(agentHealth.needsAttention),
+                label: 'Agents needing attention',
+                detail: `${agentHealth.connected} ready · ${agentHealth.executionFaulted} execution faulted`,
                 href: '/ui/agents',
             },
             {
                 key: 'protocol-runs',
                 value: String(activeRuns.length),
-                label: 'Active protocol runs',
+                label: 'Active or stuck runs',
                 detail: [
                     `${blockedRuns.length} blocked`,
+                    `${activeRuns.filter((run) => issueRuns.has(String(run.protocol_run_id || '').trim())).length} with issues`,
                     `${visibleRuns.length} visible recent runs`,
                 ].join(' · '),
                 href: '/ui/runs',

@@ -3596,6 +3596,17 @@ select {
         align-items: stretch;
     }
 
+    .kit-catalog-search {
+        flex: 0 1 auto;
+        width: 100%;
+    }
+
+    .kit-catalog-controls > .btn,
+    .kit-catalog-controls > a {
+        justify-content: center;
+        width: 100%;
+    }
+
     .kit-catalog-hero {
         grid-template-columns: 1fr;
     }

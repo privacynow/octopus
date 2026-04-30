@@ -2471,7 +2471,7 @@ window.Kit = (() => {
                 emptyHint || dictValue('runs.empty', 'No runs match this filter.'),
             ));
         } else {
-            entries.forEach((run) => {
+            const renderEntry = (run) => {
                 const selected = String(run.id || '') === String(selectedId || '');
                 const entry = document.createElement('article');
                 entry.className = 'kit-runs-list-entry';
@@ -2516,6 +2516,18 @@ window.Kit = (() => {
                     sub.textContent = String(run.subtitle);
                     row.appendChild(sub);
                 }
+                const metaItems = Array.isArray(run.meta) ? run.meta.filter(Boolean) : [];
+                if (metaItems.length) {
+                    const meta = document.createElement('div');
+                    meta.className = 'kit-runs-list-row-meta';
+                    metaItems.slice(0, 4).forEach((item) => {
+                        const chip = document.createElement('span');
+                        chip.className = 'kit-runs-list-row-meta-chip';
+                        chip.textContent = String(item || '');
+                        meta.appendChild(chip);
+                    });
+                    row.appendChild(meta);
+                }
                 if (run.stageProgress) {
                     row.appendChild(runStageProgressRail({
                         ...run.stageProgress,
@@ -2538,8 +2550,51 @@ window.Kit = (() => {
                         entry.appendChild(expanded);
                     }
                 }
-                list.appendChild(entry);
-            });
+                return entry;
+            };
+            const grouped = entries.some((run) => String(run.groupLabel || '').trim());
+            if (grouped) {
+                const groups = [];
+                const groupByKey = new Map();
+                entries.forEach((run) => {
+                    const label = String(run.groupLabel || 'Other runs').trim();
+                    const key = String(run.groupKey || label).trim();
+                    if (!groupByKey.has(key)) {
+                        const group = {
+                            key,
+                            label,
+                            rank: Number.isFinite(Number(run.groupRank)) ? Number(run.groupRank) : groups.length + 50,
+                            meta: String(run.groupMeta || '').trim(),
+                            runs: [],
+                        };
+                        groupByKey.set(key, group);
+                        groups.push(group);
+                    }
+                    groupByKey.get(key).runs.push(run);
+                });
+                groups
+                    .sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label))
+                    .forEach((group) => {
+                        const section = document.createElement('section');
+                        section.className = 'kit-runs-list-group';
+                        section.dataset.groupKey = group.key;
+                        const groupHead = document.createElement('div');
+                        groupHead.className = 'kit-runs-list-group-head';
+                        const groupTitle = document.createElement('span');
+                        groupTitle.className = 'kit-runs-list-group-title';
+                        groupTitle.textContent = group.label;
+                        groupHead.appendChild(groupTitle);
+                        const groupMeta = document.createElement('span');
+                        groupMeta.className = 'kit-runs-list-group-meta';
+                        groupMeta.textContent = group.meta || `${group.runs.length} run${group.runs.length === 1 ? '' : 's'}`;
+                        groupHead.appendChild(groupMeta);
+                        section.appendChild(groupHead);
+                        group.runs.forEach((run) => section.appendChild(renderEntry(run)));
+                        list.appendChild(section);
+                    });
+            } else {
+                entries.forEach((run) => list.appendChild(renderEntry(run)));
+            }
         }
         root.appendChild(list);
         return root;

@@ -1220,12 +1220,18 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "kit-run-status-attention" in (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
-    assert "renderExpanded: () => _buildRunDetailPanel()" in (
+    workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
-    assert "issuesByRunId" in (
-        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
-    ).read_text(encoding="utf-8")
+    assert "renderExpanded: null" in workspace
+    assert "workbench.appendChild(_buildRunDetailPanel());" in workspace
+    assert "function _buildRunsOverviewStrip(" in workspace
+    assert "const buildRunFocusHero = () => {" in workspace
+    assert "Run inspector" in workspace
+    assert "issuesByRunId" in workspace
+    assert ".runs-overview-strip" in css
+    assert ".run-focus-hero" in css
+    assert ".kit-runs-list-group" in css
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

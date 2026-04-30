@@ -6593,7 +6593,7 @@ function renderProtocolRuns(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Runs</h2><p>Inspect live workflow execution, issue triage, artifacts, and operator actions without the authoring surface mixed in.</p>';
+    header.innerHTML = '<h2>Runs</h2><p>Watch workflow progress, find runs that need attention, and open produced artifacts.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');
@@ -6761,13 +6761,77 @@ function renderProtocolRuns(container) {
             });
             row.setAttribute('aria-expanded', String(selected));
             shell.appendChild(row);
-            if (selected) {
-                const detail = _buildRunDetailPanel();
-                detail.classList.add('kit-runs-inline-detail');
-                shell.appendChild(detail);
-            }
             return shell;
         });
+    }
+
+    function _runStatusValue(run) {
+        return String(run?.status || '').trim().toLowerCase() || 'queued';
+    }
+
+    function _runGroupInfo(run, issue = null) {
+        const status = _runStatusValue(run);
+        if (issue || status === 'blocked' || status === 'failed') {
+            return { key: 'attention', label: 'Needs attention', rank: 0 };
+        }
+        if (['running', 'queued'].includes(status)) {
+            return { key: 'active', label: 'Running now', rank: 1 };
+        }
+        if (status === 'completed') {
+            return { key: 'completed', label: 'Recently completed', rank: 2 };
+        }
+        if (status === 'cancelled') {
+            return { key: 'ended', label: 'Ended', rank: 3 };
+        }
+        return { key: 'other', label: 'Other runs', rank: 4 };
+    }
+
+    function _runDisplayTitle(run) {
+        return String(run?.protocol_display_name || run?.protocol_name || run?.protocol_id || 'Protocol run').trim();
+    }
+
+    function _runStageListLabel(run) {
+        const stage = String(run?.current_stage_key || '').trim();
+        if (stage) return `Stage ${stage}`;
+        const status = _runStatusValue(run);
+        return status === 'completed' ? 'Finished' : 'No active stage';
+    }
+
+    function _buildRunsOverviewStrip(runSource, issuesByRunId) {
+        const counts = {
+            attention: 0,
+            active: 0,
+            completed: 0,
+            ended: 0,
+        };
+        (runSource || []).forEach((run) => {
+            const group = _runGroupInfo(run, issuesByRunId.get(String(_runRecordId(run) || '').trim()) || null);
+            if (Object.prototype.hasOwnProperty.call(counts, group.key)) {
+                counts[group.key] += 1;
+            }
+        });
+        const strip = document.createElement('div');
+        strip.className = 'runs-overview-strip';
+        [
+            { key: 'attention', label: 'Needs attention', help: 'Blocked or failed' },
+            { key: 'active', label: 'Running now', help: 'Queued or active' },
+            { key: 'completed', label: 'Completed', help: 'Recently finished' },
+            { key: 'ended', label: 'Ended', help: 'Cancelled or closed' },
+        ].forEach((item) => {
+            const card = document.createElement('div');
+            card.className = `runs-overview-card runs-overview-${item.key}`;
+            const value = document.createElement('strong');
+            value.textContent = String(counts[item.key] || 0);
+            card.appendChild(value);
+            const copy = document.createElement('span');
+            copy.textContent = item.label;
+            card.appendChild(copy);
+            const help = document.createElement('small');
+            help.textContent = item.help;
+            card.appendChild(help);
+            strip.appendChild(card);
+        });
+        return strip;
     }
 
     function _buildRunSummaryGrid() {
@@ -7055,6 +7119,7 @@ function renderProtocolRuns(container) {
                 runSource.unshift(currentRun.run);
             }
         }
+        panel.appendChild(_buildRunsOverviewStrip(runSource, issuesByRunId));
         const listRuns = runSource.filter((item) => {
             if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
             if (!runSearch) return true;
@@ -7072,16 +7137,29 @@ function renderProtocolRuns(container) {
             const selectedDetail = currentRun && _runRecordId(currentRun.run) === String(runId || '')
                 ? currentRun
                 : null;
+            const group = _runGroupInfo(item, issue);
+            const stageLabel = _runStageListLabel(item);
             return {
                 id: runId,
                 status: item.status,
                 attention: issue ? _issueAttentionLabel(issue) : '',
                 attentionStatus: issue ? 'blocked' : '',
-                title: item.current_stage_key
-                    ? `${item.current_stage_key} · ${item.status}`
-                    : (item.status || 'queued'),
-                subtitle: item.problem_statement || item.protocol_run_id,
-                badge: item.protocol_id || '',
+                title: _runDisplayTitle(item),
+                subtitle: item.problem_statement || stageLabel || item.protocol_run_id,
+                badge: runId ? runId.slice(0, 8) : '',
+                meta: [
+                    stageLabel,
+                    item.updated_at ? `Updated ${UI.relativeTime(item.updated_at)}` : '',
+                    item.origin_channel ? `From ${item.origin_channel}` : '',
+                ],
+                groupKey: group.key,
+                groupLabel: group.label,
+                groupRank: group.rank,
+                groupMeta: group.key === 'attention'
+                    ? 'Review blocked or failed work first'
+                    : group.key === 'active'
+                        ? 'Live and queued work'
+                        : '',
                 stageProgress: selectedDetail
                     ? _runStageProgressData(selectedDetail)
                     : {
@@ -7122,7 +7200,7 @@ function renderProtocolRuns(container) {
                 renderRunsRoute();
             },
             onSelect: (run) => _setRunSelection(run.id),
-            renderExpanded: () => _buildRunDetailPanel(),
+            renderExpanded: null,
             emptyHint: includeGenerated
                 ? 'No generated or normal runs match this filter.'
                 : 'No normal runs match this filter. Use Show generated/audit runs to inspect test, rehearsal, and generated executions.',
@@ -7365,6 +7443,109 @@ function renderProtocolRuns(container) {
             return samples.reduce((sum, value) => sum + value, 0) / samples.length;
         };
 
+        const buildRunFocusHero = () => {
+            const run = currentRun.run || {};
+            const status = String(run.status || 'queued').trim().toLowerCase();
+            const active = !['completed', 'failed', 'cancelled'].includes(status);
+            const currentStage = currentRunStageExecution();
+            const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : 0;
+            const totalStages = Math.max(stageRows.length, currentRun.version?.definition_json?.stages?.length || 0);
+            const currentStageDef = currentStage
+                ? stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {}
+                : {};
+            const protocolLabel = String(
+                currentRun.definition?.display_name
+                || currentRun.definition?.slug
+                || run.protocol_id
+                || 'Protocol run',
+            ).trim();
+            const startMs = timestampMs(run.created_at || run.started_at || currentStage?.started_at);
+            const elapsed = startMs ? durationLabel(Date.now() - startMs) : 'n/a';
+            const averageMs = averageCompletedRunDurationMs();
+            const hero = document.createElement('article');
+            hero.className = `run-focus-hero run-focus-status-${status || 'queued'}`;
+
+            const main = document.createElement('div');
+            main.className = 'run-focus-main';
+            const kicker = document.createElement('div');
+            kicker.className = 'run-focus-kicker';
+            kicker.textContent = active ? 'Run in progress' : 'Run finished';
+            main.appendChild(kicker);
+            const title = document.createElement('h3');
+            title.className = 'run-focus-title';
+            title.textContent = protocolLabel;
+            main.appendChild(title);
+            const stage = document.createElement('div');
+            stage.className = 'run-focus-stage';
+            stage.textContent = currentStage
+                ? `${currentStageDef.display_name || currentStage.stage_key || 'Stage'} · ${currentStage.status || run.status || 'queued'}`
+                : run.termination_summary || 'Waiting for the first stage';
+            main.appendChild(stage);
+            if (run.problem_statement) {
+                const problem = document.createElement('p');
+                problem.className = 'run-focus-problem';
+                problem.textContent = String(run.problem_statement || '');
+                main.appendChild(problem);
+            }
+            hero.appendChild(main);
+
+            const state = document.createElement('div');
+            state.className = 'run-focus-state';
+            state.appendChild(Kit.runStageProgressRail(_runStageProgressData(currentRun)));
+            const metrics = document.createElement('div');
+            metrics.className = 'run-focus-metrics';
+            [
+                { label: 'Status', value: run.status || 'queued' },
+                { label: 'Stage', value: totalStages ? `${currentStageIndex + 1} / ${totalStages}` : 'n/a' },
+                { label: 'Elapsed', value: elapsed },
+                { label: 'Outputs', value: `${artifactRows.length}${pendingArtifactRows.length ? ` / ${artifactRows.length + pendingArtifactRows.length}` : ''}` },
+                { label: 'Issues', value: String(currentIssues.length) },
+                { label: 'Typical', value: averageMs ? durationLabel(averageMs) : 'learning' },
+            ].forEach((item) => {
+                const metric = document.createElement('span');
+                metric.className = 'run-focus-metric';
+                const value = document.createElement('strong');
+                value.textContent = item.value;
+                metric.appendChild(value);
+                const label = document.createElement('small');
+                label.textContent = item.label;
+                metric.appendChild(label);
+                metrics.appendChild(metric);
+            });
+            state.appendChild(metrics);
+            hero.appendChild(state);
+
+            const lower = document.createElement('div');
+            lower.className = 'run-focus-lower';
+            const artifacts = document.createElement('div');
+            artifacts.className = 'run-focus-artifacts';
+            const artifactTitle = document.createElement('div');
+            artifactTitle.className = 'detail-label';
+            artifactTitle.textContent = 'Outputs';
+            artifacts.appendChild(artifactTitle);
+            if (artifactRows.length) {
+                artifacts.appendChild(createArtifactList(artifactRows.slice(0, 3), {
+                    relationshipFor: () => 'Produced output',
+                }));
+            } else if (pendingArtifactRows.length) {
+                artifacts.appendChild(UI.renderEmptyState(`${pendingArtifactRows.length} declared output${pendingArtifactRows.length === 1 ? '' : 's'} not produced yet.`, true));
+            } else {
+                artifacts.appendChild(UI.renderEmptyState('No outputs recorded yet.', true));
+            }
+            lower.appendChild(artifacts);
+            const actions = document.createElement('div');
+            actions.className = 'run-focus-actions';
+            const actionTitle = document.createElement('div');
+            actionTitle.className = 'detail-label';
+            actionTitle.textContent = 'Next action';
+            actions.appendChild(actionTitle);
+            actions.appendChild(_buildRunActionBar());
+            lower.appendChild(actions);
+            hero.appendChild(lower);
+
+            return hero;
+        };
+
         const buildRunLivenessCard = () => {
             const run = currentRun.run || {};
             const status = String(run.status || '').trim().toLowerCase();
@@ -7539,8 +7720,7 @@ function renderProtocolRuns(container) {
         const buildOverviewSection = () => {
             const section = document.createElement('div');
             section.className = 'studio-stack';
-            appendSectionTitle(section, 'Overview', 'The run story starts with state, active issue, current stage, and next action.');
-            section.appendChild(_buildRunSummaryGrid());
+            appendSectionTitle(section, 'Overview', 'The run story starts with state, active issue, current stage, and produced outputs.');
             section.appendChild(buildRunLivenessCard());
             if (currentIssues.length) {
                 const issueSummary = document.createElement('div');
@@ -7591,12 +7771,6 @@ function renderProtocolRuns(container) {
                     },
                 }));
             }
-            appendSectionTitle(
-                section,
-                'Available actions',
-                'These are operator interventions for the current run state. They only appear when the current stage can actually accept that intervention; export is always available for audit.',
-            );
-            section.appendChild(_buildRunActionBar());
             return section;
         };
 
@@ -7626,6 +7800,7 @@ function renderProtocolRuns(container) {
         const sectionToolbar = document.createElement('div');
         sectionToolbar.className = 'kit-stage-workspace-toolbar';
         sectionToolbar.appendChild(sectionControl.element);
+        detailPanel.appendChild(buildRunFocusHero());
         detailPanel.appendChild(sectionToolbar);
 
         const sectionPanel = document.createElement('div');
@@ -7751,6 +7926,18 @@ function renderProtocolRuns(container) {
             }
         } else {
             appendSectionTitle(sectionPanel, 'Audit', 'Raw participants, decisions, and support issues remain available here without driving the default run story.');
+            const run = currentRun.run || {};
+            appendSectionTitle(sectionPanel, 'Run inspector', 'Identifiers and runtime context are kept here for audit and troubleshooting.');
+            sectionPanel.appendChild(UI.renderMetadataGrid([
+                { label: 'Run id', value: run.protocol_run_id || '—' },
+                { label: 'Protocol id', value: run.protocol_id || '—' },
+                { label: 'Version', value: String(run.version || 1) },
+                { label: 'Workspace', value: run.workspace_ref || 'default' },
+                { label: 'Root conversation', value: run.root_conversation_id || '—' },
+                { label: 'Origin', value: run.origin_channel || '—' },
+                { label: 'Created', value: run.created_at ? UI.relativeTime(run.created_at) : '—' },
+                { label: 'Updated', value: run.updated_at ? UI.relativeTime(run.updated_at) : '—' },
+            ], { compact: true }));
             const participantList = document.createElement('div');
             const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
                 label: `${item.display_name || item.participant_key} · ${item.resolution_outcome || item.state || 'queued'}`,
@@ -7810,6 +7997,9 @@ function renderProtocolRuns(container) {
             workbench.dataset.hasSelection = currentRunId ? 'true' : 'false';
             workbench.dataset.issueMode = issueKindFilter ? 'true' : 'false';
             workbench.appendChild(_buildRunNavigatorPanel());
+            if (currentRunId) {
+                workbench.appendChild(_buildRunDetailPanel());
+            }
             return workbench;
         });
     }

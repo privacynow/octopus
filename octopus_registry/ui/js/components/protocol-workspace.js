@@ -713,6 +713,18 @@ function renderProtocolWorkspace(container) {
         };
     }
 
+    function _appendStageInsertAnchor(projection) {
+        const stages = Array.isArray(draft.document?.stages) ? draft.document.stages : [];
+        if (!stages.length) return null;
+        const segments = Array.isArray(projection?.segments) ? projection.segments : [];
+        const lastSegment = segments.length ? segments[segments.length - 1] : null;
+        const lastStageKey = String(lastSegment?.endStageKey || stages[stages.length - 1]?.stage_key || '');
+        const lastStage = stages.find((item) => String(item?.stage_key || '') === lastStageKey)
+            || stages[stages.length - 1]
+            || null;
+        return lastStage ? _insertAnchorForStage(lastStage, projection) : null;
+    }
+
     function _defaultStageParticipantKey(doc = draft.document) {
         if (selection.sectionKey === 'participants' && selection.nodeKey) {
             return String(selection.nodeKey || '');
@@ -4455,9 +4467,11 @@ function renderProtocolWorkspace(container) {
         const sourceStage = (draft.document.stages || []).find((item) => String(item.stage_key || '') === String(editorMode.sourceStageKey || ''));
         if (!sourceStage) return '';
         const targetKey = String(sourceStage.transitions?.[String(editorMode.decision || '').trim().toLowerCase()] || '').trim();
-        if (!targetKey) return '';
         const decisionLabel = _protocolDecisionLabel(editorMode.decision);
         const sourceLabel = String(sourceStage.display_name || sourceStage.stage_key || 'Selected step');
+        if (!targetKey) {
+            return `This step will be inserted on ${decisionLabel} after ${sourceLabel}.`;
+        }
         const targetLabel = _transitionTargetLabel(targetKey, draft.document) || 'the current destination';
         return `This step will be inserted on ${decisionLabel} from ${sourceLabel} before ${targetLabel}.`;
     }
@@ -4516,6 +4530,7 @@ function renderProtocolWorkspace(container) {
                 decision: selectedTransition.decision,
             }
             : selectedStageAnchor;
+        const defaultAddAnchor = insertAnchor || (progress.stageCount ? _appendStageInsertAnchor(projection) : null);
         const focusedSurface = _focusedSecondarySurfaceKey();
         const mapVisible = focusedSurface === 'map';
         const settingsVisible = focusedSurface === 'protocol' || focusedSurface === 'artifacts';
@@ -4540,7 +4555,7 @@ function renderProtocolWorkspace(container) {
             actions.splice(2, 0, {
                 label: progress.stageCount ? Kit.dict.label('protocol.stages.add') : 'Add first step',
                 tone: 'btn-small',
-                onClick: () => _startStageInsert(insertAnchor || {}),
+                onClick: () => _startStageInsert(defaultAddAnchor || {}),
                 disabled: !canMutate,
             });
         }

@@ -6,7 +6,8 @@ import asyncio
 import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from app.agents.state import load_runtime_registry_connection_state
 from app.channels.telegram.state import TelegramRuntime
@@ -21,6 +22,19 @@ log = logging.getLogger(__name__)
 
 PROTOCOL_NOTIFICATION_INTERVAL_SECONDS = 20.0
 PROTOCOL_NOTIFICATION_DEBOUNCE_SECONDS = 60.0
+_START_OPTION_ALIASES = {
+    "goal": "problem_statement",
+    "problem": "problem_statement",
+    "workspace": "workspace_ref",
+    "workspace-ref": "workspace_ref",
+    "context": "context",
+    "constraints": "constraints",
+    "constraint": "constraints",
+    "expected": "expected_outputs",
+    "expected-output": "expected_outputs",
+    "expected-outputs": "expected_outputs",
+    "outputs": "expected_outputs",
+}
 
 
 def registry_client_for_runtime(runtime: TelegramRuntime) -> tuple[RegistryClient, str, str] | None:
@@ -55,6 +69,8 @@ def protocol_artifact_url(
     artifact_key: str,
     *,
     registry_url: str = "",
+    download: bool = False,
+    browse: bool = False,
 ) -> str:
     base = str(registry_url or "").strip()
     if not base:
@@ -66,7 +82,66 @@ def protocol_artifact_url(
     artifact_token = quote(str(artifact_key or "").strip())
     if not run_token or not artifact_token:
         return ""
-    return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content"
+    query = urlencode({
+        key: "true"
+        for key, enabled in (("download", download), ("browse", browse))
+        if enabled
+    })
+    suffix = f"?{query}" if query else ""
+    return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content{suffix}"
+
+
+def parse_protocol_start_args(args: Iterable[str]) -> tuple[str, dict[str, object]]:
+    """Parse `/protocol start` arguments into the shared launch input shape.
+
+    Supported form:
+
+    `/protocol start <slug> <goal> --context <text> --constraints <text>
+    --expected-outputs <text> --workspace <ref>`
+
+    Text for each option consumes words until the next `--option` marker. The
+    simple historical form still works because all tokens after the slug become
+    the problem statement when no markers are present.
+    """
+
+    parts = [str(item or "").strip() for item in args if str(item or "").strip()]
+    if not parts:
+        return "", {}
+    slug = parts[0]
+    values: dict[str, list[str]] = {"problem_statement": []}
+    active_key = "problem_statement"
+    for token in parts[1:]:
+        if token.startswith("--") and len(token) > 2:
+            raw_name, sep, inline_value = token[2:].partition("=")
+            next_key = _START_OPTION_ALIASES.get(raw_name.strip().lower())
+            if next_key:
+                active_key = next_key
+                values.setdefault(active_key, [])
+                if sep and inline_value.strip():
+                    values[active_key].append(inline_value.strip())
+                continue
+        values.setdefault(active_key, []).append(token)
+    inputs = {
+        key: " ".join(value_parts).strip()
+        for key, value_parts in values.items()
+        if " ".join(value_parts).strip()
+    }
+    return slug, inputs
+
+
+def protocol_artifact_download_filename(artifact) -> str:
+    path = str(
+        getattr(artifact, "workspace_path", "")
+        or getattr(artifact, "location", "")
+        or ""
+    ).strip()
+    key = str(getattr(artifact, "artifact_key", "") or "artifact").strip()
+    name = Path(path).name.strip() if path else ""
+    filename = name or key or "artifact"
+    lower_hint = " ".join([key, path, filename]).lower()
+    if "." not in Path(filename).name and any(token in lower_hint for token in ("package", "bundle", "directory", "folder")):
+        return f"{filename}.zip"
+    return filename
 
 
 def protocol_action_requires_confirmation(action: str) -> bool:

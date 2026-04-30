@@ -79,6 +79,37 @@ def test_protocol_run_url_targets_protocol_runs_route():
     assert url == "http://registry.local/ui/runs?run_id=run-1"
 
 
+def test_protocol_start_args_parse_rich_launch_fields():
+    slug, inputs = telegram_protocols.parse_protocol_start_args(
+        [
+            "manufacturing",
+            "Build",
+            "the",
+            "package",
+            "--context",
+            "Use",
+            "synthetic",
+            "data",
+            "--constraints=offline",
+            "only",
+            "--expected-outputs",
+            "package",
+            "directory",
+            "--workspace",
+            "demo",
+        ]
+    )
+
+    assert slug == "manufacturing"
+    assert inputs == {
+        "problem_statement": "Build the package",
+        "context": "Use synthetic data",
+        "constraints": "offline only",
+        "expected_outputs": "package directory",
+        "workspace_ref": "demo",
+    }
+
+
 async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypatch):
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -99,6 +130,12 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
                 assert payload["root_conversation_id"] == "conv-1"
                 assert payload["origin_channel"] == "telegram"
                 assert payload["problem_statement"] == "Build the feature"
+                assert payload["constraints_json"] == {
+                    "context": "Use synthetic data",
+                    "constraints": "offline only",
+                    "expected_outputs": "report",
+                }
+                assert payload["workspace_ref"] == "demo"
                 return ProtocolRunMutationRecord.model_validate(
                     {
                         "ok": True,
@@ -110,7 +147,7 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
                             "entry_agent_id": "agent-1",
                             "root_conversation_id": "conv-1",
                             "origin_channel": "telegram",
-                            "workspace_ref": "",
+                            "workspace_ref": "demo",
                             "run_org_id": "local",
                             "status": "running",
                             "problem_statement": "Build the feature",
@@ -137,8 +174,25 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
             th.cmd_protocol,
             chat,
             user,
-            "/protocol start software-engineering Build the feature",
-            args=["start", "software-engineering", "Build", "the", "feature"],
+            "/protocol start software-engineering Build the feature --context Use synthetic data --constraints offline only --expected-outputs report --workspace demo",
+            args=[
+                "start",
+                "software-engineering",
+                "Build",
+                "the",
+                "feature",
+                "--context",
+                "Use",
+                "synthetic",
+                "data",
+                "--constraints",
+                "offline",
+                "only",
+                "--expected-outputs",
+                "report",
+                "--workspace",
+                "demo",
+            ],
         )
 
         reply = last_reply(msg)
@@ -335,6 +389,58 @@ async def test_protocol_artifacts_download_sends_requested_document(monkeypatch)
         assert msg.replies[-1]["caption"] == "Protocol artifact: plan"
         assert msg.replies[-1]["document"].name == "plan.md"
         assert msg.replies[-1]["document"].getvalue() == b"# Plan\n"
+
+
+async def test_protocol_artifacts_download_names_package_zip(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        def _detail():
+            detail = _run_detail(run_id="run-1", version=2, stage_key="build")
+            detail.artifacts = [
+                SimpleNamespace(
+                    artifact_key="manufacturing_intelligence_package",
+                    verification_state="verified",
+                    state="available",
+                    exists=True,
+                    workspace_path="artifacts/manufacturing-intelligence/package",
+                    location="artifacts/manufacturing-intelligence/package",
+                    size_bytes=4096,
+                )
+            ]
+            return detail
+
+        class _Client:
+            async def get_run(self, run_id):
+                return _detail()
+
+            async def get_run_artifact_content(self, run_id, artifact_key, *, download=False):
+                assert artifact_key == "manufacturing_intelligence_package"
+                assert download is True
+                return b"PK\x03\x04"
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol artifacts run-1 download manufacturing_intelligence_package",
+            args=["artifacts", "run-1", "download", "manufacturing_intelligence_package"],
+        )
+
+        assert msg.replies[-1]["document_sent"] is True
+        assert msg.replies[-1]["document"].name == "package.zip"
 
 
 async def test_protocol_export_sends_json_document(monkeypatch):

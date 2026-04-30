@@ -842,13 +842,11 @@ async def cmd_protocol(
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "start":
-        if len(args) < 3:
-            await update.effective_message.reply_text("Usage: /protocol start <slug> <problem statement>")
-            return
-        slug = str(args[1] or "").strip()
-        problem_statement = " ".join(str(part).strip() for part in args[2:] if str(part).strip()).strip()
-        if not slug or not problem_statement:
-            await update.effective_message.reply_text("Usage: /protocol start <slug> <problem statement>")
+        slug, launch_inputs = telegram_protocols.parse_protocol_start_args(args[1:])
+        if not slug or not str(launch_inputs.get("problem_statement") or "").strip():
+            await update.effective_message.reply_text(
+                "Usage: /protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--expected-outputs <text>] [--workspace <ref>]",
+            )
             return
         try:
             match = await protocol_service.resolve_launchable(slug)
@@ -859,6 +857,8 @@ async def cmd_protocol(
             await update.effective_message.reply_text(f"Unknown published protocol: {slug}")
             return
         session = telegram_session_io.load(runtime, event.chat_id)
+        if not str(launch_inputs.get("workspace_ref") or "").strip():
+            launch_inputs["workspace_ref"] = str(session.project_id or "")
         conversation = await client.create_conversation(
             target_agent_id=agent_id,
             origin_channel="telegram",
@@ -866,19 +866,14 @@ async def cmd_protocol(
             title=f"Telegram chat {event.chat_id}",
         )
         try:
-            launch = await protocol_service.launch_from_conversation(
-                {
-                    "protocol_ref": match.protocol_id,
-                    "entry_agent_id": agent_id,
-                    "root_conversation_id": conversation.conversation_id,
-                    "origin_channel": "telegram",
-                    "workspace_ref": str(session.project_id or ""),
-                    "problem_statement": problem_statement,
-                    "constraints_json": {},
-                },
+            result = await protocol_service.launch_from_inputs(
+                match,
+                launch_inputs,
+                entry_agent_id=agent_id,
+                root_conversation_id=conversation.conversation_id,
+                origin_channel="telegram",
                 origin="telegram",
             )
-            result = launch.mutation
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to start the protocol run. {exc}")
             return
@@ -886,7 +881,7 @@ async def cmd_protocol(
             await update.effective_message.reply_text(f"Failed to start the protocol run. {exc}")
             return
         try:
-            protocol_label = str(launch.definition.display_name or launch.definition.slug or launch.definition.protocol_id)
+            protocol_label = str(match.display_name or match.slug or match.protocol_id)
         except Exception:
             protocol_label = str(match.display_name or match.slug or match.protocol_id)
         run = result.run
@@ -974,10 +969,7 @@ async def cmd_protocol(
             if not content:
                 await update.effective_message.reply_text(f"Artifact {requested_artifact_key} is empty or unavailable.")
                 return
-            filename = (
-                str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip().split("/")[-1]
-                or f"{requested_artifact_key}.txt"
-            )
+            filename = telegram_protocols.protocol_artifact_download_filename(artifact)
             doc = io.BytesIO(content)
             doc.name = filename
             await update.effective_message.reply_document(
@@ -991,6 +983,7 @@ async def cmd_protocol(
                 run_id,
                 item.artifact_key,
                 registry_url=registry_url,
+                download=True,
             )
             for item in (detail.artifacts or [])
             if item.exists and str(item.artifact_key or "").strip()

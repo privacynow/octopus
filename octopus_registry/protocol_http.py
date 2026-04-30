@@ -603,7 +603,7 @@ def build_protocol_router(
     @router.get("/v1/protocol-runs/{run_id}/export")
     def resource_export_protocol_run(
         run_id: str,
-        auth: AuthContext = Depends(require_operator_session),
+        auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         try:

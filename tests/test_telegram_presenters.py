@@ -151,9 +151,12 @@ def test_protocol_artifacts_message_distinguishes_available_and_missing_artifact
 
     assert rendered.parse_mode == ParseMode.HTML
     assert "<code>plan</code>: verified" in rendered.text
+    assert "<code>plan.md</code>" in rendered.text
     assert "Download" in rendered.text
     assert "<code>report</code>: declared" in rendered.text
     assert "not produced yet" in rendered.text
+    assert rendered.reply_markup is not None
+    assert rendered.reply_markup.inline_keyboard[0][0].text == "Open Run in Registry"
 
 
 def test_recovery_notice_markup_renders_expected_buttons():

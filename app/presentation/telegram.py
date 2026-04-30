@@ -6,6 +6,7 @@ import html
 import re
 from dataclasses import dataclass
 from dataclasses import asdict, is_dataclass
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -1401,11 +1402,16 @@ def protocol_run_started_message(
         f"Current stage: <code>{html.escape(current_stage or 'queued')}</code>",
         f"Notifications: <code>{'watching' if watching else 'not watching'}</code>",
     ]
+    reply_markup = None
     if deep_link:
-        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+        lines.append(f"Open in registry: <code>{html.escape(deep_link)}</code>")
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Open in Registry", url=deep_link),
+        ]])
     return TelegramRenderedMessage(
         text="\n".join(lines),
         parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup,
         disable_web_page_preview=True,
     )
 
@@ -1448,11 +1454,16 @@ def protocol_run_status_message(
             lines.append(f"Latest summary: {html.escape(latest.decision_summary)}")
         elif latest.failure_detail:
             lines.append(f"Latest failure: {html.escape(latest.failure_detail)}")
+    reply_markup = None
     if deep_link:
-        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+        lines.append(f"Open in registry: <code>{html.escape(deep_link)}</code>")
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Open in Registry", url=deep_link),
+        ]])
     return TelegramRenderedMessage(
         text="\n".join(lines),
         parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup,
         disable_web_page_preview=True,
     )
 
@@ -1461,7 +1472,7 @@ def protocol_run_artifacts_message(
     detail,
     *,
     deep_link: str = "",
-    artifact_links: dict[str, str] | None = None,
+    artifact_links: dict[str, str | Mapping[str, str]] | None = None,
 ) -> TelegramRenderedMessage:
     run = detail.run
     links = artifact_links or {}
@@ -1471,11 +1482,16 @@ def protocol_run_artifacts_message(
             f"Run id: <code>{html.escape(run.protocol_run_id)}</code>",
             "No artifacts are declared for this run yet.",
         ]
+        reply_markup = None
         if deep_link:
-            lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+            lines.append(f"Open in registry: <code>{html.escape(deep_link)}</code>")
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Open in Registry", url=deep_link),
+            ]])
         return TelegramRenderedMessage(
             text="\n".join(lines),
             parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
             disable_web_page_preview=True,
         )
 
@@ -1483,6 +1499,9 @@ def protocol_run_artifacts_message(
         "<b>Protocol artifacts</b>",
         f"Run id: <code>{html.escape(run.protocol_run_id)}</code>",
     ]
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+    if deep_link:
+        keyboard_rows.append([InlineKeyboardButton("Open Run in Registry", url=deep_link)])
     for item in detail.artifacts[:12]:
         key = str(getattr(item, "artifact_key", "") or "artifact").strip()
         state = str(
@@ -1500,25 +1519,46 @@ def protocol_run_artifacts_message(
         status = state or ("available" if exists else "declared")
         if exists and status == "declared":
             status = "available"
-        detail_bits = [status]
+        line = f"- <code>{html.escape(key)}</code>: {html.escape(status)}"
         if path:
-            detail_bits.append(path)
+            line += f" · <code>{html.escape(path)}</code>"
         if size > 0:
-            detail_bits.append(f"{size} bytes")
-        line = f"- <code>{html.escape(key)}</code>: {html.escape(' · '.join(detail_bits))}"
-        link = links.get(key, "")
-        if exists and link:
-            line += f" · <a href=\"{html.escape(link)}\">Download</a>"
+            line += f" · {html.escape(str(size))} bytes"
+        raw_links = links.get(key, "")
+        open_link = ""
+        download_link = ""
+        if isinstance(raw_links, Mapping):
+            open_link = str(raw_links.get("open") or "")
+            download_link = str(raw_links.get("download") or "")
+        else:
+            download_link = str(raw_links or "")
+        if exists and (open_link or download_link):
+            actions: list[str] = []
+            if open_link:
+                actions.append(f"Open: <code>{html.escape(open_link)}</code>")
+            if download_link:
+                actions.append(f"Download: <code>{html.escape(download_link)}</code>")
+            line += " · " + " · ".join(actions)
+            if len(keyboard_rows) < 7:
+                row: list[InlineKeyboardButton] = []
+                button_key = key if len(key) <= 24 else f"{key[:21]}..."
+                if open_link:
+                    row.append(InlineKeyboardButton(f"Open {button_key}", url=open_link))
+                if download_link:
+                    row.append(InlineKeyboardButton(f"Download {button_key}", url=download_link))
+                if row:
+                    keyboard_rows.append(row)
         elif not exists:
             line += " · not produced yet"
         lines.append(line)
     if len(detail.artifacts) > 12:
         lines.append(f"Showing first 12 of {len(detail.artifacts)} artifacts.")
     if deep_link:
-        lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
+        lines.append(f"Open in registry: <code>{html.escape(deep_link)}</code>")
     return TelegramRenderedMessage(
         text="\n".join(lines),
         parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None,
         disable_web_page_preview=True,
     )
 

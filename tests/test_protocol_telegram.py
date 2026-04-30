@@ -346,9 +346,11 @@ async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
         reply = last_reply(msg)
         assert "Protocol artifacts" in reply
         assert "<code>plan</code>: verified" in reply
+        assert "<code>plan.md</code>" in reply
         assert "Download" in reply
         assert "/v1/protocol-runs/run-1/artifacts/plan/content" in reply
         assert "Open in registry" in reply
+        assert msg.replies[-1]["reply_markup"].inline_keyboard[0][0].text == "Open Run in Registry"
 
 
 async def test_protocol_artifacts_download_sends_requested_document(monkeypatch):

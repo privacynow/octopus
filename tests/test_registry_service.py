@@ -2176,6 +2176,44 @@ def test_protocol_run_subresources_return_not_visible_for_hidden_run(
     assert "details" in response.json()["detail"]
 
 
+def test_protocol_run_export_route_accepts_visible_agent_auth(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def export_protocol_run(self, run_id: str, *, access):
+            assert run_id == "run-1"
+            assert access.actor_ref == "agent:agent-1"
+            assert access.has_role("agent")
+            return {
+                "run": {"protocol_run_id": run_id, "status": "completed"},
+                "definition": {"protocol_id": "protocol-1"},
+                "version": {"protocol_definition_version_id": "version-1"},
+                "definition_document": {"schema_version": 1, "metadata": {"slug": "demo"}},
+                "participants": [],
+                "stage_executions": [],
+                "tasks": [],
+                "artifacts": [],
+                "transitions": [],
+            }
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_agent=True,
+        agent_id="agent-1",
+        org_id="local",
+        roles=("agent",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1/export")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert response.json()["run"]["protocol_run_id"] == "run-1"
+
+
 def test_protocol_run_action_route_returns_conflict_for_version_mismatch(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

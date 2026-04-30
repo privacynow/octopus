@@ -212,6 +212,7 @@ def require_authenticated(
             agent_id=str(agent_record.agent_id),
             agent_token=token,
             org_id=settings.operator_org_id,
+            roles=("agent",),
         )
     # Fall back to session cookie
     if ui_session_is_valid(request):

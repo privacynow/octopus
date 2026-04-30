@@ -1732,11 +1732,11 @@ def test_registry_store_archive_protocol_marks_definition_archived(postgres_regi
     assert archived.protocol.lifecycle_state == "archived"
 
 
-def test_registry_store_protocol_export_requires_operator_or_auditor_role(postgres_registry_truncated: str) -> None:
+def test_registry_store_protocol_export_requires_operator_auditor_or_agent_role(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     _enroll, _published, created, _detail = running_protocol_run(store)
 
-    with pytest.raises(PermissionError, match="operator or auditor access"):
+    with pytest.raises(PermissionError, match="operator, auditor, or agent access"):
         store.export_protocol_run(
             created.run.protocol_run_id,
             access=ProtocolAccessContextRecord(
@@ -1758,6 +1758,16 @@ def test_registry_store_protocol_export_requires_operator_or_auditor_role(postgr
     assert exported.definition_document.slug == "mini-protocol"
     assert [artifact.artifact_key for artifact in exported.artifacts] == ["plan"]
     assert exported.artifacts[0].verification_state == "declared"
+
+    agent_exported = store.export_protocol_run(
+        created.run.protocol_run_id,
+        access=ProtocolAccessContextRecord(
+            actor_ref="agent:planner",
+            org_id="local",
+            roles=["agent"],
+        ),
+    )
+    assert agent_exported.run.protocol_run_id == created.run.protocol_run_id
 
 
 def test_registry_store_protocol_text_routes_round_trip_json_yaml_and_diff(postgres_registry_truncated: str) -> None:

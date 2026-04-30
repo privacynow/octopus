@@ -978,13 +978,22 @@ async def cmd_protocol(
             )
             return
         artifact_links = {
-            str(item.artifact_key or ""): telegram_protocols.protocol_artifact_url(
-                runtime,
-                run_id,
-                item.artifact_key,
-                registry_url=registry_url,
-                download=True,
-            )
+            str(item.artifact_key or ""): {
+                "open": telegram_protocols.protocol_artifact_url(
+                    runtime,
+                    run_id,
+                    item.artifact_key,
+                    registry_url=registry_url,
+                    download=False,
+                ),
+                "download": telegram_protocols.protocol_artifact_url(
+                    runtime,
+                    run_id,
+                    item.artifact_key,
+                    registry_url=registry_url,
+                    download=True,
+                ),
+            }
             for item in (detail.artifacts or [])
             if item.exists and str(item.artifact_key or "").strip()
         }

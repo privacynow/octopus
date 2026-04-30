@@ -1063,7 +1063,9 @@ def test_ui_login_with_correct_password_sets_cookie_and_redirects(monkeypatch, t
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/ui"
-    assert "registry_session=" in response.headers.get("set-cookie", "")
+    cookie = response.headers.get("set-cookie", "")
+    assert "registry_session=" in cookie
+    assert "samesite=lax" in cookie.lower()
 
 
 def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_path: Path):

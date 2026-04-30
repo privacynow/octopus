@@ -73,7 +73,7 @@ def configure_session_middleware(app) -> None:
         SessionMiddleware,
         secret_key=session_secret(settings=settings),
         session_cookie="registry_session",
-        same_site="strict",
+        same_site="lax",
         max_age=_SESSION_TTL_SECONDS,
         https_only=not settings.allow_http,
     )

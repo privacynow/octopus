@@ -968,40 +968,56 @@ Resolution already verified:
   support. After redeploy, retrying the same run from Safari completed stage 2
   and stage 3. The package artifact was verified as a directory output and the
   validator accepted it.
+- Commit `46849c4e` added generic package artifact browsing from run/task
+  artifact routes and UI action rows. Package artifacts now expose `Open`,
+  `Contents`, `Download`, and `Copy path` without adding analytics-specific
+  product behavior.
+- Commit `865addc2` fixed retried run stage counting. The same run now shows
+  `3 / 3` stages instead of counting the failed attempt as a fourth workflow
+  stage.
 - The generated SPA opened from the protocol run artifact in Safari and
   successfully generated default synthetic data, profiled 6 tables / 948 rows,
   inferred relationship candidates, rendered aggregation results, and displayed
   bar, trend, heat-map, and aggregate-table views.
+- The package contents browser opened in Safari and listed the expected handoff
+  files: `README.md`, `index.html`, sample CSVs, and `validation-report.md`.
 
-UX issues observed:
+UX issues resolved during this pass:
 
-- The runs page did not reliably live-refresh. It stayed on stage 1 with a
-  stale `4s` elapsed counter while the linked conversation showed stage 2
-  running.
+- The stale linked-run behavior was addressed by subscribing conversation
+  linked work to protocol-run websocket updates.
+- The contradictory package artifact state was addressed by verifying directory
+  artifacts through the same artifact finalization path as file artifacts.
+- Package contents browsing was added generically for directory/package
+  artifacts.
+- Retry evidence now marks previous attempts instead of presenting stale output
+  state as current run state.
+
+UX issues still open:
+
+- The generated SPA still needs a full fresh interactive rerun after the latest
+  UI fixes. Safari verified the final package contents, but the desktop
+  automation bridge stopped returning window state before a complete second
+  from-blank run could be driven end to end.
+- Full activity is no longer blank, but the newest progress is still dense:
+  rows are collapsed, the page does not clearly auto-follow the latest event,
+  and the user has to infer whether the run is still healthy.
 - Conversation linked work and full activity eventually showed useful progress,
-  but both needed manual navigation/reload to reveal newer runtime events.
-- Full activity is no longer blank, but the newest progress is hard to follow:
-  rows are collapsed, the page does not auto-follow the latest event, and the
-  user has to infer whether the run is still healthy.
-- The run page showed contradictory artifact language for the same output:
-  "Produced by this stage" and "Declared artifact, not produced yet." The
-  directory-artifact fix should remove this contradiction for package outputs.
+  but conversation drill-through should be rechecked from a new run after the
+  package browser deployment.
 - The run launch warning for "expected outputs not declared" is useful for
   strict artifacts, but it becomes confusing when a declared package directory
   intentionally contains `index.html`, README, samples, and reports. The UI
   should explain whether the user should declare one package output or each
   contained file.
-- Package artifacts need a contents browser. `Open` correctly launches
-  `index.html`, and `Download` retrieves a zip, but users also need to preview
-  and download individual files such as README and sample CSVs from the run UI.
-- Retry history needs clearer language. The successful retry and the previous
-  failed attempt can appear in the same evidence trail, and old missing outputs
-  need to be explicitly marked as previous/superseded attempt evidence.
 - Manual Safari testing of the generated SPA found that inferred relationship
   Accept/Reject controls did not visibly update the confirmed relationship
   count. The validator accepted the artifact without catching that interactive
   defect, so the scenario rerun must include direct browser interaction checks,
   not just static file validation.
+- Real Safari is the required acceptance browser. If the desktop automation
+  bridge is unavailable again, use manual Safari inspection for acceptance and
+  only use Playwright as a secondary regression aid.
 
 ## Open Blockers
 
@@ -1010,21 +1026,23 @@ UX issues observed:
 | P0-1 | Critical | Workflow builder skill catalog breaks assignment continuity. | Implement stage-scoped skill select/create/return flow. |
 | P0-2 | Critical | Protocol run launch is overfit to local analytics. | Replace hardcoded analytics launch fields with generic launch plus protocol-authored custom inputs. |
 | P0-3 | Critical | Customer-handoff language can leak into protocol/runtime/artifacts. | Remove from product/runtime prompt paths; keep only repo planning docs. |
-| P0-4 | Critical | Runs need animated, scalable stage progress. | Build shared stage-progress rail with current/previous/next focus and compressed large-stage behavior. |
+| P0-4 | Critical | Run progress is improved but still not obvious enough during active execution. | Make stage liveness more prominent, show current stage movement grounded in real run state, and reduce dense activity context. |
 | P1-1 | High | Protocol authoring assignment matrix not fully reverified after latest changes. | Run real Safari matrix from blank protocol. |
-| P1-2 | High | Artifact actions are not proven across all reference surfaces. | Verify package Contents/Open/Download in run, stage, task, conversation, dashboard, and Telegram surfaces. |
+| P1-2 | High | Package artifact actions are verified on the run artifact page but not yet across every reference surface. | Verify package Contents/Open/Download in run, stage, task, conversation, dashboard, and Telegram surfaces. |
 | P1-3 | High | Conversations/runs/delegations can still feel unrelated or stale. | Consolidate lineage display, subscribe linked work to run updates, and verify drill-through freshness. |
 | P1-4 | High | Telegram protocol parity needs live recheck. | Verify list/start/status/watch/artifacts against shared SDK path. |
 | P1-5 | High | Full desktop/narrow Safari audit is not complete after current blockers. | Run only after P0/P1 blockers are fixed. |
 | P2-1 | Medium | Clean-clone/customer-self-service pass remains unproven. | Run setup from docs in clean environment and fix docs/product gaps. |
 | P2-2 | Medium | Workspace cleanup UI needs post-deploy Safari verification. | Verify password + `CLEAN` flow preserves agents/skills/guidance. |
 | P2-3 | Medium | Stale/interrupted run recovery needs UI confirmation after redeploy. | Interrupt/redeploy during a run and confirm terminal retryable state. |
+| P2-4 | Medium | Real Safari desktop automation became unavailable during the final contents check. | Treat as test-environment risk: recover Safari automation or perform documented manual Safari acceptance before closing the scenario. |
 
 ## Implementation Order
 
-1. Commit, push, pull, and redeploy the current package-browser and linked-run
-   freshness fixes.
-2. Hard-refresh Safari and rerun the offline analytics protocol from the UI.
+1. Recover real Safari interaction or arrange manual Safari acceptance if the
+   automation bridge remains unavailable.
+2. Start a fresh offline analytics protocol run from the UI using the deployed
+   package-browser build.
 3. Verify the final package from the run UI: Open SPA, Contents browser,
    README/sample CSV preview, zip download, and generated SPA interaction.
 4. If the generated SPA still fails interactive checks, use protocol UI actions

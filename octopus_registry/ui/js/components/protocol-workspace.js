@@ -6836,10 +6836,10 @@ function renderProtocolRuns(container) {
         const strip = document.createElement('div');
         strip.className = 'runs-overview-strip';
         [
-            { key: 'attention', label: 'Needs attention', help: 'Blocked or failed' },
-            { key: 'active', label: 'Running now', help: 'Queued or active' },
-            { key: 'completed', label: 'Completed', help: 'Recently finished' },
-            { key: 'ended', label: 'Ended', help: 'Cancelled or closed' },
+            { key: 'attention', label: 'Needs attention' },
+            { key: 'active', label: 'Running now' },
+            { key: 'completed', label: 'Completed' },
+            { key: 'ended', label: 'Ended' },
         ].forEach((item) => {
             const card = document.createElement('div');
             card.className = `runs-overview-card runs-overview-${item.key}`;
@@ -6849,9 +6849,6 @@ function renderProtocolRuns(container) {
             const copy = document.createElement('span');
             copy.textContent = item.label;
             card.appendChild(copy);
-            const help = document.createElement('small');
-            help.textContent = item.help;
-            card.appendChild(help);
             strip.appendChild(card);
         });
         return strip;
@@ -7068,7 +7065,7 @@ function renderProtocolRuns(container) {
     function _buildRunNavigatorPanel() {
         const issueListActive = Boolean(issueKindFilter);
         const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel run-navigator-panel';
+        panel.className = 'editor-panel protocol-panel run-feed-panel';
 
         const title = document.createElement('div');
         title.className = 'editor-section-title';
@@ -7123,6 +7120,9 @@ function renderProtocolRuns(container) {
                     )],
             );
             panel.appendChild(list);
+            if (currentRunId) {
+                panel.appendChild(_buildRunDetailPanel());
+            }
             return panel;
         }
 
@@ -7157,9 +7157,6 @@ function renderProtocolRuns(container) {
         }).map((item) => {
             const runId = _runRecordId(item);
             const issue = issuesByRunId.get(String(runId || '').trim()) || null;
-            const selectedDetail = currentRun && _runRecordId(currentRun.run) === String(runId || '')
-                ? currentRun
-                : null;
             const group = _runGroupInfo(item, issue);
             const stageLabel = _runStageListLabel(item);
             return {
@@ -7186,16 +7183,6 @@ function renderProtocolRuns(container) {
                     : group.key === 'active'
                         ? 'Live and queued work'
                         : '',
-                stageProgress: selectedDetail
-                    ? _runStageProgressData(selectedDetail)
-                    : {
-                        stages: item.current_stage_key
-                            ? [{ stage_key: item.current_stage_key, display_name: item.current_stage_key }]
-                            : [],
-                        currentStageKey: item.current_stage_key || '',
-                        runStatus: item.status || '',
-                        issues: issue ? [issue] : [],
-                    },
                 raw: item,
             };
         });
@@ -7226,7 +7213,8 @@ function renderProtocolRuns(container) {
                 renderRunsRoute();
             },
             onSelect: (run) => _setRunSelection(run.id),
-            renderExpanded: null,
+            renderExpanded: () => _buildRunDetailPanel(),
+            filtersMode: 'disclosure',
             emptyHint: includeGenerated
                 ? 'No generated or normal runs match this filter.'
                 : 'No normal runs match this filter. Use Show generated/audit runs to inspect test, rehearsal, and generated executions.',
@@ -7248,13 +7236,8 @@ function renderProtocolRuns(container) {
 
     function _buildRunDetailPanel() {
         const issueListActive = Boolean(issueKindFilter);
-        const detailPanel = document.createElement('section');
-        detailPanel.className = 'editor-panel protocol-panel run-detail-panel';
-
-        const detailTitle = document.createElement('div');
-        detailTitle.className = 'editor-section-title';
-        detailTitle.textContent = issueListActive ? 'Issue detail' : 'Run detail';
-        detailPanel.appendChild(detailTitle);
+        const detailPanel = document.createElement('div');
+        detailPanel.className = 'run-expansion-panel';
 
         if (runDetailLoading && currentRunId) {
             detailPanel.appendChild(UI.renderEmptyState('Loading run detail…', true));
@@ -7504,7 +7487,6 @@ function renderProtocolRuns(container) {
             ).trim();
             const startMs = timestampMs(run.created_at || run.started_at || currentStage?.started_at);
             const elapsed = startMs ? durationLabel(Date.now() - startMs) : 'n/a';
-            const averageMs = averageCompletedRunDurationMs();
             const hero = document.createElement('article');
             hero.className = `run-focus-hero run-focus-status-${status || 'queued'}`;
 
@@ -7527,28 +7509,21 @@ function renderProtocolRuns(container) {
             if (run.problem_statement) {
                 const problem = document.createElement('p');
                 problem.className = 'run-focus-problem';
-                problem.textContent = String(run.problem_statement || '');
+                problem.textContent = _compactRunText(run.problem_statement, 220);
                 main.appendChild(problem);
             }
             hero.appendChild(main);
 
             const state = document.createElement('div');
             state.className = 'run-focus-state';
-            state.appendChild(Kit.runStageProgressRail({
-                ..._runStageProgressData(currentRun),
-                selectedStageExecutionId: activeRunStageExecutionId,
-                selectedStageKey: String(currentStage?.stage_key || run.current_stage_key || ''),
-                onStageSelect: selectRunStageEvidence,
-            }));
             const metrics = document.createElement('div');
             metrics.className = 'run-focus-metrics';
             [
                 { label: 'Status', value: run.status || 'queued' },
                 { label: 'Stage', value: totalStages ? `${currentStageIndex + 1} / ${totalStages}` : 'n/a' },
-                { label: 'Elapsed', value: elapsed },
                 { label: 'Outputs', value: `${artifactRows.length}${pendingArtifactRows.length ? ` / ${artifactRows.length + pendingArtifactRows.length}` : ''}` },
                 { label: 'Issues', value: String(currentIssues.length) },
-                { label: 'Typical', value: averageMs ? durationLabel(averageMs) : 'learning' },
+                { label: 'Elapsed', value: elapsed },
             ].forEach((item) => {
                 const metric = document.createElement('span');
                 metric.className = 'run-focus-metric';
@@ -7565,41 +7540,6 @@ function renderProtocolRuns(container) {
 
             const lower = document.createElement('div');
             lower.className = 'run-focus-lower';
-            const artifacts = document.createElement('div');
-            artifacts.className = 'run-focus-artifacts';
-            const artifactTitle = document.createElement('div');
-            artifactTitle.className = 'detail-label';
-            artifactTitle.textContent = 'Outputs';
-            artifacts.appendChild(artifactTitle);
-            const artifactSummary = document.createElement('div');
-            artifactSummary.className = 'run-focus-summary-card';
-            const artifactCount = document.createElement('strong');
-            artifactCount.textContent = artifactRows.length
-                ? `${artifactRows.length} available`
-                : pendingArtifactRows.length
-                    ? `${pendingArtifactRows.length} pending`
-                    : 'None yet';
-            artifactSummary.appendChild(artifactCount);
-            const artifactCopy = document.createElement('span');
-            artifactCopy.textContent = pendingArtifactRows.length
-                ? `${pendingArtifactRows.length} declared output${pendingArtifactRows.length === 1 ? '' : 's'} not produced yet.`
-                : artifactRows.length
-                    ? 'Open the Artifacts section for preview, download, and path actions.'
-                    : 'Outputs will appear after stages record artifacts.';
-            artifactSummary.appendChild(artifactCopy);
-            const artifactOpen = document.createElement('button');
-            artifactOpen.type = 'button';
-            artifactOpen.className = 'btn btn-sm';
-            artifactOpen.textContent = 'Open artifacts';
-            artifactOpen.addEventListener('click', () => {
-                activeRunDetailSection = 'artifacts';
-                activeRunArtifactStageExecutionId = '';
-                UI.clearMemoizedRender(contentEl);
-                renderRunsRoute();
-            });
-            artifactSummary.appendChild(artifactOpen);
-            artifacts.appendChild(artifactSummary);
-            lower.appendChild(artifacts);
             const actions = document.createElement('div');
             actions.className = 'run-focus-actions';
             const actionTitle = document.createElement('div');
@@ -7608,7 +7548,9 @@ function renderProtocolRuns(container) {
             actions.appendChild(actionTitle);
             actions.appendChild(_buildRunActionBar());
             lower.appendChild(actions);
-            hero.appendChild(lower);
+            if (actions.childElementCount > 1) {
+                hero.appendChild(lower);
+            }
 
             return hero;
         };
@@ -7841,157 +7783,87 @@ function renderProtocolRuns(container) {
             return section;
         };
 
-        const sectionOptions = [
-            { value: 'overview', label: currentIssues.length ? `Overview (${currentIssues.length} issue${currentIssues.length === 1 ? '' : 's'})` : 'Overview' },
-            { value: 'stages', label: `Stages (${stageRows.length})` },
-            { value: 'artifacts', label: `Artifacts (${artifactRows.length})` },
-            { value: 'audit', label: 'Audit' },
-        ];
-        const sectionValues = new Set(sectionOptions.map((item) => item.value));
-        if (!sectionValues.has(activeRunDetailSection || '')) {
-            activeRunDetailSection = 'overview';
-        }
-        const sectionControl = UI.createSegmentedControl(
-            sectionOptions,
-            (value) => {
-                activeRunDetailSection = value || 'overview';
-                if (activeRunDetailSection === 'artifacts') {
-                    activeRunArtifactStageExecutionId = '';
-                }
-                renderRunsRoute();
-            },
-            { label: 'Run evidence section', value: activeRunDetailSection || 'overview' },
-        );
-        sectionControl.element.dataset.key = 'run-evidence-section-nav';
-        sectionControl.element.classList.add('kit-stage-workspace-nav');
-        const sectionToolbar = document.createElement('div');
-        sectionToolbar.className = 'kit-stage-workspace-toolbar';
-        sectionToolbar.appendChild(sectionControl.element);
         detailPanel.appendChild(buildRunFocusHero());
-        detailPanel.appendChild(sectionToolbar);
 
+        const stagePanel = document.createElement('div');
+        stagePanel.className = 'run-stage-timeline';
+        appendSectionTitle(stagePanel, 'Stages', 'Click a stage to see the work, outputs, and decisions for that step.');
+        if (stageRows.length) {
+            const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
+            const preferredStage = currentRunStageExecution();
+            const currentStageIndex = Math.max(stageRows.indexOf(preferredStage), 0);
+            const currentStage = stageRows[currentStageIndex] || stageRows[0];
+            if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
+                activeRunStageExecutionId = stageValueFor(currentStage, currentStageIndex);
+            }
+            const stageList = document.createElement('div');
+            stageList.className = 'run-stage-timeline-list';
+            stageRows.forEach((stageItem, index) => {
+                const stageDef = stageDefinitionByKey.get(String(stageItem.stage_key || '')) || {};
+                const value = stageValueFor(stageItem, index);
+                const producedArtifacts = artifactsByProducer.get(String(stageItem.protocol_stage_execution_id || '')) || [];
+                const selected = value === String(activeRunStageExecutionId || '');
+                const item = document.createElement('article');
+                item.className = `run-stage-timeline-item${selected ? ' is-expanded' : ''}`;
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'run-stage-timeline-button';
+                button.setAttribute('aria-expanded', String(selected));
+                button.addEventListener('click', () => {
+                    activeRunDetailSection = 'stages';
+                    activeRunStageExecutionId = value;
+                    UI.clearMemoizedRender(contentEl);
+                    renderRunsRoute();
+                });
+                const marker = document.createElement('span');
+                marker.className = 'run-stage-timeline-marker';
+                marker.textContent = String(index + 1);
+                button.appendChild(marker);
+                const copy = document.createElement('span');
+                copy.className = 'run-stage-timeline-copy';
+                const label = document.createElement('strong');
+                label.textContent = stageDef.display_name || stageItem.stage_key || 'Stage';
+                copy.appendChild(label);
+                const meta = document.createElement('small');
+                meta.textContent = [
+                    stageItem.status || 'pending',
+                    producedArtifacts.length ? `${producedArtifacts.length} output${producedArtifacts.length === 1 ? '' : 's'}` : '',
+                    stageItem.decision_summary || stageItem.failure_detail || '',
+                ].filter(Boolean).join(' · ');
+                copy.appendChild(meta);
+                button.appendChild(copy);
+                const badge = document.createElement('span');
+                badge.className = `badge ${String(stageItem.status || '').toLowerCase() === 'completed' ? 'badge-connected' : ''}`;
+                badge.textContent = stageItem.status || 'pending';
+                button.appendChild(badge);
+                item.appendChild(button);
+                if (selected) {
+                    item.appendChild(buildStageEvidenceCard(stageItem, index));
+                }
+                stageList.appendChild(item);
+            });
+            stagePanel.appendChild(stageList);
+        } else {
+            stagePanel.appendChild(UI.renderEmptyState('No stage executions recorded for this run yet.', true));
+        }
+        if (pendingArtifactRows.length) {
+            appendSectionTitle(stagePanel, 'Declared but missing');
+            stagePanel.appendChild(createArtifactList(pendingArtifactRows, {
+                relationshipFor: () => 'Declared output not yet recorded',
+                missing: true,
+            }));
+        }
+        detailPanel.appendChild(stagePanel);
+
+        const auditDetails = document.createElement('details');
+        auditDetails.className = 'run-audit-disclosure';
+        const auditSummary = document.createElement('summary');
+        auditSummary.textContent = 'Audit and troubleshooting';
+        auditDetails.appendChild(auditSummary);
         const sectionPanel = document.createElement('div');
         sectionPanel.className = 'studio-stack run-evidence-panel';
-        if (activeRunDetailSection === 'overview') {
-            sectionPanel.appendChild(buildOverviewSection());
-        } else if (activeRunDetailSection === 'stages') {
-            appendSectionTitle(sectionPanel, 'Stages', 'Workflow evidence is ordered by the authored protocol, not by reverse event chronology.');
-            if (stageRows.length) {
-                const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
-                const preferredStage = currentRunStageExecution();
-                const currentStageIndex = Math.max(stageRows.indexOf(preferredStage), 0);
-                const currentStage = stageRows[currentStageIndex] || stageRows[0];
-                if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
-                    activeRunStageExecutionId = stageValueFor(currentStage, currentStageIndex);
-                }
-                const stageOptions = stageRows.map((item, index) => {
-                    const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
-                    const value = stageValueFor(item, index);
-                    return {
-                        key: `run-stage-evidence:${value}`,
-                        value,
-                        label: `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'}`,
-                    };
-                });
-                const stageControl = UI.createSegmentedControl(
-                    stageOptions,
-                    (value) => {
-                        activeRunStageExecutionId = String(value || '');
-                        UI.clearMemoizedRender(contentEl);
-                        renderRunsRoute();
-                    },
-                    { label: 'Run stage evidence', value: activeRunStageExecutionId },
-                );
-                stageControl.element.dataset.key = 'run-stage-evidence-nav';
-                stageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
-                const stageToolbar = document.createElement('div');
-                stageToolbar.className = 'kit-stage-workspace-toolbar';
-                stageToolbar.appendChild(stageControl.element);
-                sectionPanel.appendChild(stageToolbar);
-
-                const selectedStageIndex = Math.max(
-                    stageRows.findIndex((item, index) => stageValueFor(item, index) === String(activeRunStageExecutionId || '')),
-                    0,
-                );
-                const selectedStage = stageRows[selectedStageIndex] || stageRows[0];
-                const stageList = document.createElement('div');
-                stageList.className = 'protocol-lineage-list';
-                UI.reconcileChildren(stageList, [buildStageEvidenceCard(selectedStage, selectedStageIndex)]);
-                sectionPanel.appendChild(stageList);
-            } else {
-                sectionPanel.appendChild(UI.renderEmptyState('No stage executions recorded for this run yet.', true));
-            }
-        } else if (activeRunDetailSection === 'artifacts') {
-            appendSectionTitle(sectionPanel, 'Artifacts', 'This is the same artifact evidence shown under each stage, grouped by the stage that produced it.');
-            const artifactStageGroups = stageRows
-                .map((stage, index) => {
-                    const producedArtifacts = artifactsByProducer.get(String(stage.protocol_stage_execution_id || '')) || [];
-                    const stageDef = stageDefinitionByKey.get(String(stage.stage_key || '')) || {};
-                    return {
-                        value: String(stage.protocol_stage_execution_id || stage.stage_key || `artifact-stage-${index}`),
-                        stage,
-                        index,
-                        stageDef,
-                        producedArtifacts,
-                    };
-                })
-                .filter((item) => item.producedArtifacts.length);
-            if (artifactStageGroups.length) {
-                const groupValues = new Set(artifactStageGroups.map((item) => item.value));
-                if (!groupValues.has(String(activeRunArtifactStageExecutionId || ''))) {
-                    const currentStageKey = String(currentRun.run.current_stage_key || '').trim();
-                    const currentGroup = artifactStageGroups.find((item) =>
-                        String(item.stage.stage_key || '') === currentStageKey);
-                    const defaultGroup = currentGroup || artifactStageGroups.reduce((best, item) => {
-                        if (!best) return item;
-                        if (item.producedArtifacts.length > best.producedArtifacts.length) return item;
-                        if (item.producedArtifacts.length === best.producedArtifacts.length && item.index > best.index) return item;
-                        return best;
-                    }, null);
-                    activeRunArtifactStageExecutionId = String(defaultGroup?.value || artifactStageGroups[0].value || '');
-                }
-                const artifactStageControl = UI.createSegmentedControl(
-                    artifactStageGroups.map((item) => ({
-                        key: `run-artifact-stage-evidence:${item.value}`,
-                        value: item.value,
-                        label: `${item.index + 1}. ${item.stageDef.display_name || item.stage.stage_key || 'Stage'} (${item.producedArtifacts.length})`,
-                    })),
-                    (value) => {
-                        activeRunArtifactStageExecutionId = String(value || '');
-                        UI.clearMemoizedRender(contentEl);
-                        renderRunsRoute();
-                    },
-                    { label: 'Run artifact stage evidence', value: activeRunArtifactStageExecutionId },
-                );
-                artifactStageControl.element.dataset.key = 'run-artifact-stage-evidence-nav';
-                artifactStageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
-                const artifactStageToolbar = document.createElement('div');
-                artifactStageToolbar.className = 'kit-stage-workspace-toolbar';
-                artifactStageToolbar.appendChild(artifactStageControl.element);
-                sectionPanel.appendChild(artifactStageToolbar);
-
-                const selectedGroup = artifactStageGroups.find((item) =>
-                    item.value === String(activeRunArtifactStageExecutionId || '')) || artifactStageGroups[0];
-                appendSectionTitle(
-                    sectionPanel,
-                    `${selectedGroup.index + 1}. ${selectedGroup.stageDef.display_name || selectedGroup.stage.stage_key || 'Stage'}`,
-                    `${selectedGroup.producedArtifacts.length} output${selectedGroup.producedArtifacts.length === 1 ? '' : 's'} produced by this stage.`,
-                );
-                sectionPanel.appendChild(createArtifactList(selectedGroup.producedArtifacts, {
-                    relationshipFor: () => 'Produced by this stage',
-                }));
-            } else {
-                sectionPanel.appendChild(UI.renderEmptyState('No produced outputs recorded yet.', true));
-            }
-            if (pendingArtifactRows.length) {
-                appendSectionTitle(sectionPanel, 'Declared but missing');
-                sectionPanel.appendChild(createArtifactList(pendingArtifactRows, {
-                    relationshipFor: () => 'Declared output not yet recorded',
-                    missing: true,
-                }));
-            }
-        } else {
-            appendSectionTitle(sectionPanel, 'Audit', 'Raw participants, decisions, and support issues remain available here without driving the default run story.');
+        appendSectionTitle(sectionPanel, 'Audit', 'Raw participants, decisions, and support issues remain available here without driving the default run story.');
+        {
             const run = currentRun.run || {};
             appendSectionTitle(sectionPanel, 'Run inspector', 'Identifiers and runtime context are kept here for audit and troubleshooting.');
             sectionPanel.appendChild(UI.renderMetadataGrid([
@@ -8038,7 +7910,8 @@ function renderProtocolRuns(container) {
             );
             sectionPanel.appendChild(issueDetailList);
         }
-        detailPanel.appendChild(sectionPanel);
+        auditDetails.appendChild(sectionPanel);
+        detailPanel.appendChild(auditDetails);
         return detailPanel;
     }
 
@@ -8063,9 +7936,6 @@ function renderProtocolRuns(container) {
             workbench.dataset.hasSelection = currentRunId ? 'true' : 'false';
             workbench.dataset.issueMode = issueKindFilter ? 'true' : 'false';
             workbench.appendChild(_buildRunNavigatorPanel());
-            if (currentRunId) {
-                workbench.appendChild(_buildRunDetailPanel());
-            }
             return workbench;
         });
     }

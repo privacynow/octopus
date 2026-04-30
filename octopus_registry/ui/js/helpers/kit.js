@@ -2427,13 +2427,38 @@ window.Kit = (() => {
         onStatusFilter = null,
         onSelect = null,
         renderExpanded = null,
+        filtersMode = 'inline',
         emptyHint = '',
     } = {}) {
         const root = document.createElement('div');
         root.className = 'kit-runs-list';
 
-        const filters = document.createElement('div');
-        filters.className = 'kit-runs-filters';
+        const filters = filtersMode === 'disclosure'
+            ? document.createElement('details')
+            : document.createElement('div');
+        filters.className = filtersMode === 'disclosure'
+            ? 'kit-runs-filters kit-runs-filter-disclosure'
+            : 'kit-runs-filters';
+        if (filtersMode === 'disclosure' && (String(search || '').trim() || String(statusFilter || '').trim())) {
+            filters.open = true;
+        }
+        if (filtersMode === 'disclosure') {
+            const summary = document.createElement('summary');
+            summary.className = 'kit-runs-filter-summary';
+            const label = document.createElement('span');
+            label.textContent = dictValue('runs.filters.summary', 'Find and filter runs');
+            summary.appendChild(label);
+            const activeFilter = document.createElement('small');
+            activeFilter.textContent = [
+                String(search || '').trim() ? 'search active' : '',
+                String(statusFilter || '').trim() ? String(statusFilter || '') : '',
+            ].filter(Boolean).join(' · ') || 'All runs';
+            summary.appendChild(activeFilter);
+            filters.appendChild(summary);
+        }
+
+        const filterContent = document.createElement('div');
+        filterContent.className = 'kit-runs-filter-content';
         const searchInput = document.createElement('input');
         searchInput.className = 'kit-runs-search';
         searchInput.type = 'search';
@@ -2442,7 +2467,7 @@ window.Kit = (() => {
         if (typeof onSearch === 'function') {
             searchInput.addEventListener('input', (e) => onSearch(String(e.target.value || '')));
         }
-        filters.appendChild(searchInput);
+        filterContent.appendChild(searchInput);
 
         const filterRow = document.createElement('div');
         filterRow.className = 'kit-runs-filter-chips';
@@ -2460,7 +2485,8 @@ window.Kit = (() => {
             }
             filterRow.appendChild(chip);
         });
-        filters.appendChild(filterRow);
+        filterContent.appendChild(filterRow);
+        filters.appendChild(filterContent);
         root.appendChild(filters);
 
         const list = document.createElement('div');

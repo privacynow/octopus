@@ -244,7 +244,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
     assert "stageProgress: _runStageProgressData(currentRun)" in workspace
-    assert "stageProgress: selectedDetail" in workspace
+    assert "renderExpanded: () => _buildRunDetailPanel()" in workspace
+    assert "run-stage-timeline" in workspace
     assert "const currentRunStageExecution = () =>" in workspace
     assert "run.current_stage_execution_id" in workspace
     assert "return latestStageExecution(matchingAttempts)" in workspace
@@ -1223,14 +1224,14 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
-    assert "renderExpanded: null" in workspace
-    assert "workbench.appendChild(_buildRunDetailPanel());" in workspace
+    assert "renderExpanded: () => _buildRunDetailPanel()" in workspace
+    assert "workbench.appendChild(_buildRunDetailPanel());" not in workspace
     assert "function _buildRunsOverviewStrip(" in workspace
     assert "const buildRunFocusHero = () => {" in workspace
     assert "normalizedRunId === String(currentRunId || '')" in workspace
-    assert "onStageSelect: selectRunStageEvidence" in workspace
-    assert "run-detail-panel" in workspace
-    assert "run-navigator-panel" in workspace
+    assert "run-expansion-panel" in workspace
+    assert "run-feed-panel" in workspace
+    assert "run-stage-timeline-button" in workspace
     assert "Run inspector" in workspace
     assert "issuesByRunId" in workspace
     kit = (
@@ -1240,9 +1241,9 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "kit-run-stage-progress-node is-" in kit
     assert ".runs-overview-strip" in css
     assert ".run-focus-hero" in css
-    assert ".run-focus-summary-card" in css
-    assert ".kit-run-stage-progress-node.is-selectable" in css
-    assert ".protocol-panel.run-detail-panel" in css
+    assert ".run-expansion-panel" in css
+    assert ".run-stage-timeline-button" in css
+    assert ".run-audit-disclosure" in css
     assert ".kit-runs-list-group" in css
 
 

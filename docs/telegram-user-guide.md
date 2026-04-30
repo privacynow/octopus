@@ -101,7 +101,7 @@ Current command shape:
 
 ```text
 /protocol list
-/protocol start <slug> <problem statement>
+/protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--expected-outputs <text>] [--workspace <ref>]
 /protocol status <run_id>
 /protocol artifacts <run_id>
 /protocol export <run_id>
@@ -116,6 +116,10 @@ Current command shape:
 Behavior:
 
 - `start` creates a registry protocol run and starts watching it from the chat.
+- `start` uses the same shared SDK launch model as Registry UI. The simple
+  historical form is still valid. Optional launch fields are parsed from
+  `--context`, `--constraints`, `--expected-outputs`, and `--workspace`; each
+  option consumes text until the next option marker.
 - `status` reports registry run state and deep links when available.
 - `artifacts` lists declared and produced artifacts and should expose download
   links for artifacts the registry can serve.

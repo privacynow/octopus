@@ -497,6 +497,11 @@ dispatch.
 Lifecycle decisions are evaluated by `octopus_sdk/protocols/engine.py` and then
 applied by `octopus_registry/protocol_store.py`.
 
+Protocol stage prompts are SDK behavior. Stage instructions, run context, input
+artifacts, and output write scope are rendered by `octopus_sdk/protocols/` so
+Registry UI, Telegram, and future channels inherit the same execution contract.
+Registry routes and UI components must not create a second prompt contract.
+
 Protocol document model:
 
 | Object | Fields |

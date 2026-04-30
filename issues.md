@@ -5,6 +5,52 @@ a new session/model can resume without relying on prior chat context.
 
 ## Resume Here
 
+## Latest Manufacturing Intelligence Run Evidence
+
+Date: 2026-04-30
+
+Verified in real Safari:
+
+- Created and ran `Adaptive Manufacturing Intelligence Command Center` through
+  Registry UI, not direct API or database mutation.
+- Latest successful run:
+  `25e2f70f8b9545ffa4e477582628bb97`.
+- Final package artifact:
+  `artifact_4`, `sha256 79ea0bff24db`,
+  `artifacts/manufacturing-intelligence/package`.
+- Run completed 6 / 6 stages. M2 handled package build stages and M1 handled
+  charter/spec/validation/executive review stages, proving multi-agent protocol
+  handoff through the Registry path.
+- Generated artifact opened in Safari from the Registry artifact route.
+- Artifact workflow verified:
+  default synthetic generation, unconfirmed relationship candidates, evidence
+  review, explicit relationship confirmation, joined analytics builder,
+  heat-map output, manager dashboards, multiple local CSV upload, single-table
+  adapted synthetic mode, relationship-preserving adapted synthetic mode, and
+  local management report export.
+
+Product-generic issues found and fixed in this workstream:
+
+- SDK stage prompts did not clearly separate run-level goals from the current
+  stage's output write scope. This let a stage pre-fill artifacts assigned to
+  later stages. Fix: render input artifacts as read-only context, output
+  artifacts as write scope, and explicitly prohibit creating or overwriting
+  later-stage artifacts in `octopus_sdk/protocols/documents.py`.
+- Runs page could briefly show `Select a run...` for a selected run during
+  refresh. Fix: keep selected-run loading state visible while detail is loading.
+- Linked work view could appear blank until the user switched away and back.
+  Fix: show a loading state while linked work is loaded.
+- Full activity contained repeated quiet task heartbeat/status events and was
+  too dense for human inspection. Fix: compact quiet nonterminal task-status
+  events and open only genuinely actionable/contentful activity by default.
+
+Artifact-level issue found and documented for the next scenario refinement:
+
+- The generated `index.html` can retain stale detail-panel relationship evidence
+  after Reset or data replacement. This is scenario artifact behavior, not a
+  product feature to hardcode. The next manufacturing protocol refinement should
+  require reset/data-load handlers to clear selected detail state.
+
 Resume from the verified generic offline-analytics scenario acceptance run.
 Directory/package artifacts, linked-run freshness, retry-attempt clarity, and
 run progress feedback have been fixed and deployed. The latest real Safari run

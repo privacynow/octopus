@@ -57,6 +57,27 @@ Recently verified product state:
 - Run progress feedback is improved, but still needs broad verification on
   larger non-analytics workflows.
 
+Current manufacturing execution pass:
+
+- Protocol:
+  `Adaptive Manufacturing Intelligence Command Center`
+- Protocol id:
+  `b0974e104404409481426d31842b56d4`
+- Latest successful Registry UI run:
+  `25e2f70f8b9545ffa4e477582628bb97`
+- Final package artifact:
+  `artifact_4`, `sha256 79ea0bff24db`,
+  `artifacts/manufacturing-intelligence/package`
+- Real Safari verified:
+  default synthetic data, explicit relationship confirmation, joined analytics,
+  heat-map output, manager dashboards, multiple CSV upload, adapted synthetic
+  single-table mode, adapted synthetic relationship-preserving mode, and local
+  management report export.
+- Artifact-level follow-up:
+  reset/data replacement should clear stale detail-panel relationship evidence
+  in the generated `index.html` package. This belongs in scenario refinement,
+  not product-hardcoded manufacturing behavior.
+
 Relevant code and docs:
 
 - Protocol editor and runs UI:

@@ -296,6 +296,8 @@ def test_protocol_stage_prompt_limits_artifact_work_to_stage_outputs():
 
     assert "do not create or update protocol artifacts for this stage" in prompt
     assert "update the required artifacts" not in prompt
+    assert "Run-level context may describe the desired outcome of the full workflow" in prompt
+    assert "Do not create, overwrite, or pre-fill artifacts assigned to later stages." in prompt
 
 
 def test_protocol_review_prompt_mentions_assigned_output_artifacts():
@@ -329,9 +331,9 @@ def test_protocol_review_prompt_mentions_assigned_output_artifacts():
         artifacts=[],
     )
 
-    assert "Artifacts for this stage:" in prompt
+    assert "Output artifacts for this stage (write scope):" in prompt
     assert "- review_report: protocol/review.md" in prompt
-    assert "Complete the review, update the assigned output artifacts in the workspace" in prompt
+    assert "Complete the review, update only the assigned output artifacts in the workspace" in prompt
 
 
 @pytest.mark.asyncio

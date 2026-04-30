@@ -7371,7 +7371,7 @@ function renderProtocolRuns(container) {
         const detailPanel = document.createElement('div');
         detailPanel.className = 'run-expansion-panel';
 
-        if (runDetailLoading && currentRunId) {
+        if ((runDetailLoading || !currentRun) && currentRunId) {
             detailPanel.appendChild(UI.renderEmptyState('Loading run detail…', true));
             return detailPanel;
         }
@@ -8311,6 +8311,9 @@ function renderProtocolRuns(container) {
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocol runs…', true)]);
         try {
+            if (currentRunId) {
+                runDetailLoading = true;
+            }
             await Promise.all([loadRuns(), loadIssues({ rerender: false })]);
             if (currentRunId) {
                 await loadRunDetail();

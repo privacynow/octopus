@@ -2254,7 +2254,7 @@ function renderConversationDetail(container, params) {
     }
 
     function visibleTimelineEvents(events) {
-        if (activeView === 'activity') return events;
+        if (activeView === 'activity') return compactActivityEvents(events);
         if (activeView === 'conversation') {
             return events.filter(shouldRenderConversationEvent);
         }
@@ -2271,10 +2271,51 @@ function renderConversationDetail(container, params) {
         return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
     }
 
+    function isQuietTaskStatusEvent(event) {
+        if (String(event?.kind || '') !== 'task.status') return false;
+        if (String(event?.content || '').trim()) return false;
+        const metadata = event?.metadata || {};
+        if (metadata.progress !== null && metadata.progress !== undefined) return false;
+        const status = String(metadata.status || '').trim().toLowerCase();
+        return ['queued', 'submitted', 'leased', 'running'].includes(status);
+    }
+
+    function taskStatusEventTaskId(event) {
+        return String(event?.metadata?.routed_task_id || event?.metadata?.task_id || '').trim();
+    }
+
+    function compactActivityEvents(events = []) {
+        const rows = Array.isArray(events) ? events : [];
+        const latestQuietByTask = new Map();
+        const compacted = [];
+        rows.forEach((event) => {
+            if (isQuietTaskStatusEvent(event)) {
+                const taskId = taskStatusEventTaskId(event);
+                const key = taskId || `status:${String(event?.metadata?.status || '')}`;
+                latestQuietByTask.set(key, event);
+                return;
+            }
+            if (isTerminalTaskEvent(event)) {
+                const taskId = taskStatusEventTaskId(event);
+                if (taskId) {
+                    latestQuietByTask.delete(taskId);
+                }
+            }
+            compacted.push(event);
+        });
+        latestQuietByTask.forEach((event) => compacted.push(event));
+        compacted.sort((left, right) => {
+            const leftSeq = Number(left?.seq || 0);
+            const rightSeq = Number(right?.seq || 0);
+            if (leftSeq !== rightSeq) return leftSeq - rightSeq;
+            return String(left?.created_at || '').localeCompare(String(right?.created_at || ''));
+        });
+        return compacted;
+    }
+
     function eventShouldOpenByDefault(event) {
         const kind = String(event?.kind || '');
         if (kind === 'approval.requested' || kind === 'error') return true;
-        if (isTerminalTaskEvent(event)) return Boolean(String(event?.content || '').trim());
         return false;
     }
 
@@ -2290,7 +2331,7 @@ function renderConversationDetail(container, params) {
                 expandedEventIds.add(key);
             }
             if (isTerminalTaskEvent(event) && String(event?.content || '').trim()) {
-                const taskId = String(event?.metadata?.routed_task_id || '').trim();
+                const taskId = taskStatusEventTaskId(event);
                 if (taskId) latestTerminalByTask.set(taskId, key);
             }
         });
@@ -2631,6 +2672,10 @@ function renderConversationDetail(container, params) {
     }
 
     async function loadRelatedTasks({ soft = false, silent = false } = {}) {
+        if (activeView === 'tasks' && !silent && !soft && !tasksLoaded) {
+            UI.clearMemoizedRender(taskBoard);
+            UI.reconcileChildren(taskBoard, [UI.renderEmptyState('Loading linked work…', true)]);
+        }
         try {
             const conversationData = meta || await API.getConversation(convoId);
             const taskId = API.routedTaskIdFromConversation(conversationData);

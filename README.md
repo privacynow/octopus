@@ -121,6 +121,10 @@ live in separate guides so examples do not become product defaults.
 
 Current scenario guide:
 
+- [docs/manufacturing-intelligence-demo.md](docs/manufacturing-intelligence-demo.md):
+  UI-only blank-protocol walkthrough for the manufacturing intelligence command
+  center acceptance run. This is scenario documentation, not product default
+  behavior.
 - [docs/local-data-analytics-demo.md](docs/local-data-analytics-demo.md):
   UI-only blank-protocol walkthrough for generating and validating an offline
   multi-CSV browser analytics SPA.
@@ -148,7 +152,7 @@ Common command families:
 Protocol commands currently include:
 
 - `/protocol list`
-- `/protocol start <slug> <problem statement>`
+- `/protocol start <slug> <problem statement> [--context ...] [--constraints ...] [--expected-outputs ...] [--workspace ...]`
 - `/protocol status <run_id>`
 - `/protocol artifacts <run_id>`
 - `/protocol export <run_id>`

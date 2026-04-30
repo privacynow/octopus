@@ -40,9 +40,10 @@ Product-generic issues found and fixed in this workstream:
   refresh. Fix: keep selected-run loading state visible while detail is loading.
 - Linked work view could appear blank until the user switched away and back.
   Fix: show a loading state while linked work is loaded.
-- Full activity contained repeated quiet task heartbeat/status events and was
-  too dense for human inspection. Fix: compact quiet nonterminal task-status
-  events and open only genuinely actionable/contentful activity by default.
+- Full activity contained repeated nonterminal task status events such as
+  thinking, still-working, command, draft-reply, and running updates. Fix:
+  compact nonterminal `task.status` rows per task while keeping terminal
+  outcomes and actionable/contentful events visible.
 
 Artifact-level issue found and documented for the next scenario refinement:
 

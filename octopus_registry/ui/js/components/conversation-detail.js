@@ -2399,6 +2399,18 @@ function renderConversationDetail(container, params) {
         return ids;
     }
 
+    function pruneRenderedCompactTaskStatusForTerminalTasks() {
+        if (activeView !== 'activity') return;
+        const terminalIds = renderedTerminalTaskIds();
+        if (!terminalIds.size) return;
+        Array.from(eventList.children).forEach((child) => {
+            const taskId = child?.dataset?.compactTaskStatusKey;
+            if (taskId && terminalIds.has(taskId)) {
+                child.remove();
+            }
+        });
+    }
+
     function protocolDisplayName(protocolId = '') {
         const target = String(protocolId || '').trim();
         if (!target) return 'Protocol run';
@@ -2849,6 +2861,7 @@ function renderConversationDetail(container, params) {
             } else {
                 const expansionState = activityExpansionState(visibleEvents);
                 UI.reconcileChildren(eventList, visibleEvents.map((event) => renderEventElement(event, expansionState)));
+                pruneRenderedCompactTaskStatusForTerminalTasks();
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
@@ -2896,6 +2909,7 @@ function renderConversationDetail(container, params) {
                     fragment.appendChild(renderEventElement(event));
                 });
                 eventList.prepend(fragment);
+                pruneRenderedCompactTaskStatusForTerminalTasks();
             }
             hasMoreBefore = !!result.has_more_before;
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || beforeSeq);
@@ -2989,6 +3003,7 @@ function renderConversationDetail(container, params) {
         eventList.appendChild(renderEventElement(event, {
             defaultExpanded: activeView === 'activity' && eventShouldOpenByDefault(event),
         }));
+        pruneRenderedCompactTaskStatusForTerminalTasks();
         syncConversationDensityForCurrentView();
         if (seq) latestSeq = Math.max(latestSeq, seq);
         if (

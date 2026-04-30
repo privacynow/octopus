@@ -644,6 +644,103 @@ async def test_registry_channel_input_direct_assignment_routes_through_shared_bo
         assert pending["tasks"][0]["status"] == "submitted"
 
 
+async def test_registry_channel_input_natural_direct_assignment_routes_before_provider(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, _cfg, prov):
+        captured: dict[str, object] = {}
+
+        async def _direct_assign(
+            conversation_id,
+            *,
+            selector,
+            title,
+            instructions,
+            parent_event_id="",
+            origin_transport_ref="",
+            authorized_actor_key="",
+            message_text="",
+            requested_skills=(),
+        ):
+            captured.update(
+                {
+                    "conversation_id": str(conversation_id),
+                    "selector_kind": selector.kind,
+                    "selector_value": selector.value,
+                    "title": title,
+                    "instructions": instructions,
+                    "parent_event_id": parent_event_id,
+                    "origin_transport_ref": origin_transport_ref,
+                    "authorized_actor_key": authorized_actor_key,
+                    "message_text": message_text,
+                    "requested_skills": list(requested_skills),
+                }
+            )
+            return CoordinationActionResult(
+                conversation_id=str(conversation_id),
+                action_id="direct-action-natural-1",
+                action="direct_assign",
+                accepted=True,
+                routed_tasks=[
+                    {
+                        "routed_task_id": "task-natural-direct-1",
+                        "target_agent_id": "agent-m2",
+                        "title": title,
+                        "status": "queued",
+                    }
+                ],
+            )
+
+        monkeypatch.setattr(current_runtime().services.registry.coordination, "direct_assign", _direct_assign)
+
+        conversation_ref = _reg_ref("registry-natural-direct-1")
+        conversation_key = _reg_conv(conversation_ref)
+        event = InboundMessage(
+            user=InboundUser(id=_actor(42), username="registry-ui"),
+            conversation_key=conversation_key,
+            text="Ok then ask what is 2 plus 2 from @m2 if you can",
+            source="registry",
+            transport="registry",
+            conversation_ref=conversation_ref,
+            authority_ref="registry:default",
+        )
+        item = WorkItemRecord(
+            id="registry-item-natural-direct-1",
+            conversation_key=conversation_key,
+            event_id=_event(7003),
+            dispatch_mode="fresh",
+        )
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        session = load_session_disk(data_dir, conversation_key, prov)
+        pending = session.get("pending_delegation")
+        assert len(prov.run_calls) == 0
+        assert captured["selector_kind"] == "agent"
+        assert captured["selector_value"] == "m2"
+        assert captured["instructions"] == "what is 2 plus 2"
+        assert captured["parent_event_id"] == _event(7003)
+        assert captured["message_text"] == "Ok then ask what is 2 plus 2 from @m2 if you can"
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["routed_task_id"] == "task-natural-direct-1"
+        assert pending["tasks"][0]["status"] == "submitted"
+
+
 async def test_registry_delivery_channel_input_direct_assignment_preserves_registry_parent_ref_and_nested_requested_skill(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -344,6 +344,69 @@ def test_extract_target_selector_message_accepts_leading_skill_phrase():
     assert instructions == "give me a system design review"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_kind", "expected_value", "expected_instructions"),
+    [
+        (
+            "Ask m2 what is the current temperature",
+            "agent",
+            "m2",
+            "what is the current temperature",
+        ),
+        (
+            "Ok then ask what is 2 plus 2 from @m2 if you can",
+            "agent",
+            "m2",
+            "what is 2 plus 2",
+        ),
+        (
+            "please have @m2 review this",
+            "agent",
+            "m2",
+            "review this",
+        ),
+        (
+            "route this to @skill:architecture: review the API",
+            "skill",
+            "architecture",
+            "review the API",
+        ),
+        (
+            "@m2, return only the answer",
+            "agent",
+            "m2",
+            "return only the answer",
+        ),
+    ],
+)
+def test_extract_target_selector_message_accepts_conservative_natural_delegation_forms(
+    text,
+    expected_kind,
+    expected_value,
+    expected_instructions,
+):
+    extracted = extract_target_selector_message(text)
+
+    assert extracted is not None
+    selector, instructions = extracted
+    assert selector.kind == expected_kind
+    assert selector.value == expected_value
+    assert instructions == expected_instructions
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what does m2 mean?",
+        "ask what is m2?",
+        "email m2 tomorrow",
+        "can m2 be used here?",
+    ],
+)
+def test_extract_target_selector_message_ignores_non_delegation_mentions(text):
+    assert extract_target_selector_message(text) is None
+
+
 def test_pending_delegation_transition_derives_partial_failure__child_states():
     result = apply_pending_delegation_transition(
         PendingDelegationSnapshot(status="submitted", task_statuses=("completed", "failed")),
@@ -1066,6 +1129,24 @@ _OBSERVATION_METHODS = (
     "list_run_timeline",
     "export_run",
 )
+_AUTHORING_METHODS = (
+    "get_protocol_authoring_options",
+    "list_protocol_templates",
+    "get_protocol_template",
+    "get_protocol",
+    "get_protocol_version",
+    "save_protocol",
+    "create_protocol_draft",
+    "create_protocol_template",
+    "delete_protocol",
+    "validate_protocol",
+    "publish_protocol",
+    "archive_protocol",
+    "parse_protocol_document_text",
+    "export_protocol_draft",
+    "diff_protocol_draft",
+)
+_ARTIFACT_ACCESS_METHODS = ("get_run_artifact_content",)
 
 
 def test_registry_client_satisfies_invocation_port():
@@ -1085,6 +1166,17 @@ def test_registry_client_satisfies_observation_port():
     client = RegistryClient("http://test:8787", "test-token")
     assert isinstance(client, ProtocolObservationPort)
     for name in _OBSERVATION_METHODS:
+        assert callable(getattr(client, name))
+
+
+def test_registry_client_satisfies_authoring_and_artifact_ports():
+    from octopus_sdk.protocols import ProtocolArtifactAccessPort, ProtocolAuthoringPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    assert isinstance(client, ProtocolAuthoringPort)
+    assert isinstance(client, ProtocolArtifactAccessPort)
+    for name in (*_AUTHORING_METHODS, *_ARTIFACT_ACCESS_METHODS):
         assert callable(getattr(client, name))
 
 
@@ -1138,6 +1230,39 @@ def test_invocation_port_invoke_protocol_roundtrips_idempotency_and_origin():
     assert captured["url"].endswith("/v1/protocol-runs")
     assert captured["headers"].get("Idempotency-Key") == "abc-123"
     assert captured["json"]["protocol_id"] == "protocol-1"
+
+
+def test_artifact_access_port_downloads_bytes_from_canonical_path():
+    from unittest.mock import patch
+
+    from octopus_sdk.protocols import ProtocolArtifactAccessPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client: ProtocolArtifactAccessPort = RegistryClient("http://test:8787", "test-token")
+    captured: dict = {}
+
+    async def mock_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+
+        class FakeResp:
+            status_code = 200
+            content = b"# Plan\n"
+
+            @property
+            def headers(self):
+                return {"content-type": "text/markdown"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        content = asyncio.run(client.get_run_artifact_content("run-1", "plan", download=True))
+
+    assert content == b"# Plan\n"
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/v1/protocol-runs/run-1/artifacts/plan/content")
+    assert captured["params"] == {"download": "1"}
 
 
 def test_observation_port_methods_hit_expected_paths():

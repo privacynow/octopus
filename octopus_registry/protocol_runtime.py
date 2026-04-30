@@ -113,7 +113,7 @@ def runtime_protocol_selector(
     preferred = str(entry_agent_id or "").strip()
     if selector.kind != "skill" or not preferred or str(selector.preferred_agent_id or "").strip():
         return selector
-    # Skill selectors stay authored as capabilities, but runtime resolution
+    # Skill selectors stay authored as skills, but runtime resolution
     # prefers the run entry agent when that agent satisfies the selector.
     return selector.model_copy(update={"preferred_agent_id": preferred})
 

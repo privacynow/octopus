@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from app import runtime_backend
-from app.agents.registry_capabilities import (
-    registry_authority_capabilities,
-    registry_authority_ref,
-    registry_id_from_authority_ref,
+from app.agents.registry_projection_interfaces import (
+    registry_projection_interfaces_by_implementation_ref,
+    registry_implementation_ref,
+    registry_id_from_implementation_ref,
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.state import (
@@ -70,12 +70,12 @@ class _StoreBackedRegistryClient:
     def _store(self) -> RegistryPostgresStore:
         return type(self).stores_by_url[self.base_url]
 
-    def _maybe_fail(self, operation: str) -> None:
-        if operation in type(self).failing_ops_by_url.get(self.base_url, set()):
+    def _maybe_fail(self, admin_operation: str) -> None:
+        if admin_operation in type(self).failing_ops_by_url.get(self.base_url, set()):
             raise RegistryClientError(
-                f"{operation} failed",
+                f"{admin_operation} failed",
                 error_code="registry_unreachable",
-                operator_detail=f"{self.base_url}:{operation} failed",
+                operator_detail=f"{self.base_url}:{admin_operation} failed",
             )
 
     async def sync_binding(
@@ -181,7 +181,7 @@ def _agent_card(*, name: str, slug: str, registry_scope: str) -> dict[str, objec
         "description": "",
         "provider": "claude",
         "mode": "registry",
-        "channel_capabilities": ["telegram"],
+        "transport_implementations": ["telegram"],
         "version": "test",
     }
 
@@ -257,18 +257,18 @@ def _init_backend(config: BotConfig) -> None:
 
 
 def _services_for_config(config: BotConfig) -> BotServices:
-    def _agent_id_for_authority(authority_ref: str) -> str:
+    def _agent_id_for_implementation(implementation_ref: str) -> str:
         from app.agents.state import load_registry_connection_state
 
         try:
-            rid = registry_id_from_authority_ref(authority_ref)
+            rid = registry_id_from_implementation_ref(implementation_ref)
         except ValueError:
             return ""
         return load_registry_connection_state(config.data_dir, rid).agent_id
 
     return build_test_bot_services(
         config=config,
-        agent_id_for_authority=_agent_id_for_authority,
+        agent_id_for_implementation=_agent_id_for_implementation,
     )
 
 
@@ -395,7 +395,7 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
     async with _running_registry_processor(config):
         result = await services.control_plane.task_routing.report_routed_task_result(
             routed_task_id="task-1",
-            authority_ref=registry_authority_ref("default"),
+            authority_ref=registry_implementation_ref("default"),
             result=RoutedTaskResult(
                 routed_task_id="task-1",
                 status="completed",
@@ -490,7 +490,7 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
                 ),
                 progress=50,
             ),
-            authority_ref=registry_authority_ref("status"),
+            authority_ref=registry_implementation_ref("status"),
         )
         await _wait_for(
             lambda: seeded.store.list_tasks()[0]["status"] == "running"
@@ -573,7 +573,7 @@ async def test_routed_task_report_failure_persists_partialfailed_status(
                 runtime_chat="registry:fallback:task:task-fallback-1",
                 conversation_ref="registry:fallback:task:task-fallback-1",
                 routed_task_id="task-fallback-1",
-                authority_ref=registry_authority_ref("fallback"),
+                authority_ref=registry_implementation_ref("fallback"),
                 task_routing=services.control_plane.task_routing,
             ),
         )

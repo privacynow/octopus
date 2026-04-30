@@ -486,7 +486,7 @@ function renderAgentDetail(container, params) {
 
         const head = document.createElement('div');
         head.className = 'section-header';
-        head.innerHTML = '<strong>Capabilities</strong>';
+        head.innerHTML = '<strong>Skills</strong>';
         card.appendChild(head);
 
         const body = document.createElement('div');
@@ -494,14 +494,14 @@ function renderAgentDetail(container, params) {
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = manageEnabled
-            ? 'Open the shared Capabilities workspace to inspect instructions, manage lifecycle, search the catalog, and activate a capability from a conversation.'
-            : 'This bot does not currently advertise registry-backed capability management.';
+            ? 'Open the shared Skills workspace to inspect instructions, manage lifecycle, search the catalog, and activate a skill from a conversation.'
+            : 'This bot does not currently advertise registry-backed skill management.';
         body.appendChild(note);
 
         if ((agent.routing_skills || []).length) {
             const label = document.createElement('div');
             label.className = 'detail-label';
-            label.textContent = 'Available capabilities';
+            label.textContent = 'Available skills';
             body.appendChild(label);
             const chips = document.createElement('div');
             chips.className = 'chip-row';
@@ -525,7 +525,7 @@ function renderAgentDetail(container, params) {
         const manageBtn = document.createElement('button');
         manageBtn.type = 'button';
         manageBtn.className = 'btn btn-sm btn-primary';
-        manageBtn.textContent = 'Open Capabilities workspace';
+        manageBtn.textContent = 'Open Skills workspace';
         manageBtn.disabled = !manageEnabled;
         manageBtn.addEventListener('click', () => Router.navigate(skillsWorkspaceHref()));
         actions.appendChild(manageBtn);
@@ -826,7 +826,7 @@ function renderAgentDetail(container, params) {
                     scope: String(agent.registry_scope || ''),
                     version: String(agent.version || ''),
                     routingSkills: (agent.routing_skills || []).map((skillName) => String(skillName || '')),
-                    capabilities: (agent.management_capabilities || []).map((capability) => String(capability || '')),
+                    skills: (agent.supported_admin_operations || []).map((skill) => String(skill || '')),
                     trustTier: String(agent.trust_tier || 'community'),
                     currentCapacity: Number(agent.current_capacity || 0),
                     maxCapacity: Number(agent.max_capacity || 1),

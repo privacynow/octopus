@@ -36,15 +36,6 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillSetupAdvanceOutcome,
 )
 
-ManagementCapability = Literal[
-    "skill_catalog",
-    "skill_lifecycle",
-    "provider_guidance",
-    "conversation_skills",
-    "conversation_settings",
-    "agent_runtime",
-]
-
 ManagementOperation = Literal[
     "list_catalog_skills",
     "search_catalog_skills",
@@ -81,9 +72,47 @@ ManagementOperation = Literal[
     "archive_provider_guidance",
 ]
 
+ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
+    "list_catalog_skills",
+    "search_catalog_skills",
+    "catalog_skill_detail",
+    "catalog_skill_lifecycle_detail",
+    "edit_catalog_skill_draft",
+    "export_catalog_skill_package",
+    "import_catalog_skill_package",
+    "submit_catalog_skill",
+    "approve_catalog_skill",
+    "reject_catalog_skill",
+    "publish_catalog_skill",
+    "archive_catalog_skill",
+    "install_catalog_skill",
+    "uninstall_catalog_skill",
+    "update_catalog_skill",
+    "diff_catalog_skill",
+    "conversation_skill_state",
+    "activate_conversation_skill",
+    "deactivate_conversation_skill",
+    "clear_conversation_skills",
+    "submit_conversation_skill_credential",
+    "conversation_settings_state",
+    "set_conversation_setting",
+    "reset_conversation",
+    "reset_execution_fault",
+    "preview_provider_guidance",
+    "provider_guidance_detail",
+    "edit_provider_guidance_draft",
+    "submit_provider_guidance",
+    "approve_provider_guidance",
+    "reject_provider_guidance",
+    "publish_provider_guidance",
+    "archive_provider_guidance",
+)
+
 ManagementErrorCode = Literal[
     "agent_not_connected",
-    "capability_not_available",
+    "admin_operation_not_implemented",
+    "admin_operation_unavailable",
+    "admin_interface_not_implemented",
     "request_timeout",
     "request_failed",
     "request_invalid",
@@ -338,7 +367,7 @@ class ProviderGuidancePreviewRecord(RegistryRecordModel):
     preview_guidance: str = ""
     preview_source: str = ""
     composed_prompt: str = ""
-    capability_summary: str = ""
+    active_skill_tools_summary: str = ""
     provider_config: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     prompt_weight: int = 0
 
@@ -723,7 +752,7 @@ def provider_guidance_preview_record(
         preview_guidance=preview.preview_guidance,
         preview_source=preview.preview_source,
         composed_prompt=preview.composed_prompt,
-        capability_summary=preview.capability_summary,
+        active_skill_tools_summary=preview.active_skill_tools_summary,
         provider_config=RegistryJsonRecord(preview.provider_config.to_dict()),
         prompt_weight=preview.prompt_weight,
     )
@@ -1293,50 +1322,8 @@ class ManagementResult(RegistryRecordModel):
             return str(self.payload.operation)
         return ""
 
-
-MANAGEMENT_OPERATION_CAPABILITIES: dict[ManagementOperation, ManagementCapability] = {
-    "list_catalog_skills": "skill_catalog",
-    "search_catalog_skills": "skill_catalog",
-    "catalog_skill_detail": "skill_catalog",
-    "install_catalog_skill": "skill_catalog",
-    "uninstall_catalog_skill": "skill_catalog",
-    "update_catalog_skill": "skill_catalog",
-    "diff_catalog_skill": "skill_catalog",
-    "catalog_skill_lifecycle_detail": "skill_lifecycle",
-    "edit_catalog_skill_draft": "skill_lifecycle",
-    "export_catalog_skill_package": "skill_lifecycle",
-    "import_catalog_skill_package": "skill_lifecycle",
-    "submit_catalog_skill": "skill_lifecycle",
-    "approve_catalog_skill": "skill_lifecycle",
-    "reject_catalog_skill": "skill_lifecycle",
-    "publish_catalog_skill": "skill_lifecycle",
-    "archive_catalog_skill": "skill_lifecycle",
-    "preview_provider_guidance": "provider_guidance",
-    "provider_guidance_detail": "provider_guidance",
-    "edit_provider_guidance_draft": "provider_guidance",
-    "submit_provider_guidance": "provider_guidance",
-    "approve_provider_guidance": "provider_guidance",
-    "reject_provider_guidance": "provider_guidance",
-    "publish_provider_guidance": "provider_guidance",
-    "archive_provider_guidance": "provider_guidance",
-    "conversation_skill_state": "conversation_skills",
-    "activate_conversation_skill": "conversation_skills",
-    "deactivate_conversation_skill": "conversation_skills",
-    "clear_conversation_skills": "conversation_skills",
-    "submit_conversation_skill_credential": "conversation_skills",
-    "conversation_settings_state": "conversation_settings",
-    "set_conversation_setting": "conversation_settings",
-    "reset_conversation": "conversation_settings",
-    "reset_execution_fault": "agent_runtime",
-}
-
-
-def required_management_capability(operation: ManagementOperation | str) -> ManagementCapability:
-    return MANAGEMENT_OPERATION_CAPABILITIES[str(operation)]  # type: ignore[index]
-
-
-def management_capability_supported(
-    capabilities: list[str] | tuple[str, ...] | set[str],
+def management_operation_supported(
+    supported_admin_operations: list[str] | tuple[str, ...] | set[str],
     operation: ManagementOperation | str,
 ) -> bool:
-    return required_management_capability(operation) in set(capabilities)
+    return str(operation) in set(supported_admin_operations)

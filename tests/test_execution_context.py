@@ -352,7 +352,7 @@ async def test_inspect_mode_always_readonly(provider_config):
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
 
     context = RunContext(
-        extra_dirs=[], system_prompt="", capability_summary="",
+        extra_dirs=[], system_prompt="", active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(provider_config),
         credential_env=CredentialEnvRecord(),
         file_policy="inspect",

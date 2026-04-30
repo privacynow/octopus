@@ -112,7 +112,11 @@ def _transport_error(result: ManagementResult) -> RegistryIngressError:
         return RegistryIngressError(504, detail)
     if result.error_code == "agent_not_connected":
         return RegistryIngressError(503, detail)
-    if result.error_code == "capability_not_available":
+    if result.error_code in {
+        "admin_operation_not_implemented",
+        "admin_operation_unavailable",
+        "admin_interface_not_implemented",
+    }:
         return RegistryIngressError(409, detail)
     if detail == "No skill registry configured.":
         return RegistryIngressError(404, detail)

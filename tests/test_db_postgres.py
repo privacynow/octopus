@@ -34,7 +34,7 @@ def test_run_init_applies_current_schema(postgres_base_url, request):
             )
             agent_columns = {row[0] for row in cur.fetchall()}
 
-    assert "channel_capabilities_json" in agent_columns
+    assert "transport_implementations" in agent_columns
     assert "registry_scope" in agent_columns
     assert "runtime_health_json" in agent_columns
     assert "bot_key" in agent_columns
@@ -56,6 +56,87 @@ def test_run_init_is_noop_on_current_db(postgres_truncated):
     with get_connection(postgres_truncated) as conn:
         errors = run_init(conn)
     assert errors == []
+
+
+def test_run_init_backfills_nullable_default_visibility_columns(postgres_truncated):
+    """DB init repairs current deployments that have nullable default-visibility flags."""
+    from app.db.postgres import get_connection
+
+    touched_tables = ("conversations", "routed_tasks", "protocol_runs")
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            for table in touched_tables:
+                cur.execute(
+                    f"ALTER TABLE agent_registry.{table} "
+                    "ALTER COLUMN hidden_from_default_views DROP NOT NULL"
+                )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.conversations (
+                    conversation_id, target_agent_id, hidden_from_default_views, title, created_at, updated_at
+                )
+                VALUES ('legacy-null-conversation', 'agent-m1', NULL, 'Legacy conversation', '2026-04-29T00:00:00Z', '2026-04-29T00:00:00Z')
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.routed_tasks (
+                    routed_task_id, parent_conversation_id, origin_agent_id, target_agent_id,
+                    hidden_from_default_views, title, request_json, created_at, updated_at
+                )
+                VALUES (
+                    'legacy-null-task', 'legacy-null-conversation', 'agent-m1', 'agent-m2',
+                    NULL, 'Legacy routed task', '{}'::jsonb, '2026-04-29T00:00:00Z', '2026-04-29T00:00:00Z'
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.protocol_runs (
+                    protocol_run_id, protocol_id, protocol_definition_version_id,
+                    hidden_from_default_views, created_at, updated_at
+                )
+                VALUES (
+                    'legacy-null-run', 'protocol-demo', 'version-demo',
+                    NULL, '2026-04-29T00:00:00Z', '2026-04-29T00:00:00Z'
+                )
+                """
+            )
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+
+        with conn.cursor() as cur:
+            for table, key_column, key_value in (
+                ("conversations", "conversation_id", "legacy-null-conversation"),
+                ("routed_tasks", "routed_task_id", "legacy-null-task"),
+                ("protocol_runs", "protocol_run_id", "legacy-null-run"),
+            ):
+                cur.execute(
+                    f"""
+                    SELECT hidden_from_default_views
+                    FROM agent_registry.{table}
+                    WHERE {key_column} = %s
+                    """,
+                    (key_value,),
+                )
+                assert cur.fetchone()[0] is False
+            cur.execute(
+                """
+                SELECT table_name, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'agent_registry'
+                  AND table_name = ANY(%s)
+                  AND column_name = 'hidden_from_default_views'
+                """,
+                (list(touched_tables),),
+            )
+            constraints = {row[0]: (row[1], row[2] or "") for row in cur.fetchall()}
+
+    for table in touched_tables:
+        assert constraints[table][0] == "NO"
+        assert constraints[table][1].lower() == "false"
 
 
 def test_protocol_responsiveness_indexes_exist(postgres_truncated):
@@ -87,13 +168,13 @@ def test_protocol_responsiveness_indexes_exist(postgres_truncated):
     assert expected_indexes <= actual_indexes
 
 
-def test_run_init_does_not_seed_builtin_protocols_into_authored_definitions(postgres_base_url, request):
-    """DB init leaves builtin protocol examples out of authored protocol rows."""
+def test_run_init_does_not_seed_protocol_examples_into_authored_definitions(postgres_base_url, request):
+    """DB init leaves protocol examples out of authored protocol rows."""
     from app.db.postgres import get_connection
     from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
 
     worker_id = get_worker_id(request.config)
-    db_name = f"test_bot_registry_builtin_seed_{worker_id}".replace("-", "_")
+    db_name = f"test_bot_registry_protocol_seed_{worker_id}".replace("-", "_")
     db_url = _replace_db_in_url(postgres_base_url, db_name)
     create_test_database(postgres_base_url, db_name)
 
@@ -179,8 +260,8 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "connectivity_state",
             "current_capacity",
             "max_capacity",
-            "channel_capabilities_json",
-            "management_capabilities_json",
+            "transport_implementations",
+            "supported_admin_operations",
             "version",
             "runtime_health_json",
             "trust_tier",
@@ -219,7 +300,6 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "request_id",
             "target_agent_id",
             "operation",
-            "capability",
             "payload_json",
             "status",
             "delivery_id",
@@ -232,6 +312,8 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
         "conversations": {
             "conversation_id",
             "target_agent_id",
+            "source_kind",
+            "hidden_from_default_views",
             "title",
             "conversation_type",
             "origin_channel",
@@ -331,6 +413,8 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "parent_conversation_id",
             "origin_agent_id",
             "target_agent_id",
+            "source_kind",
+            "hidden_from_default_views",
             "title",
             "request_json",
             "status",
@@ -371,6 +455,8 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "protocol_run_id",
             "protocol_id",
             "protocol_definition_version_id",
+            "source_kind",
+            "hidden_from_default_views",
             "entry_agent_id",
             "entry_authority_ref",
             "is_rehearsal",
@@ -524,7 +610,7 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
 
     assert by_table == expected_columns
     assert defaults[("agents", "registry_scope")].startswith("'full'")
-    assert "jsonb" in defaults[("agents", "channel_capabilities_json")]
+    assert "jsonb" in defaults[("agents", "transport_implementations")]
     assert "jsonb" in defaults[("agents", "runtime_health_json")]
     assert defaults[("conversations", "conversation_type")].startswith("'conversation'")
     assert defaults[("conversations", "origin_channel")].startswith("'registry'")

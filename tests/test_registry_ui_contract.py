@@ -112,8 +112,8 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "await loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" not in skill_catalog
     assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
     assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
-    assert "renderLoadingState(message = 'Loading capabilities…')" in skill_catalog
-    assert "renderLoadingState(queryText.length >= 2 ? 'Searching capabilities…' : 'Loading capabilities…');" in skill_catalog
+    assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
+    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
@@ -142,8 +142,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.listRoutingSkills()" in workspace
     assert "_agentsAdvertisingSkill(" in workspace
     assert "_selectorAgentSkillsSection(" in workspace
-    assert "return UI.isHumanAssignableCapabilityName(item?.skill_name || item);" in workspace
-    assert "Available capabilities" in workspace
+    assert "return UI.isHumanAssignableSkillName(item?.skill_name || item);" in workspace
+    assert "Available skills" in workspace
     assert "preferred_agent_id" in workspace
 
     # Rehearsal API the workspace drives
@@ -161,6 +161,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.saveProtocolDraft(" in workspace
     assert "API.publishProtocol(" in workspace
     assert "API.createProtocolTemplate(" in workspace
+    assert "protocol-template-chooser" in workspace
+    assert "onClick: () => void _createBlankDraft()" in workspace
+    assert "protocolTemplates.length" in workspace
     assert "API.archiveProtocol(" in workspace
     assert "API.deleteProtocol(" in workspace
     assert "API.validateProtocol(" in workspace
@@ -183,16 +186,22 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "_selectorCatalogEntries(" in workspace
     assert "_documentSelectorValues(" in workspace
     assert "if (catalog.length) return String(catalog[0].value || '');" in workspace
+    assert "pendingStage.stage_key = _slugSuggestion(pendingStage.display_name);" in workspace
+    assert "String(_slugSuggestion(displayName) || pendingStage.stage_key || 'step')" in workspace
     assert "_selectorEditor(" in workspace
     assert "_currentAuthoringSurface()" in workspace
     assert "operator_surface_available" in workspace
-    assert "_normalizeStageWriteCapability(" in workspace
+    assert "_normalizeStageWriteAccess(" in workspace
+    assert "_ensureStageAssignmentParticipants(" in workspace
+    assert "participant_key: participantKey" in workspace
+    assert "display_name: _assignmentParticipantLabel(nextStage.selector) || participantKey" in workspace
     assert "write_capable: Boolean(stage?.write_capable || outputs.length)" in workspace
+    assert "label: 'Workspace path', help: Kit.dict.label('protocol.artifact.path.help'), placeholder: Kit.dict.label('protocol.artifact.path.placeholder'), commitOnInput: true" in workspace
     assert "Available now" in workspace
     assert "Preferred agent:" in workspace
     assert "quickstart-chip" in workspace
     assert "pins the step to" in workspace
-    assert "Required capability" in workspace
+    assert "Required skill" in workspace
     assert "Pin matching agent (optional)" in workspace
     assert "Specific agent" in workspace
     assert "Show workflow map" in workspace
@@ -234,6 +243,11 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
+    assert "stageProgress: _runStageProgressData(currentRun)" in workspace
+    assert "stageProgress: selectedDetail" in workspace
+    assert "const currentRunStageExecution = () =>" in workspace
+    assert "run.current_stage_execution_id" in workspace
+    assert "return latestStageExecution(matchingAttempts)" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
@@ -303,9 +317,10 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
     assert "UI.readQueryParam('protocol_view'" not in workspace
     assert "protocol_view:" in workspace  # kept in _writeState to clear legacy URLs
-    assert "API.getProtocolTemplate(" not in workspace
+    assert "API.getProtocolTemplate(" in workspace
     assert "API.getProtocolAuthoringManifest(" not in workspace
     assert "loadDefaultTemplate" not in workspace
+    assert "UI.defaultVisibleRecords(\n            Array.isArray(protocolTemplates) ? protocolTemplates : []" in workspace
 
     # Protocol authoring lifecycle subscription is retained
     assert "UI.subscribeWithRefresh(cleanups, 'agents'" in workspace
@@ -454,21 +469,21 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Find reusable capabilities for conversations and protocol stages." in skill_catalog
-    assert "Capability catalog" in skill_catalog
+    assert "Find reusable skills for conversations and protocol stages." in skill_catalog
+    assert "Skill catalog" in skill_catalog
     assert "Choose a bot only when you need to manage installation or drafts." in skill_catalog
-    assert "UI.isHumanAssignableCapabilityName(name)" in skill_catalog
+    assert "UI.isHumanAssignableSkillName(name)" in skill_catalog
     assert "String(selectedSkillOrigin || '') === 'global'" in skill_catalog
-    assert "Use this in a protocol stage by choosing Assignment, then Existing capability." in skill_catalog
+    assert "Use this in a protocol stage by choosing Assignment, then Existing skill." in skill_catalog
     assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "workspace.classList.add('dashboard-board-stacked');" in skill_catalog
     assert "detailEl.hidden = true;" in skill_catalog
-    assert "capability-inline-detail" in skill_catalog
+    assert "skill-inline-detail" in skill_catalog
     assert "function _renderSelectedSkillInlineDetail(selected)" in skill_catalog
     assert "function _buildSelectedSkillDetailNodes(selected)" in skill_catalog
-    assert "function _renderAgentCapabilityIntro(agentLabel)" in skill_catalog
-    assert "agent-capability-intro" in skill_catalog
-    assert "Loading capability instructions…" in skill_catalog
+    assert "function _renderAgentSkillIntro(agentLabel)" in skill_catalog
+    assert "agent-skill-intro" in skill_catalog
+    assert "Loading skill instructions…" in skill_catalog
     assert "Instructions preview" in skill_catalog
     assert "API.getSkillDetail(agent.agent_id, skillName)" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
@@ -487,8 +502,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "'Custom'" in skill_catalog
     assert "'Installed on this bot'" in skill_catalog
     assert "'Store'" in skill_catalog
-    assert "'New capability'" in skill_catalog
-    assert "'No capabilities are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
+    assert "'New skill'" in skill_catalog
+    assert "'No skills are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
@@ -548,7 +563,7 @@ def test_agents_surface_uses_shared_kit_primitives_and_admin_actions() -> None:
     assert "selectedId: selectedAgentId" in agent_list
     assert "renderExpanded: _renderAgentInlineDetail" in agent_list
     assert "Open agent workspace" in agent_list
-    assert "Open capabilities" in agent_list
+    assert "Open skills" in agent_list
     assert "trustTier: String(agent.trust_tier" in agent_list
     assert "currentCapacity: Number(agent.current_capacity" in agent_list
     assert "softDeletedAt: String(agent.soft_deleted_at" in agent_list
@@ -593,13 +608,13 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
     assert "!_isGeneratedSkill(skill)" in skill_catalog
     assert "!UI.isGeneratedTimestampName(skill)" in kit
     assert "function buildSkillsCard(agent) {" in agent_detail
-    assert "Open Capabilities workspace" in agent_detail
+    assert "Open Skills workspace" in agent_detail
     assert "Router.navigate(skillsWorkspaceHref())" in agent_detail
     assert "Open a conversation with ${label}" in skill_catalog
     assert "function openSkillsDrawer(" not in agent_detail
-    assert "Open Capabilities page" not in agent_detail
+    assert "Open Skills page" not in agent_detail
     assert "Quick actions live here." not in agent_detail
-    assert "Available capabilities" in agent_detail
+    assert "Available skills" in agent_detail
     assert "buildSkillsCard(agent)," in agent_detail
     assert "buildOperationsCard(agent, workers)," in agent_detail
     assert "quickstart-chip static" in agent_detail
@@ -729,7 +744,7 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "function visibleDashboardProtocols()" in dashboard
     assert "function loadSecondarySnapshot(" in dashboard
     assert "void loadSecondarySnapshot({ soft });" in dashboard
-    assert "API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT })" in dashboard
+    assert "API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT, include_generated: '0' })" in dashboard
     assert "API.listProtocols({ limit: 50 })" in dashboard
     assert "Filtered by default · generated/audit totals inside" in dashboard
 
@@ -738,6 +753,7 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "!task.protocol_run_id && !UI.isDefaultHiddenRecord(task)" in task_list
     assert "function _visibleTask(task)" in task_list
     assert "renderSummary({ tasks: Object.fromEntries(entries) });" in task_list
+    assert "include_generated: currentProtocolRunId || includeGenerated ? '1' : '0'" in task_list
     assert "API.getSummary()" not in task_list
     assert "<h2>Delegations</h2>" in task_list
 
@@ -785,6 +801,9 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert "primaryColumn.className = 'dashboard-column';" in dashboard
     assert "secondaryColumn.className = 'dashboard-column';" in dashboard
     assert "function refreshSnapshot(" in dashboard
+    assert "function openCleanupDialog()" in dashboard
+    assert "API.cleanupWorkspaceData({" in dashboard
+    assert "'Clean workspace data'" in dashboard
     assert "refreshSummaryOnly" not in dashboard
     assert "refreshAgents" not in dashboard
     assert "refreshConversations" not in dashboard
@@ -793,6 +812,7 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert ".dashboard-board {" in css
     assert ".dashboard-column {" in css
     assert ".dashboard-work-grid {" not in css
+    assert ".kit-catalog-search {\n        flex: 0 1 auto;" in css
 
 
 def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections() -> None:
@@ -805,7 +825,11 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "function renderNeedsAttentionSection(" not in dashboard
     assert "buildNeedsAttention" not in dashboard
     assert "label: 'Queued backlog'" in dashboard
-    assert "label: 'Unhealthy agents'" in dashboard
+    assert "label: 'Agents needing attention'" in dashboard
+    assert "function visibleDashboardAgents()" in dashboard
+    assert "function dashboardAgentHealth(summary)" in dashboard
+    assert "label: 'Active or stuck runs'" in dashboard
+    assert "with issues" in dashboard
     assert "label: 'Usage review'" in dashboard
     assert "label: 'Tokens · 24h'" not in dashboard
     assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" not in dashboard
@@ -990,7 +1014,7 @@ def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> No
     assert "function closeManagement(" in detail
     assert "function scheduleManagementIdleClose(" in detail
     assert "function scheduleManagementSuccessClose(" in detail
-    assert "skillsManageBtn.textContent = 'Capabilities';" in detail
+    assert "skillsManageBtn.textContent = 'Skills';" in detail
     assert "settingsManageBtn.textContent = 'Settings';" in detail
     assert "protocolsManageBtn.textContent = 'Protocols';" in detail
     assert "textContent = '×';" in detail
@@ -1029,6 +1053,8 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Start a published protocol" in detail
     assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
     assert "API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 })" in detail
+    assert "function ensureConversationProtocolLaunchFields(" in detail
+    assert "API.getProtocolVersion(protocolId, versionId)" in detail
     assert "function loadConversationLinkedRuns(" in detail
     assert "requestedManagementMode !== 'protocols'" in detail
     assert "API.listConversationProtocolRuns(key, meta, { limit: 5 })" in conversation_list
@@ -1039,19 +1065,65 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "API.createProtocolRun({" in detail
     assert "root_conversation_id: convoId" in detail
     assert "entry_agent_id: agentId" in detail
-    assert "protocolProblemStatement = String(textarea.value || '').trim();" in detail
+    assert "Kit.protocolRunLaunchForm({" in detail
+    assert "includeWorkspace: false" in detail
+    assert "fields: selectedProtocol?.launchFields || null" in detail
+    assert "problem_statement: state.problemStatement" in detail
+    assert "const launchValues = launchForm.readValues();" in detail
+    assert "const problemStatement = String(launchValues.problem_statement || '').trim();" in detail
+    assert "Object.keys(launchValues).forEach((key) => {" in detail
+    assert "constraints_json: constraints" in detail
+    assert "raw private data" not in detail
     assert "requestedManagementMode === 'protocols'" in detail
     assert "value === 'skills' || value === 'settings' || value === 'protocols'" in detail
-    assert "Started protocol run" in detail
-    assert "Open run" in detail
-    assert "function generatedTimestamp(" in helper
-    assert "function compactGeneratedName(" in helper
-    assert "compactGeneratedFamilies: true" in (
+
+
+def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
-    assert "Latest of ${Number(record._catalogCollapsedCount || 0)} generated variants" in (
+    kit = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
+
+    assert "'protocol.action.run': 'Run protocol'" in kit
+    assert "primaryActions = ['validate', 'publish', 'run']" in kit
+    assert "function protocolRunLaunchForm(" in kit
+    assert "function runStageProgressRail(" in kit
+    assert "runStageProgressRail," in kit
+    assert "_compressedStageProgressItems(items, currentIndex)" in kit
+    assert "const terminalRun = !activeRun && Boolean(normalizedRunStatus);" in kit
+    assert "normalizedRunStatus === 'completed' && index <= currentIndex" in kit
+    assert "fields = null" in kit
+    assert "field.default_value" in kit
+    assert "function protocolRunLaunchFields()" in kit
+    assert "context" in kit
+    assert "constraints" in kit
+    assert "expected_outputs" in kit
+    assert "manufacturing analytics" not in kit
+    assert "raw private data" not in kit
+    assert "function _openRunProtocolDialog()" in workspace
+    assert "Start a real run from the latest published version." in workspace
+    assert "Dry-run rehearsal" in workspace
+    assert "is_rehearsal: true" in workspace
+    assert "Kit.protocolRunLaunchForm({" in workspace
+    assert "fields: _protocolRunLaunchFields()" in workspace
+    assert "includeWorkspace: true" in workspace
+    assert "Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`)" in workspace
+
+
+def test_protocol_assignment_keeps_skill_selection_scoped_and_searchable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    assert "{ value: 'skill', label: 'Existing skill' }" in workspace
+    assert "{ value: 'new_skill', label: 'New skill needed' }" in workspace
+    assert "searchLabel.textContent = 'Search skills';" in workspace
+    assert "searchInput.addEventListener('input', () => renderOptions(searchInput.value));" in workspace
+    assert "Use this when the workflow needs a skill that is not available yet." in workspace
 
 
 def test_artifact_preview_actions_have_link_fallbacks() -> None:
@@ -1077,7 +1149,7 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
 
     assert "function createArtifactActionRow({" in helper
     assert "function createArtifactListRow({" in helper
-    assert "function isHumanAssignableCapabilityName(value)" in helper
+    assert "function isHumanAssignableSkillName(value)" in helper
     assert "&& !isGeneratedOrRehearsalText(normalized)" in helper
     assert "function compactMarkdownReferences(text)" in helper
     assert "function _ensureArtifactPreviewDelegation()" in helper
@@ -1089,8 +1161,12 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "className: ['artifact-list-row', className || ''].join(' ').trim()," in helper
     assert "onClick: previewTarget" in helper
     assert "event.preventDefault();" in helper
-    assert "openHref: missing ? '' : API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "const available = !missing && artifact?.exists !== false;" in protocol_workspace
+    assert "openHref: available ? API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "unavailableReason: missing ? 'Declared artifact, not produced yet.'" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
+    assert "function createTaskArtifactListRow(task, artifact, expectedOutput = null)" in helper
+    assert "function createPendingTaskArtifactListRow(task, expectedOutput)" in helper
     assert "UI.compactMarkdownReferences(task.result_summary || task.result_text || task.summary || task.instructions || '')" in task_list
     assert "const displaySummary = UI.compactMarkdownReferences(summary);" in task_board
     assert "UI.esc(UI.compactMarkdownReferences(event.content))" in event_renderers

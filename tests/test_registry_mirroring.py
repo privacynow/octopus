@@ -6,7 +6,7 @@ Tests cover:
 3. Execution runtime wiring (conversation_projection present)
 4. Delivery canonical identity (bot_key, origin_channel, external_conversation_ref, stable fields)
 5. Session collapse (registry conversation refs collapse, task refs do not)
-6. Bus retry on failure (mirror_retry command submitted on create_conversation bus error)
+6. Bus retry on failure (conversation_projection command resubmitted on transient bus error)
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ class _FakeBus:
     async def request(self, command: ControlCommand, *, timeout_seconds: float = 10.0) -> ControlReply:
         del timeout_seconds
         self.requests.append(command)
-        reply = self._request_replies.get(command.authority_ref)
+        reply = self._request_replies.get(command.implementation_ref)
         if isinstance(reply, Exception):
             raise reply
         if reply is None:
@@ -76,10 +76,10 @@ class _FakeBus:
         return reply
 
 
-def _directory_with(*authority_refs: str) -> ControlPlaneDirectory:
+def _directory_with(*implementation_refs: str) -> ControlPlaneDirectory:
     directory = ControlPlaneDirectory()
-    for ref in authority_refs:
-        directory.register(capability="conversation_projection", authority_ref=ref)
+    for ref in implementation_refs:
+        directory.register(admin_interface="conversation_projection", implementation_ref=ref)
     return directory
 
 
@@ -100,7 +100,7 @@ def _projection_adapter(
     return BusConversationProjection(
         bus,
         directory,
-        agent_id_for_authority=lambda _authority_ref: agent_id,
+        agent_id_for_implementation=lambda _implementation_ref: agent_id,
     )
 
 
@@ -242,7 +242,7 @@ class TestStoreContracts:
 
 
 class TestBusConversationProjectionAdapter:
-    async def test_adapter_creates_on_all_authorities(self) -> None:
+    async def test_adapter_creates_on_all_implementations(self) -> None:
         bus = _FakeBus()
         directory = _directory_with("registry:alpha", "registry:beta")
 
@@ -260,10 +260,10 @@ class TestBusConversationProjectionAdapter:
 
         assert cid == expected_cid
         # Both authorities received a request
-        authority_refs = sorted(cmd.authority_ref for cmd in bus.requests)
-        assert authority_refs == ["registry:alpha", "registry:beta"]
+        implementation_refs = sorted(cmd.implementation_ref for cmd in bus.requests)
+        assert implementation_refs == ["registry:alpha", "registry:beta"]
 
-    async def test_adapter_publishes_to_all_authorities(self) -> None:
+    async def test_adapter_publishes_to_all_implementations(self) -> None:
         bus = _FakeBus()
         directory = _directory_with("registry:alpha", "registry:beta")
 
@@ -304,8 +304,8 @@ class TestBusConversationProjectionAdapter:
         )
 
         # submit called for both authorities
-        authority_refs = sorted(cmd.authority_ref for cmd in bus.submitted)
-        assert authority_refs == ["registry:alpha", "registry:beta"]
+        implementation_refs = sorted(cmd.implementation_ref for cmd in bus.submitted)
+        assert implementation_refs == ["registry:alpha", "registry:beta"]
 
     async def test_adapter_verifies_deterministic_id_match(self, caplog) -> None:
         bus = _FakeBus()
@@ -456,8 +456,8 @@ class TestSessionCollapse:
 
 
 class TestBusRetryOnFailure:
-    async def test_create_conversation_failure_submits_mirror_retry(self) -> None:
-        """When bus.request fails on create_conversation, a mirror_retry command is submitted."""
+    async def test_create_conversation_failure_resubmits_projection_command(self) -> None:
+        """When bus.request fails on create_conversation, the projection command is retried."""
         bus = _FakeBus()
         directory = _directory_with("registry:alpha", "registry:beta")
 
@@ -475,28 +475,30 @@ class TestBusRetryOnFailure:
 
         assert cid == "cid-ok"
 
-        # A mirror_retry command should have been submitted for the failed authority
+        # A retried conversation_projection command should have been submitted for the failed implementation.
         retry_commands = [
             cmd for cmd in bus.submitted
-            if cmd.capability == "mirror_retry"
+            if cmd.admin_interface == "conversation_projection"
+            and cmd.admin_operation == "create_conversation"
+            and cmd.implementation_ref == "registry:alpha"
         ]
         assert len(retry_commands) == 1
         retry = retry_commands[0]
-        assert retry.authority_ref == "registry:alpha"
-        assert retry.operation == "create_conversation"
+        assert retry.implementation_ref == "registry:alpha"
+        assert retry.admin_operation == "create_conversation"
         assert retry.max_retries == 10
         payload = json.loads(retry.payload_json)
         assert payload["target_agent_id"] == "agent-1"
         assert payload["origin_channel"] == "telegram"
         assert payload["external_conversation_ref"] == "ref-1"
         assert payload["title"] == "Retry test"
-        assert retry.idempotency_key.startswith("mirror:create:")
+        assert retry.idempotency_key.startswith("projection-retry:create:")
 
-    async def test_publish_events_failure_submits_mirror_retry(self) -> None:
-        """When bus.submit fails on publish_events, a mirror_retry command is submitted."""
+    async def test_publish_events_failure_resubmits_projection_command(self) -> None:
+        """When bus.submit fails on publish_events, the projection command is retried."""
 
         class _FailOnSecondSubmitBus(_FakeBus):
-            """Fails the first submit (conversation_projection publish) but allows mirror_retry."""
+            """Fails the first publish submit but allows the queued projection retry."""
             def __init__(self):
                 super().__init__()
                 self._submit_call_count = 0
@@ -504,8 +506,12 @@ class TestBusRetryOnFailure:
             async def submit(self, command: ControlCommand) -> str:
                 self._submit_call_count += 1
                 # The first submit per authority is the conversation_projection publish_events.
-                # Fail it for alpha (first submit call), allow the mirror_retry (second submit).
-                if command.capability == "conversation_projection" and command.authority_ref == "registry:alpha":
+                # Fail it for alpha (first submit call), allow the queued retry (second submit).
+                if (
+                    self._submit_call_count == 1
+                    and command.admin_interface == "conversation_projection"
+                    and command.implementation_ref == "registry:alpha"
+                ):
                     self.submitted.append(command)
                     raise ConnectionError("bus write failed")
                 self.submitted.append(command)
@@ -539,14 +545,17 @@ class TestBusRetryOnFailure:
 
         retry_commands = [
             cmd for cmd in bus.submitted
-            if cmd.capability == "mirror_retry"
+            if cmd.admin_interface == "conversation_projection"
+            and cmd.admin_operation == "publish_events"
+            and cmd.implementation_ref == "registry:alpha"
+            and cmd.idempotency_key.startswith("projection-retry:publish:")
         ]
         assert len(retry_commands) == 1
         retry = retry_commands[0]
-        assert retry.authority_ref == "registry:alpha"
-        assert retry.operation == "publish_events"
+        assert retry.implementation_ref == "registry:alpha"
+        assert retry.admin_operation == "publish_events"
         assert retry.max_retries == 10
         payload = json.loads(retry.payload_json)
         assert payload["conversation_id"] == cid
         assert payload["events"][0]["event_id"] == "evt-1"
-        assert retry.idempotency_key.startswith("mirror:publish:")
+        assert retry.idempotency_key.startswith("projection-retry:publish:")

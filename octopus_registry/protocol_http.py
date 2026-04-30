@@ -403,6 +403,7 @@ def build_protocol_router(
         entry_agent_id: str = Query(default=""),
         root_conversation_id: str = Query(default=""),
         origin_channel: str = Query(default=""),
+        include_generated: bool = Query(default=True),
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
@@ -415,6 +416,7 @@ def build_protocol_router(
             entry_agent_id=entry_agent_id,
             root_conversation_id=root_conversation_id,
             origin_channel=origin_channel,
+            include_generated=include_generated,
         )
         return _json_payload(_paginated_response("runs", runs, cursor, limit))
 

@@ -76,28 +76,8 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
 
         const outputsList = document.createElement('div');
         outputsList.className = 'task-artifact-list';
-        const outputNodes = recordedArtifacts.map((artifact) => {
-            const expectedOutput = UI.taskExpectedOutput(expectedOutputs, artifact?.artifact_key);
-            const resolvedPath = UI.taskArtifactDisplayPath(task, artifact, expectedOutput);
-            const trailing = UI.createArtifactActionRow({
-                previewable: UI.taskArtifactPreviewable(artifact, expectedOutput),
-                previewTitle: `${String(artifact?.artifact_key || 'artifact')} preview`,
-                openHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key),
-                downloadHref: API.taskArtifactContentUrl(task.routed_task_id, artifact.artifact_key, { download: true }),
-                copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),
-            });
-            return UI.createArtifactListRow({
-                label: UI.taskArtifactLabel(artifact, expectedOutput),
-                sublabelParts: [
-                    'Produced output',
-                    resolvedPath || String(artifact?.path || ''),
-                    String(artifact?.artifact_key || '').trim(),
-                ],
-                badgeText: artifact.verification_state || (artifact.exists ? 'available' : 'missing'),
-                badgeClass: artifact.exists ? 'badge-connected' : 'badge-blocked',
-                actionRow: trailing,
-            });
-        });
+        const outputNodes = recordedArtifacts.map((artifact) =>
+            UI.createTaskArtifactListRow(task, artifact, UI.taskExpectedOutput(expectedOutputs, artifact?.artifact_key)));
         UI.reconcileChildren(outputsList, outputNodes);
         card.appendChild(outputsList);
     }

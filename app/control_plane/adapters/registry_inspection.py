@@ -21,21 +21,21 @@ class BusRegistryInspection(RegistryInspectionPort):
         self._bus = bus
         self._directory = directory
 
-    def _validated_authority_ref(self, authority_ref: str) -> str:
-        authorities = sorted(self._directory.authorities_for_capability("registry_inspection"))
-        if not authority_ref or authority_ref not in authorities:
+    def _validated_implementation_ref(self, implementation_ref: str) -> str:
+        authorities = sorted(self._directory.implementations_for_admin_interface("registry_inspection"))
+        if not implementation_ref or implementation_ref not in authorities:
             raise RuntimeError("registry inspection unavailable")
-        return authority_ref
+        return implementation_ref
 
-    async def get_conversation(self, authority_ref: str, conversation_id: str) -> ConversationRecord:
+    async def get_conversation(self, implementation_ref: str, conversation_id: str) -> ConversationRecord:
         payload = GetConversationRequest(conversation_id=conversation_id)
         reply = await self._bus.request(
             ControlCommand(
                 command_id=uuid4().hex,
-                capability="registry_inspection",
-                operation="get_conversation",
+                admin_interface="registry_inspection",
+                admin_operation="get_conversation",
                 payload_json=payload.model_dump_json(),
-                authority_ref=self._validated_authority_ref(authority_ref),
+                implementation_ref=self._validated_implementation_ref(implementation_ref),
                 idempotency_key=f"registry-inspection:conversation:{conversation_id}",
             )
         )
@@ -43,15 +43,15 @@ class BusRegistryInspection(RegistryInspectionPort):
             raise RuntimeError(reply.error or "registry inspection failed")
         return ConversationRecord.model_validate_json(reply.result_json or "{}")
 
-    async def get_task(self, authority_ref: str, routed_task_id: str) -> TaskRecord:
+    async def get_task(self, implementation_ref: str, routed_task_id: str) -> TaskRecord:
         payload = GetTaskRequest(routed_task_id=routed_task_id)
         reply = await self._bus.request(
             ControlCommand(
                 command_id=uuid4().hex,
-                capability="registry_inspection",
-                operation="get_task",
+                admin_interface="registry_inspection",
+                admin_operation="get_task",
                 payload_json=payload.model_dump_json(),
-                authority_ref=self._validated_authority_ref(authority_ref),
+                implementation_ref=self._validated_implementation_ref(implementation_ref),
                 idempotency_key=f"registry-inspection:task:{routed_task_id}",
             )
         )
@@ -61,7 +61,7 @@ class BusRegistryInspection(RegistryInspectionPort):
 
     async def list_events(
         self,
-        authority_ref: str,
+        implementation_ref: str,
         conversation_id: str,
         *,
         kind: str = "",
@@ -79,10 +79,10 @@ class BusRegistryInspection(RegistryInspectionPort):
         reply = await self._bus.request(
             ControlCommand(
                 command_id=uuid4().hex,
-                capability="registry_inspection",
-                operation="list_events",
+                admin_interface="registry_inspection",
+                admin_operation="list_events",
                 payload_json=payload.model_dump_json(),
-                authority_ref=self._validated_authority_ref(authority_ref),
+                implementation_ref=self._validated_implementation_ref(implementation_ref),
                 idempotency_key=(
                     f"registry-inspection:events:{conversation_id}:"
                     f"{kind}:{before_seq}:{after_seq}:{limit}"

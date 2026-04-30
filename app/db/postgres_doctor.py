@@ -68,8 +68,8 @@ _REQUIRED_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
     ("agent_registry", "agents"): (
         "bot_key",
         "registry_scope",
-        "channel_capabilities_json",
-        "management_capabilities_json",
+        "transport_implementations",
+        "supported_admin_operations",
         "runtime_health_json",
     ),
     ("agent_registry", "conversations"): ("conversation_type",),

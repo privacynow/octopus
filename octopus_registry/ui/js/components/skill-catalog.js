@@ -1,12 +1,12 @@
 /**
- * Shared capability hub helpers used by the unified skill pipeline and agent launchers.
+ * Shared skill catalog helpers used by the unified skill pipeline and agent launchers.
  */
 const RegistrySkillHub = (() => {
     const SEARCHABLE_LOCAL_FIELDS = ['name', 'display_name', 'description', 'source_kind', 'lifecycle_status'];
 
-    function supportsCapability(agent, capability) {
-        const capabilities = Array.isArray(agent?.management_capabilities) ? agent.management_capabilities : [];
-        return capabilities.includes(capability);
+    function supportsAdminOperation(agent, operation) {
+        const operations = Array.isArray(agent?.supported_admin_operations) ? agent.supported_admin_operations : [];
+        return operations.includes(operation);
     }
 
     function eligibleAgents(agents) {
@@ -14,16 +14,17 @@ const RegistrySkillHub = (() => {
             const connectivity = String(agent?.connectivity_state || '').trim();
             return ['connected', 'degraded'].includes(connectivity)
                 && !UI.isDefaultHiddenRecord(agent)
-                && (supportsCapability(agent, 'skill_catalog') || supportsCapability(agent, 'skill_lifecycle'));
+                && (supportsAdminOperation(agent, 'list_catalog_skills')
+                    || supportsAdminOperation(agent, 'catalog_skill_lifecycle_detail'));
         });
     }
 
     function canCreateCustom(agent) {
-        return supportsCapability(agent, 'skill_lifecycle');
+        return supportsAdminOperation(agent, 'edit_catalog_skill_draft');
     }
 
     function canSearchStore(agent) {
-        return supportsCapability(agent, 'skill_catalog');
+        return supportsAdminOperation(agent, 'search_catalog_skills') || supportsAdminOperation(agent, 'list_catalog_skills');
     }
 
     function isCustomSkill(skill) {
@@ -193,7 +194,7 @@ const RegistrySkillHub = (() => {
     }
 
     return {
-        supportsCapability,
+        supportsAdminOperation,
         eligibleAgents,
         canCreateCustom,
         canSearchStore,
@@ -218,7 +219,7 @@ const RegistrySkillHub = (() => {
 window.RegistrySkillHub = RegistrySkillHub;
 
 /**
- * Capabilities hub - unified bot-scoped skill management.
+ * Skills catalog - unified bot-scoped skill management.
  */
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
@@ -260,9 +261,9 @@ function renderSkillCatalog(container) {
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
     header.innerHTML = [
-        '<h2>Capabilities</h2>',
+        '<h2>Skills</h2>',
         '<p class="quiet-note">',
-        'Find reusable capabilities for conversations and protocol stages. Choose a bot only when you need to manage installation or drafts.',
+        'Find reusable skills for conversations and protocol stages. Choose a bot only when you need to manage installation or drafts.',
         '</p>',
     ].join('');
     container.appendChild(header);
@@ -297,9 +298,9 @@ function renderSkillCatalog(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search capabilities';
+    searchInput.placeholder = 'Search skills';
     searchInput.type = 'text';
-    searchInput.setAttribute('aria-label', 'Search capabilities');
+    searchInput.setAttribute('aria-label', 'Search skills');
     controls.appendChild(searchInput);
 
     const controlsActions = document.createElement('div');
@@ -307,7 +308,7 @@ function renderSkillCatalog(container) {
     const createDraftBtn = document.createElement('button');
     createDraftBtn.type = 'button';
     createDraftBtn.className = 'btn btn-sm btn-primary';
-    createDraftBtn.textContent = 'New capability';
+    createDraftBtn.textContent = 'New skill';
     createDraftBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
     controlsActions.appendChild(createDraftBtn);
     const importBtn = document.createElement('button');
@@ -640,12 +641,12 @@ function renderSkillCatalog(container) {
         return RegistrySkillHub.visibleStoreSkills(registrySkills, _queryText());
     }
 
-    function _visibleGlobalCapabilities() {
+    function _visibleGlobalSkills() {
         const normalized = _queryText();
         return (Array.isArray(globalRoutingSkills) ? globalRoutingSkills : [])
             .filter((item) => {
                 const name = String(item?.skill_name || '').trim();
-                if (!UI.isHumanAssignableCapabilityName(name)) return false;
+                if (!UI.isHumanAssignableSkillName(name)) return false;
                 if (!normalized) return true;
                 return [name, ...(Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [])]
                     .join(' ')
@@ -655,26 +656,26 @@ function renderSkillCatalog(container) {
             .sort((left, right) => String(left.skill_name || '').localeCompare(String(right.skill_name || '')));
     }
 
-    function _globalCapabilityLabel(item) {
+    function _globalSkillLabel(item) {
         return String(item?.skill_name || '')
             .trim()
             .replace(/[-_]+/g, ' ')
             .replace(/\b\w/g, (letter) => letter.toUpperCase());
     }
 
-    function _findSelectedGlobalCapability() {
+    function _findSelectedGlobalSkill() {
         const normalized = String(selectedSkillName || '').trim().toLowerCase();
         if (!normalized || selectedSkillOrigin !== 'global') return null;
-        return _visibleGlobalCapabilities().find((item) =>
+        return _visibleGlobalSkills().find((item) =>
             String(item?.skill_name || '').trim().toLowerCase() === normalized) || null;
     }
 
-    function _globalCapabilityAdvertisers(item) {
+    function _globalSkillAdvertisers(item) {
         return Array.isArray(item?.advertised_by_agents) ? item.advertised_by_agents : [];
     }
 
-    function _globalCapabilityAgents(item) {
-        const advertisers = _globalCapabilityAdvertisers(item)
+    function _globalSkillAgents(item) {
+        const advertisers = _globalSkillAdvertisers(item)
             .map((value) => String(value || '').trim().toLowerCase())
             .filter(Boolean);
         if (!advertisers.length) return [];
@@ -704,7 +705,7 @@ function renderSkillCatalog(container) {
         _writeState();
     }
 
-    function renderLoadingState(message = 'Loading capabilities…') {
+    function renderLoadingState(message = 'Loading skills…') {
         UI.clearMemoizedRender(listEl);
         UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
     }
@@ -737,12 +738,12 @@ function renderSkillCatalog(container) {
         _syncCatalogLayout();
         if (!currentAgentId) {
             UI.clearMemoizedRender(listEl);
-            const capabilities = _visibleGlobalCapabilities();
-            if (capabilities.length) {
+            const skills = _visibleGlobalSkills();
+            if (skills.length) {
                 UI.reconcileChildren(listEl, [
                     _renderGlobalCatalogIntro(),
-                    _sectionLabel('Available capabilities', 'skills-global-heading'),
-                    ...capabilities.map((item) => _renderGlobalCapabilityRow(item, {
+                    _sectionLabel('Available skills', 'skills-global-heading'),
+                    ...skills.map((item) => _renderGlobalSkillRow(item, {
                         selected: String(selectedSkillOrigin || '') === 'global'
                             && String(selectedSkillName || '').trim().toLowerCase() === String(item?.skill_name || '').trim().toLowerCase(),
                         detail: selectedGlobalDetail,
@@ -750,7 +751,7 @@ function renderSkillCatalog(container) {
                         detailError: selectedGlobalDetailError,
                         loading: globalSelectionLoading,
                     })),
-                    ...(globalRoutingError ? [UI.renderEmptyState(`Capability catalog is incomplete. ${globalRoutingError}`, true)] : []),
+                    ...(globalRoutingError ? [UI.renderEmptyState(`Skill catalog is incomplete. ${globalRoutingError}`, true)] : []),
                 ]);
             } else {
                 const hasEligibleAgents = _eligibleAgents().length > 0;
@@ -758,8 +759,8 @@ function renderSkillCatalog(container) {
                     _renderGlobalCatalogIntro(),
                     UI.renderEmptyState(
                         hasEligibleAgents
-                            ? 'No capabilities match this search. Choose a bot to manage installation or drafts.'
-                            : 'No connected bot advertises capability management.',
+                            ? 'No skills match this search. Choose a bot to manage installation or drafts.'
+                            : 'No connected bot advertises skill management.',
                         true,
                     ),
                 ]);
@@ -774,8 +775,8 @@ function renderSkillCatalog(container) {
         if (!sections.length) {
             UI.clearMemoizedRender(listEl);
             const message = _queryText()
-                ? 'No installed or store capabilities match this search.'
-                : 'No capabilities are available on this bot yet. Create a custom skill or import one to get started.';
+                ? 'No installed or store skills match this search.'
+                : 'No skills are available on this bot yet. Create a custom skill or import one to get started.';
             UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
             return;
         }
@@ -789,7 +790,7 @@ function renderSkillCatalog(container) {
         }, (state) => {
             const nodes = [];
             if (!state.selectedSkillName) {
-                nodes.push(_renderAgentCapabilityIntro(_currentAgentLabel()));
+                nodes.push(_renderAgentSkillIntro(_currentAgentLabel()));
             }
             (state.sections || []).forEach((section) => {
                 nodes.push(_sectionLabel(section.label, `skills-${section.key}-heading`));
@@ -841,13 +842,13 @@ function renderSkillCatalog(container) {
     function _renderGlobalCatalogIntro() {
         const panel = document.createElement('section');
         panel.className = 'editor-panel';
-        panel.dataset.key = 'capability-catalog-intro';
+        panel.dataset.key = 'skill-catalog-intro';
         const title = document.createElement('h3');
-        title.textContent = 'Capability catalog';
+        title.textContent = 'Skill catalog';
         panel.appendChild(title);
         const note = document.createElement('p');
         note.className = 'quiet-note';
-        note.textContent = 'This default view shows capabilities available for assignment. Choose a bot only when you need to install, draft, import, or review capability implementation.';
+        note.textContent = 'This default view shows skills available for assignment. Choose a bot only when you need to install, draft, import, or review skill implementation.';
         panel.appendChild(note);
         if (_eligibleAgents().length) {
             const manage = document.createElement('p');
@@ -858,16 +859,16 @@ function renderSkillCatalog(container) {
         return panel;
     }
 
-    function _renderAgentCapabilityIntro(agentLabel) {
+    function _renderAgentSkillIntro(agentLabel) {
         const panel = document.createElement('section');
         panel.className = 'editor-panel';
-        panel.dataset.key = 'agent-capability-intro';
+        panel.dataset.key = 'agent-skill-intro';
         const title = document.createElement('h3');
-        title.textContent = 'Capabilities';
+        title.textContent = 'Skills';
         panel.appendChild(title);
         const note = document.createElement('p');
         note.className = 'quiet-note';
-        note.textContent = `Select a capability for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
+        note.textContent = `Select a skill for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
         panel.appendChild(note);
         return panel;
     }
@@ -884,7 +885,7 @@ function renderSkillCatalog(container) {
         return String(skill.source_label || skill.source_kind || 'Skill');
     }
 
-    function _renderGlobalCapabilityRow(item, {
+    function _renderGlobalSkillRow(item, {
         selected = false,
         detail = null,
         detailAgent = null,
@@ -893,16 +894,16 @@ function renderSkillCatalog(container) {
     } = {}) {
         const name = String(item?.skill_name || '').trim();
         const shellRow = document.createElement('article');
-        shellRow.className = 'conversation-list-entry capability-list-entry';
+        shellRow.className = 'conversation-list-entry skill-list-entry';
         shellRow.dataset.key = `global:${name}:${selected ? 'open' : 'closed'}`;
         if (selected) shellRow.classList.add('is-selected');
-        const advertisers = _globalCapabilityAdvertisers(item);
+        const advertisers = _globalSkillAdvertisers(item);
         const row = UI.renderListRow({
-            label: _globalCapabilityLabel(item),
+            label: _globalSkillLabel(item),
             sublabel: advertisers.length
                 ? `Available from ${advertisers.join(', ')}`
-                : 'Declared capability; choose a bot to manage installation or drafts.',
-            badgeText: item?.enabled === false ? 'Disabled' : 'Capability',
+                : 'Declared skill; choose a bot to manage installation or drafts.',
+            badgeText: item?.enabled === false ? 'Disabled' : 'Skill',
             badgeClass: item?.enabled === false ? 'badge-warning' : '',
             onClick: () => {
                 _runWithDraftGuard(async () => {
@@ -918,7 +919,7 @@ function renderSkillCatalog(container) {
         row.setAttribute('aria-expanded', String(selected));
         shellRow.appendChild(row);
         if (selected) {
-            shellRow.appendChild(_renderGlobalCapabilityDetail(item, {
+            shellRow.appendChild(_renderGlobalSkillDetail(item, {
                 detail,
                 detailAgent,
                 detailError,
@@ -930,7 +931,7 @@ function renderSkillCatalog(container) {
 
     function _renderLocalSkillRow(skill, { selected = false } = {}) {
         const shellRow = document.createElement('div');
-        shellRow.className = 'list-row-shell capability-list-entry';
+        shellRow.className = 'list-row-shell skill-list-entry';
         shellRow.dataset.key = `local:${skill.name || ''}:${selected ? 'open' : 'closed'}`;
         const meta = RegistrySkillHub.localRowMeta(skill);
         const row = UI.renderListRow({
@@ -984,7 +985,7 @@ function renderSkillCatalog(container) {
 
     function _renderRegistrySkillRow(skill, { selected = false } = {}) {
         const shellRow = document.createElement('div');
-        shellRow.className = 'list-row-shell capability-list-entry';
+        shellRow.className = 'list-row-shell skill-list-entry';
         shellRow.dataset.key = `store:${skill.name || ''}:${selected ? 'open' : 'closed'}`;
         const meta = RegistrySkillHub.storeRowMeta(skill);
         const row = UI.renderListRow({
@@ -1131,7 +1132,7 @@ function renderSkillCatalog(container) {
     }
 
     async function loadGlobalSelectionData({ soft = false } = {}) {
-        const selectedGlobal = _findSelectedGlobalCapability();
+        const selectedGlobal = _findSelectedGlobalSkill();
         if (!selectedGlobal) {
             selectedGlobalDetail = null;
             selectedGlobalDetailAgent = null;
@@ -1141,7 +1142,7 @@ function renderSkillCatalog(container) {
             return;
         }
         const skillName = String(selectedGlobal.skill_name || '').trim();
-        const candidates = _globalCapabilityAgents(selectedGlobal);
+        const candidates = _globalSkillAgents(selectedGlobal);
         if (!skillName || !candidates.length) {
             selectedGlobalDetail = null;
             selectedGlobalDetailAgent = null;
@@ -1184,8 +1185,8 @@ function renderSkillCatalog(container) {
         selectedGlobalDetailError = lastError;
         globalSelectionLoading = false;
         if (lastError && !soft) {
-            UI.reportError('Failed to load capability instructions', lastError, {
-                context: 'Global capability detail load failed',
+            UI.reportError('Failed to load skill instructions', lastError, {
+                context: 'Global skill detail load failed',
             });
         }
         renderList();
@@ -1243,7 +1244,7 @@ function renderSkillCatalog(container) {
 
     function _renderSelectedSkillInlineDetail(selected) {
         const panel = document.createElement('section');
-        panel.className = 'conversation-inline-detail capability-inline-detail';
+        panel.className = 'conversation-inline-detail skill-inline-detail';
         panel.dataset.key = `skill-inline-detail:${selected?.origin || ''}:${selected?.skill?.name || ''}`;
         _buildSelectedSkillDetailNodes(selected).forEach((node) => {
             if (node instanceof Node) panel.appendChild(node);
@@ -1258,19 +1259,19 @@ function renderSkillCatalog(container) {
         renderList();
     }
 
-    function _renderGlobalCapabilityDetail(item, {
+    function _renderGlobalSkillDetail(item, {
         detail = null,
         detailAgent = null,
         detailError = null,
         loading = false,
     } = {}) {
         const panel = document.createElement('section');
-        panel.className = 'conversation-inline-detail capability-inline-detail';
+        panel.className = 'conversation-inline-detail skill-inline-detail';
         panel.dataset.key = `global-detail:${item?.skill_name || ''}`;
         const title = document.createElement('h3');
-        title.textContent = _globalCapabilityLabel(item) || 'Capability';
+        title.textContent = _globalSkillLabel(item) || 'Skill';
         panel.appendChild(title);
-        const advertisers = _globalCapabilityAdvertisers(item);
+        const advertisers = _globalSkillAdvertisers(item);
         if (detail?.description) {
             const desc = document.createElement('p');
             desc.className = 'quiet-note';
@@ -1279,7 +1280,7 @@ function renderSkillCatalog(container) {
         }
         panel.appendChild(UI.renderMetadataGrid([
             { label: 'Assignment slug', value: String(item?.skill_name || '') },
-            { label: 'Available from', value: advertisers.length ? advertisers.join(', ') : 'No connected bot currently advertises this capability' },
+            { label: 'Available from', value: advertisers.length ? advertisers.join(', ') : 'No connected bot currently advertises this skill' },
             detailAgent ? {
                 label: 'Instructions from',
                 value: UI.visibleLabel(detailAgent.display_name, detailAgent.slug, detailAgent.agent_id) || detailAgent.agent_id,
@@ -1288,7 +1289,7 @@ function renderSkillCatalog(container) {
         ].filter(Boolean), { compact: true }));
         const bodyText = String(detail?.body || '').trim();
         if (loading && !bodyText) {
-            panel.appendChild(UI.renderEmptyState('Loading capability instructions…', true));
+            panel.appendChild(UI.renderEmptyState('Loading skill instructions…', true));
         } else if (bodyText) {
             const bodyLabel = document.createElement('div');
             bodyLabel.className = 'detail-label';
@@ -1299,13 +1300,13 @@ function renderSkillCatalog(container) {
             preview.innerHTML = UI.renderContent(bodyText);
             panel.appendChild(preview);
         } else if (detailError) {
-            panel.appendChild(UI.renderEmptyState('Capability metadata is available, but instructions could not be loaded from an advertising bot.', true));
+            panel.appendChild(UI.renderEmptyState('Skill metadata is available, but instructions could not be loaded from an advertising bot.', true));
         } else {
-            panel.appendChild(UI.renderEmptyState('Capability metadata is available. Choose a bot to inspect implementation details.', true));
+            panel.appendChild(UI.renderEmptyState('Skill metadata is available. Choose a bot to inspect implementation details.', true));
         }
         const note = document.createElement('p');
         note.className = 'quiet-note';
-        note.textContent = 'Use this in a protocol stage by choosing Assignment, then Existing capability. Choose a bot above only when you need to install, draft, import, or review implementation.';
+        note.textContent = 'Use this in a protocol stage by choosing Assignment, then Existing skill. Choose a bot above only when you need to install, draft, import, or review implementation.';
         panel.appendChild(note);
         return panel;
     }
@@ -1376,9 +1377,9 @@ function renderSkillCatalog(container) {
         help.className = 'editor-panel';
         help.dataset.key = 'store-help';
         help.innerHTML = [
-            '<div class="editor-section-title">How to use this capability</div>',
+            '<div class="editor-section-title">How to use this skill</div>',
             '<p class="quiet-note">',
-            'Install this capability on the bot first. Then open a conversation and use the conversation Capabilities panel to activate it in that chat.',
+            'Install this skill on the bot first. Then open a conversation and use the conversation Skills panel to activate it in that chat.',
             '</p>',
         ].join('');
         nodes.push(help);
@@ -1685,8 +1686,8 @@ function renderSkillCatalog(container) {
         copy.className = 'quiet-note';
         const label = agentLabel || _currentAgentLabel();
         copy.textContent = detail.runtime_available
-            ? `This capability is available on ${label}. Open a conversation with that bot and use its Capabilities panel to activate it there.`
-            : `This capability is available on ${label}, but it must be published before it can be activated in a conversation.`;
+            ? `This skill is available on ${label}. Open a conversation with that bot and use its Skills panel to activate it there.`
+            : `This skill is available on ${label}, but it must be published before it can be activated in a conversation.`;
         panel.appendChild(copy);
         if (detail.default_for_new_conversations) {
             const defaultsNote = document.createElement('p');
@@ -1744,20 +1745,20 @@ function renderSkillCatalog(container) {
         intro.dataset.key = 'studio-home';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
-        title.textContent = 'Capabilities';
+        title.textContent = 'Skills';
         intro.appendChild(title);
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = selected && selected.origin === 'store'
-            ? `Install this capability on ${agentLabel}, or pick a custom skill to edit it here.`
-            : `Select a capability for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
+            ? `Install this skill on ${agentLabel}, or pick a custom skill to edit it here.`
+            : `Select a skill for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
         intro.appendChild(note);
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
         const createBtn = document.createElement('button');
         createBtn.type = 'button';
         createBtn.className = 'btn btn-primary';
-        createBtn.textContent = 'New capability';
+        createBtn.textContent = 'New skill';
         createBtn.hidden = !RegistrySkillHub.canCreateCustom(_currentAgent());
         createBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
         actions.appendChild(createBtn);
@@ -1781,7 +1782,7 @@ function renderSkillCatalog(container) {
         const nameLabel = document.createElement('label');
         nameLabel.className = 'detail-label';
         nameLabel.htmlFor = slugId;
-        nameLabel.textContent = 'Capability slug';
+        nameLabel.textContent = 'Skill slug';
         form.appendChild(nameLabel);
         const nameInput = document.createElement('input');
         nameInput.id = slugId;
@@ -2711,7 +2712,7 @@ function renderSkillCatalog(container) {
             void loadSelectionData({ soft: true });
         }
         if (!soft && !hasCachedView && (shouldLoadCatalog || queryText.length >= 2)) {
-            renderLoadingState(queryText.length >= 2 ? 'Searching capabilities…' : 'Loading capabilities…');
+            renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
         }
         try {
             if (shouldLoadCatalog) {
@@ -2746,11 +2747,11 @@ function renderSkillCatalog(container) {
             await loadSelectionData({ soft: true });
         } catch (err) {
             if (hasCachedView || hadVisibleState) {
-                UI.reportError('Failed to refresh capabilities', err, { context: 'Capability refresh failed' });
+                UI.reportError('Failed to refresh skills', err, { context: 'Skill refresh failed' });
                 return;
             }
             UI.clearMemoizedRender(listEl);
-            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load capabilities: ' + err.message, loadSkills)]);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load skills: ' + err.message, loadSkills)]);
         }
     }
 

@@ -25,7 +25,7 @@ The registry UI is grouped by job:
 | Area | Current entries | Purpose |
 | --- | --- | --- |
 | Work | Conversations, Runs, Agents | Day-to-day collaboration, protocol run inspection, and agent contact/health. |
-| Build | Protocols, Capabilities, Guidance | Reusable workflow authoring, skill/capability management, and provider policy. |
+| Build | Protocols, Skills, Guidance | Reusable workflow authoring, skill management, and provider policy. |
 | Operations | Dashboard, Routing, Usage | Stack overview, routing diagnostics, and usage visibility. |
 
 Important current details:
@@ -36,7 +36,8 @@ Important current details:
 - `Approvals` still exists as a route and API. It is surfaced from Dashboard
   or direct links rather than as a primary menu item.
 - `Templates` are managed inside Protocols. There is no separate template
-  gallery product surface in the main navigation.
+  gallery product surface in the main navigation, and no prepackaged starter
+  protocols are exposed by default.
 - Protocol authoring, run detail, artifacts, and linked work are actively being
   consolidated around one lineage model. Treat the docs in this repo as the
   source of truth for current behavior, not old screenshots or prior plans.
@@ -104,7 +105,7 @@ Use the registry to:
 - send registry-origin messages
 - inspect protocol runs
 - inspect agents and agent-generated work
-- manage capabilities/skills
+- manage skills
 - manage provider guidance
 - author and publish protocols/templates
 - inspect routing and usage
@@ -113,7 +114,7 @@ Use the registry to:
 For the browser workflow, use
 [docs/registry-user-guide.md](docs/registry-user-guide.md).
 
-## Demo Use Case: Local Data Analytics Without Uploading Raw CSVs
+## Demo Use Case: Local Manufacturing Analytics Without Uploading Raw CSVs
 
 One practical customer workflow is local data analytics and reporting.
 
@@ -127,9 +128,16 @@ The intended pattern is:
 - keep generated code, reports, and charts as local artifacts
 
 This lets a customer use Octopus to build a repeatable analytics/reporting
-pipeline without pasting raw property records into the model prompt. The
+pipeline without pasting raw manufacturing records into the model prompt. The
 operator still controls the boundary: do not paste raw rows or attach private
 files to chat unless that is explicitly approved for the deployment.
+
+For development regression checks, run the deterministic local fixture:
+
+```bash
+./.venv/bin/python scripts/demo/manufacturing_local_analytics/run_demo.py \
+  --workspace .tmp/demo/manufacturing-local-analytics
+```
 
 For a step-by-step demo, use
 [docs/local-data-analytics-demo.md](docs/local-data-analytics-demo.md).
@@ -182,10 +190,7 @@ For Telegram behavior, use
 ./octopus clean
 ```
 
-## Skills And Capabilities
-
-The registry UI labels the main build surface as `Capabilities`. The underlying
-runtime model still uses `skills`.
+## Skills
 
 Use this vocabulary:
 
@@ -206,9 +211,10 @@ plane and executed through routed work.
 Current behavior:
 
 - author drafts in the Protocols UI
-- create from blank or starter templates
+- create new protocols from blank
+- publish a protocol as a user-authored template and later copy from that saved
+  template
 - publish protocol definitions
-- publish a protocol as a template
 - start runs from registry UI or Telegram
 - inspect run overview, stages, artifacts, and audit data
 - intervene with `retry`, `accept`, `send-back`, and `cancel` where permitted

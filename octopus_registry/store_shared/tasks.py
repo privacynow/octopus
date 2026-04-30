@@ -27,6 +27,8 @@ def _task_base_payload(row, request, result):
     return {
         "routed_task_id": row["routed_task_id"],
         "delivery_id": row.get("delivery_id", ""),
+        "source_kind": row.get("source_kind", "delegation") or "delegation",
+        "hidden_from_default_views": bool(row.get("hidden_from_default_views", False)),
         "parent_conversation_id": row["parent_conversation_id"],
         "parent_conversation_title": row.get("parent_conversation_title", "") or "",
         "recipient_conversation_id": row.get("recipient_conversation_id", "") or "",
@@ -136,6 +138,7 @@ def list_tasks(
     limit: int = 25,
     status: str = "",
     completed_since_iso: str = "",
+    include_generated: bool = True,
 ) -> list[TaskRecord]:
     fetch_limit = limit + 1
     sql = _task_select_sql(dialect)
@@ -163,6 +166,8 @@ def list_tasks(
         where_clauses.append(
             f"COALESCE({completed_expr}, t.updated_at) >= {dialect.placeholder(len(params))}"
         )
+    if not include_generated:
+        where_clauses.append("t.hidden_from_default_views = FALSE")
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
     params.extend([fetch_limit, cursor])

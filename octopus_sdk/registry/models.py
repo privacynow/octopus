@@ -25,6 +25,36 @@ _DIRECT_SKILL_MESSAGE_RE = re.compile(
     r"^(?:using|use)\s+([a-z0-9][a-z0-9_-]*)\s+skill\s*[,:-]\s*(.+)$",
     re.IGNORECASE,
 )
+_SELECTOR_TOKEN_PATTERN = r"@?(?:skill:|role:)?[a-z0-9][a-z0-9_.-]*"
+_DIRECT_ASSIGNMENT_PREFIX_PATTERN = r"(?:(?:ok(?:ay)?|alright)\s*,?\s+then\s+)?(?:please\s+)?"
+_DIRECT_ASSIGNMENT_TARGET_FIRST_RE = re.compile(
+    rf"^{_DIRECT_ASSIGNMENT_PREFIX_PATTERN}(?:ask|have)\s+"
+    rf"(?P<selector>{_SELECTOR_TOKEN_PATTERN})(?:(?:\s*[,:-]\s*)|\s+(?:to\s+)?)"
+    r"(?P<instructions>.+)$",
+    re.IGNORECASE,
+)
+_DIRECT_ASSIGNMENT_ROUTE_RE = re.compile(
+    rf"^{_DIRECT_ASSIGNMENT_PREFIX_PATTERN}"
+    rf"(?:(?:delegate|route)\s+(?:this|it|that|the\s+request)?\s*(?:to\s+)?"
+    rf"|send\s+(?:this|it|that|the\s+request)\s+to\s+)"
+    rf"(?P<selector>{_SELECTOR_TOKEN_PATTERN})\s*(?:[,:-]\s*)?(?P<instructions>.+)$",
+    re.IGNORECASE,
+)
+_DIRECT_ASSIGNMENT_TRAILING_TARGET_RE = re.compile(
+    rf"^{_DIRECT_ASSIGNMENT_PREFIX_PATTERN}(?:ask|have)\s+"
+    r"(?P<instructions>.+?)\s+(?:from|of|to)\s+"
+    r"(?P<selector>@(?:skill:|role:)?[a-z0-9][a-z0-9_.-]*)"
+    r"\s*(?:if\s+you\s+can|please)?\s*[.!?]?$",
+    re.IGNORECASE,
+)
+_DIRECT_ASSIGNMENT_TRAILING_FILLER_RE = re.compile(
+    r"\s*,?\s*if\s+you\s+can\s*[.!?]?\s*$",
+    re.IGNORECASE,
+)
+_BARE_AGENT_SELECTOR_RE = re.compile(
+    r"^(?:m\d+|[a-z][a-z0-9_.-]*[-_][a-z0-9_.-]+|[a-z][a-z0-9_.-]*\d+)$",
+    re.IGNORECASE,
+)
 
 
 class RegistryRecordModel(BaseModel):
@@ -141,8 +171,8 @@ class AgentCard(RegistryRecordModel):
     connectivity_state: str = "standalone"
     current_capacity: int = 0
     max_capacity: int = 1
-    channel_capabilities: list[str] = Field(default_factory=list)
-    management_capabilities: list[str] = Field(default_factory=list)
+    transport_implementations: list[str] = Field(default_factory=list)
+    supported_admin_operations: list[str] = Field(default_factory=list)
     version: str = "dev"
 
 
@@ -378,8 +408,8 @@ class AgentRecord(RegistryRecordModel):
     connectivity_state: str = ""
     current_capacity: int = 0
     max_capacity: int = 1
-    channel_capabilities: list[str] = Field(default_factory=list)
-    management_capabilities: list[str] = Field(default_factory=list)
+    transport_implementations: list[str] = Field(default_factory=list)
+    supported_admin_operations: list[str] = Field(default_factory=list)
     version: str = ""
     trust_tier: str = "community"
     soft_deleted_at: str = ""
@@ -425,6 +455,8 @@ class MessageRecord(RegistryRecordModel):
 class TaskRecord(RegistryRecordModel):
     routed_task_id: str = ""
     delivery_id: str = ""
+    source_kind: str = "delegation"
+    hidden_from_default_views: bool = False
     status: str = ""
     summary: str = ""
     title: str = ""
@@ -461,6 +493,8 @@ class TaskRecord(RegistryRecordModel):
 class ConversationRecord(RegistryRecordModel):
     conversation_id: str = ""
     target_agent_id: str = ""
+    source_kind: str = "human"
+    hidden_from_default_views: bool = False
     title: str = ""
     conversation_type: str = "conversation"
     origin_channel: str = ""
@@ -696,6 +730,38 @@ def parse_target_selector(raw: str) -> TargetSelector | None:
     return TargetSelector(kind="agent", value=body)
 
 
+def _clean_direct_assignment_selector_token(raw: str) -> str:
+    return str(raw or "").strip().strip("`'\"()[]{}<>").rstrip(".,;:!?")
+
+
+def _parse_direct_assignment_selector_token(
+    raw: str,
+    *,
+    allow_bare_agent: bool = False,
+) -> TargetSelector | None:
+    token = _clean_direct_assignment_selector_token(raw)
+    if not token:
+        return None
+    if token.startswith("@"):
+        return parse_target_selector(token)
+    token_lower = token.lower()
+    if token_lower.startswith("skill:"):
+        value = token.split(":", 1)[1].strip()
+        return TargetSelector(kind="skill", value=value) if value else None
+    if token_lower.startswith("role:"):
+        value = token.split(":", 1)[1].strip()
+        return TargetSelector(kind="role", value=value) if value else None
+    if allow_bare_agent and _BARE_AGENT_SELECTOR_RE.match(token):
+        return TargetSelector(kind="agent", value=token_lower)
+    return None
+
+
+def _normalize_direct_assignment_instructions(raw: str) -> str:
+    text = re.sub(r"\s+", " ", str(raw or "").strip())
+    text = _DIRECT_ASSIGNMENT_TRAILING_FILLER_RE.sub("", text)
+    return text.strip(" \t\r\n,;:-")
+
+
 def normalized_requested_skills(
     requested_skills: list[str] | tuple[str, ...] | None = None,
     *,
@@ -736,16 +802,34 @@ def extract_target_selector_message(raw: str) -> tuple[TargetSelector, str] | No
     if text.startswith("@"):
         parts = text.split(None, 1)
         selector_token = parts[0]
-        selector = parse_target_selector(selector_token)
+        selector = _parse_direct_assignment_selector_token(selector_token)
         if selector is None:
             return None
-        instructions = parts[1].strip() if len(parts) > 1 else ""
+        instructions = _normalize_direct_assignment_instructions(parts[1]) if len(parts) > 1 else ""
         return (selector, instructions) if instructions else None
     requested_skills, instructions = extract_leading_requested_skills(text)
-    if not requested_skills:
-        return None
-    selector = TargetSelector(kind="skill", value=requested_skills[0])
-    return (selector, instructions) if instructions else None
+    if requested_skills:
+        selector = TargetSelector(kind="skill", value=requested_skills[0])
+        instructions = _normalize_direct_assignment_instructions(instructions)
+        return (selector, instructions) if instructions else None
+    for pattern in (
+        _DIRECT_ASSIGNMENT_TARGET_FIRST_RE,
+        _DIRECT_ASSIGNMENT_ROUTE_RE,
+        _DIRECT_ASSIGNMENT_TRAILING_TARGET_RE,
+    ):
+        match = pattern.match(text)
+        if not match:
+            continue
+        selector = _parse_direct_assignment_selector_token(
+            match.group("selector"),
+            allow_bare_agent=pattern is not _DIRECT_ASSIGNMENT_TRAILING_TARGET_RE,
+        )
+        if selector is None:
+            continue
+        instructions = _normalize_direct_assignment_instructions(match.group("instructions"))
+        if instructions:
+            return selector, instructions
+    return None
 
 
 class DelegationTaskDraft(RegistryRecordModel):

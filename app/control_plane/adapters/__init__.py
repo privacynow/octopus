@@ -1,4 +1,4 @@
-"""Bus-backed capability adapters."""
+"""Bus-backed admin_interface adapters."""
 
 from app.control_plane.adapters.agent_directory import BusAgentDirectory
 from app.control_plane.adapters.conversation_projection import BusConversationProjection

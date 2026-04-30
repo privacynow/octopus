@@ -42,7 +42,7 @@ from octopus_sdk.testing import (
 from octopus_sdk.transport import (
     EditableHandle,
     TransportBindingRecord,
-    TransportCapabilities,
+    TransportEgressFeatures,
     TransportDescriptor,
     TransportEgress,
     TransportImplementation,
@@ -87,8 +87,8 @@ class StubEgress(TransportEgress):
     bound_title: str = ""
 
     @property
-    def capabilities(self) -> TransportCapabilities:
-        return TransportCapabilities(
+    def egress_features(self) -> TransportEgressFeatures:
+        return TransportEgressFeatures(
             can_edit_message=True,
             can_answer_action=False,
             can_send_photo=False,
@@ -96,7 +96,7 @@ class StubEgress(TransportEgress):
             can_render_timeline=False,
             can_present_actions=False,
             can_share_conversation=False,
-            channel_name="stub",
+            transport_implementation="stub",
         )
 
     async def send_text(self, text: str, **kwargs: object) -> EditableHandle:
@@ -539,7 +539,7 @@ class StubGuidanceService(ProviderGuidanceServicePort):
         del provider_name, active_skills, credential_env
         return ProviderConfigRecord()
 
-    def capability_summary(self, provider_name: str, active_skills: list[str]) -> str:
+    def active_skill_tools_summary(self, provider_name: str, active_skills: list[str]) -> str:
         del provider_name, active_skills
         return "caps"
 
@@ -594,7 +594,7 @@ class StubGuidanceService(ProviderGuidanceServicePort):
         return RunContext(
             extra_dirs=list(extra_dirs),
             system_prompt=guidance_override or "system",
-            capability_summary="caps",
+            active_skill_tools_summary="caps",
             working_dir=working_dir,
             file_policy=file_policy,
             effective_model=effective_model,
@@ -618,7 +618,7 @@ class StubGuidanceService(ProviderGuidanceServicePort):
         return PreflightContext(
             extra_dirs=list(extra_dirs),
             system_prompt=guidance_override or "preflight",
-            capability_summary="caps",
+            active_skill_tools_summary="caps",
             working_dir=working_dir,
             file_policy=file_policy,
             effective_model=effective_model,

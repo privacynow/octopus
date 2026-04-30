@@ -14,14 +14,14 @@ from app.control_plane.requests import (
 )
 
 
-def test_control_command_requires_non_empty_authority_ref() -> None:
+def test_control_command_requires_non_empty_implementation_ref() -> None:
     with pytest.raises(ValidationError):
         ControlCommand(
             command_id="cmd-1",
-            capability="conversation_projection",
-            operation="create_conversation",
+            admin_interface="conversation_projection",
+            admin_operation="create_conversation",
             payload_json="{}",
-            authority_ref="",
+            implementation_ref="",
         )
 
 
@@ -99,7 +99,7 @@ def test_control_plane_request_models_validate_domain_payloads() -> None:
     )
     search = SearchAgentsRequest(
         role="ops",
-        capabilities=["logs"],
+        admin_interfaces=["logs"],
         tags=["oncall"],
         free_text="incident",
         exclude_agent_ids=["agent-1"],

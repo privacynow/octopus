@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import app.runtime_backend as runtime_backend
 from app.access import get_authorization
-from app.agents.registry_capabilities import registry_id_from_authority_ref
+from app.agents.registry_projection_interfaces import registry_id_from_implementation_ref
 from app.agents.state import load_runtime_registry_connection_state
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
@@ -57,7 +57,7 @@ def build_bus_control_plane_services(
     directory: ControlPlaneDirectory,
     *,
     config: BotConfig,
-    agent_id_for_authority: Callable[[str], str] | None = None,
+    agent_id_for_implementation: Callable[[str], str] | None = None,
 ) -> ControlPlaneServices:
     from app.control_plane.adapters import (
         BusAgentDirectory,
@@ -69,7 +69,7 @@ def build_bus_control_plane_services(
 
     def _connectivity_state_for_authority(authority_ref: str) -> str:
         try:
-            registry_id = registry_id_from_authority_ref(authority_ref)
+            registry_id = registry_id_from_implementation_ref(authority_ref)
         except ValueError:
             return "offline"
         registry = next(
@@ -89,7 +89,7 @@ def build_bus_control_plane_services(
         conversation_projection=BusConversationProjection(
             bus,
             directory,
-            agent_id_for_authority=agent_id_for_authority,
+            agent_id_for_implementation=agent_id_for_implementation,
         ),
         task_routing=BusTaskRouting(bus, directory),
         agent_directory=BusAgentDirectory(bus, directory),
@@ -107,7 +107,7 @@ def build_bus_bot_services(
     directory: ControlPlaneDirectory,
     *,
     config: BotConfig,
-    agent_id_for_authority: Callable[[str], str] | None = None,
+    agent_id_for_implementation: Callable[[str], str] | None = None,
     sessions: SessionRuntimePort,
 ) -> BotServices:
     from app.runtime.registry_participant import build_control_plane_registry_participant
@@ -121,7 +121,7 @@ def build_bus_bot_services(
         bus,
         directory,
         config=config,
-        agent_id_for_authority=agent_id_for_authority,
+        agent_id_for_implementation=agent_id_for_implementation,
     )
     workflow_graph = compose_workflows(config=config, sessions=sessions)
     execution_services = ExecutionServices(

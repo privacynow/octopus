@@ -199,8 +199,8 @@ async def edit_or_reply_text(message, text: str, **kwargs) -> None:
     if getattr(message, "_target_message_id", None) is not None and hasattr(message, "edit_text"):
         await message.edit_text(text, **kwargs)
         return
-    caps = getattr(message, "capabilities", None)
-    if getattr(caps, "channel_name", "") == "telegram":
+    transport_features = getattr(message, "transport_features", None)
+    if getattr(transport_features, "transport_implementation", "") == "telegram":
         await message.reply_text(text, **kwargs)
         return
     if hasattr(message, "edit_text"):

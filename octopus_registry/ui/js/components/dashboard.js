@@ -65,6 +65,10 @@ function renderDashboard(container) {
     protocolIssuesHost.dataset.key = 'protocol-issues-host';
     secondaryColumn.appendChild(protocolIssuesHost);
 
+    const maintenanceHost = document.createElement('div');
+    maintenanceHost.dataset.key = 'maintenance-host';
+    secondaryColumn.appendChild(maintenanceHost);
+
     function createSection(key, title, href, rows, emptyText) {
         const section = document.createElement('section');
         section.className = 'workspace-section';
@@ -171,6 +175,10 @@ function renderDashboard(container) {
         return coerceList(payload, 'protocols');
     }
 
+    function coerceAgentList(payload) {
+        return coerceList(payload, 'agents');
+    }
+
     function coerceList(payload, key) {
         return payload && Array.isArray(payload[key])
             ? payload[key]
@@ -185,7 +193,7 @@ function renderDashboard(container) {
 
     async function loadTasksByStatus(statuses) {
         const payloads = await Promise.all(
-            (statuses || []).map((status) => API.listTasks({ limit: 6, status }).catch(() => ({ tasks: [] }))),
+            (statuses || []).map((status) => API.listTasks({ limit: 6, status, include_generated: '0' }).catch(() => ({ tasks: [] }))),
         );
         const seen = new Set();
         const tasks = sortTasks([
@@ -266,16 +274,46 @@ function renderDashboard(container) {
         return UI.defaultVisibleRecords(coerceProtocolList(dashboardState.protocols), { includeHidden: false });
     }
 
+    function visibleDashboardAgents() {
+        return UI.defaultVisibleRecords(coerceAgentList(dashboardState.agents), { includeHidden: false });
+    }
+
+    function dashboardAgentHealth(summary) {
+        const visibleAgents = visibleDashboardAgents();
+        if (visibleAgents.length) {
+            const connected = visibleAgents.filter((agent) =>
+                String(agent.connectivity_state || '').trim().toLowerCase() === 'connected',
+            ).length;
+            const executionFaulted = visibleAgents.filter((agent) =>
+                String(agent.execution_state || 'healthy').trim().toLowerCase() === 'faulted',
+            ).length;
+            const needsAttention = visibleAgents.filter((agent) => {
+                const connectivity = String(agent.connectivity_state || '').trim().toLowerCase();
+                const execution = String(agent.execution_state || 'healthy').trim().toLowerCase();
+                return connectivity !== 'connected' || execution === 'faulted';
+            }).length;
+            return { connected, executionFaulted, needsAttention };
+        }
+        return {
+            connected: Number(summary.agents?.connected || 0),
+            executionFaulted: Number(summary.agents?.execution_faulted || 0),
+            needsAttention: Number(summary.agents?.degraded || 0)
+                + Number(summary.agents?.disconnected || 0)
+                + Number(summary.agents?.execution_faulted || 0),
+        };
+    }
+
     function renderSummaryRail(summary) {
-        const unhealthyAgents = Number(summary.agents?.degraded || 0)
-            + Number(summary.agents?.disconnected || 0)
-            + Number(summary.agents?.execution_faulted || 0);
+        const agentHealth = dashboardAgentHealth(summary);
         const visibleActiveTasks = visibleDashboardTasks(dashboardState.activeTasks);
         const visibleRuns = visibleDashboardRuns();
         const visibleProtocols = visibleDashboardProtocols();
         const activeRuns = visibleRuns.filter((run) =>
             ['queued', 'running', 'blocked'].includes(String(run.status || '').trim().toLowerCase()));
         const blockedRuns = visibleRuns.filter((run) => String(run.status || '').trim().toLowerCase() === 'blocked');
+        const issueRuns = new Set(coerceList(dashboardState.protocolIssues, 'issues')
+            .map((issue) => String(issue.protocol_run_id || '').trim())
+            .filter(Boolean));
         const publishedProtocols = visibleProtocols.filter((item) =>
             String(item.lifecycle_state || '').trim().toLowerCase() === 'published');
         const items = [
@@ -288,17 +326,18 @@ function renderDashboard(container) {
             },
             {
                 key: 'unhealthy-agents',
-                value: String(unhealthyAgents),
-                label: 'Unhealthy agents',
-                detail: `${summary.agents?.connected || 0} connected · ${summary.agents?.execution_faulted || 0} execution faulted`,
+                value: String(agentHealth.needsAttention),
+                label: 'Agents needing attention',
+                detail: `${agentHealth.connected} ready · ${agentHealth.executionFaulted} execution faulted`,
                 href: '/ui/agents',
             },
             {
                 key: 'protocol-runs',
                 value: String(activeRuns.length),
-                label: 'Active protocol runs',
+                label: 'Active or stuck runs',
                 detail: [
                     `${blockedRuns.length} blocked`,
+                    `${activeRuns.filter((run) => issueRuns.has(String(run.protocol_run_id || '').trim())).length} with issues`,
                     `${visibleRuns.length} visible recent runs`,
                 ].join(' · '),
                 href: '/ui/runs',
@@ -505,6 +544,98 @@ function renderDashboard(container) {
         ]);
     }
 
+    function openCleanupDialog() {
+        const form = document.createElement('div');
+        form.className = 'conversation-management-form';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'This removes workspace work records from the registry database: conversations, tasks, protocol definitions, runs, artifacts, events, and deliveries. Registered agents, skill catalog entries, guidance, and tokens are preserved so bots can keep running.';
+        form.appendChild(note);
+
+        const passwordLabel = document.createElement('label');
+        passwordLabel.className = 'kit-details-field';
+        const passwordTitle = document.createElement('span');
+        passwordTitle.className = 'kit-details-label';
+        passwordTitle.textContent = 'Registry UI password';
+        passwordLabel.appendChild(passwordTitle);
+        const passwordInput = document.createElement('input');
+        passwordInput.type = 'password';
+        passwordInput.className = 'input';
+        passwordInput.autocomplete = 'current-password';
+        passwordInput.setAttribute('aria-label', 'Registry UI password');
+        passwordLabel.appendChild(passwordInput);
+        form.appendChild(passwordLabel);
+
+        const confirmLabel = document.createElement('label');
+        confirmLabel.className = 'kit-details-field';
+        const confirmTitle = document.createElement('span');
+        confirmTitle.className = 'kit-details-label';
+        confirmTitle.textContent = 'Type CLEAN to confirm';
+        confirmLabel.appendChild(confirmTitle);
+        const confirmInput = document.createElement('input');
+        confirmInput.type = 'text';
+        confirmInput.className = 'input';
+        confirmInput.setAttribute('aria-label', 'Type CLEAN to confirm');
+        confirmLabel.appendChild(confirmInput);
+        form.appendChild(confirmLabel);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const cleanBtn = document.createElement('button');
+        cleanBtn.type = 'button';
+        cleanBtn.className = 'btn';
+        cleanBtn.textContent = 'Clean workspace data';
+        const view = UI.showDialog('Clean workspace data', form, {
+            actions: [cancelBtn, cleanBtn],
+            role: 'alertdialog',
+            initialFocus: passwordInput,
+            maxWidth: '680px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        cleanBtn.addEventListener('click', async () => {
+            cleanBtn.disabled = true;
+            try {
+                await API.cleanupWorkspaceData({
+                    password: passwordInput.value || '',
+                    confirm: confirmInput.value || '',
+                });
+                view.close();
+                UI.notify('Workspace data cleaned. Agents and skills were preserved.', 'success');
+                await refreshSnapshot({ soft: true });
+            } catch (err) {
+                UI.reportError('Failed to clean workspace data', err, {
+                    context: 'Dashboard workspace-data cleanup failed',
+                });
+                cleanBtn.disabled = false;
+            }
+        });
+    }
+
+    function renderMaintenanceSection() {
+        const section = document.createElement('section');
+        section.className = 'workspace-section';
+        section.dataset.key = 'maintenance';
+        const head = document.createElement('div');
+        head.className = 'section-header';
+        const title = document.createElement('strong');
+        title.textContent = 'Workspace maintenance';
+        head.appendChild(title);
+        section.appendChild(head);
+        const body = document.createElement('div');
+        body.className = 'list-container';
+        const cleanupRow = UI.renderListRow({
+            label: 'Clean workspace data',
+            sublabel: 'Preserves agents and skills; removes conversations, tasks, protocols, runs, artifacts, and events.',
+            badgeText: 'requires password',
+            onClick: openCleanupDialog,
+        });
+        body.appendChild(cleanupRow);
+        section.appendChild(body);
+        UI.memoizedRender(maintenanceHost, { rendered: true }, () => [section]);
+    }
+
     function renderDashboardView() {
         const summary = dashboardState.summary || {};
         renderSummaryRail(summary);
@@ -513,6 +644,7 @@ function renderDashboard(container) {
         renderConversationSection();
         renderAgentSection();
         renderProtocolIssuesSection();
+        renderMaintenanceSection();
     }
 
     function hasPatchKey(patch, key) {
@@ -547,9 +679,9 @@ function renderDashboard(container) {
             secondary('approvals', API.listApprovals({ limit: 4 }), { approvals: [] }),
             secondary('follow-up tasks', loadFollowUpTasks(), { tasks: [] }),
             secondary('active tasks', loadActiveTasks(), { tasks: [] }),
-            secondary('completed tasks', API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }), { tasks: [] }),
+            secondary('completed tasks', API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso(), include_generated: '0' }), { tasks: [] }),
             secondary('protocols', API.listProtocols({ limit: 50 }), []),
-            secondary('protocol runs', API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT }), { runs: [] }),
+            secondary('protocol runs', API.listProtocolRuns({ limit: UI.DEFAULT_PAGE_LIMIT, include_generated: '0' }), { runs: [] }),
             secondary('protocol issues', API.listProtocolIssues({ limit: 6 }), { issues: [] }),
         ]).then(([approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues]) => {
             applySnapshotPatch({ approvals, followUpTasks, activeTasks, recentCompletedTasks, protocols, protocolRuns, protocolIssues });
@@ -565,7 +697,7 @@ function renderDashboard(container) {
         try {
             const [summary, conversations, agents] = await Promise.all([
                 API.getSummary(),
-                API.listConversations({ limit: 6, status: 'open' }),
+                API.listConversations({ limit: 6, status: 'open', include_generated: '0' }),
                 API.listAgents({ limit: 8 }),
             ]);
             applySnapshotPatch({ summary, conversations, agents });

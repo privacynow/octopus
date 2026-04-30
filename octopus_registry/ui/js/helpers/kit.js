@@ -39,6 +39,7 @@ window.Kit = (() => {
         // Protocol — actions
         'protocol.action.validate': 'Validate',
         'protocol.action.publish': 'Publish',
+        'protocol.action.run': 'Run protocol',
         'protocol.action.archive': 'Archive',
         'protocol.action.discard': 'Delete draft',
         'protocol.action.rehearse': 'Rehearse',
@@ -81,7 +82,7 @@ window.Kit = (() => {
         'protocol.participant.selector_kind.placeholder': 'Choose how this step should resolve…',
         'protocol.participant.selector_strategy.label': 'Strategy',
         'protocol.participant.selector_value.label': 'Rule value',
-        'protocol.participant.selector_value.help': 'For example: a capability slug, a runtime role tag, or an agent slug.',
+        'protocol.participant.selector_value.help': 'For example: a skill slug, a runtime role tag, or an agent slug.',
         'protocol.participant.selector_value.placeholder': 'e.g. legal-review, approver, m1',
         'protocol.participant.selector_preview.label': 'Who matches right now',
         'protocol.participant.selector_preview.help': 'Preview uses the shared registry selector resolution path. Choose a matching agent to pin this step when needed.',
@@ -168,7 +169,7 @@ window.Kit = (() => {
         'protocol.canvas.empty.title': 'Start the workflow',
         'protocol.canvas.empty.body': 'Add the first step in the workflow and create its owner role inline if needed.',
         'protocol.catalog.empty.title': 'No protocols yet',
-        'protocol.catalog.empty.body': 'Create a blank protocol, or start from a reusable template.',
+        'protocol.catalog.empty.body': 'Create a blank protocol from scratch. Saved templates appear here only after you publish one.',
         'protocol.catalog.title': 'Workflow definitions',
         'protocol.catalog.subtitle': 'Draft, publish, and rehearse reusable protocols without leaving the registry.',
         'protocol.catalog.search': 'Search protocols',
@@ -218,7 +219,7 @@ window.Kit = (() => {
         // Agents - work entry point with operational diagnostics behind detail.
         'agents.list.title': 'Agents',
         'agents.empty': 'No agents match this view.',
-        'agents.search.placeholder': 'Search by name, capability, role, or provider…',
+        'agents.search.placeholder': 'Search by name, skill, role, or provider…',
         'agents.presence.filter.all': 'All',
         'agents.presence.connected': 'Connected',
         'agents.presence.degraded': 'Degraded',
@@ -226,7 +227,7 @@ window.Kit = (() => {
         'agents.presence.standalone': 'Standalone',
         'agents.presence.stopped': 'Stopped',
         'agents.presence.faulted': 'Execution faulted',
-        'agents.detail.firstrun': 'Select an agent to start work, inspect capabilities, and open recent activity.',
+        'agents.detail.firstrun': 'Select an agent to start work, inspect skills, and open recent activity.',
         'agents.summary.agent_id': 'Agent ID',
         'agents.summary.slug': 'Slug',
         'agents.summary.role': 'Role',
@@ -239,7 +240,7 @@ window.Kit = (() => {
         'agents.summary.execution': 'Execution',
         'agents.summary.capacity': 'Workload',
         'agents.summary.last_heartbeat': 'Last heartbeat',
-        'agents.summary.skills': 'Capabilities',
+        'agents.summary.skills': 'Skills',
         'agents.trust_tier.community': 'Community',
         'agents.trust_tier.trusted': 'Trusted',
         'agents.trust_tier.verified': 'Verified',
@@ -274,7 +275,7 @@ window.Kit = (() => {
         'agents.selector.candidate_subtitle_template': '{role} · {slug}',
         'agents.selector.quick_picks': 'Quick picks',
 
-        // Capabilities / guidance - enough for stub adoption; expanded on migration
+        // Skills / guidance - enough for stub adoption; expanded on migration
         'skill.lifecycle.draft': 'Draft',
         'skill.lifecycle.published': 'Published',
         'skill.lifecycle.archived': 'Archived',
@@ -306,6 +307,141 @@ window.Kit = (() => {
             });
         },
     };
+
+    const PROTOCOL_RUN_LAUNCH_FIELDS = [
+        {
+            key: 'problem_statement',
+            label: 'What should this run accomplish?',
+            help: 'Concrete goal for the run. This is visible to assigned agents.',
+            placeholder: 'Describe the outcome this run should produce.',
+            rows: 4,
+            required: true,
+        },
+        {
+            key: 'context',
+            label: 'Context',
+            help: 'Optional background, source material, repository details, or other context for the run.',
+            placeholder: 'Relevant files, links, requirements, prior decisions, or source material.',
+            rows: 3,
+        },
+        {
+            key: 'constraints',
+            label: 'Constraints',
+            help: 'Optional requirements, limits, preferences, or operational constraints.',
+            placeholder: 'Scope, deadlines, privacy boundaries, tools to use or avoid, or review requirements.',
+            rows: 3,
+        },
+        {
+            key: 'expected_outputs',
+            label: 'Expected outputs',
+            help: 'Optional deliverables or artifact names the run should produce.',
+            placeholder: 'Patch, report, spreadsheet, deck, app, script, exported file, or review notes.',
+            rows: 3,
+        },
+    ];
+
+    function protocolRunLaunchFields() {
+        return PROTOCOL_RUN_LAUNCH_FIELDS.map((field) => ({ ...field }));
+    }
+
+    function protocolRunLaunchForm({
+        values = {},
+        fields = null,
+        includeWorkspace = true,
+        onInput = null,
+    } = {}) {
+        const form = document.createElement('div');
+        form.className = 'conversation-management-form protocol-run-launch-form';
+        const controls = new Map();
+        let focusTarget = null;
+
+        function appendControl(field, control) {
+            const group = document.createElement('label');
+            group.className = 'kit-details-field';
+            const labelEl = document.createElement('span');
+            labelEl.className = 'kit-details-label';
+            labelEl.textContent = field.label;
+            group.appendChild(labelEl);
+            control.className = 'input';
+            control.dataset.runInputKey = field.key;
+            control.required = Boolean(field.required);
+            control.setAttribute('aria-label', field.label);
+            control.placeholder = field.placeholder || '';
+            const current = values[field.key] !== undefined
+                ? values[field.key]
+                : field.defaultValue !== undefined
+                    ? field.defaultValue
+                    : field.default_value !== undefined
+                        ? field.default_value
+                        : '';
+            control.value = String(current || '');
+            const emitInput = () => {
+                if (typeof onInput === 'function') onInput(field.key, control.value);
+            };
+            control.addEventListener('input', emitInput);
+            control.addEventListener('change', emitInput);
+            group.appendChild(control);
+            if (field.help) {
+                const helpEl = document.createElement('span');
+                helpEl.className = 'kit-details-help';
+                helpEl.textContent = field.help;
+                group.appendChild(helpEl);
+            }
+            form.appendChild(group);
+            controls.set(field.key, control);
+            if (!focusTarget) focusTarget = control;
+        }
+
+        if (includeWorkspace) {
+            const workspace = document.createElement('input');
+            workspace.type = 'text';
+            appendControl({
+                key: 'workspace_ref',
+                label: 'Workspace',
+                help: 'Optional workspace/project reference for files and generated artifacts.',
+                placeholder: 'default',
+            }, workspace);
+        }
+
+        const launchFields = Array.isArray(fields) && fields.length
+            ? fields.map((field) => ({ ...field }))
+            : protocolRunLaunchFields();
+        launchFields.forEach((field) => {
+            const kind = String(field.kind || 'textarea').trim().toLowerCase();
+            if (kind === 'select' && Array.isArray(field.options) && field.options.length) {
+                const select = document.createElement('select');
+                field.options.forEach((optionValue) => {
+                    const option = document.createElement('option');
+                    option.value = String(optionValue || '');
+                    option.textContent = String(optionValue || '');
+                    select.appendChild(option);
+                });
+                appendControl(field, select);
+                return;
+            }
+            if (kind === 'text' || kind === 'input') {
+                const input = document.createElement('input');
+                input.type = 'text';
+                appendControl(field, input);
+                return;
+            }
+            const textarea = document.createElement('textarea');
+            textarea.rows = Number(field.rows || 3);
+            appendControl(field, textarea);
+        });
+
+        return {
+            element: form,
+            focusTarget,
+            readValues: () => {
+                const result = {};
+                controls.forEach((control, key) => {
+                    result[key] = String(control.value || '').trim();
+                });
+                return result;
+            },
+        };
+    }
 
     // -----------------------------------------------------------------------
     // Draft-state chip
@@ -362,7 +498,7 @@ window.Kit = (() => {
         onTitleCommit = null,
         onSlugCommit = null,
         compact = false,
-        primaryActions = ['validate', 'publish', 'rehearse'],
+        primaryActions = ['validate', 'publish', 'run'],
         secondaryActions = ['archive', 'discard'],
     } = {}) {
         const header = document.createElement('header');
@@ -371,6 +507,7 @@ window.Kit = (() => {
         const availableActions = [
             permissions.canValidate !== false ? 'validate' : '',
             permissions.canPublish !== false ? 'publish' : '',
+            permissions.canRun !== false ? 'run' : '',
             permissions.canRehearse !== false ? 'rehearse' : '',
             permissions.canArchive !== false ? 'archive' : '',
             permissions.canDiscard !== false ? 'discard' : '',
@@ -413,6 +550,7 @@ window.Kit = (() => {
         const buttonSpec = [
             { key: 'validate', tone: '', permissionKey: 'canValidate' },
             { key: 'publish', tone: 'btn-primary', permissionKey: 'canPublish' },
+            { key: 'run', tone: 'btn-primary', permissionKey: 'canRun' },
             { key: 'rehearse', tone: '', permissionKey: 'canRehearse' },
             { key: 'archive', tone: 'btn-secondary', permissionKey: 'canArchive' },
             { key: 'discard', tone: 'btn-danger', permissionKey: 'canDiscard' },
@@ -722,12 +860,22 @@ window.Kit = (() => {
             if (field.readOnly && kind !== 'checkbox' && kind !== 'select') control.readOnly = true;
 
             if (typeof onCommit === 'function' && kind !== 'checklist') {
+                let commitTimer = null;
                 const commit = () => {
+                    if (commitTimer) {
+                        window.clearTimeout(commitTimer);
+                        commitTimer = null;
+                    }
                     const value = kind === 'checkbox' ? control.checked : control.value;
                     onCommit(target, field.key, value);
                 };
                 if (field.commitOnInput && (kind === 'text' || kind === 'textarea')) {
-                    control.addEventListener('input', commit);
+                    const scheduleCommit = () => {
+                        if (commitTimer) window.clearTimeout(commitTimer);
+                        const delay = Number(field.commitDelayMs || 350);
+                        commitTimer = window.setTimeout(commit, Number.isFinite(delay) ? delay : 350);
+                    };
+                    control.addEventListener('input', scheduleCommit);
                 }
                 control.addEventListener('change', commit);
                 if (kind === 'text' || kind === 'textarea') {
@@ -2368,6 +2516,12 @@ window.Kit = (() => {
                     sub.textContent = String(run.subtitle);
                     row.appendChild(sub);
                 }
+                if (run.stageProgress) {
+                    row.appendChild(runStageProgressRail({
+                        ...run.stageProgress,
+                        compact: true,
+                    }));
+                }
 
                 if (typeof onSelect === 'function') {
                     row.addEventListener('click', () => onSelect({
@@ -2425,7 +2579,163 @@ window.Kit = (() => {
             live.textContent = String(liveEventText);
             root.appendChild(live);
         }
+        if (run.stageProgress) {
+            root.appendChild(runStageProgressRail(run.stageProgress));
+        }
 
+        return root;
+    }
+
+    function _runStageKey(stage = {}) {
+        return String(stage.stage_key || stage.key || stage.id || '').trim();
+    }
+
+    function _runStageLabel(stage = {}) {
+        return String(stage.display_name || stage.label || stage.stage_key || stage.key || 'Stage').trim();
+    }
+
+    function _latestStageExecutions(stageExecutions = []) {
+        const byStage = new Map();
+        (Array.isArray(stageExecutions) ? stageExecutions : []).forEach((item) => {
+            const key = String(item?.stage_key || '').trim();
+            if (!key) return;
+            const previous = byStage.get(key);
+            const previousAttempt = Number(previous?.attempt || 0);
+            const nextAttempt = Number(item?.attempt || 0);
+            const previousTime = Date.parse(String(previous?.updated_at || previous?.completed_at || previous?.started_at || '')) || 0;
+            const nextTime = Date.parse(String(item?.updated_at || item?.completed_at || item?.started_at || '')) || 0;
+            if (!previous || nextAttempt > previousAttempt || (nextAttempt === previousAttempt && nextTime >= previousTime)) {
+                byStage.set(key, item);
+            }
+        });
+        return byStage;
+    }
+
+    function _compressedStageProgressItems(items, currentIndex, maxVisible = 5) {
+        if (items.length <= maxVisible) return items.map((item) => ({ kind: 'stage', item }));
+        const safeIndex = Math.min(Math.max(Number(currentIndex || 0), 0), items.length - 1);
+        const firstVisible = Math.max(0, safeIndex - 1);
+        const lastVisible = Math.min(items.length - 1, safeIndex + 1);
+        const result = [];
+        if (firstVisible > 0) result.push({ kind: 'group', count: firstVisible, label: `${firstVisible} earlier` });
+        for (let index = firstVisible; index <= lastVisible; index += 1) {
+            result.push({ kind: 'stage', item: items[index] });
+        }
+        const remaining = items.length - lastVisible - 1;
+        if (remaining > 0) result.push({ kind: 'group', count: remaining, label: `${remaining} later` });
+        return result;
+    }
+
+    function runStageProgressRail({
+        stages = [],
+        stageExecutions = [],
+        currentStageKey = '',
+        runStatus = '',
+        issues = [],
+        compact = false,
+    } = {}) {
+        const executionByStage = _latestStageExecutions(stageExecutions);
+        const issueByStage = new Map();
+        (Array.isArray(issues) ? issues : []).forEach((issue) => {
+            const key = String(issue?.stage_key || '').trim();
+            if (key && !issueByStage.has(key)) issueByStage.set(key, issue);
+        });
+        const knownStages = (Array.isArray(stages) ? stages : [])
+            .map((stage) => ({ ...stage, stage_key: _runStageKey(stage) }))
+            .filter((stage) => stage.stage_key);
+        if (!knownStages.length) {
+            Array.from(executionByStage.keys()).forEach((stageKey) => {
+                knownStages.push({ stage_key: stageKey, display_name: stageKey });
+            });
+        }
+        if (!knownStages.length && currentStageKey) {
+            knownStages.push({ stage_key: String(currentStageKey || ''), display_name: String(currentStageKey || '') });
+        }
+
+        const normalizedRunStatus = String(runStatus || '').trim().toLowerCase();
+        const activeRun = !['completed', 'failed', 'cancelled'].includes(normalizedRunStatus);
+        const terminalRun = !activeRun && Boolean(normalizedRunStatus);
+        let currentIndex = knownStages.findIndex((stage) => stage.stage_key === String(currentStageKey || ''));
+        if (currentIndex < 0) {
+            const executionKeys = Array.from(executionByStage.keys());
+            currentIndex = knownStages.findIndex((stage) => executionKeys.includes(stage.stage_key));
+        }
+        if (currentIndex < 0) currentIndex = 0;
+
+        const items = knownStages.map((stage, index) => {
+            const execution = executionByStage.get(stage.stage_key) || null;
+            const executionStatus = String(execution?.status || '').trim().toLowerCase();
+            const issue = issueByStage.get(stage.stage_key) || null;
+            let state = 'waiting';
+            if (issue) {
+                state = 'attention';
+            } else if (executionStatus === 'failed' || executionStatus === 'blocked') {
+                state = 'failed';
+            } else if (stage.stage_key === String(currentStageKey || '') && activeRun) {
+                state = 'current';
+            } else if (executionStatus === 'completed' || execution?.completed_at) {
+                state = 'completed';
+            } else if (terminalRun && !execution) {
+                if (normalizedRunStatus === 'completed' && index <= currentIndex) {
+                    state = 'completed';
+                } else if (normalizedRunStatus === 'failed' && index === currentIndex) {
+                    state = 'failed';
+                } else if (index < currentIndex) {
+                    state = 'completed';
+                } else {
+                    state = 'skipped';
+                }
+            } else if (executionStatus === 'cancelled' || (index < currentIndex && !execution)) {
+                state = 'skipped';
+            }
+            return {
+                index,
+                key: stage.stage_key,
+                label: _runStageLabel(stage),
+                state,
+                status: executionStatus || (stage.stage_key === String(currentStageKey || '') ? normalizedRunStatus : ''),
+            };
+        });
+
+        const root = document.createElement('span');
+        root.className = `kit-run-stage-progress${compact ? ' is-compact' : ''}`;
+        root.setAttribute('aria-label', 'Run stage progress');
+        root.setAttribute('role', 'list');
+        _compressedStageProgressItems(items, currentIndex).forEach((entry) => {
+            const li = document.createElement('span');
+            li.setAttribute('role', 'listitem');
+            if (entry.kind === 'group') {
+                li.className = 'kit-run-stage-progress-group';
+                li.textContent = entry.label;
+                root.appendChild(li);
+                return;
+            }
+            const item = entry.item;
+            li.className = `kit-run-stage-progress-node is-${item.state}`;
+            li.dataset.stageKey = item.key;
+            li.dataset.state = item.state;
+            const marker = document.createElement('span');
+            marker.className = 'kit-run-stage-progress-marker';
+            marker.textContent = String(item.index + 1);
+            li.appendChild(marker);
+            const copy = document.createElement('span');
+            copy.className = 'kit-run-stage-progress-copy';
+            const label = document.createElement('span');
+            label.className = 'kit-run-stage-progress-label';
+            label.textContent = item.label;
+            copy.appendChild(label);
+            const state = document.createElement('span');
+            state.className = 'kit-run-stage-progress-state';
+            state.textContent = item.state === 'current'
+                ? 'running'
+                : item.state === 'attention'
+                    ? 'needs attention'
+                    : item.state;
+            copy.appendChild(state);
+            li.appendChild(copy);
+            li.setAttribute('aria-label', `${item.index + 1}. ${item.label}: ${state.textContent}`);
+            root.appendChild(li);
+        });
         return root;
     }
 
@@ -2582,23 +2892,23 @@ window.Kit = (() => {
                 sub.textContent = parts.join(' · ');
                 row.appendChild(sub);
 
-                const skills = _agentSkills(agent);
-                if (skills.length) {
-                    const capabilities = document.createElement('div');
-                    capabilities.className = 'kit-agents-capabilities';
-                    skills.slice(0, 5).forEach((skill) => {
+                const skillNames = _agentSkills(agent);
+                if (skillNames.length) {
+                    const skillsEl = document.createElement('div');
+                    skillsEl.className = 'kit-agents-skills';
+                    skillNames.slice(0, 5).forEach((skill) => {
                         const chip = document.createElement('span');
                         chip.className = 'quickstart-chip static';
                         chip.textContent = skill;
-                        capabilities.appendChild(chip);
+                        skillsEl.appendChild(chip);
                     });
-                    if (skills.length > 5) {
+                    if (skillNames.length > 5) {
                         const more = document.createElement('span');
                         more.className = 'quiet-note';
-                        more.textContent = `+${skills.length - 5} more`;
-                        capabilities.appendChild(more);
+                        more.textContent = `+${skillNames.length - 5} more`;
+                        skillsEl.appendChild(more);
                     }
-                    row.appendChild(capabilities);
+                    row.appendChild(skillsEl);
                 }
 
                 const actions = document.createElement('div');
@@ -2641,7 +2951,7 @@ window.Kit = (() => {
         root.className = 'kit-agent-summary';
         if (!agent) {
             root.appendChild(UI.renderEmptyState(
-                emptyHint || dictValue('agents.detail.firstrun', 'Select an agent to start work, inspect capabilities, and open recent activity.'),
+                emptyHint || dictValue('agents.detail.firstrun', 'Select an agent to start work, inspect skills, and open recent activity.'),
             ));
             return root;
         }
@@ -2659,7 +2969,7 @@ window.Kit = (() => {
         if (skills.length) {
             const skillsLabel = document.createElement('div');
             skillsLabel.className = 'detail-label';
-            skillsLabel.textContent = dictValue('agents.summary.skills', 'Capabilities');
+            skillsLabel.textContent = dictValue('agents.summary.skills', 'Skills');
             root.appendChild(skillsLabel);
             const chips = document.createElement('div');
             chips.className = 'chip-row';
@@ -2840,6 +3150,8 @@ window.Kit = (() => {
         dict,
         draftStateChip,
         lifecycleHeader,
+        protocolRunLaunchFields,
+        protocolRunLaunchForm,
         validationSurface,
         detailsPanel,
         authoredCatalog,
@@ -2850,6 +3162,7 @@ window.Kit = (() => {
         rehearsalPanel,
         runsList,
         runSummary,
+        runStageProgressRail,
         agentsList,
         agentSummary,
         selectorResolutionPreview,

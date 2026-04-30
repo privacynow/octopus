@@ -6,7 +6,8 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from app.octopus_cli.core import LOCAL_REGISTRY_INTERNAL_URL, OctopusError, OctopusManager, PromptIO
+from app.octopus_cli.admin_service import OctopusAdminService
+from app.octopus_cli.core import OctopusError, OctopusManager, PromptIO
 from app.octopus_cli.models import (
     Action,
     BotState,
@@ -22,13 +23,10 @@ class OctopusCLI:
     def __init__(self, repo_dir: Path, *, io: PromptIO | None = None) -> None:
         self.io = io or PromptIO()
         self.manager = OctopusManager(repo_dir, io=self.io)
+        self.admin = OctopusAdminService(self.manager, io=self.io)
 
     def _state(self, *, live_provider_auth: bool = False) -> SystemState:
-        state = self.manager.inspect_state()
-        if live_provider_auth:
-            providers = [provider.provider for provider in state.provider_auth]
-            state.provider_auth = self.manager.provider_auth_states(providers, live=True)
-        return state
+        return self.admin.state(live_provider_auth=live_provider_auth)
 
     def build_parser(self) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(prog="./octopus", add_help=False)
@@ -287,141 +285,41 @@ class OctopusCLI:
         connect: RegistryConnectOptions | None = None,
         disconnect_registry_id: str = "",
     ) -> int:
-        deploy = deploy or RegistryDeployOptions()
-        connect = connect or RegistryConnectOptions()
-        if action not in {Action.START, Action.RESTART, Action.REDEPLOY} and not deploy.is_empty:
-            raise OctopusError("Registry bind/public URL options are only valid with start, restart, or redeploy.")
-        if action not in {Action.CONNECT, Action.DISCONNECT}:
-            if connect.is_remote or disconnect_registry_id:
-                raise OctopusError("Registry connection options are only valid with connect or disconnect.")
-        if action != Action.CONNECT and connect.is_remote:
-            raise OctopusError("--registry-url and --registry-enroll-token are only valid with connect.")
-        state = self.manager.inspect_state()
-        if action == Action.CONNECT and connect.is_remote and not selectors:
-            targets = [ResolvedTarget(TargetKind.BOT, bot.slug, bot.label) for bot in state.bots]
-        elif action == Action.DISCONNECT and disconnect_registry_id and not selectors:
-            targets = [
-                ResolvedTarget(TargetKind.BOT, bot.slug, bot.label)
-                for bot in state.bots
-                if any(connection.registry_id == disconnect_registry_id for connection in bot.registry_connection_statuses)
-            ]
-        else:
-            targets = self.manager.resolve_targets(selectors, action, state)
-        if action in {Action.CONNECT, Action.DISCONNECT} and any(target.kind == TargetKind.REGISTRY for target in targets):
-            raise OctopusError(f"{action.value.title()} only applies to bots.")
-        if not targets:
-            self.io.print("Nothing to do.")
-            return 0
-        plan = self.manager.plan_action(action, targets, state)
-        if action == Action.CONNECT:
-            if connect.is_remote:
-                plan.notes = [f"Bots will be connected to remote registry {connect.registry_url}."]
-            else:
-                plan.notes = ["Bots will be connected to the local registry."]
-        elif action == Action.DISCONNECT:
-            if disconnect_registry_id:
-                plan.notes = [
-                    f"Only registry connection '{disconnect_registry_id}' will be removed; bot data will be preserved."
-                ]
-            else:
-                plan.notes = ["Only the local registry connection will be removed; bot data will be preserved."]
-        self.manager.confirm_plan(plan, yes=yes)
-        if action == Action.START:
-            return self.execute_start(targets, deploy=deploy)
-        if action == Action.STOP:
-            return self.execute_stop(targets)
-        if action == Action.RESTART:
-            return self.execute_restart(targets, deploy=deploy)
-        if action == Action.REDEPLOY:
-            return self.execute_redeploy(targets, deploy=deploy)
-        if action == Action.CONNECT:
-            return self.execute_connect(targets, connect=connect)
-        if action == Action.DISCONNECT:
-            return self.execute_disconnect(targets, registry_id=disconnect_registry_id)
-        raise OctopusError(f"Unsupported action: {action.value}")
+        return self.admin.run_mutating(
+            action,
+            selectors,
+            yes=yes,
+            deploy=deploy,
+            connect=connect,
+            disconnect_registry_id=disconnect_registry_id,
+        )
 
     def execute_start(self, targets: list[ResolvedTarget], *, deploy: RegistryDeployOptions | None = None) -> int:
-        for target in targets:
-            if target.kind == TargetKind.REGISTRY:
-                self.manager.start_registry(deploy=deploy)
-            else:
-                self.manager.start_bot(target.identifier)
-        return 0
+        return self.admin.start(targets, deploy=deploy)
 
     def execute_stop(self, targets: list[ResolvedTarget]) -> int:
-        for target in targets:
-            if target.kind == TargetKind.REGISTRY:
-                self.manager.stop_registry()
-            else:
-                self.manager.stop_bot(target.identifier)
-        return 0
+        return self.admin.stop(targets)
 
     def execute_restart(self, targets: list[ResolvedTarget], *, deploy: RegistryDeployOptions | None = None) -> int:
-        for target in targets:
-            if target.kind == TargetKind.REGISTRY:
-                if self.manager.has_local_registry():
-                    self.manager.stop_registry()
-                self.manager.start_registry(deploy=deploy)
-            else:
-                self.manager.restart_bot(target.identifier)
-        return 0
+        return self.admin.restart(targets, deploy=deploy)
 
     def execute_redeploy(self, targets: list[ResolvedTarget], *, deploy: RegistryDeployOptions | None = None) -> int:
-        for target in targets:
-            if target.kind == TargetKind.REGISTRY:
-                if self.manager.has_local_registry():
-                    self.manager.stop_registry()
-                self.manager.start_registry(force_rebuild=True, force_recreate=True, deploy=deploy)
-            else:
-                self.manager.restart_bot(target.identifier, force_rebuild=True)
-        return 0
+        return self.admin.redeploy(targets, deploy=deploy)
 
     def execute_connect(self, targets: list[ResolvedTarget], *, connect: RegistryConnectOptions | None = None) -> int:
-        connect = connect or RegistryConnectOptions()
-        for target in targets:
-            if connect.is_remote:
-                connection = self.manager.connect_bot_to_registry(
-                    target.identifier,
-                    registry_url=connect.registry_url,
-                    enrollment_token=connect.enrollment_token,
-                    desired_scope=connect.scope or "full",
-                    registry_id=connect.registry_id,
-                )
-                self.io.print(f"Connected {target.label} to remote registry {connection.registry_id} ({connection.url}).")
-            else:
-                self.manager.connect_bot_to_local_registry(target.identifier, desired_scope=connect.scope or "full")
-                self.io.print(f"Connected {target.label} to the local registry.")
-        return 0
+        return self.admin.connect(targets, connect=connect)
 
     def execute_disconnect(self, targets: list[ResolvedTarget], *, registry_id: str = "") -> int:
-        for target in targets:
-            connection = self.manager.disconnect_bot_registry(target.identifier, registry_id=registry_id)
-            label = "local registry" if connection.url == LOCAL_REGISTRY_INTERNAL_URL else f"registry {connection.registry_id}"
-            self.io.print(f"Disconnected {target.label} from {label}.")
-        return 0
+        return self.admin.disconnect(targets, registry_id=registry_id)
 
     def cmd_logs(self, targets: list[str], *, follow: bool) -> int:
-        state = self.manager.inspect_state()
-        resolved = self.manager.resolve_targets(targets, Action.LOGS, state)
-        if len(resolved) != 1:
-            raise OctopusError("logs requires exactly one target.")
-        return self.manager.follow_logs(resolved[0], follow=follow)
+        return self.admin.logs(targets, follow=follow)
 
     def cmd_shell(self, targets: list[str]) -> int:
-        state = self.manager.inspect_state()
-        resolved = self.manager.resolve_targets(targets, Action.SHELL, state)
-        if len(resolved) != 1:
-            raise OctopusError("shell requires exactly one target.")
-        return self.manager.open_shell(resolved[0])
+        return self.admin.shell(targets)
 
     def cmd_doctor(self, targets: list[str], *, live_provider: bool) -> int:
-        state = self.manager.inspect_state()
-        resolved = self.manager.resolve_targets(targets, Action.DOCTOR, state)
-        if len(resolved) != 1 or resolved[0].kind != TargetKind.BOT:
-            raise OctopusError("doctor requires exactly one bot target.")
-        output = self.manager.run_bot_doctor(resolved[0].identifier, live_provider=live_provider)
-        self.io.print(output.rstrip())
-        return 0
+        return self.admin.doctor(targets, live_provider=live_provider)
 
     def recommended_actions(self, state: SystemState) -> list[tuple[str, callable[[], int]]]:
         actions: list[tuple[str, callable[[], int]]] = []

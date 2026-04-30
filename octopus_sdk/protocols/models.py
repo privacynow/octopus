@@ -30,6 +30,7 @@ ProtocolDocumentTextFormat = Literal["json", "yaml"]
 ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
 ProtocolValidationMode = Literal["strict", "draft"]
 ProtocolAuthoringSurface = Literal["standard", "operator"]
+ProtocolRunInputKind = Literal["text", "textarea", "select"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
@@ -365,6 +366,52 @@ class ProtocolDefinitionRecord(RegistryRecordModel):
     updated_at: str = ""
 
 
+class ProtocolRunInputFieldRecord(RegistryRecordModel):
+    """One launch-time input a protocol surface can ask a user to provide."""
+
+    key: str = Field(..., min_length=1)
+    label: str = ""
+    help: str = ""
+    kind: ProtocolRunInputKind = "textarea"
+    required: bool = False
+    default_value: str = ""
+    placeholder: str = ""
+    options: list[str] = Field(default_factory=list)
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def _key(cls, value: object) -> str:
+        return _normalize_key(value, field_name="key")
+
+    @field_validator("options", mode="before")
+    @classmethod
+    def _options(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            raw = [part.strip() for part in value.split(",")]
+        else:
+            raw = [str(item or "").strip() for item in value]
+        seen: set[str] = set()
+        options: list[str] = []
+        for item in raw:
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            options.append(item)
+        return options
+
+
+class ProtocolRunLaunchFormRecord(RegistryRecordModel):
+    """Transport-neutral launch form derived from a published protocol."""
+
+    protocol_id: str = ""
+    slug: str = ""
+    display_name: str = ""
+    description: str = ""
+    fields: list[ProtocolRunInputFieldRecord] = Field(default_factory=list)
+
+
 class ProtocolDefinitionVersionRecord(RegistryRecordModel):
     protocol_definition_version_id: str = ""
     protocol_id: str = ""
@@ -431,6 +478,8 @@ class ProtocolRunRecord(RegistryRecordModel):
     protocol_run_id: str = ""
     protocol_id: str = ""
     protocol_definition_version_id: str = ""
+    source_kind: str = "protocol_run"
+    hidden_from_default_views: bool = False
     entry_agent_id: str = ""
     entry_authority_ref: str = ""
     is_rehearsal: bool = False

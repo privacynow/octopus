@@ -9,7 +9,7 @@ from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunResult
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.transport import TransportBindingRecord, TransportDescriptor
-from octopus_sdk.transport import EditableHandle, TransportCapabilities, TransportEgress
+from octopus_sdk.transport import EditableHandle, TransportEgressFeatures, TransportEgress
 from app.runtime.telegram_execution import (
     TelegramExecutionMessage,
     build_transport_identity as build_telegram_transport_identity,
@@ -65,8 +65,8 @@ class _DispatchEgress(TransportEgress):
         self.typing_started = asyncio.Event()
 
     @property
-    def capabilities(self) -> TransportCapabilities:
-        return TransportCapabilities(channel_name="dispatch-test")
+    def egress_features(self) -> TransportEgressFeatures:
+        return TransportEgressFeatures(transport_implementation="dispatch-test")
 
     async def send_text(self, text: str, **kwargs: object) -> EditableHandle:
         del text, kwargs
@@ -429,7 +429,7 @@ def test_workflow_context_builder_resolves_registry_conversation_metadata() -> N
                 supports_multiple=True,
                 inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_transport_capability=True,
+                report_in_agent_status=True,
                 accepts_transport_input=True,
                 supports_conversation_binding=True,
                 supports_timeline=True,
@@ -476,7 +476,7 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
                 supports_multiple=True,
                 inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_transport_capability=False,
+                report_in_agent_status=False,
                 accepts_transport_input=False,
                 supports_conversation_binding=False,
                 supports_timeline=False,
@@ -523,7 +523,7 @@ def test_workflow_context_builder_derives_registry_external_conversation_ref_whe
                 supports_multiple=True,
                 inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_transport_capability=True,
+                report_in_agent_status=True,
                 accepts_transport_input=True,
                 supports_conversation_binding=True,
                 supports_timeline=True,
@@ -575,7 +575,7 @@ async def test_workflow_context_builder_chooses_routed_task_callback_by_concern(
                 supports_multiple=True,
                 inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_transport_capability=False,
+                report_in_agent_status=False,
                 accepts_transport_input=False,
                 supports_conversation_binding=False,
                 supports_timeline=False,

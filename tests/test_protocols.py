@@ -19,17 +19,19 @@ from octopus_sdk.protocols import (
     ProtocolStageDefinitionRecord,
     TargetSelector,
     build_conversation_protocol_run_request,
+    build_protocol_run_request_from_inputs,
     canonical_protocol_document,
     filter_launchable_protocols,
     launch_protocol_from_conversation,
     list_launchable_protocols,
     parse_protocol_stage_decision,
+    protocol_run_launch_form,
     protocol_document_to_text,
     protocol_review_edge_key,
+    render_protocol_stage_prompt,
     resolve_launchable_protocol,
     validate_protocol_document,
 )
-from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.protocols.launch import ProtocolConversationLaunchRequestRecord
 from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
@@ -161,6 +163,175 @@ async def test_conversation_protocol_launch_helpers_filter_resolve_and_build_req
     assert request.root_conversation_id == "conv-1"
     assert request.workspace_ref == "workspace-a"
     assert request.constraints_json == {"priority": "high"}
+
+
+def test_protocol_launch_form_and_input_request_are_transport_neutral():
+    definition = _launchable_definition()
+
+    default_form = protocol_run_launch_form(definition, canonical_protocol_document(protocol_document()))
+    assert [field.key for field in default_form.fields] == [
+        "problem_statement",
+        "workspace_ref",
+        "context",
+        "constraints",
+        "expected_outputs",
+    ]
+    default_text = " ".join(
+        " ".join(
+            [
+                field.label,
+                field.help,
+                field.default_value,
+                field.placeholder,
+            ]
+        )
+        for field in default_form.fields
+    ).lower()
+    assert "analytics" not in default_text
+    assert "manufacturing" not in default_text
+    assert "raw private data" not in default_text
+
+    document = protocol_document()
+    document["metadata"]["run_inputs"] = [
+        {
+            "key": "problem_statement",
+            "label": "Goal",
+            "kind": "textarea",
+            "required": True,
+        },
+        {
+            "key": "privacy_constraints",
+            "label": "Privacy",
+            "kind": "textarea",
+            "default_value": "Keep raw data local.",
+        },
+    ]
+
+    form = protocol_run_launch_form(definition, canonical_protocol_document(document))
+
+    assert form.protocol_id == "protocol-1"
+    assert [field.key for field in form.fields] == ["problem_statement", "privacy_constraints"]
+    assert form.fields[1].default_value == "Keep raw data local."
+
+    request = build_protocol_run_request_from_inputs(
+        definition,
+        {
+            "problem_statement": "Prepare a release review.",
+            "workspace_ref": "workspace-a",
+            "context": "Review the repository changes and release notes.",
+            "constraints": "Keep the review focused on release blockers.",
+            "expected_outputs": "Release readiness summary.",
+        },
+        entry_agent_id="agent-1",
+        origin_channel="registry",
+    )
+
+    assert request.protocol_id == "protocol-1"
+    assert request.entry_agent_id == "agent-1"
+    assert request.workspace_ref == "workspace-a"
+    assert request.problem_statement == "Prepare a release review."
+    assert request.constraints_json["context"] == "Review the repository changes and release notes."
+    assert request.constraints_json["constraints"] == "Keep the review focused on release blockers."
+    assert request.constraints_json["expected_outputs"] == "Release readiness summary."
+
+
+def test_protocol_stage_prompt_includes_typed_run_context_without_special_surface_logic():
+    document = canonical_protocol_document(protocol_document())
+    run = ProtocolRunRecord.model_validate(
+        {
+            "protocol_run_id": "run-1",
+            "protocol_id": "protocol-1",
+            "protocol_definition_version_id": "version-1",
+            "entry_agent_id": "agent-1",
+            "status": "running",
+            "current_stage_key": "planning",
+            "problem_statement": "Prepare the release review.",
+            "constraints_json": {
+                "context": "Review the repository changes and release notes.",
+                "constraints": "Keep the review focused on release blockers.",
+                "expected_outputs": "Release readiness summary.",
+            },
+        }
+    )
+
+    prompt = render_protocol_stage_prompt(
+        document=document,
+        run=run,
+        stage=document.stage("planning"),
+        artifacts=[],
+    )
+
+    assert "Run context and constraints:" in prompt
+    assert "Context:\nReview the repository changes and release notes." in prompt
+    assert "Constraints:\nKeep the review focused on release blockers." in prompt
+    assert "Expected outputs:\nRelease readiness summary." in prompt
+
+
+def test_protocol_stage_prompt_limits_artifact_work_to_stage_outputs():
+    payload = protocol_document()
+    planning = next(stage for stage in payload["stages"] if stage["stage_key"] == "planning")
+    planning["outputs"] = []
+    document = canonical_protocol_document(payload)
+    run = ProtocolRunRecord.model_validate(
+        {
+            "protocol_run_id": "run-1",
+            "protocol_id": "protocol-1",
+            "protocol_definition_version_id": "version-1",
+            "entry_agent_id": "agent-1",
+            "status": "running",
+            "current_stage_key": "planning",
+            "problem_statement": "Create the local analytics app.",
+            "constraints_json": {
+                "desired_outputs": "index.html and findings report",
+            },
+        }
+    )
+
+    prompt = render_protocol_stage_prompt(
+        document=document,
+        run=run,
+        stage=document.stage("planning"),
+        artifacts=[],
+    )
+
+    assert "do not create or update protocol artifacts for this stage" in prompt
+    assert "update the required artifacts" not in prompt
+
+
+def test_protocol_review_prompt_mentions_assigned_output_artifacts():
+    payload = protocol_document()
+    payload["artifacts"].append(
+        {
+            "artifact_key": "review_report",
+            "kind": "workspace_file",
+            "path": "protocol/review.md",
+        }
+    )
+    review = next(stage for stage in payload["stages"] if stage["stage_key"] == "review")
+    review["outputs"] = ["review_report"]
+    document = canonical_protocol_document(payload)
+    run = ProtocolRunRecord.model_validate(
+        {
+            "protocol_run_id": "run-1",
+            "protocol_id": "protocol-1",
+            "protocol_definition_version_id": "version-1",
+            "entry_agent_id": "agent-1",
+            "status": "running",
+            "current_stage_key": "review",
+            "problem_statement": "Review the local analytics app.",
+        }
+    )
+
+    prompt = render_protocol_stage_prompt(
+        document=document,
+        run=run,
+        stage=document.stage("review"),
+        artifacts=[],
+    )
+
+    assert "Artifacts for this stage:" in prompt
+    assert "- review_report: protocol/review.md" in prompt
+    assert "Complete the review, update the assigned output artifacts in the workspace" in prompt
 
 
 @pytest.mark.asyncio
@@ -299,13 +470,16 @@ def test_canonical_protocol_document_migrates_participant_selector_to_stage_sele
 
 def test_validate_protocol_document_requires_assignment_rule_for_stages() -> None:
     invalid = protocol_document()
+    invalid["stages"][0]["display_name"] = "Planning stage"
     invalid["stages"][0].pop("selector", None)
 
     result = validate_protocol_document(invalid)
 
     assert result.ok is False
     assert result.issues
-    assert any(item.code == "stage.selector_required" for item in result.issues)
+    issue = next(item for item in result.issues if item.code == "stage.selector_required")
+    assert "Planning stage" in issue.message
+    assert "planning" not in issue.message
 
 
 def test_validate_protocol_document_warns_when_legacy_required_skills_has_multiple_values() -> None:
@@ -317,17 +491,6 @@ def test_validate_protocol_document_warns_when_legacy_required_skills_has_multip
 
     assert result.ok is True
     assert any(item.code == "participant.legacy_multi_skill" and item.blocking is False for item in result.issues)
-
-
-def test_builtin_protocol_templates_use_selector_backed_assignment() -> None:
-    for slug in ("software-engineering", "document-approval"):
-        document = builtin_protocol_document(slug)
-        assert document.participants
-        for participant in document.participants:
-            assert "selector" not in participant.model_dump(mode="json")
-            assert "required_skills" not in participant.model_dump(mode="json")
-        for stage in document.stages:
-            assert stage.selector is not None, f"{slug} stage {stage.stage_key} must declare a selector"
 
 
 def test_runtime_protocol_selector_prefers_entry_agent_for_skill_selectors() -> None:
@@ -596,6 +759,46 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert detail.run.status == "completed"
     assert detail.run.termination_summary == "Accepted."
+
+
+def test_registry_store_protocol_run_completes_single_work_stage_without_transition(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    document = {
+        **protocol_document(),
+        "artifacts": [],
+        "stages": [
+            {
+                **protocol_document()["stages"][0],
+                "stage_key": "release-readiness",
+                "display_name": "Release readiness",
+                "inputs": [],
+                "outputs": [],
+                "transitions": {},
+            }
+        ],
+    }
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    token = enroll.agent_token
+    first_stage = detail.stage_executions[0]
+
+    store.update_routed_task_result(
+        token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "single-stage-complete",
+            "summary": "Ready.",
+            "full_text": "Ready to proceed.\nPROTOCOL_SUMMARY: Ready.",
+        },
+    )
+
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert detail.run.status == "completed"
+    assert detail.run.blocked_code == ""
+    assert detail.run.termination_summary == "Ready."
+    assert any(item.transition_kind == "terminal" for item in detail.transitions)
 
 
 def test_registry_store_protocol_run_detail_projects_latest_artifact_once(postgres_registry_truncated: str) -> None:
@@ -1141,7 +1344,7 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
     assert store.list_protocol_issues(access=operator_access(), issue_kind="not-a-real-issue-kind") == []
 
 
-def test_registry_store_sources_builtin_protocol_templates_from_code_not_authored_rows(postgres_registry_truncated: str) -> None:
+def test_registry_store_does_not_seed_protocol_templates_from_code(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -1158,12 +1361,9 @@ def test_registry_store_sources_builtin_protocol_templates_from_code_not_authore
             row = cur.fetchone()
             assert row is None
 
-    template = store.get_protocol_template("software-engineering", access=operator_access())
-    assert template.slug == "software-engineering"
-    assert template.display_name
-    approval = store.get_protocol_template("document-approval", access=operator_access())
-    assert approval.slug == "document-approval"
-    assert approval.display_name == "Document Approval"
+    assert store.list_protocol_templates(access=operator_access()) == []
+    with pytest.raises(KeyError):
+        store.get_protocol_template("software-engineering", access=operator_access())
 
 
 def test_registry_store_authoring_options_and_templates_are_separate_resources(postgres_registry_truncated: str) -> None:
@@ -1177,9 +1377,7 @@ def test_registry_store_authoring_options_and_templates_are_separate_resources(p
     options = store.get_protocol_authoring_options(access=operator_access())
     templates = store.list_protocol_templates(access=operator_access())
 
-    assert templates
-    assert any(item.slug == "software-engineering" for item in templates)
-    assert any(item.slug == "document-approval" for item in templates)
+    assert templates == []
     assert "design" in options.sections
     assert "advanced" not in options.sections
     assert "review" in options.stage_kind_options
@@ -1327,7 +1525,7 @@ def test_registry_store_standard_surface_preserves_existing_operator_only_fields
     assert saved.draft_definition_json["stages"][0]["timeout_seconds"] == 300
 
 
-def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_starter(postgres_registry_truncated: str) -> None:
+def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_draft(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
 
     created = store.create_protocol_draft(
@@ -1348,7 +1546,7 @@ def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_st
     assert "Add at least one stage before review or publish." in created.validation.errors
 
 
-def test_registry_store_create_template_protocol_draft_clones_builtin_template(postgres_registry_truncated: str) -> None:
+def test_registry_store_create_template_protocol_draft_requires_user_published_template(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 
     store = RegistryPostgresStore(postgres_registry_truncated)
@@ -1356,31 +1554,32 @@ def test_registry_store_create_template_protocol_draft_clones_builtin_template(p
         assert run_init(conn) == []
         conn.commit()
 
-    created = store.create_protocol_draft(
+    missing = store.create_protocol_draft(
         ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "software-engineering"}),
+        access=operator_access(),
+    )
+
+    assert missing.ok is False
+    assert missing.status == "not_found"
+
+    published = published_protocol(store, slug="template-source-for-draft")
+    assert published.protocol is not None
+    template_result = store.publish_protocol_template(published.protocol.protocol_id, access=operator_access())
+    assert template_result.ok is True
+    assert template_result.protocol is not None
+
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": template_result.protocol.slug}),
         access=operator_access(),
     )
 
     assert created.ok is True
     assert created.protocol is not None
-    assert created.protocol.slug != "software-engineering"
+    assert created.protocol.slug != template_result.protocol.slug
     assert created.draft_definition_json["metadata"]["display_name"].endswith("Draft")
     assert created.draft_definition_json["stages"]
     assert created.validation is not None
     assert created.validation.ok is True
-
-    approval_created = store.create_protocol_draft(
-        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "document-approval"}),
-        access=operator_access(),
-    )
-
-    assert approval_created.ok is True
-    assert approval_created.protocol is not None
-    assert approval_created.protocol.slug != "document-approval"
-    assert approval_created.draft_definition_json["metadata"]["display_name"].startswith("Document Approval")
-    assert approval_created.draft_definition_json["stages"]
-    assert approval_created.validation is not None
-    assert approval_created.validation.ok is True
 
 
 def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_registry_truncated: str) -> None:
@@ -1402,6 +1601,25 @@ def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_
     assert cloned.draft_definition_json["stages"]
     assert cloned.validation is not None
     assert cloned.validation.ok is True
+
+
+def test_registry_store_cleanup_workspace_data_removes_authored_work_records(postgres_registry_truncated: str) -> None:
+    from app.db.postgres_init import run_init
+
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    with get_connection(postgres_registry_truncated) as conn:
+        assert run_init(conn) == []
+        conn.commit()
+
+    created = store.create_protocol_draft(ProtocolDraftCreateRecord.model_validate({"source_kind": "blank"}), access=operator_access())
+    assert created.protocol is not None
+    assert store.list_protocols(access=operator_access())
+
+    result = store.cleanup_workspace_data()
+
+    assert result["cleaned"] is True
+    assert store.list_protocols(access=operator_access()) == []
+    assert store.list_protocol_templates(access=operator_access()) == []
 
 
 def test_registry_store_delete_protocol_discards_unpublished_draft(postgres_registry_truncated: str) -> None:

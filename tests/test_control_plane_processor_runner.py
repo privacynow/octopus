@@ -21,17 +21,17 @@ class _RecordingProcessor:
     def __init__(
         self,
         *,
-        authority_capabilities: dict[str, set[str]],
+        implemented_admin_interfaces: dict[str, set[str]],
         reply: ControlReply | None = None,
         side_effect=None,
     ) -> None:
-        self._authority_capabilities = authority_capabilities
+        self._implemented_admin_interfaces = implemented_admin_interfaces
         self._reply = reply or ControlReply(command_id="reply", status="completed", result_json='{"ok": true}')
         self._side_effect = side_effect
         self.seen: list[ControlCommand] = []
 
-    def authority_capabilities(self) -> dict[str, set[str]]:
-        return self._authority_capabilities
+    def implemented_admin_interfaces(self) -> dict[str, set[str]]:
+        return self._implemented_admin_interfaces
 
     async def process(self, command: ControlCommand) -> ControlReply:
         self.seen.append(command)
@@ -58,8 +58,8 @@ class _FakeLeaseBus:
         self.purge_calls += 1
         return 0
 
-    async def poll_commands(self, *, allowed_pairs: set[tuple[str, str]], limit: int = 20) -> list[ControlCommand]:
-        del allowed_pairs, limit
+    async def poll_commands(self, *, allowed_admin_targets: set[tuple[str, str]], limit: int = 20) -> list[ControlCommand]:
+        del allowed_admin_targets, limit
         if self._claimed:
             return []
         self._claimed = True
@@ -110,8 +110,8 @@ class _FlakyLoopBus:
             raise RuntimeError("purge boom")
         return 0
 
-    async def poll_commands(self, *, allowed_pairs: set[tuple[str, str]], limit: int = 20) -> list[ControlCommand]:
-        del allowed_pairs, limit
+    async def poll_commands(self, *, allowed_admin_targets: set[tuple[str, str]], limit: int = 20) -> list[ControlCommand]:
+        del allowed_admin_targets, limit
         self.calls["poll"] += 1
         if self.failing_step == "poll" and self.calls["poll"] == 1:
             raise RuntimeError("poll boom")
@@ -121,17 +121,17 @@ class _FlakyLoopBus:
 def _command(
     command_id: str,
     *,
-    capability: str = "conversation_projection",
-    operation: str = "bind_conversation",
-    authority_ref: str = "registry:alpha",
+    admin_interface: str = "conversation_projection",
+    admin_operation: str = "bind_conversation",
+    implementation_ref: str = "registry:alpha",
     max_retries: int = 3,
 ) -> ControlCommand:
     return ControlCommand(
         command_id=command_id,
-        capability=capability,
-        operation=operation,
+        admin_interface=admin_interface,
+        admin_operation=admin_operation,
         payload_json='{"ok": true}',
-        authority_ref=authority_ref,
+        implementation_ref=implementation_ref,
         max_retries=max_retries,
     )
 
@@ -171,21 +171,21 @@ async def test_processor_runner_claims_and_dispatches_by_authority_pair(postgres
     try:
         runner = ProcessorRunner(bus, poll_interval_seconds=0.01, reclaim_interval_seconds=0.01)
         projection = _RecordingProcessor(
-            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+            implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
         )
         routing = _RecordingProcessor(
-            authority_capabilities={"registry:coord": {"task_routing"}},
+            implemented_admin_interfaces={"registry:coord": {"task_routing"}},
         )
         runner.register(projection)
         runner.register(routing)
 
-        await bus.submit(_command("cmd-proj", authority_ref="registry:alpha"))
+        await bus.submit(_command("cmd-proj", implementation_ref="registry:alpha"))
         await bus.submit(
             _command(
                 "cmd-route",
-                capability="task_routing",
-                operation="submit_routed_task",
-                authority_ref="registry:coord",
+                admin_interface="task_routing",
+                admin_operation="submit_routed_task",
+                implementation_ref="registry:coord",
             )
         )
 
@@ -218,7 +218,7 @@ async def test_processor_runner_retries_transient_failure_then_completes(bus_and
         return ControlReply(command_id=command.command_id, status="completed", result_json='{"ok": true}')
 
     processor = _RecordingProcessor(
-        authority_capabilities={"registry:alpha": {"conversation_projection"}},
+        implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
         side_effect=flaky,
     )
     runner.register(processor)
@@ -247,7 +247,7 @@ async def test_processor_runner_dead_letters_after_retry_exhaustion(bus_and_data
 
     runner.register(
         _RecordingProcessor(
-            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+            implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
             side_effect=always_fail,
         )
     )
@@ -270,12 +270,12 @@ async def test_processor_runner_reclaims_expired_commands_before_dispatch(bus_an
     bus, data_dir, postgres_url = bus_and_data_dir
     runner = ProcessorRunner(bus, poll_interval_seconds=0.01, reclaim_interval_seconds=0.01)
     processor = _RecordingProcessor(
-        authority_capabilities={"registry:alpha": {"conversation_projection"}},
+        implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
     )
     runner.register(processor)
 
     await bus.submit(_command("cmd-expired"))
-    claimed = await bus.poll_commands(allowed_pairs={("registry:alpha", "conversation_projection")})
+    claimed = await bus.poll_commands(allowed_admin_targets={("registry:alpha", "conversation_projection")})
     assert [item.command_id for item in claimed] == ["cmd-expired"]
 
     with connect(postgres_url) as conn:
@@ -321,13 +321,13 @@ async def test_processor_runner_clean_shutdown_stops_claiming_and_waits_for_infl
     )
     runner.register(
         _RecordingProcessor(
-            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+            implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
             side_effect=blocking,
         )
     )
 
     await bus.submit(_command("cmd-first"))
-    await bus.submit(_command("cmd-second", operation="publish_timeline"))
+    await bus.submit(_command("cmd-second", admin_operation="publish_timeline"))
 
     stop_event = asyncio.Event()
     task = asyncio.create_task(runner.run(stop_event=stop_event))
@@ -338,7 +338,7 @@ async def test_processor_runner_clean_shutdown_stops_claiming_and_waits_for_infl
 
     first_reply = await _wait_for_reply(bus, data_dir, "cmd-first")
     assert first_reply.status == "completed"
-    pending = await bus.poll_commands(allowed_pairs={("registry:alpha", "conversation_projection")}, limit=10)
+    pending = await bus.poll_commands(allowed_admin_targets={("registry:alpha", "conversation_projection")}, limit=10)
     assert [command.command_id for command in pending] == ["cmd-second"]
 
 
@@ -362,7 +362,7 @@ async def test_processor_runner_renews_leases_for_inflight_commands() -> None:
     )
     runner.register(
         _RecordingProcessor(
-            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+            implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
             side_effect=wait_for_renewal,
         )
     )
@@ -429,7 +429,7 @@ async def test_processor_runner_forwards_claim_token_on_processor_failure(caplog
     )
     runner.register(
         _RecordingProcessor(
-            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+            implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
             side_effect=boom,
         )
     )
@@ -447,7 +447,7 @@ async def test_processor_runner_forwards_claim_token_on_processor_failure(caplog
 
 @pytest.mark.asyncio
 async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owner(caplog) -> None:
-    command = _command("cmd-dead-letter", authority_ref="registry:beta")
+    command = _command("cmd-dead-letter", implementation_ref="registry:beta")
     bus = _FakeLeaseBus(command)
     caplog.set_level(logging.WARNING, logger="app.control_plane.processor_runner")
     runner = ProcessorRunner(
@@ -458,7 +458,7 @@ async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owne
     )
     runner.register(
         _RecordingProcessor(
-            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+            implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}},
         )
     )
 
@@ -480,7 +480,7 @@ async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owne
 def test_processor_runner_rejects_duplicate_pair_ownership(bus_and_data_dir) -> None:
     bus, _data_dir, _postgres_url = bus_and_data_dir
     runner = ProcessorRunner(bus)
-    runner.register(_RecordingProcessor(authority_capabilities={"registry:alpha": {"conversation_projection"}}))
+    runner.register(_RecordingProcessor(implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}}))
 
     with pytest.raises(ValueError, match="duplicate control-plane processor ownership"):
-        runner.register(_RecordingProcessor(authority_capabilities={"registry:alpha": {"conversation_projection"}}))
+        runner.register(_RecordingProcessor(implemented_admin_interfaces={"registry:alpha": {"conversation_projection"}}))

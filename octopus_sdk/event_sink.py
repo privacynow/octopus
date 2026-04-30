@@ -1,7 +1,7 @@
 """Execution event sink — thin adapter over ConversationProjectionPort.
 
 The sink is NOT a second registry client. It composes:
-  - ConversationProjectionPort (the capability)
+  - ConversationProjectionPort (the SDK interface)
   - TransportIdentity (who/where)
   - BotConfigBase (publish level gating)
 

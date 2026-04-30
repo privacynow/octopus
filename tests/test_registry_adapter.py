@@ -306,7 +306,7 @@ async def test_registry_task_egress_does_not_project_task_ref_lifecycle(tmp_path
         recovery_id="reg:1",
     )
 
-    assert task_egress.capabilities.can_render_timeline is False
+    assert task_egress.egress_features.can_render_timeline is False
     assert projection.event_calls == []
 
 
@@ -343,10 +343,10 @@ def test_register_registry_channels_registers_channels_by_scope(tmp_path):
     assert dispatcher.transport_type_for_ref(registry_conversation_ref("prod", "conv-1")) == "registry"
     assert dispatcher.transport_type_for_ref("registry:ops:task:task-1") == "registry"
     assert dispatcher.transport_type_for_ref("registry:prod:task:task-1") is None
-    assert dispatcher.active_transport_types() == ["registry"]
+    assert dispatcher.reported_transport_implementations() == ["registry"]
 
 
-def test_registry_task_channel_does_not_contribute_channel_capability(tmp_path):
+def test_registry_task_channel_does_not_report_transport_implementation(tmp_path):
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -366,6 +366,6 @@ def test_registry_task_channel_does_not_contribute_channel_capability(tmp_path):
         services=_services(cfg, _ProjectionRecorder()),
     )
 
-    assert task_channel.descriptor.contributes_transport_capability is False
+    assert task_channel.descriptor.report_in_agent_status is False
     assert task_channel.descriptor.accepts_transport_input is False
     assert task_channel.descriptor.supports_timeline is False

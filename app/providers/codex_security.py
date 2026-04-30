@@ -136,7 +136,7 @@ def probe_codex_sandbox_support() -> str | None:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return "the sandbox capability probe timed out"
+        return "the sandbox feature probe timed out"
     except OSError as exc:
         return str(exc)
     if completed.returncode == 0:

@@ -110,6 +110,12 @@ class _Registry:
     async def list_run_artifacts(self, run_id):
         return (await self.get_run(run_id)).artifacts
 
+    async def get_run_artifact_content(self, run_id, artifact_key, *, download=False):
+        assert run_id == "run-1"
+        assert artifact_key == "plan"
+        assert download is True
+        return b"# Plan\n"
+
     async def act_on_protocol_run(self, run_id, *, action, reason="", idempotency_key="", expected_version=None):
         self.actions.append((run_id, action, reason, idempotency_key, expected_version))
         return ProtocolRunMutationRecord.model_validate(
@@ -176,3 +182,11 @@ async def test_protocol_service_observes_artifacts_and_controls_runs():
     assert result.run is not None
     assert result.run.status == "cancelled"
     assert registry.actions == [("run-1", "cancel", "wrong output", "idem-2", 1)]
+
+
+async def test_protocol_service_downloads_artifact_content_through_shared_port():
+    service = ProtocolService(_Registry())
+
+    content = await service.get_run_artifact_content("run-1", "plan", download=True)
+
+    assert content == b"# Plan\n"

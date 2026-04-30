@@ -14,7 +14,7 @@ from app.config import BotConfig
 from octopus_sdk.transport import (
     EditableHandle,
     TransportBindingRecord,
-    TransportCapabilities,
+    TransportEgressFeatures,
     TransportEgress,
 )
 from octopus_sdk.transport import TransportHealthRecord
@@ -80,8 +80,8 @@ class TelegramChannelEgress(TransportEgress):
         self.replies: list[str] = []
 
     @property
-    def capabilities(self) -> TransportCapabilities:
-        return TransportCapabilities(channel_name="telegram")
+    def egress_features(self) -> TransportEgressFeatures:
+        return TransportEgressFeatures(transport_implementation="telegram")
 
     async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
         sent = await self._bot.send_message(self.chat_id, text, **kwargs)

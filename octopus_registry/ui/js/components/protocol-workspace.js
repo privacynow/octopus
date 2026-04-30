@@ -60,12 +60,15 @@ function _protocolArtifactPreviewable(item) {
 
 function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
+    const available = !missing && artifact?.exists !== false;
     return UI.createArtifactActionRow({
-        previewable: !missing && _protocolArtifactPreviewable(artifact),
+        previewable: available && _protocolArtifactPreviewable(artifact),
         previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
-        openHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key),
-        downloadHref: missing ? '' : API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }),
+        openHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
+        downloadHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }) : '',
         copyPathText: displayPath,
+        available,
+        unavailableReason: missing ? 'Declared artifact, not produced yet.' : 'Artifact path is not available on this host.',
     });
 }
 
@@ -211,7 +214,12 @@ function _selectorFromFields(kind, value, preferredAgentId = '') {
 function _selectorModeFromKind(kind, fallback = 'skill') {
     const normalized = String(kind || '').trim().toLowerCase();
     if (normalized === 'unassigned') return 'unassigned';
-    if (normalized === 'new_capability' || normalized === 'new-capability') return 'new_capability';
+    if (
+        normalized === 'new_skill'
+        || normalized === 'new-skill'
+        || normalized === 'new_capability'
+        || normalized === 'new-capability'
+    ) return 'new_skill';
     if (normalized === 'agent' || normalized === 'skill') return normalized;
     if (normalized) return 'advanced';
     return String(fallback || 'skill');
@@ -264,7 +272,7 @@ function renderProtocolWorkspace(container) {
     let authoringOptions = null;
     let protocolTemplates = [];
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
-    let starterMode = String(UI.readQueryParam('new', '') || '').trim().toLowerCase() === 'template' ? 'template' : '';
+    let templateChooserMode = String(UI.readQueryParam('new', '') || '').trim().toLowerCase() === 'template' ? 'template' : '';
     let includeGeneratedCatalog = UI.readQueryParam('include_generated', '') === '1';
     let currentProtocol = null;
     let protocolDetailLoading = false;
@@ -725,7 +733,7 @@ function renderProtocolWorkspace(container) {
         return JSON.parse(JSON.stringify(doc || _blankDocument()));
     }
 
-    function _normalizeStageWriteCapability(stage) {
+    function _normalizeStageWriteAccess(stage) {
         const outputs = Array.isArray(stage?.outputs) ? stage.outputs.filter(Boolean) : [];
         return {
             ...stage,
@@ -733,8 +741,58 @@ function renderProtocolWorkspace(container) {
         };
     }
 
+    function _assignmentParticipantKey(selector) {
+        const kind = String(selector?.kind || '').trim().toLowerCase();
+        const value = String(selector?.value || '').trim();
+        if (!kind || !value || !PRIMARY_SELECTOR_KINDS.includes(kind)) return '';
+        return _slugSuggestion(`${kind}-${value}`) || '';
+    }
+
+    function _assignmentParticipantLabel(selector) {
+        const kind = String(selector?.kind || '').trim().toLowerCase();
+        const value = String(selector?.value || '').trim();
+        if (!kind || !value) return '';
+        if (kind === 'agent') {
+            const agent = _selectorAgentRecord(value);
+            return UI.visibleLabel(agent?.display_name, agent?.slug || value, value);
+        }
+        if (kind === 'skill') {
+            return `${_titleCaseWords(value)} skill`;
+        }
+        return _titleCaseWords(value);
+    }
+
+    function _ensureStageAssignmentParticipants(doc) {
+        const normalized = _cloneDoc(doc || _blankDocument());
+        const participants = Array.isArray(normalized.participants) ? [...normalized.participants] : [];
+        const participantKeys = new Set(
+            participants.map((item) => String(item?.participant_key || '').trim()).filter(Boolean),
+        );
+        normalized.stages = (Array.isArray(normalized.stages) ? normalized.stages : [])
+            .map((stage) => {
+                const nextStage = _normalizeStageWriteAccess(stage);
+                if (String(nextStage.participant_key || '').trim()) return nextStage;
+                const participantKey = _assignmentParticipantKey(nextStage.selector);
+                if (!participantKey) return nextStage;
+                if (!participantKeys.has(participantKey)) {
+                    participants.push({
+                        participant_key: participantKey,
+                        display_name: _assignmentParticipantLabel(nextStage.selector) || participantKey,
+                        instructions: '',
+                    });
+                    participantKeys.add(participantKey);
+                }
+                return {
+                    ...nextStage,
+                    participant_key: participantKey,
+                };
+            });
+        normalized.participants = participants;
+        return normalized;
+    }
+
     function _docFromDraft() {
-        const doc = _cloneDoc(draft.document);
+        const doc = _ensureStageAssignmentParticipants(draft.document);
         doc.schema_version = Number(doc.schema_version || 1) || 1;
         doc.metadata = Object.assign({}, doc.metadata || {}, {
             slug: String(draft.slug || '').trim(),
@@ -743,7 +801,7 @@ function renderProtocolWorkspace(container) {
         });
         doc.participants = Array.isArray(doc.participants) ? doc.participants : [];
         doc.artifacts = Array.isArray(doc.artifacts) ? doc.artifacts : [];
-        doc.stages = Array.isArray(doc.stages) ? doc.stages.map((stage) => _normalizeStageWriteCapability(stage)) : [];
+        doc.stages = Array.isArray(doc.stages) ? doc.stages.map((stage) => _normalizeStageWriteAccess(stage)) : [];
         return doc;
     }
 
@@ -1388,7 +1446,7 @@ function renderProtocolWorkspace(container) {
     function _writeState({ push = false } = {}) {
         UI.updateQueryParams({
             protocol_id: currentProtocolId || '',
-            new: !currentProtocolId && starterMode === 'template' ? 'template' : '',
+            new: !currentProtocolId && templateChooserMode === 'template' && protocolTemplates.length ? 'template' : '',
             run_id: '',
             status: '',
             issue_kind: '',
@@ -1599,7 +1657,7 @@ function renderProtocolWorkspace(container) {
         try {
             const result = await API.createProtocolDraft({ source_kind: 'blank' });
             currentProtocolId = result.protocol?.protocol_id || '';
-            starterMode = '';
+            templateChooserMode = '';
             _applyServerDetail(result);
             _writeState({ push: true });
             await loadProtocols({ quiet: true });
@@ -1621,7 +1679,7 @@ function renderProtocolWorkspace(container) {
                 template_slug: templateSlug,
             });
             currentProtocolId = result.protocol?.protocol_id || '';
-            starterMode = '';
+            templateChooserMode = '';
             _applyServerDetail(result);
             _writeState({ push: true });
             await loadProtocols({ quiet: true });
@@ -1634,42 +1692,121 @@ function renderProtocolWorkspace(container) {
         }
     }
 
-    function _openStarterChooser() {
+    async function _openTemplateReviewDialog(template) {
+        const templateSlug = String(template?.slug || '').trim();
+        if (!templateSlug) return;
+        const body = document.createElement('div');
+        body.className = 'conversation-management-form';
+        body.appendChild(UI.renderEmptyState('Loading template…', true));
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const createBtn = document.createElement('button');
+        createBtn.type = 'button';
+        createBtn.className = 'btn btn-primary';
+        createBtn.textContent = 'Create editable draft';
+        createBtn.disabled = true;
+        const view = UI.showDialog('Review template', body, {
+            actions: [cancelBtn, createBtn],
+            maxWidth: '780px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        try {
+            const documentRecord = await API.getProtocolTemplate(templateSlug);
+            const metadata = documentRecord?.metadata || {};
+            const stages = Array.isArray(documentRecord?.stages) ? documentRecord.stages : [];
+            const artifacts = Array.isArray(documentRecord?.artifacts) ? documentRecord.artifacts : [];
+            body.textContent = '';
+            const summary = document.createElement('p');
+            summary.className = 'quiet-note';
+            summary.textContent = `${metadata.display_name || template?.display_name || templateSlug} will be copied into a separate editable protocol. The template is not changed; the new protocol can be changed, published, and run from the UI.`;
+            body.appendChild(summary);
+            const stageList = document.createElement('div');
+            stageList.className = 'protocol-lineage-list';
+            UI.reconcileChildren(stageList, stages.slice(0, 8).map((stage, index) => UI.renderListRow({
+                label: `${index + 1}. ${stage.display_name || stage.stage_key || 'Stage'}`,
+                sublabel: [
+                    stage.stage_kind || 'work',
+                    (stage.outputs || []).length ? `${stage.outputs.length} output${stage.outputs.length === 1 ? '' : 's'}` : 'no declared outputs',
+                ].join(' · '),
+                badgeText: stage.participant_key || '',
+            })));
+            const stageHead = document.createElement('div');
+            stageHead.className = 'detail-label';
+            stageHead.textContent = `Stages (${stages.length})`;
+            body.appendChild(stageHead);
+            body.appendChild(stageList);
+            const artifactList = document.createElement('div');
+            artifactList.className = 'task-artifact-list';
+            UI.reconcileChildren(artifactList, artifacts.slice(0, 10).map((artifact) => UI.createArtifactListRow({
+                label: artifact.description || artifact.artifact_key || 'Artifact',
+                sublabelParts: [
+                    artifact.path || artifact.location || '',
+                    artifact.kind || '',
+                    artifact.verify ? 'verified output' : '',
+                ],
+                badgeText: artifact.artifact_key || '',
+            })));
+            const artifactHead = document.createElement('div');
+            artifactHead.className = 'detail-label';
+            artifactHead.textContent = `Artifacts (${artifacts.length})`;
+            body.appendChild(artifactHead);
+            body.appendChild(artifactList);
+            if (artifacts.length > 10 || stages.length > 8) {
+                const note = document.createElement('p');
+                note.className = 'quiet-note';
+                note.textContent = 'Only the first items are shown here; the full draft opens after creation.';
+                body.appendChild(note);
+            }
+            createBtn.disabled = false;
+            createBtn.addEventListener('click', async () => {
+                createBtn.disabled = true;
+                await _createTemplateDraft(template || { slug: templateSlug });
+                view.close();
+            });
+        } catch (err) {
+            body.textContent = '';
+            body.appendChild(UI.createErrorCard(`Failed to load template: ${err.message}`, () => _openTemplateReviewDialog(template)));
+        }
+    }
+
+    function _openTemplateChooser() {
         currentProtocolId = '';
         currentProtocol = null;
         protocolDetailLoading = false;
-        starterMode = 'template';
+        templateChooserMode = 'template';
         _writeState({ push: true });
         render();
     }
 
-    function _closeStarterChooser() {
-        starterMode = '';
+    function _closeTemplateChooser() {
+        templateChooserMode = '';
         _writeState({ push: true });
         render();
     }
 
-    function _bindStarterChooserControls(root) {
-        const starter = root?.querySelector?.('[data-testid="protocol-starter"]');
-        if (!(starter instanceof Element)) return;
+    function _bindTemplateChooserControls(root) {
+        const chooser = root?.querySelector?.('[data-testid="protocol-template-chooser"]');
+        if (!(chooser instanceof Element)) return;
 
-        const blank = starter.querySelector('[data-protocol-starter-action="blank"]');
+        const blank = chooser.querySelector('[data-protocol-template-chooser-action="blank"]');
         if (blank instanceof HTMLButtonElement) {
             blank.onclick = () => void _createBlankDraft();
         }
 
-        const close = starter.querySelector('[data-protocol-starter-action="close"]');
+        const close = chooser.querySelector('[data-protocol-template-chooser-action="close"]');
         if (close instanceof HTMLButtonElement) {
-            close.onclick = _closeStarterChooser;
+            close.onclick = _closeTemplateChooser;
         }
 
-        starter.querySelectorAll('[data-protocol-template-slug]').forEach((button) => {
+        chooser.querySelectorAll('[data-protocol-template-slug]').forEach((button) => {
             if (!(button instanceof HTMLButtonElement)) return;
             const templateSlug = String(button.dataset.protocolTemplateSlug || '').trim();
             button.onclick = () => {
                 const template = (Array.isArray(protocolTemplates) ? protocolTemplates : [])
                     .find((item) => String(item?.slug || '').trim() === templateSlug);
-                void _createTemplateDraft(template || { slug: templateSlug });
+                void _openTemplateReviewDialog(template || { slug: templateSlug });
             };
         });
     }
@@ -1760,6 +1897,198 @@ function renderProtocolWorkspace(container) {
         UI.notify('Rehearsal started — dry run, external transports gated.', 'success');
         render();
         await _refreshRehearsalSessions();
+    }
+
+    function _defaultProtocolRunAgentId() {
+        const agents = _authoringAssignableAgents();
+        const preferred = agents.find((agent) => {
+            const execution = String(agent?.execution_state || agent?.execution_status || '').trim().toLowerCase();
+            const connectivity = String(agent?.connectivity_state || '').trim().toLowerCase();
+            return connectivity === 'connected' && !['faulted', 'stopped', 'disconnected'].includes(execution);
+        }) || agents[0] || _availableAuthoringAgents()[0] || null;
+        return String(preferred?.agent_id || '').trim();
+    }
+
+    function _protocolRunLaunchFields() {
+        const fields = draft?.document?.metadata?.run_inputs;
+        return Array.isArray(fields) && fields.length
+            ? fields
+            : Kit.protocolRunLaunchFields();
+    }
+
+    function _normalizeExpectedOutputToken(value) {
+        return String(value || '')
+            .trim()
+            .replace(/^[-*]\s+/, '')
+            .replace(/^`|`$/g, '')
+            .replace(/^["']|["']$/g, '')
+            .replace(/[.;]+$/g, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    function _expectedOutputTokens(value) {
+        return String(value || '')
+            .split(/[\n,]+/g)
+            .map(_normalizeExpectedOutputToken)
+            .filter(Boolean)
+            .filter((item) => /[./*]/.test(item) || /^[\w -]+\.[a-z0-9]{2,8}$/i.test(item));
+    }
+
+    function _declaredArtifactIdentifiers(doc = draft.document) {
+        const identifiers = new Set();
+        (doc?.artifacts || []).forEach((artifact) => {
+            [
+                artifact?.artifact_key,
+                artifact?.display_name,
+                artifact?.path,
+                artifact?.workspace_path,
+                artifact?.location,
+            ].forEach((value) => {
+                const normalized = _normalizeExpectedOutputToken(value);
+                if (normalized) identifiers.add(normalized);
+            });
+        });
+        return identifiers;
+    }
+
+    function _expectedOutputMatchesDeclared(token, declared) {
+        if (!token || declared.has(token)) return true;
+        const basename = token.split('/').filter(Boolean).pop() || token;
+        if (declared.has(basename)) return true;
+        if (!token.includes('*')) return false;
+        const pattern = new RegExp(`^${token
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*/g, '.*')}$`);
+        return Array.from(declared).some((item) => pattern.test(item));
+    }
+
+    function _openRunProtocolDialog() {
+        if (_blockConflictAction('Run protocol')) return;
+        if (!currentProtocolId) return;
+        const agents = _authoringAssignableAgents();
+        const defaultAgentId = _defaultProtocolRunAgentId();
+        const body = document.createElement('div');
+        body.className = 'conversation-management-form';
+
+        const summary = document.createElement('p');
+        summary.className = 'quiet-note';
+        summary.textContent = 'Start a real run from the latest published version. Rehearsal is the dry-run path; this dispatches work to runtime agents and records produced artifacts.';
+        body.appendChild(summary);
+
+        if (saveState.state === 'editing' || saveState.state === 'saving') {
+            const draftNote = document.createElement('p');
+            draftNote.className = 'quiet-note';
+            draftNote.textContent = 'You have unpublished draft edits. This run uses the latest published protocol, not unsaved or unpublished changes.';
+            body.appendChild(draftNote);
+        }
+
+        const agentLabel = document.createElement('label');
+        agentLabel.className = 'kit-details-field';
+        const agentTitle = document.createElement('span');
+        agentTitle.className = 'kit-details-label';
+        agentTitle.textContent = 'Entry agent';
+        agentLabel.appendChild(agentTitle);
+        const agentSelect = document.createElement('select');
+        agentSelect.className = 'input';
+        agentSelect.setAttribute('aria-label', 'Entry agent');
+        if (!agents.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No connected agents available';
+            agentSelect.appendChild(option);
+            agentSelect.disabled = true;
+        } else {
+            agents.forEach((agent) => {
+                const option = document.createElement('option');
+                option.value = String(agent.agent_id || '');
+                option.textContent = UI.visibleLabel(agent.display_name, agent.slug || agent.agent_id, 'Agent');
+                if (String(agent.agent_id || '') === defaultAgentId) option.selected = true;
+                agentSelect.appendChild(option);
+            });
+        }
+        agentLabel.appendChild(agentSelect);
+        const agentHelp = document.createElement('span');
+        agentHelp.className = 'kit-details-help';
+        agentHelp.textContent = 'The entry agent owns the root conversation for this run. Stage assignment rules still decide which agent receives each step.';
+        agentLabel.appendChild(agentHelp);
+        body.appendChild(agentLabel);
+
+        const outputAlignmentNote = document.createElement('p');
+        outputAlignmentNote.className = 'quiet-note';
+        outputAlignmentNote.hidden = true;
+        const launchForm = Kit.protocolRunLaunchForm({
+            values: {
+                problem_statement: draft.description,
+            },
+            fields: _protocolRunLaunchFields(),
+            includeWorkspace: true,
+            onInput: (key) => {
+                if (String(key || '') !== 'expected_outputs') return;
+                const values = launchForm.readValues();
+                const declared = _declaredArtifactIdentifiers(draft.document);
+                const missing = _expectedOutputTokens(values.expected_outputs)
+                    .filter((item) => !_expectedOutputMatchesDeclared(item, declared));
+                outputAlignmentNote.hidden = !missing.length;
+                outputAlignmentNote.textContent = missing.length
+                    ? `Expected outputs not declared as protocol artifacts: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''}. The run can still start, but the protocol will only verify declared artifacts.`
+                    : '';
+            },
+        });
+        body.appendChild(launchForm.element);
+        body.appendChild(outputAlignmentNote);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const startBtn = document.createElement('button');
+        startBtn.type = 'button';
+        startBtn.className = 'btn btn-primary';
+        startBtn.textContent = 'Start run';
+        startBtn.disabled = !agents.length;
+
+        const view = UI.showDialog('Run protocol', body, {
+            actions: [cancelBtn, startBtn],
+            maxWidth: '720px',
+            initialFocus: launchForm.focusTarget,
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        startBtn.addEventListener('click', async () => {
+            const entryAgentId = String(agentSelect.value || '').trim();
+            const values = launchForm.readValues();
+            if (!entryAgentId || !values.problem_statement) {
+                UI.notify('Choose an entry agent and describe what this run should accomplish.', 'error');
+                return;
+            }
+            startBtn.disabled = true;
+            try {
+                const constraints = {};
+                Object.keys(values).forEach((key) => {
+                    if (['problem_statement', 'workspace_ref'].includes(key)) return;
+                    if (String(values[key] || '').trim()) constraints[key] = String(values[key] || '').trim();
+                });
+                const created = await API.createProtocolRun({
+                    protocol_id: currentProtocolId,
+                    entry_agent_id: entryAgentId,
+                    origin_channel: 'registry',
+                    workspace_ref: String(values.workspace_ref || ''),
+                    problem_statement: String(values.problem_statement || ''),
+                    constraints_json: constraints,
+                });
+                const runId = String(created?.run?.protocol_run_id || '').trim();
+                view.close();
+                if (runId) {
+                    UI.notify('Protocol run started.', 'success');
+                    Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
+                } else {
+                    UI.notify('Protocol run started, but no run id was returned.', 'success');
+                }
+            } catch (err) {
+                UI.reportError('Failed to start protocol run', err, { context: 'Protocol authoring run launch failed' });
+                startBtn.disabled = false;
+            }
+        });
     }
 
     function _updateRehearsalDraft({ routedTaskId, responseText, decision, decisionSummary, scenarioId, artifactContents = {} } = {}) {
@@ -1959,7 +2288,7 @@ function renderProtocolWorkspace(container) {
         } else if (key === 'inputs' || key === 'outputs') {
             next[key] = Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : [];
             if (kind === 'stage') {
-                Object.assign(next, _normalizeStageWriteCapability(next));
+                Object.assign(next, _normalizeStageWriteAccess(next));
             }
         } else if (key === 'max_rounds' || key === 'timeout_seconds') {
             next[key] = Number.parseInt(String(value || '0'), 10) || 0;
@@ -1985,9 +2314,7 @@ function renderProtocolWorkspace(container) {
     function _commitPendingStageField(_target, key, value) {
         if (key === 'display_name') {
             pendingStage.display_name = String(value || '');
-            if (!String(pendingStage.stage_key || '').trim()) {
-                pendingStage.stage_key = _slugSuggestion(pendingStage.display_name);
-            }
+            pendingStage.stage_key = _slugSuggestion(pendingStage.display_name);
         } else if (key === 'stage_key') {
             pendingStage.stage_key = _slugSuggestion(value);
         } else if (key === 'stage_kind') {
@@ -2026,9 +2353,9 @@ function renderProtocolWorkspace(container) {
 
     function _commitPendingStageSelector(selectorKind, selectorValue, selectorPreferredAgentId = '') {
         const normalizedKind = String(selectorKind || '').trim().toLowerCase();
-        const keepNeededCapabilityMode = normalizedKind === 'skill'
-            && String(pendingStage.selector_mode || '') === 'new_capability';
-        if (normalizedKind && !keepNeededCapabilityMode) {
+        const keepNeededSkillMode = normalizedKind === 'skill'
+            && String(pendingStage.selector_mode || '') === 'new_skill';
+        if (normalizedKind && !keepNeededSkillMode) {
             pendingStage.selector_mode = _selectorModeFromKind(selectorKind, pendingStage.selector_mode || 'skill');
         }
         pendingStage.selector_kind = String(selectorKind || '');
@@ -2064,11 +2391,11 @@ function renderProtocolWorkspace(container) {
         );
         const advancedKind = readValue('select[aria-label="Custom selector type"]', pendingStage.selector_kind);
         const selector = _selectorFromEditorFields({
-            requiredSkill: readValue('[aria-label="Required capability"]', ''),
+            requiredSkill: readValue('[aria-label="Required skill"]', ''),
             pinnedAgent: readValue('[aria-label="Pin matching agent (optional)"]')
                 || readValue('[aria-label="Pinned agent"]')
                 || readValue('[aria-label="Agent"]', pendingStage.selector_kind === 'agent' ? pendingStage.selector_value : pendingStage.selector_preferred_agent_id),
-            capabilityNeed: readValue('[aria-label="Needed capability"]', ''),
+            neededSkill: readValue('[aria-label="Needed skill"]', ''),
             advancedKind,
             advancedValue: advancedKind === 'role'
                 ? (readValue('[aria-label="Choose runtime role tag"]', pendingStage.selector_value) || readValue('[aria-label="Custom value"]', pendingStage.selector_value))
@@ -2126,12 +2453,12 @@ function renderProtocolWorkspace(container) {
             button.__pendingStageBound = true;
             button.addEventListener('click', () => _commitPendingStageField(null, 'selector_mode', button.dataset.value || ''));
         });
-        bindAssignmentControl('[aria-label="Required capability"]');
-        bindAssignmentControl('[aria-label="Needed capability"]', 'input');
-        bindAssignmentControl('[aria-label="Needed capability"]', 'change');
+        bindAssignmentControl('[aria-label="Required skill"]');
+        bindAssignmentControl('[aria-label="Needed skill"]', 'input');
+        bindAssignmentControl('[aria-label="Needed skill"]', 'change');
         bindAssignmentControl('[aria-label="Pin matching agent (optional)"]');
         bindAssignmentControl('[aria-label="Agent"]');
-        bindAssignmentControl('[aria-label="Limit to one of this agent\'s capabilities (optional)"]');
+        bindAssignmentControl('[aria-label="Limit to one of this agent\'s skills (optional)"]');
         bindAssignmentControl('[aria-label="Custom selector type"]');
         bindAssignmentControl('[aria-label="Choose runtime role tag"]');
         bindAssignmentControl('[aria-label="Custom value"]', 'input');
@@ -2168,12 +2495,12 @@ function renderProtocolWorkspace(container) {
         const idx = items.findIndex((item) => String(item.stage_key || '') === String(nodeKey || ''));
         if (idx < 0) return;
         const normalizedKind = String(selectorKind || '').trim().toLowerCase();
-        const keepNeededCapabilityMode = normalizedKind === 'skill'
-            && String(stageAssignmentEditor.mode || '') === 'new_capability';
+        const keepNeededSkillMode = normalizedKind === 'skill'
+            && String(stageAssignmentEditor.mode || '') === 'new_skill';
         stageAssignmentEditor = {
             stageKey: String(nodeKey || ''),
-            mode: keepNeededCapabilityMode
-                ? 'new_capability'
+            mode: keepNeededSkillMode
+                ? 'new_skill'
                 : _selectorModeFromKind(selectorKind, stageAssignmentEditor.mode || 'unassigned'),
         };
         const next = Object.assign({}, items[idx], {
@@ -2218,6 +2545,8 @@ function renderProtocolWorkspace(container) {
     }
 
     function _showPendingStageInsertChoice(sourceStageKey = '', decision = '') {
+        const currentSourceStageKey = String(editorMode.sourceStageKey || '');
+        const currentDecision = String(editorMode.decision || '').trim().toLowerCase();
         const body = document.createElement('div');
         body.className = 'kit-selector-editor-note';
         body.textContent = 'You already have an unfinished step draft. Continue it, move it to this position, or discard it and start a new step here.';
@@ -2239,7 +2568,7 @@ function renderProtocolWorkspace(container) {
         });
         continueBtn.addEventListener('click', () => {
             dialog.close();
-            render();
+            _setStageInsertAnchor(currentSourceStageKey, currentDecision, { keepDraft: true });
         });
         moveBtn.addEventListener('click', () => {
             dialog.close();
@@ -2258,7 +2587,7 @@ function renderProtocolWorkspace(container) {
             && String(editorMode.sourceStageKey || '') === nextSourceStageKey
             && String(editorMode.decision || '') === nextDecision;
         if (sameInsert) {
-            render();
+            _setStageInsertAnchor(nextSourceStageKey, nextDecision, { keepDraft: true });
             return;
         }
         if (editorMode.kind === 'insert-stage') {
@@ -2302,9 +2631,9 @@ function renderProtocolWorkspace(container) {
         const stageKey = _nextAvailableKey(
             doc.stages || [],
             'stage_key',
-            String(pendingStage.stage_key || displayName || 'step'),
+            String(_slugSuggestion(displayName) || pendingStage.stage_key || 'step'),
         );
-        const nextStage = _normalizeStageWriteCapability({
+        const nextStage = _normalizeStageWriteAccess({
             stage_key: stageKey,
             display_name: displayName,
             participant_key: participantKey,
@@ -2598,12 +2927,12 @@ function renderProtocolWorkspace(container) {
     }
 
     function _isAuthoringRoutingSkill(item) {
-        return UI.isHumanAssignableCapabilityName(item?.skill_name || item);
+        return UI.isHumanAssignableSkillName(item?.skill_name || item);
     }
 
     function _supportsSkillCatalog(agent) {
-        const capabilities = Array.isArray(agent?.management_capabilities) ? agent.management_capabilities : [];
-        return capabilities.includes('skill_catalog') || capabilities.includes('skill_lifecycle');
+        const operations = Array.isArray(agent?.supported_admin_operations) ? agent.supported_admin_operations : [];
+        return operations.includes('list_catalog_skills') || operations.includes('catalog_skill_lifecycle_detail');
     }
 
     function _skillCatalogSummary(skillName = '') {
@@ -2743,7 +3072,7 @@ function renderProtocolWorkspace(container) {
     function _selectorKindLabel(kind) {
         const normalized = String(kind || '').trim().toLowerCase();
         if (normalized === 'agent') return 'Specific agent';
-        if (normalized === 'skill') return 'Required capability';
+        if (normalized === 'skill') return 'Required skill';
         if (normalized === 'role') return 'Runtime role tag';
         return _titleCaseWords(normalized);
     }
@@ -2751,7 +3080,7 @@ function renderProtocolWorkspace(container) {
     function _selectorValueLabel(kind) {
         const normalized = String(kind || '').trim().toLowerCase();
         if (normalized === 'agent') return 'agent';
-        if (normalized === 'skill') return 'capability';
+        if (normalized === 'skill') return 'skill';
         if (normalized === 'role') return 'runtime role tag';
         return normalized || 'value';
     }
@@ -2904,7 +3233,7 @@ function renderProtocolWorkspace(container) {
             return 'No available agents were loaded from the registry. Enter an agent slug only if you need to pin one anyway.';
         }
         if (normalized === 'skill') {
-            return 'No available capabilities were loaded from the registry. Use New capability needed if the capability does not exist yet.';
+            return 'No available skills were loaded from the registry. Use New skill needed if the skill does not exist yet.';
         }
         if (normalized === 'role') {
             return 'No runtime role tags were loaded from the registry. Enter one manually only if you need this advanced path.';
@@ -2978,15 +3307,15 @@ function renderProtocolWorkspace(container) {
         const primaryMode = requestedMode === 'advanced' ? 'skill' : requestedMode;
         if (normalizedKind === 'skill') {
             const skillValue = String(selectorValue || '').trim();
-            const skillMode = primaryMode === 'new_capability' || primaryMode === 'agent'
+            const skillMode = primaryMode === 'new_skill' || primaryMode === 'agent'
                 ? primaryMode
                 : skillValue
                     ? 'skill'
                     : primaryMode;
             return {
                 mode: skillMode,
-                requiredSkill: skillMode === 'new_capability' ? '' : skillValue,
-                capabilityNeed: skillMode === 'new_capability' ? skillValue : '',
+                requiredSkill: skillMode === 'new_skill' ? '' : skillValue,
+                neededSkill: skillMode === 'new_skill' ? skillValue : '',
                 pinnedAgent: _selectorAgentControlValue(selectorPreferredAgentId),
                 advancedKind: '',
                 advancedValue: '',
@@ -2996,7 +3325,7 @@ function renderProtocolWorkspace(container) {
             return {
                 mode: primaryMode,
                 requiredSkill: '',
-                capabilityNeed: '',
+                neededSkill: '',
                 pinnedAgent: _selectorAgentControlValue(selectorValue),
                 advancedKind: '',
                 advancedValue: '',
@@ -3005,7 +3334,7 @@ function renderProtocolWorkspace(container) {
         return {
             mode: primaryMode,
             requiredSkill: '',
-            capabilityNeed: '',
+            neededSkill: '',
             pinnedAgent: '',
             advancedKind: normalizedKind,
             advancedValue: String(selectorValue || '').trim(),
@@ -3015,7 +3344,7 @@ function renderProtocolWorkspace(container) {
     function _selectorFromEditorFields({
         requiredSkill = '',
         pinnedAgent = '',
-        capabilityNeed = '',
+        neededSkill = '',
         advancedKind = '',
         advancedValue = '',
     } = {}) {
@@ -3033,9 +3362,9 @@ function renderProtocolWorkspace(container) {
         if (agentKey) {
             return _selectorFromFields('agent', agentKey);
         }
-        const neededSkill = _slugSuggestion(capabilityNeed) || String(capabilityNeed || '').trim();
-        if (neededSkill) {
-            return _selectorFromFields('skill', neededSkill);
+        const neededSkillSlug = _slugSuggestion(neededSkill) || String(neededSkill || '').trim();
+        if (neededSkillSlug) {
+            return _selectorFromFields('skill', neededSkillSlug);
         }
         return null;
     }
@@ -3115,8 +3444,8 @@ function renderProtocolWorkspace(container) {
             help = `Available now: ${matchLabels.join(', ')}.`;
         } else {
             help = readOnly
-                ? 'No connected agents currently advertise this capability.'
-                : 'No connected agents currently advertise this capability yet.';
+                ? 'No connected agents currently advertise this skill.'
+                : 'No connected agents currently advertise this skill yet.';
         }
         if (preferredAgent) {
             help += ` Preferred agent: ${String(preferredAgent.display_name || preferredAgent.slug || preferredAgentId || '').trim()}.`;
@@ -3153,7 +3482,7 @@ function renderProtocolWorkspace(container) {
         const title = document.createElement('strong');
         title.className = 'kit-selector-editor-context-title';
         title.dataset.key = `${section.dataset.key}:title`;
-        title.textContent = 'Available capabilities';
+        title.textContent = 'Available skills';
         section.appendChild(title);
         const note = document.createElement('p');
         note.className = 'kit-selector-editor-note';
@@ -3164,12 +3493,12 @@ function renderProtocolWorkspace(container) {
             : '';
         if (skills.length) {
             note.textContent = agentLabel
-                ? `${agentLabel} currently advertises these capabilities.`
-                : 'This agent currently advertises these capabilities.';
+                ? `${agentLabel} currently advertises these skills.`
+                : 'This agent currently advertises these skills.';
         } else {
             note.textContent = readOnly
-                ? 'No advertised capabilities are currently available for this agent.'
-                : 'No advertised capabilities are currently available for this agent right now.';
+                ? 'No advertised skills are currently available for this agent.'
+                : 'No advertised skills are currently available for this agent right now.';
         }
         if (agentLabel && selectedSkillLabel) {
             note.textContent += ` Selected: ${selectedSkillLabel} on ${agentLabel}.`;
@@ -3215,6 +3544,7 @@ function renderProtocolWorkspace(container) {
         block.className = 'kit-selector-editor-field';
         const row = document.createElement('div');
         row.className = 'kit-details-row';
+        let preControlRow = null;
         const valueLabel = document.createElement('label');
         valueLabel.className = 'kit-details-label';
         valueLabel.textContent = label || `Choose ${_selectorValueLabel(normalized)}`;
@@ -3277,23 +3607,59 @@ function renderProtocolWorkspace(container) {
         } else if (catalog.length || shouldRenderSelect) {
             const select = document.createElement('select');
             select.className = 'kit-details-control';
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = placeholderText || `(choose ${_selectorValueLabel(normalized)})`;
-            select.appendChild(placeholder);
-            catalog.forEach((item) => {
+            const searchable = normalized === 'skill' && catalog.length > 8 && !readOnly && !disabled;
+            let searchInput = null;
+            const appendOption = (item) => {
                 const option = document.createElement('option');
                 option.value = String(item.value || '');
                 option.textContent = item.meta ? `${item.label} · ${item.meta}` : item.label;
                 if (String(selectorValue || '') === String(item.value || '')) option.selected = true;
                 select.appendChild(option);
-            });
-            if (allowCustom && selectorValue && !catalog.some((item) => item.value === String(selectorValue || ''))) {
-                const custom = document.createElement('option');
-                custom.value = String(selectorValue || '');
-                custom.textContent = `Custom · ${String(selectorValue || '')}`;
-                custom.selected = true;
-                select.appendChild(custom);
+            };
+            const renderOptions = (filterText = '') => {
+                const filter = String(filterText || '').trim().toLowerCase();
+                select.replaceChildren();
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = placeholderText || `(choose ${_selectorValueLabel(normalized)})`;
+                select.appendChild(placeholder);
+                catalog
+                    .filter((item) => {
+                        const value = String(item.value || '');
+                        if (value === String(selectorValue || '')) return true;
+                        if (!filter) return true;
+                        return [
+                            value,
+                            String(item.label || ''),
+                            String(item.meta || ''),
+                        ].join(' ').toLowerCase().includes(filter);
+                    })
+                    .forEach(appendOption);
+                if (allowCustom && selectorValue && !catalog.some((item) => item.value === String(selectorValue || ''))) {
+                    const custom = document.createElement('option');
+                    custom.value = String(selectorValue || '');
+                    custom.textContent = `Custom · ${String(selectorValue || '')}`;
+                    custom.selected = true;
+                    select.appendChild(custom);
+                }
+                select.value = String(selectorValue || '');
+            };
+            renderOptions('');
+            if (searchable) {
+                const searchRow = document.createElement('div');
+                searchRow.className = 'kit-details-row';
+                const searchLabel = document.createElement('label');
+                searchLabel.className = 'kit-details-label';
+                searchLabel.textContent = 'Search skills';
+                searchRow.appendChild(searchLabel);
+                searchInput = document.createElement('input');
+                searchInput.type = 'search';
+                searchInput.className = 'kit-details-control';
+                searchInput.placeholder = 'Type to filter available skills';
+                searchInput.setAttribute('aria-label', searchLabel.textContent);
+                searchInput.addEventListener('input', () => renderOptions(searchInput.value));
+                searchRow.appendChild(searchInput);
+                preControlRow = searchRow;
             }
             select.disabled = Boolean(readOnly || disabled);
             if (!readOnly) {
@@ -3346,6 +3712,7 @@ function renderProtocolWorkspace(container) {
             block.appendChild(hint);
         }
         block.prepend(row);
+        if (preControlRow) block.prepend(preControlRow);
         return { element: block, catalog, presentation: canRenderPills ? 'pills' : (catalog.length || shouldRenderSelect ? 'select' : 'input') };
     }
 
@@ -3415,7 +3782,7 @@ function renderProtocolWorkspace(container) {
         const {
             mode,
             requiredSkill,
-            capabilityNeed,
+            neededSkill,
             pinnedAgent,
             advancedKind,
             advancedValue,
@@ -3430,7 +3797,7 @@ function renderProtocolWorkspace(container) {
             String(stageKey || 'new'),
             String(mode || ''),
             String(requiredSkill || '').trim().toLowerCase(),
-            String(capabilityNeed || '').trim().toLowerCase(),
+            String(neededSkill || '').trim().toLowerCase(),
             String(pinnedAgent || '').trim().toLowerCase(),
             String(advancedKind || '').trim().toLowerCase(),
             String(advancedValue || '').trim().toLowerCase(),
@@ -3453,14 +3820,14 @@ function renderProtocolWorkspace(container) {
         const emitAssignment = ({
             nextSkill = requiredSkill,
             nextAgent = pinnedAgent,
-            nextCapabilityNeed = capabilityNeed,
+            nextNeededSkill = neededSkill,
             nextAdvancedKind = '',
             nextAdvancedValue = '',
         } = {}) => {
             const selector = _selectorFromEditorFields({
                 requiredSkill: nextSkill,
                 pinnedAgent: nextAgent,
-                capabilityNeed: nextCapabilityNeed,
+                neededSkill: nextNeededSkill,
                 advancedKind: nextAdvancedKind,
                 advancedValue: nextAdvancedValue,
             });
@@ -3486,24 +3853,24 @@ function renderProtocolWorkspace(container) {
         }
         const modeControl = UI.createSegmentedControl([
             { value: 'unassigned', label: 'No assignment yet' },
-            { value: 'skill', label: 'Existing capability' },
+            { value: 'skill', label: 'Existing skill' },
             { value: 'agent', label: 'Specific agent' },
-            { value: 'new_capability', label: 'New capability needed' },
+            { value: 'new_skill', label: 'New skill needed' },
         ], (nextMode) => {
             emitMode(nextMode);
             if (nextMode === 'unassigned') {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
-            } else if (nextMode === 'new_capability') {
+            } else if (nextMode === 'new_skill') {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: capabilityNeed,
+                    nextNeededSkill: neededSkill,
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
@@ -3511,7 +3878,7 @@ function renderProtocolWorkspace(container) {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
@@ -3519,7 +3886,7 @@ function renderProtocolWorkspace(container) {
                 emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                     nextAdvancedKind: '',
                     nextAdvancedValue: '',
                 });
@@ -3540,7 +3907,7 @@ function renderProtocolWorkspace(container) {
         if (mode === 'unassigned') {
             const note = document.createElement('p');
             note.className = 'kit-selector-editor-note';
-            note.textContent = 'Leave this step unassigned while shaping the workflow. Choose a capability or a specific agent before publishing when this step needs to execute.';
+            note.textContent = 'Leave this step unassigned while shaping the workflow. Choose a skill or a specific agent before publishing when this step needs to execute.';
             wrap.appendChild(note);
         } else if (mode === 'skill') {
             skillField = _buildSelectorValueField({
@@ -3550,9 +3917,9 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: String(nextValue || ''),
                     nextAgent: requiredSkillMatches.some((item) => item.value === pinnedAgent) ? pinnedAgent : '',
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
-                label: 'Required capability',
+                label: 'Required skill',
                 allowCustom: false,
             });
             skillField.element.dataset.key = `selector-field:${String(stageKey || 'new')}:skill:required`;
@@ -3565,7 +3932,7 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: requiredSkill,
                     nextAgent: String(nextValue || ''),
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
                 label: 'Pin matching agent (optional)',
                 catalogEntries: requiredSkillMatches,
@@ -3594,7 +3961,7 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: pinnedAgent === String(nextValue || '') ? requiredSkill : '',
                     nextAgent: String(nextValue || ''),
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
                 label: 'Agent',
                 allowCustom: false,
@@ -3609,12 +3976,12 @@ function renderProtocolWorkspace(container) {
                 onSelectorChange: (_kind, nextValue) => emitAssignment({
                     nextSkill: String(nextValue || ''),
                     nextAgent: pinnedAgent,
-                    nextCapabilityNeed: '',
+                    nextNeededSkill: '',
                 }),
-                label: 'Limit to one of this agent\'s capabilities (optional)',
+                label: 'Limit to one of this agent\'s skills (optional)',
                 catalogEntries: agentSkillEntries,
                 emptyHint: pinnedAgent
-                    ? 'No advertised capabilities are available for this agent right now.'
+                    ? 'No advertised skills are available for this agent right now.'
                     : 'Choose an agent first.',
                 placeholderText: pinnedAgent ? '(leave agent-only)' : '(choose an agent first)',
                 disabled: !pinnedAgent,
@@ -3630,25 +3997,25 @@ function renderProtocolWorkspace(container) {
                 String(pinnedAgent || '').trim().toLowerCase(),
             ].join(':');
             wrap.appendChild(skillField.element);
-        } else if (mode === 'new_capability') {
+        } else if (mode === 'new_skill') {
             const row = document.createElement('div');
             row.className = 'kit-details-row';
             const label = document.createElement('label');
             label.className = 'kit-details-label';
-            label.textContent = 'Needed capability';
+            label.textContent = 'Needed skill';
             row.appendChild(label);
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'kit-details-control';
             input.placeholder = 'e.g. dependency-upgrade, data-quality-review';
-            input.value = String(capabilityNeed || '');
+            input.value = String(neededSkill || '');
             input.readOnly = Boolean(readOnly);
             input.setAttribute('aria-label', label.textContent);
             if (!readOnly) {
                 const commit = () => emitAssignment({
                     nextSkill: '',
                     nextAgent: '',
-                    nextCapabilityNeed: input.value,
+                    nextNeededSkill: input.value,
                 });
                 input.addEventListener('input', commit);
                 input.addEventListener('change', commit);
@@ -3658,17 +4025,17 @@ function renderProtocolWorkspace(container) {
             wrap.appendChild(row);
             const note = document.createElement('p');
             note.className = 'kit-selector-editor-note';
-            note.textContent = 'Use this when the workflow needs a capability that is not available yet. The step can be authored now and resolved before execution.';
+            note.textContent = 'Use this when the workflow needs a skill that is not available yet. The step can be authored now and resolved before execution.';
             wrap.appendChild(note);
         }
 
-        if (requiredSkill || pinnedAgent || capabilityNeed) {
+        if (requiredSkill || pinnedAgent || neededSkill) {
             const summary = document.createElement('p');
             summary.className = 'kit-selector-editor-note';
             const requiredSkillLabel = _standardSkillLabel({ value: requiredSkill, name: requiredSkill });
-            const capabilityNeedLabel = _standardSkillLabel({ value: capabilityNeed, name: capabilityNeed });
-            if (capabilityNeed) {
-                summary.textContent = `Current assignment: needs new capability ${capabilityNeedLabel || capabilityNeed}.`;
+            const neededSkillLabel = _standardSkillLabel({ value: neededSkill, name: neededSkill });
+            if (neededSkill) {
+                summary.textContent = `Current assignment: needs new skill ${neededSkillLabel || neededSkill}.`;
             } else if (requiredSkill && activeAgentLabel) {
                 summary.textContent = `Current assignment: requires ${requiredSkillLabel} and pins the step to ${activeAgentLabel}.`;
             } else if (requiredSkill) {
@@ -3911,6 +4278,7 @@ function renderProtocolWorkspace(container) {
             canValidate: Boolean(currentProtocolId) && progress.stageCount > 0 && saveState.state !== 'conflict',
             canPublish: Boolean(currentProtocolId) && progress.stageCount > 0 && saveState.state !== 'conflict',
             canArchive: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
+            canRun: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState === 'published' && saveState.state !== 'conflict',
             canRehearse: Boolean(currentProtocolId) && hasPublishedVersion && lifecycleState !== 'archived' && saveState.state !== 'conflict',
             canDiscard: Boolean(currentProtocolId) && !hasPublishedVersion && saveState.state !== 'conflict',
         };
@@ -3923,9 +4291,13 @@ function renderProtocolWorkspace(container) {
                 label: 'Publish as template',
                 onClick: () => UI.showConfirm(
                     'Publish template',
-                    'Create a reusable starter snapshot from the currently published protocol version?',
+                    'Create a reusable template snapshot from the currently published protocol version?',
                     async () => { await _publishTemplateNow(); },
                 ),
+            });
+            utilityActions.push({
+                label: 'Dry-run rehearsal',
+                onClick: () => void _startRehearsal().catch((err) => UI.reportError('Rehearsal failed to start', err)),
             });
         }
         return Kit.lifecycleHeader({
@@ -3934,12 +4306,13 @@ function renderProtocolWorkspace(container) {
             saveState,
             permissions,
             compact: true,
-            primaryActions: ['validate', 'publish', 'rehearse'],
+            primaryActions: ['validate', 'publish', 'run'],
             secondaryActions: ['archive', 'discard'],
             utilityActions,
             actions: {
                 validate: () => void _validateNow().catch((err) => UI.reportError('Validation failed', err)),
                 publish: () => void _publishNow().catch((err) => UI.reportError('Publish failed', err)),
+                run: () => _openRunProtocolDialog(),
                 rehearse: () => void _startRehearsal().catch((err) => UI.reportError('Rehearsal failed to start', err)),
                 archive: () => UI.showConfirm(
                     'Archive protocol',
@@ -4031,12 +4404,14 @@ function renderProtocolWorkspace(container) {
                         text: 'Open the workflow map only when you want route context or a spatial review of the whole flow.',
                     },
                 ],
-                note: 'For assistant-building flows, open the skills catalog to publish or install a capability first, then come back here and assign steps by skill.',
+                note: 'For assistant-building flows, open the skills catalog to publish or install a skill first, then come back here and assign steps by skill.',
                 actions: [
                     { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
                     { label: 'Define shared files', tone: '', onClick: () => _openArtifactCatalog() },
                     { label: 'Open skills catalog', tone: '', onClick: () => Router.navigate('/ui/skills') },
-                    { label: Kit.dict.label('protocol.catalog.template'), tone: '', onClick: () => Router.navigate('/ui/protocols?new=template') },
+                    ...(protocolTemplates.length
+                        ? [{ label: Kit.dict.label('protocol.catalog.template'), tone: '', onClick: _openTemplateChooser }]
+                        : []),
                 ],
             }
             : null;
@@ -4702,7 +5077,7 @@ function renderProtocolWorkspace(container) {
                 { key: 'kind', kind: 'select', label: 'What it represents', options: kindOptions, help: 'Most datasets, code files, documents, and reports should stay as workspace files.' },
                 ...(String(artifact?.kind || 'workspace_file').trim().toLowerCase() === 'control_plane_text'
                     ? []
-                    : [{ key: 'path', kind: 'text', label: 'Workspace path', help: Kit.dict.label('protocol.artifact.path.help'), placeholder: Kit.dict.label('protocol.artifact.path.placeholder') }]),
+                    : [{ key: 'path', kind: 'text', label: 'Workspace path', help: Kit.dict.label('protocol.artifact.path.help'), placeholder: Kit.dict.label('protocol.artifact.path.placeholder'), commitOnInput: true }]),
             ]),
             actions: context.readOnly
                 ? []
@@ -5344,6 +5719,7 @@ function renderProtocolWorkspace(container) {
         onCommit = null,
         artifactOptions = [],
         context = null,
+        deferCatalogUntilStageCreated = false,
     } = {}) {
         const shell = document.createElement('div');
         shell.className = 'kit-stage-artifacts';
@@ -5381,10 +5757,12 @@ function renderProtocolWorkspace(container) {
         if (!artifactOptions.length) {
             const note = document.createElement('p');
             note.className = 'kit-stage-editor-hero-note';
-            note.textContent = 'Define the shared files or outputs this step should read or write, then attach them here.';
+            note.textContent = deferCatalogUntilStageCreated
+                ? 'Create this step before defining new workflow files or outputs. This keeps the unsaved step draft visible and prevents file definitions from being attached to a step that does not exist yet.'
+                : 'Define the shared files or outputs this step should read or write, then attach them here.';
             shell.appendChild(note);
             shell.appendChild(UI.renderEmptyState('No workflow files or outputs are defined yet.', true));
-            if (!readOnly) {
+            if (!readOnly && !deferCatalogUntilStageCreated) {
                 const actions = document.createElement('div');
                 actions.className = 'kit-stage-routing-actions';
                 const button = document.createElement('button');
@@ -5413,11 +5791,22 @@ function renderProtocolWorkspace(container) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'btn btn-small';
-            button.textContent = 'Manage workflow files';
-            button.addEventListener('click', () => {
-                _openArtifactCatalog('', { stageKey: normalizedStageKey, surfaceKey: 'local' });
-            });
-            actions.appendChild(button);
+            if (deferCatalogUntilStageCreated) {
+                button.textContent = 'Create step before managing files';
+                button.disabled = true;
+                button.title = 'Save the new step first, then manage workflow files from the saved step.';
+                actions.appendChild(button);
+                const note = document.createElement('p');
+                note.className = 'quiet-note';
+                note.textContent = 'Existing workflow files can be attached now. New file definitions are managed after the step is created.';
+                actions.appendChild(note);
+            } else {
+                button.textContent = 'Manage workflow files';
+                button.addEventListener('click', () => {
+                    _openArtifactCatalog('', { stageKey: normalizedStageKey, surfaceKey: 'local' });
+                });
+                actions.appendChild(button);
+            }
             shell.appendChild(actions);
         }
         return shell;
@@ -5669,6 +6058,7 @@ function renderProtocolWorkspace(container) {
             onCommit,
             artifactOptions,
             context: editorContext,
+            deferCatalogUntilStageCreated: Boolean(createAction),
         });
 
         const panelOptions = [
@@ -5815,11 +6205,14 @@ function renderProtocolWorkspace(container) {
             : ['workspace_file', 'control_plane_text'];
     }
 
-    function _starterChooserEl() {
-        const templates = Array.isArray(protocolTemplates) ? protocolTemplates : [];
+    function _templateChooserEl() {
+        const templates = UI.defaultVisibleRecords(
+            Array.isArray(protocolTemplates) ? protocolTemplates : [],
+            { includeHidden: includeGeneratedCatalog },
+        );
         const shell = document.createElement('section');
         shell.className = 'editor-panel protocol-panel';
-        shell.dataset.testid = 'protocol-starter';
+        shell.dataset.testid = 'protocol-template-chooser';
 
         const head = document.createElement('div');
         head.className = 'kit-catalog-hero';
@@ -5831,7 +6224,7 @@ function renderProtocolWorkspace(container) {
         copy.appendChild(title);
         const body = document.createElement('p');
         body.className = 'kit-catalog-hero-body';
-        body.textContent = 'Create a blank workflow, or copy a published template into a separate draft you can edit without changing the template.';
+        body.textContent = 'Create a blank workflow, or copy one of your saved templates into a separate protocol you can edit without changing the template.';
         copy.appendChild(body);
         head.appendChild(copy);
         shell.appendChild(head);
@@ -5842,20 +6235,20 @@ function renderProtocolWorkspace(container) {
         blank.type = 'button';
         blank.className = 'btn btn-primary';
         blank.textContent = 'Start blank';
-        blank.dataset.protocolStarterAction = 'blank';
+        blank.dataset.protocolTemplateChooserAction = 'blank';
         actions.appendChild(blank);
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'btn';
         cancel.textContent = 'Close';
-        cancel.dataset.protocolStarterAction = 'close';
+        cancel.dataset.protocolTemplateChooserAction = 'close';
         actions.appendChild(cancel);
         shell.appendChild(actions);
 
         const list = document.createElement('div');
         list.className = 'kit-catalog-list';
         if (!templates.length) {
-            list.appendChild(UI.renderEmptyState('No starter templates are available in this registry.', true));
+            list.appendChild(UI.renderEmptyState('No saved templates are available yet.', true));
             shell.appendChild(list);
             return shell;
         }
@@ -5875,11 +6268,20 @@ function renderProtocolWorkspace(container) {
             slug.textContent = String(template.slug || '');
             copyBlock.appendChild(slug);
             top.appendChild(copyBlock);
+            const cardActions = document.createElement('div');
+            cardActions.className = 'editor-actions';
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'btn btn-primary';
+            use.textContent = 'Review and create';
+            use.dataset.protocolTemplateSlug = String(template.slug || '');
+            cardActions.appendChild(use);
+            top.appendChild(cardActions);
             card.appendChild(top);
 
             const description = document.createElement('p');
             description.className = 'kit-catalog-card-body';
-            description.textContent = String(template.description || 'Reusable workflow starter.');
+            description.textContent = String(template.description || 'Reusable protocol template.');
             card.appendChild(description);
 
             const meta = document.createElement('div');
@@ -5895,16 +6297,6 @@ function renderProtocolWorkspace(container) {
                 meta.appendChild(item);
             });
             card.appendChild(meta);
-
-            const cardActions = document.createElement('div');
-            cardActions.className = 'editor-actions';
-            const use = document.createElement('button');
-            use.type = 'button';
-            use.className = 'btn btn-primary';
-            use.textContent = 'Use template';
-            use.dataset.protocolTemplateSlug = String(template.slug || '');
-            cardActions.appendChild(use);
-            card.appendChild(cardActions);
             list.appendChild(card);
         });
         shell.appendChild(list);
@@ -5915,15 +6307,15 @@ function renderProtocolWorkspace(container) {
         const records = UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog });
         const wrapper = document.createElement('div');
         wrapper.className = 'protocol-catalog-shell';
-        if (starterMode === 'template') {
-            wrapper.appendChild(_starterChooserEl());
+        if (templateChooserMode === 'template' && protocolTemplates.length) {
+            wrapper.appendChild(_templateChooserEl());
         }
         const catalog = Kit.authoredCatalog({
             records,
             surfaceKey: 'protocol',
             onOpen: (record) => {
                 currentProtocolId = String(record.protocol_id || '');
-                starterMode = '';
+                templateChooserMode = '';
                 currentProtocol = null;
                 protocolDetailLoading = true;
                 _writeState({ push: true });
@@ -5932,8 +6324,14 @@ function renderProtocolWorkspace(container) {
             },
             createAction: {
                 label: 'New protocol',
-                onClick: _openStarterChooser,
+                onClick: () => void _createBlankDraft(),
             },
+            secondaryAction: protocolTemplates.length
+                ? {
+                    label: Kit.dict.label('protocol.catalog.template'),
+                    onClick: _openTemplateChooser,
+                }
+                : null,
             compactGeneratedFamilies: true,
         });
         const controls = catalog.querySelector('.kit-catalog-controls');
@@ -5964,7 +6362,7 @@ function renderProtocolWorkspace(container) {
             header.hidden = false;
             _writeState();
             UI.reconcileChildren(contentEl, [_catalogEl()]);
-            _bindStarterChooserControls(contentEl);
+            _bindTemplateChooserControls(contentEl);
             _lifecycleHeaderRef = null;
             return;
         }
@@ -6185,6 +6583,7 @@ function renderProtocolRuns(container) {
     let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let activeRunDetailSection = '';
     let activeRunStageExecutionId = '';
+    let activeRunArtifactStageExecutionId = '';
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
     let runPaginator = null;
@@ -6227,6 +6626,7 @@ function renderProtocolRuns(container) {
             lastRunEvent = null;
             activeRunDetailSection = '';
             activeRunStageExecutionId = '';
+            activeRunArtifactStageExecutionId = '';
             runDetailLoading = false;
             runDetailRequestToken += 1;
             _bindRunSubscription();
@@ -6261,6 +6661,7 @@ function renderProtocolRuns(container) {
         lastRunEvent = null;
         activeRunDetailSection = '';
         activeRunStageExecutionId = '';
+        activeRunArtifactStageExecutionId = '';
         if (normalizedRunId && normalizedRunId !== String(currentRunId || '')) {
             currentRunId = normalizedRunId;
             runDetailLoading = true;
@@ -6275,6 +6676,47 @@ function renderProtocolRuns(container) {
         _writeState({ push });
         _bindRunSubscription();
         renderRunsRoute();
+    }
+
+    function _runRecordId(item) {
+        return String(item?.protocol_run_id || item?.id || item?.run_id || '').trim();
+    }
+
+    function _selectedRunListRecord() {
+        const selectedId = String(currentRunId || '');
+        if (!selectedId) return null;
+        return (runs || []).find((item) => _runRecordId(item) === selectedId) || null;
+    }
+
+    function _runListRecordChangedSinceDetail(listRecord) {
+        const detail = currentRun?.run || null;
+        if (!listRecord || !detail) return false;
+        const changedFields = [
+            'status',
+            'current_stage_execution_id',
+            'current_stage_key',
+            'updated_at',
+            'completed_at',
+        ];
+        if (changedFields.some((field) => String(listRecord[field] || '') !== String(detail[field] || ''))) {
+            return true;
+        }
+        const listVersion = Number(listRecord.version || 0);
+        const detailVersion = Number(detail.version || 0);
+        return Number.isFinite(listVersion)
+            && Number.isFinite(detailVersion)
+            && listVersion > 0
+            && detailVersion > 0
+            && listVersion !== detailVersion;
+    }
+
+    function _queueSelectedRunDetailRefreshFromList() {
+        if (!currentRunId || runDetailLoading) return false;
+        const selectedListRecord = _selectedRunListRecord();
+        if (!_runListRecordChangedSinceDetail(selectedListRecord)) return false;
+        runDetailLoading = true;
+        void loadRunDetail({ soft: true });
+        return true;
     }
 
     function _filteredIssues() {
@@ -6341,11 +6783,24 @@ function renderProtocolRuns(container) {
                 workspace_ref: run.workspace_ref || 'default',
                 root_conversation_id: run.root_conversation_id,
                 notes: run.termination_summary || run.blocked_detail || '',
+                stageProgress: _runStageProgressData(currentRun),
             },
             liveEventText: (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || ''))
                 ? `Live update: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')} · ${lastRunEvent.reason || ''}`
                 : '',
         });
+    }
+
+    function _runStageProgressData(runDetail = currentRun) {
+        const detail = runDetail || {};
+        const run = detail.run || detail || {};
+        return {
+            stages: detail.version?.definition_json?.stages || [],
+            stageExecutions: detail.stage_executions || [],
+            currentStageKey: String(run.current_stage_key || ''),
+            runStatus: String(run.status || ''),
+            issues: currentIssues || [],
+        };
     }
 
     function _currentRunAllowedDecisions() {
@@ -6592,10 +7047,13 @@ function renderProtocolRuns(container) {
         });
 
         const runSource = UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated });
-        if (currentRunId && !runSource.some((item) => String(item.protocol_run_id || item.id || item.run_id || '') === String(currentRunId || ''))) {
-            const selectedHiddenRun = (runs || []).find((item) =>
-                String(item.protocol_run_id || item.id || item.run_id || '') === String(currentRunId || ''));
-            if (selectedHiddenRun) runSource.unshift(selectedHiddenRun);
+        if (currentRunId && !runSource.some((item) => _runRecordId(item) === String(currentRunId || ''))) {
+            const selectedHiddenRun = (runs || []).find((item) => _runRecordId(item) === String(currentRunId || ''));
+            if (selectedHiddenRun) {
+                runSource.unshift(selectedHiddenRun);
+            } else if (_runRecordId(currentRun?.run) === String(currentRunId || '')) {
+                runSource.unshift(currentRun.run);
+            }
         }
         const listRuns = runSource.filter((item) => {
             if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
@@ -6609,8 +7067,11 @@ function renderProtocolRuns(container) {
             ].join(' ').toLowerCase();
             return haystack.includes(runSearch.toLowerCase());
         }).map((item) => {
-            const runId = item.protocol_run_id || item.id || item.run_id || '';
+            const runId = _runRecordId(item);
             const issue = issuesByRunId.get(String(runId || '').trim()) || null;
+            const selectedDetail = currentRun && _runRecordId(currentRun.run) === String(runId || '')
+                ? currentRun
+                : null;
             return {
                 id: runId,
                 status: item.status,
@@ -6621,6 +7082,16 @@ function renderProtocolRuns(container) {
                     : (item.status || 'queued'),
                 subtitle: item.problem_statement || item.protocol_run_id,
                 badge: item.protocol_id || '',
+                stageProgress: selectedDetail
+                    ? _runStageProgressData(selectedDetail)
+                    : {
+                        stages: item.current_stage_key
+                            ? [{ stage_key: item.current_stage_key, display_name: item.current_stage_key }]
+                            : [],
+                        currentStageKey: item.current_stage_key || '',
+                        runStatus: item.status || '',
+                        issues: issue ? [issue] : [],
+                    },
                 raw: item,
             };
         });
@@ -6643,6 +7114,7 @@ function renderProtocolRuns(container) {
                 lastRunEvent = null;
                 activeRunDetailSection = '';
                 activeRunStageExecutionId = '';
+                activeRunArtifactStageExecutionId = '';
                 runDetailLoading = false;
                 runDetailRequestToken += 1;
                 _bindRunSubscription();
@@ -6655,13 +7127,17 @@ function renderProtocolRuns(container) {
                 ? 'No generated or normal runs match this filter.'
                 : 'No normal runs match this filter. Use Show generated/audit runs to inspect test, rehearsal, and generated executions.',
         }));
-        panel.appendChild(runPaginationEl);
-        if (runPaginator) {
-            runPaginator.render({
-                hasMore: !!runsListData?.has_more,
-                nextCursor: runsListData?.next_cursor || 0,
-                info: `${listRuns.length} shown`,
-            });
+        if (currentRunId) {
+            if (runPaginator) runPaginator.clear();
+        } else {
+            panel.appendChild(runPaginationEl);
+            if (runPaginator) {
+                runPaginator.render({
+                    hasMore: !!runsListData?.has_more,
+                    nextCursor: runsListData?.next_cursor || 0,
+                    info: `${listRuns.length} shown`,
+                });
+            }
         }
         return panel;
     }
@@ -6828,6 +7304,118 @@ function renderProtocolRuns(container) {
             || String(item.from_stage_execution_id || '') === String(stageExecutionId || ''),
         );
 
+        const timestampMs = (value) => {
+            const parsed = Date.parse(String(value || ''));
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const latestStageExecution = (items = []) => {
+            const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+            return rows.reduce((best, item) => {
+                if (!best) return item;
+                const bestAttempt = Number(best.attempt || 0);
+                const itemAttempt = Number(item.attempt || 0);
+                if (itemAttempt !== bestAttempt) return itemAttempt > bestAttempt ? item : best;
+                const bestTime = timestampMs(best.updated_at || best.completed_at || best.started_at);
+                const itemTime = timestampMs(item.updated_at || item.completed_at || item.started_at);
+                return itemTime >= bestTime ? item : best;
+            }, null);
+        };
+
+        const currentRunStageExecution = () => {
+            const run = currentRun.run || {};
+            const executionId = String(run.current_stage_execution_id || '').trim();
+            if (executionId && stageById.has(executionId)) {
+                return stageById.get(executionId);
+            }
+            const currentStageKey = String(run.current_stage_key || '').trim();
+            if (currentStageKey) {
+                const matchingAttempts = stageRows.filter((item) => String(item.stage_key || '') === currentStageKey);
+                if (matchingAttempts.length) return latestStageExecution(matchingAttempts);
+            }
+            return latestStageExecution(stageRows);
+        };
+
+        const durationLabel = (ms) => {
+            const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.round(seconds / 60);
+            if (minutes < 60) return `${minutes}m`;
+            const hours = Math.floor(minutes / 60);
+            const remainder = minutes % 60;
+            return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+        };
+
+        const runDurationMs = (run) => {
+            const start = timestampMs(run?.created_at || run?.started_at);
+            const end = timestampMs(run?.completed_at || run?.updated_at);
+            return start && end && end >= start ? end - start : 0;
+        };
+
+        const averageCompletedRunDurationMs = () => {
+            const protocolId = String(currentRun?.run?.protocol_id || '').trim();
+            const samples = (runs || [])
+                .filter((run) =>
+                    String(run.protocol_id || '').trim() === protocolId
+                    && String(run.status || '').trim().toLowerCase() === 'completed')
+                .map(runDurationMs)
+                .filter((value) => value > 0)
+                .slice(0, 3);
+            if (!samples.length) return 0;
+            return samples.reduce((sum, value) => sum + value, 0) / samples.length;
+        };
+
+        const buildRunLivenessCard = () => {
+            const run = currentRun.run || {};
+            const status = String(run.status || '').trim().toLowerCase();
+            const active = !['completed', 'failed', 'cancelled'].includes(status);
+            const currentStage = currentRunStageExecution();
+            const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : 0;
+            const currentStageDef = currentStage
+                ? stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {}
+                : {};
+            const startMs = timestampMs(run.created_at || currentStage?.started_at);
+            const elapsed = startMs ? durationLabel(Date.now() - startMs) : '';
+            const averageMs = averageCompletedRunDurationMs();
+            const card = document.createElement('article');
+            card.className = 'protocol-lineage-card';
+            card.dataset.key = 'run-liveness';
+
+            const label = active && currentStage
+                ? `Running stage ${currentStageIndex + 1} of ${Math.max(stageRows.length, currentRun.version?.definition_json?.stages?.length || 0)}: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`
+                : `Run ${status || 'state'}`;
+            card.appendChild(UI.renderListRow({
+                label,
+                sublabel: [
+                    active ? 'Work is being dispatched through the protocol runtime' : run.termination_summary || 'Execution is no longer active',
+                    elapsed ? `elapsed ${elapsed}` : '',
+                    averageMs ? `typical completed run ${durationLabel(averageMs)}` : 'estimate available after completed run history',
+                ].filter(Boolean).join(' · '),
+                badgeText: active ? 'live' : (run.status || ''),
+                badgeClass: active ? 'badge-running' : '',
+            }));
+            card.appendChild(UI.renderMetadataGrid([
+                { label: 'Current stage', value: currentStage ? (currentStageDef.display_name || currentStage.stage_key || 'Stage') : '—' },
+                { label: 'Stage state', value: currentStage?.status || run.status || '—' },
+                { label: 'Available outputs', value: String(artifactRows.length) },
+                { label: 'Missing declared outputs', value: String(pendingArtifactRows.length) },
+            ], { compact: true }));
+            if (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || '')) {
+                card.appendChild(UI.renderListRow({
+                    label: `Latest event: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')}`,
+                    sublabel: lastRunEvent.reason || 'Live event received from the registry.',
+                    badgeText: 'event',
+                }));
+            } else if (active) {
+                card.appendChild(UI.renderListRow({
+                    label: 'Waiting for the next runtime update',
+                    sublabel: 'The registry refreshes this run as agents create tasks, decisions, and artifacts.',
+                    badgeText: 'watching',
+                }));
+            }
+            return card;
+        };
+
         const buildStageEvidenceCard = (item, index) => {
             const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
             const task = taskById.get(String(item.routed_task_id || '')) || null;
@@ -6953,6 +7541,7 @@ function renderProtocolRuns(container) {
             section.className = 'studio-stack';
             appendSectionTitle(section, 'Overview', 'The run story starts with state, active issue, current stage, and next action.');
             section.appendChild(_buildRunSummaryGrid());
+            section.appendChild(buildRunLivenessCard());
             if (currentIssues.length) {
                 const issueSummary = document.createElement('div');
                 issueSummary.className = 'run-evidence-issue-list';
@@ -6964,7 +7553,7 @@ function renderProtocolRuns(container) {
                 })));
                 section.appendChild(issueSummary);
             }
-            const currentStage = stageRows.find((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')) || stageRows[stageRows.length - 1] || null;
+            const currentStage = currentRunStageExecution();
             if (currentStage) {
                 const currentStageIndex = Math.max(stageRows.indexOf(currentStage), 0);
                 const currentStageDef = stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {};
@@ -6997,6 +7586,7 @@ function renderProtocolRuns(container) {
                     badgeClass: pendingArtifactRows.length ? 'badge-blocked' : 'badge-connected',
                     onClick: () => {
                         activeRunDetailSection = 'artifacts';
+                        activeRunArtifactStageExecutionId = '';
                         renderRunsRoute();
                     },
                 }));
@@ -7024,10 +7614,14 @@ function renderProtocolRuns(container) {
             sectionOptions,
             (value) => {
                 activeRunDetailSection = value || 'overview';
+                if (activeRunDetailSection === 'artifacts') {
+                    activeRunArtifactStageExecutionId = '';
+                }
                 renderRunsRoute();
             },
             { label: 'Run evidence section', value: activeRunDetailSection || 'overview' },
         );
+        sectionControl.element.dataset.key = 'run-evidence-section-nav';
         sectionControl.element.classList.add('kit-stage-workspace-nav');
         const sectionToolbar = document.createElement('div');
         sectionToolbar.className = 'kit-stage-workspace-toolbar';
@@ -7043,18 +7637,18 @@ function renderProtocolRuns(container) {
             if (stageRows.length) {
                 const stageValueFor = (item, index = 0) => String(item?.protocol_stage_execution_id || item?.stage_key || `stage-${index}`);
                 const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
-                const currentStageIndex = Math.max(
-                    stageRows.findIndex((item) => String(item.stage_key || '') === String(currentRun.run.current_stage_key || '')),
-                    0,
-                );
+                const preferredStage = currentRunStageExecution();
+                const currentStageIndex = Math.max(stageRows.indexOf(preferredStage), 0);
                 const currentStage = stageRows[currentStageIndex] || stageRows[0];
                 if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
                     activeRunStageExecutionId = stageValueFor(currentStage, currentStageIndex);
                 }
                 const stageOptions = stageRows.map((item, index) => {
                     const stageDef = stageDefinitionByKey.get(String(item.stage_key || '')) || {};
+                    const value = stageValueFor(item, index);
                     return {
-                        value: stageValueFor(item, index),
+                        key: `run-stage-evidence:${value}`,
+                        value,
                         label: `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'}`,
                     };
                 });
@@ -7062,10 +7656,12 @@ function renderProtocolRuns(container) {
                     stageOptions,
                     (value) => {
                         activeRunStageExecutionId = String(value || '');
+                        UI.clearMemoizedRender(contentEl);
                         renderRunsRoute();
                     },
                     { label: 'Run stage evidence', value: activeRunStageExecutionId },
                 );
+                stageControl.element.dataset.key = 'run-stage-evidence-nav';
                 stageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
                 const stageToolbar = document.createElement('div');
                 stageToolbar.className = 'kit-stage-workspace-toolbar';
@@ -7086,16 +7682,64 @@ function renderProtocolRuns(container) {
             }
         } else if (activeRunDetailSection === 'artifacts') {
             appendSectionTitle(sectionPanel, 'Artifacts', 'This is the same artifact evidence shown under each stage, grouped by the stage that produced it.');
-            stageRows.forEach((stage, index) => {
-                const producedArtifacts = artifactsByProducer.get(String(stage.protocol_stage_execution_id || '')) || [];
-                if (!producedArtifacts.length) return;
-                const stageDef = stageDefinitionByKey.get(String(stage.stage_key || '')) || {};
-                appendSectionTitle(sectionPanel, `${index + 1}. ${stageDef.display_name || stage.stage_key || 'Stage'}`);
-                sectionPanel.appendChild(createArtifactList(producedArtifacts, {
+            const artifactStageGroups = stageRows
+                .map((stage, index) => {
+                    const producedArtifacts = artifactsByProducer.get(String(stage.protocol_stage_execution_id || '')) || [];
+                    const stageDef = stageDefinitionByKey.get(String(stage.stage_key || '')) || {};
+                    return {
+                        value: String(stage.protocol_stage_execution_id || stage.stage_key || `artifact-stage-${index}`),
+                        stage,
+                        index,
+                        stageDef,
+                        producedArtifacts,
+                    };
+                })
+                .filter((item) => item.producedArtifacts.length);
+            if (artifactStageGroups.length) {
+                const groupValues = new Set(artifactStageGroups.map((item) => item.value));
+                if (!groupValues.has(String(activeRunArtifactStageExecutionId || ''))) {
+                    const currentStageKey = String(currentRun.run.current_stage_key || '').trim();
+                    const currentGroup = artifactStageGroups.find((item) =>
+                        String(item.stage.stage_key || '') === currentStageKey);
+                    const defaultGroup = currentGroup || artifactStageGroups.reduce((best, item) => {
+                        if (!best) return item;
+                        if (item.producedArtifacts.length > best.producedArtifacts.length) return item;
+                        if (item.producedArtifacts.length === best.producedArtifacts.length && item.index > best.index) return item;
+                        return best;
+                    }, null);
+                    activeRunArtifactStageExecutionId = String(defaultGroup?.value || artifactStageGroups[0].value || '');
+                }
+                const artifactStageControl = UI.createSegmentedControl(
+                    artifactStageGroups.map((item) => ({
+                        key: `run-artifact-stage-evidence:${item.value}`,
+                        value: item.value,
+                        label: `${item.index + 1}. ${item.stageDef.display_name || item.stage.stage_key || 'Stage'} (${item.producedArtifacts.length})`,
+                    })),
+                    (value) => {
+                        activeRunArtifactStageExecutionId = String(value || '');
+                        UI.clearMemoizedRender(contentEl);
+                        renderRunsRoute();
+                    },
+                    { label: 'Run artifact stage evidence', value: activeRunArtifactStageExecutionId },
+                );
+                artifactStageControl.element.dataset.key = 'run-artifact-stage-evidence-nav';
+                artifactStageControl.element.classList.add('kit-stage-workspace-nav', 'run-stage-evidence-nav');
+                const artifactStageToolbar = document.createElement('div');
+                artifactStageToolbar.className = 'kit-stage-workspace-toolbar';
+                artifactStageToolbar.appendChild(artifactStageControl.element);
+                sectionPanel.appendChild(artifactStageToolbar);
+
+                const selectedGroup = artifactStageGroups.find((item) =>
+                    item.value === String(activeRunArtifactStageExecutionId || '')) || artifactStageGroups[0];
+                appendSectionTitle(
+                    sectionPanel,
+                    `${selectedGroup.index + 1}. ${selectedGroup.stageDef.display_name || selectedGroup.stage.stage_key || 'Stage'}`,
+                    `${selectedGroup.producedArtifacts.length} output${selectedGroup.producedArtifacts.length === 1 ? '' : 's'} produced by this stage.`,
+                );
+                sectionPanel.appendChild(createArtifactList(selectedGroup.producedArtifacts, {
                     relationshipFor: () => 'Produced by this stage',
                 }));
-            });
-            if (!artifactRows.length) {
+            } else {
                 sectionPanel.appendChild(UI.renderEmptyState('No produced outputs recorded yet.', true));
             }
             if (pendingArtifactRows.length) {
@@ -7159,6 +7803,7 @@ function renderProtocolRuns(container) {
             includeGenerated,
             activeRunDetailSection,
             activeRunStageExecutionId,
+            activeRunArtifactStageExecutionId,
         }, () => {
             const workbench = document.createElement('div');
             workbench.className = 'protocol-runs-workbench';
@@ -7173,9 +7818,11 @@ function renderProtocolRuns(container) {
         const response = await API.listProtocolRuns({
             limit,
             cursor: runPaginator ? runPaginator.cursor : 0,
+            include_generated: includeGenerated ? '1' : '0',
         });
         runsListData = response || null;
         runs = response.runs || response || [];
+        _queueSelectedRunDetailRefreshFromList();
         _writeState();
         renderRunsRoute();
     }
@@ -7207,7 +7854,9 @@ function renderProtocolRuns(container) {
         const requestToken = runDetailRequestToken + 1;
         runDetailRequestToken = requestToken;
         try {
-            runDetailLoading = true;
+            if (!soft || !currentRun) {
+                runDetailLoading = true;
+            }
             const [runDetail, issues] = await Promise.all([
                 API.getProtocolRun(requestedRunId),
                 API.listProtocolIssues({ protocol_run_id: requestedRunId, limit: 50 }),

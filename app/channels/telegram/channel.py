@@ -89,7 +89,7 @@ class TelegramTransport(TransportImplementation):
                 else "poll"
             ),
             trust_tier="untrusted",
-            contributes_transport_capability=True,
+            report_in_agent_status=True,
             accepts_transport_input=True,
             supports_conversation_binding=True,
             supports_timeline=True,

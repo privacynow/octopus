@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from octopus_sdk.registry.management import ManagementRequest, ManagementResult, required_management_capability
+from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.registry.models import AckResult, DeliveryPollResult, DeliveryRecord
 from octopus_sdk.task_protocol import TaskTransitionRequest, apply_task_transition
 
@@ -207,12 +207,11 @@ def create_management_request(
     validated_request = validated_management_request(
         request.model_dump(mode="json") if hasattr(request, "model_dump") else request
     )
-    capability = required_management_capability(validated_request.operation)
     dialect.execute(
         conn,
         f"""
         INSERT INTO {dialect.qualify('management_requests')} (
-            request_id, target_agent_id, operation, capability, payload_json,
+            request_id, target_agent_id, operation, payload_json,
             status, delivery_id, result_json, error_code, error_detail, created_at, completed_at
         )
         VALUES (
@@ -220,19 +219,17 @@ def create_management_request(
             {dialect.placeholder(2)},
             {dialect.placeholder(3)},
             {dialect.placeholder(4)},
-            {dialect.placeholder(5)},
             'queued',
-            {dialect.placeholder(6)},
+            {dialect.placeholder(5)},
             NULL,
             '',
             '',
-            {dialect.placeholder(7)},
+            {dialect.placeholder(6)},
             ''
         )
         ON CONFLICT (request_id) DO UPDATE SET
             target_agent_id = EXCLUDED.target_agent_id,
             operation = EXCLUDED.operation,
-            capability = EXCLUDED.capability,
             payload_json = EXCLUDED.payload_json,
             status = 'queued',
             delivery_id = EXCLUDED.delivery_id,
@@ -246,7 +243,6 @@ def create_management_request(
             validated_request.request_id,
             validated_request.agent_id,
             validated_request.operation,
-            capability,
             json_param(validated_request.model_dump(mode="json")),
             delivery_id,
             now,

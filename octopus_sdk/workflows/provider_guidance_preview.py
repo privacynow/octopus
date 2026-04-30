@@ -59,7 +59,7 @@ class ProviderGuidanceUseCases(ProviderGuidancePort):
             preview_guidance=preview_guidance,
             preview_source=preview_source,
             composed_prompt=composed_prompt,
-            capability_summary=self._guidance.capability_summary(provider_name, active_skills),
+            active_skill_tools_summary=self._guidance.active_skill_tools_summary(provider_name, active_skills),
             provider_config=self._guidance.provider_config(provider_name, active_skills),
             prompt_weight=len(composed_prompt),
         )

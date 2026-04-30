@@ -934,13 +934,56 @@ async def cmd_protocol(
         return
     if sub == "artifacts":
         if len(args) < 2:
-            await update.effective_message.reply_text("Usage: /protocol artifacts <run_id>")
+            await update.effective_message.reply_text("Usage: /protocol artifacts <run_id> [download <artifact_key>]")
             return
         run_id = str(args[1] or "").strip()
+        download_requested = len(args) >= 4 and str(args[2] or "").strip().lower() == "download"
+        requested_artifact_key = str(args[3] or "").strip() if download_requested else ""
         try:
             detail = await protocol_service.get_run_status(run_id)
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
+            return
+        if download_requested:
+            if not requested_artifact_key:
+                await update.effective_message.reply_text("Usage: /protocol artifacts <run_id> download <artifact_key>")
+                return
+            artifact = next(
+                (
+                    item
+                    for item in (detail.artifacts or [])
+                    if str(getattr(item, "artifact_key", "") or "").strip() == requested_artifact_key
+                ),
+                None,
+            )
+            if artifact is None:
+                await update.effective_message.reply_text(f"Unknown artifact for this run: {requested_artifact_key}")
+                return
+            if not bool(getattr(artifact, "exists", False)):
+                await update.effective_message.reply_text(f"Artifact {requested_artifact_key} has not been produced yet.")
+                return
+            try:
+                content = await protocol_service.get_run_artifact_content(
+                    run_id,
+                    requested_artifact_key,
+                    download=True,
+                )
+            except RegistryClientError as exc:
+                await update.effective_message.reply_text(f"Failed to download the artifact. {exc}")
+                return
+            if not content:
+                await update.effective_message.reply_text(f"Artifact {requested_artifact_key} is empty or unavailable.")
+                return
+            filename = (
+                str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip().split("/")[-1]
+                or f"{requested_artifact_key}.txt"
+            )
+            doc = io.BytesIO(content)
+            doc.name = filename
+            await update.effective_message.reply_document(
+                document=doc,
+                caption=f"Protocol artifact: {requested_artifact_key}",
+            )
             return
         artifact_links = {
             str(item.artifact_key or ""): telegram_protocols.protocol_artifact_url(

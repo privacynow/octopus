@@ -39,7 +39,7 @@ class ProviderGuidanceServicePort(Protocol):
         credential_env: CredentialEnvRecord | None = None,
     ) -> ProviderConfigRecord: ...
 
-    def capability_summary(self, provider_name: str, active_skills: list[str]) -> str: ...
+    def active_skill_tools_summary(self, provider_name: str, active_skills: list[str]) -> str: ...
 
     def prompt_weight(
         self,
@@ -109,7 +109,7 @@ class ProviderGuidancePreview:
     preview_guidance: str
     preview_source: str
     composed_prompt: str
-    capability_summary: str
+    active_skill_tools_summary: str
     provider_config: ProviderConfigRecord
     prompt_weight: int
 

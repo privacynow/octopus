@@ -41,7 +41,7 @@ Standard authors should see:
 - stage title
 - stage instructions
 - clear assignment summary
-- capability/skill choice where desired
+- skill choice where desired
 - agent choice where desired
 - matching-agent quick choices when the list is small
 - scalable selector when the list is larger
@@ -64,7 +64,7 @@ internal `Advanced` section.
 | Surface | Assignment responsibility | Expected behavior |
 | --- | --- | --- |
 | Protocol stage stack | Shows one compact assignment summary. | No duplicate assignment prose. |
-| Stage editor | Owns assignment editing. | Author can choose none while drafting, agent, skill/capability, or skill with preferred agent. |
+| Stage editor | Owns assignment editing. | Author can choose none while drafting, agent, skill, or skill with preferred agent. |
 | Role/participant editor | Owns reusable role identity and shared instructions. | Does not become the primary assignment editor. |
 | Workflow map | Shows structure and optional context. | Not required for primary authoring. |
 | Registry runtime/store | Resolves stage selector and run participant state. | Runtime reads stage-owned assignment. |

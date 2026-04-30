@@ -206,7 +206,7 @@ def validate_required_runtime_profile(config: BotConfig) -> None:
     if not has_channel or not has_coordination:
         raise RuntimeError(
             "Telegram runtime requires full registry participant coverage "
-            "(channel and coordination capabilities)."
+            "(channel and coordination scopes)."
         )
 
 

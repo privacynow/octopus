@@ -44,7 +44,7 @@ def test_architecture_doc_covers_live_system_boundaries_and_flows() -> None:
         "## Conversations, Direct Assignment, And Delegation",
         "## Protocol Architecture",
         "## Artifacts",
-        "## Skills, Capabilities, And Guidance",
+        "## Skills And Guidance",
         "## Registry UI",
         "## Telegram Surface",
         "## Control Plane",

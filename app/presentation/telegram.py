@@ -1362,6 +1362,7 @@ def protocol_usage_message() -> TelegramRenderedMessage:
             "/protocol start <slug> <problem statement>\n"
             "/protocol status <run_id>\n"
             "/protocol artifacts <run_id>\n"
+            "/protocol artifacts <run_id> download <artifact_key>\n"
             "/protocol export <run_id>\n"
             "/protocol watch <run_id>\n"
             "/protocol unwatch <run_id>\n"

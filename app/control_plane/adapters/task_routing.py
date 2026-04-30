@@ -49,10 +49,10 @@ class BusTaskRouting:
             reply = await self._bus.request(
                 ControlCommand(
                     command_id=uuid4().hex,
-                    capability="task_routing",
-                    operation="submit_routed_task",
+                    admin_interface="task_routing",
+                    admin_operation="submit_routed_task",
                     payload_json=payload.model_dump_json(),
-                    authority_ref=authority_ref,
+                    implementation_ref=authority_ref,
                     idempotency_key=request.routed_task_id,
                 )
             )
@@ -79,10 +79,10 @@ class BusTaskRouting:
             reply = await self._bus.request(
                 ControlCommand(
                     command_id=uuid4().hex,
-                    capability="task_routing",
-                    operation="report_routed_task_result",
+                    admin_interface="task_routing",
+                    admin_operation="report_routed_task_result",
                     payload_json=payload.model_dump_json(),
-                    authority_ref=authority_ref,
+                    implementation_ref=authority_ref,
                     idempotency_key=routed_task_id,
                 )
             )
@@ -110,10 +110,10 @@ class BusTaskRouting:
         await self._bus.submit(
             ControlCommand(
                 command_id=uuid4().hex,
-                capability="task_routing",
-                operation="update_routed_task_status",
+                admin_interface="task_routing",
+                admin_operation="update_routed_task_status",
                 payload_json=payload.model_dump_json(),
-                authority_ref=authority_ref,
+                implementation_ref=authority_ref,
                 idempotency_key=update.transition_id,
             )
         )

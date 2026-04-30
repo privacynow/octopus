@@ -1,4 +1,4 @@
-"""Registry capability subpackage for Octopus SDK.
+"""Registry projection subpackage for Octopus SDK.
 
 Exports are resolved lazily so model-only imports do not eagerly pull in the
 HTTP client layer during SDK bootstrap.

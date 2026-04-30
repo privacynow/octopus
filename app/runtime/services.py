@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.agents.registry_capabilities import (
-    registry_authority_capabilities,
-    registry_id_from_authority_ref,
+from app.agents.registry_projection_interfaces import (
+    registry_projection_interfaces_by_implementation_ref,
+    registry_id_from_implementation_ref,
 )
 from app.agents.state import runtime_registry_agent_id
 from app.control_plane.bus import ControlPlaneBus
@@ -38,16 +38,16 @@ def build_runtime(config: BotConfig, provider: Provider) -> RuntimeBuild:
         catalog=lambda: workflow_holder["workflows"].runtime_skills.catalog,  # type: ignore[return-value]
         activation=get_skill_activation_service(),
     )
-    authority_capabilities = (
-        registry_authority_capabilities(config.agent_registries)
+    implemented_admin_interfaces = (
+        registry_projection_interfaces_by_implementation_ref(config.agent_registries)
         if config.agent_registries
         else {}
     )
-    directory = build_control_plane_directory(authority_capabilities)
+    directory = build_control_plane_directory(implemented_admin_interfaces)
 
-    def _agent_id_for_authority(authority_ref: str) -> str:
+    def _agent_id_for_implementation(implementation_ref: str) -> str:
         try:
-            registry_id = registry_id_from_authority_ref(authority_ref)
+            registry_id = registry_id_from_implementation_ref(implementation_ref)
         except ValueError:
             return ""
         registry = next(
@@ -64,13 +64,13 @@ def build_runtime(config: BotConfig, provider: Provider) -> RuntimeBuild:
         bus,
         directory,
         config=config,
-        agent_id_for_authority=_agent_id_for_authority,
+        agent_id_for_implementation=_agent_id_for_implementation,
         sessions=sessions,
     )
     workflow_holder["workflows"] = services.workflows
-    if authority_capabilities and not services.registry.health.live_local_agent_ids():
+    if implemented_admin_interfaces and not services.registry.health.live_local_agent_ids():
         log.warning(
-            "Registry capabilities configured but no agent enrollment found. "
+            "Registry admin_interfaces configured but no agent enrollment found. "
             "Event publishing and delegation will not work until bots enroll."
         )
 

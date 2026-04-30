@@ -590,10 +590,12 @@ class AbstractRegistryStore(Protocol):
         title: str,
         origin_channel: str = "registry",
         external_conversation_ref: str = "",
+        source_kind: str = "human",
+        hidden_from_default_views: bool = False,
     ) -> ConversationRecord:
         """Create a new registry-originated conversation."""
 
-    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "") -> list[ConversationRecord]:
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "", include_generated: bool = True) -> list[ConversationRecord]:
         """Return the registry conversation index with offset-based pagination."""
 
     def get_conversation(self, conversation_id: str) -> ConversationRecord:
@@ -607,6 +609,9 @@ class AbstractRegistryStore(Protocol):
 
     def get_summary(self, *, now_iso: str) -> RegistrySummaryRecord:
         """Return global dashboard aggregates for the registry UI."""
+
+    def cleanup_workspace_data(self) -> dict[str, object]:
+        """Remove workspace work records while preserving registered agents and catalog content."""
 
     def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         """Return currently pending conversation approvals in UI-ready form with offset-based pagination."""
@@ -631,6 +636,7 @@ class AbstractRegistryStore(Protocol):
         limit: int = 25,
         status: str = "",
         completed_since_iso: str = "",
+        include_generated: bool = True,
     ) -> list[TaskRecord]:
         """Return routed tasks in UI-ready form with offset-based pagination."""
 
@@ -659,7 +665,7 @@ class AbstractRegistryStore(Protocol):
     def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> MessagePageRecord:
         """Return paginated message events (message.user, message.bot) for a conversation."""
 
-    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "") -> list[ConversationRecord]:
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "", include_generated: bool = True) -> list[ConversationRecord]:
         """Return paginated conversations for a specific agent."""
 
     def get_agent_status(self, agent_id: str) -> AgentStatusRecord | None:
@@ -693,7 +699,7 @@ class AbstractRegistryStore(Protocol):
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolDefinitionDocumentRecord:
-        """Return one builtin protocol template document by slug."""
+        """Return one user-authored protocol template document by slug."""
 
     def list_protocol_templates(
         self,
@@ -741,7 +747,7 @@ class AbstractRegistryStore(Protocol):
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolMutationRecord:
-        """Create one persisted draft from a blank starter, template, or existing protocol."""
+        """Create one persisted draft from blank, a template, or an existing protocol."""
 
     def delete_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Discard one unpublished protocol draft."""
@@ -777,6 +783,7 @@ class AbstractRegistryStore(Protocol):
         entry_agent_id: str = "",
         root_conversation_id: str = "",
         origin_channel: str = "",
+        include_generated: bool = True,
     ) -> list[ProtocolRunRecord]:
         """Return protocol runs in UI-ready form."""
 

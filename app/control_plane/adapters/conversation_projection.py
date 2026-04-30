@@ -1,4 +1,4 @@
-"""Bus-backed conversation projection adapter with mirrored multi-authority support."""
+"""Bus-backed conversation projection adapter with mirrored implementation support."""
 
 from __future__ import annotations
 
@@ -24,22 +24,22 @@ from octopus_sdk.registry.models import (
 log = logging.getLogger(__name__)
 
 
-def _unconfigured_agent_id_for_authority(authority_ref: str) -> str:
+def _unconfigured_agent_id_for_implementation(implementation_ref: str) -> str:
     raise RuntimeError(
-        f"conversation_projection agent_id_for_authority not configured for {authority_ref}"
+        f"conversation_projection agent_id_for_implementation not configured for {implementation_ref}"
     )
 
 
 class BusConversationProjection:
-    """Projects conversations onto all authorities that expose ``conversation_projection``.
+    """Projects conversations onto all implementations that expose ``conversation_projection``.
 
-    ``create_conversation`` is sent to **every** authority sequentially.
+    ``create_conversation`` is sent to **every** implementation sequentially.
     All returned conversation_ids must be identical (deterministic server-side),
     otherwise a critical warning is logged.
 
-    ``publish_events`` fans out to all authorities best-effort (failures are
+    ``publish_events`` fans out to all implementations best-effort (failures are
     logged but never block).  On a cache miss the adapter re-issues a
-    ``create_conversation`` for that authority before publishing (idempotent).
+    ``create_conversation`` for that implementation before publishing (idempotent).
     """
 
     bus_timeout_seconds: float = 5.0
@@ -49,29 +49,29 @@ class BusConversationProjection:
         bus: ControlPlaneBus,
         directory: ControlPlaneDirectory,
         *,
-        agent_id_for_authority: Callable[[str], str] | None = None,
+        agent_id_for_implementation: Callable[[str], str] | None = None,
     ) -> None:
         self._bus = bus
         self._directory = directory
-        if agent_id_for_authority is None:
-            self._agent_id_for_authority = _unconfigured_agent_id_for_authority
+        if agent_id_for_implementation is None:
+            self._agent_id_for_implementation = _unconfigured_agent_id_for_implementation
         else:
-            self._agent_id_for_authority = agent_id_for_authority
+            self._agent_id_for_implementation = agent_id_for_implementation
 
         # Volatile in-memory cache:
         #   conversation_id -> {target_agent_id, origin_channel, external_conversation_ref, title}
         self._identity_cache: dict[str, dict[str, str]] = {}
 
-    def _resolved_agent_id(self, authority_ref: str) -> str:
-        agent_id = self._agent_id_for_authority(authority_ref)
+    def _resolved_agent_id(self, implementation_ref: str) -> str:
+        agent_id = self._agent_id_for_implementation(implementation_ref)
         if not agent_id:
             raise RuntimeError(
-                f"conversation_projection missing agent_id for authority {authority_ref}"
+                f"conversation_projection missing agent_id for implementation {implementation_ref}"
             )
         return agent_id
 
     # ------------------------------------------------------------------
-    # create_conversation -- mirrored to every authority
+    # create_conversation -- mirrored to every implementation
     # ------------------------------------------------------------------
 
     async def create_conversation(
@@ -82,17 +82,17 @@ class BusConversationProjection:
         external_conversation_ref: str,
         title: str,
     ) -> str:
-        authorities = sorted(
-            self._directory.authorities_for_capability("conversation_projection")
+        implementations = sorted(
+            self._directory.implementations_for_admin_interface("conversation_projection")
         )
-        if not authorities:
-            raise RuntimeError("no authority registered for conversation_projection")
+        if not implementations:
+            raise RuntimeError("no implementation registered for conversation_projection")
 
         conversation_ids: list[str] = []
         first_conversation_id: str = ""
 
-        for authority_ref in authorities:
-            resolved_agent_id = self._resolved_agent_id(authority_ref)
+        for implementation_ref in implementations:
+            resolved_agent_id = self._resolved_agent_id(implementation_ref)
             payload = json.dumps({
                 "target_agent_id": resolved_agent_id,
                 "origin_channel": origin_channel,
@@ -106,10 +106,10 @@ class BusConversationProjection:
                 reply = await self._bus.request(
                     ControlCommand(
                         command_id=uuid4().hex,
-                        capability="conversation_projection",
-                        operation="create_conversation",
+                        admin_interface="conversation_projection",
+                        admin_operation="create_conversation",
                         payload_json=payload,
-                        authority_ref=authority_ref,
+                        implementation_ref=implementation_ref,
                         idempotency_key=idempotency_key,
                     ),
                     timeout_seconds=self.bus_timeout_seconds,
@@ -117,7 +117,7 @@ class BusConversationProjection:
                 if reply.status == "failed":
                     log.error(
                         "create_conversation failed on %s: %s",
-                        authority_ref,
+                        implementation_ref,
                         reply.error,
                     )
                     continue
@@ -125,7 +125,7 @@ class BusConversationProjection:
                 result = json.loads(result_json)
                 cid = str(result.get("conversation_id", ""))
                 if not cid:
-                    log.error("create_conversation on %s returned empty conversation_id", authority_ref)
+                    log.error("create_conversation on %s returned empty conversation_id", implementation_ref)
                     continue
                 conversation_ids.append(cid)
                 if not first_conversation_id:
@@ -133,39 +133,39 @@ class BusConversationProjection:
             except Exception:
                 log.error(
                     "create_conversation bus error on %s",
-                    authority_ref,
+                    implementation_ref,
                     exc_info=True,
                 )
                 try:
                     await self._bus.submit(ControlCommand(
                         command_id=uuid4().hex,
-                        capability="mirror_retry",
-                        operation="create_conversation",
+                        admin_interface="conversation_projection",
+                        admin_operation="create_conversation",
                         payload_json=json.dumps({
                             "target_agent_id": resolved_agent_id,
                             "origin_channel": origin_channel,
                             "external_conversation_ref": external_conversation_ref,
                             "title": title,
                         }),
-                        authority_ref=authority_ref,
-                        idempotency_key=f"mirror:create:{resolved_agent_id}:{origin_channel}:{external_conversation_ref}",
+                        implementation_ref=implementation_ref,
+                        idempotency_key=f"projection-retry:create:{resolved_agent_id}:{origin_channel}:{external_conversation_ref}",
                         max_retries=10,
                     ))
                 except Exception:
                     log.warning(
-                        "Failed to submit mirror_retry create_conversation for %s",
-                        authority_ref,
+                        "Failed to submit conversation_projection retry for create_conversation on %s",
+                        implementation_ref,
                         exc_info=True,
                     )
 
         if not first_conversation_id:
             raise RuntimeError("create_conversation failed on all authorities")
 
-        # Verify deterministic IDs across authorities
+        # Verify deterministic IDs across implementations
         mismatched = [cid for cid in conversation_ids if cid != first_conversation_id]
         if mismatched:
             log.critical(
-                "CONVERSATION ID MISMATCH across authorities: primary=%s mismatched=%s",
+                "CONVERSATION ID MISMATCH across implementations: primary=%s mismatched=%s",
                 first_conversation_id,
                 mismatched,
             )
@@ -181,7 +181,7 @@ class BusConversationProjection:
         return first_conversation_id
 
     # ------------------------------------------------------------------
-    # publish_events -- best-effort fan-out to every authority
+    # publish_events -- best-effort fan-out to every implementation
     # ------------------------------------------------------------------
 
     async def publish_events(
@@ -190,21 +190,21 @@ class BusConversationProjection:
         conversation_id: str,
         events: list[ConversationEvent],
     ) -> None:
-        authorities = sorted(
-            self._directory.authorities_for_capability("conversation_projection")
+        implementations = sorted(
+            self._directory.implementations_for_admin_interface("conversation_projection")
         )
-        if not authorities:
+        if not implementations:
             return
-        if conversation_id not in self._identity_cache and authorities:
-            recovery_authority = authorities[0]
+        if conversation_id not in self._identity_cache and implementations:
+            recovery_implementation = implementations[0]
             try:
                 reply = await self._bus.request(
                     ControlCommand(
                         command_id=uuid4().hex,
-                        capability="conversation_projection",
-                        operation="get_conversation",
+                        admin_interface="conversation_projection",
+                        admin_operation="get_conversation",
                         payload_json=json.dumps({"conversation_id": conversation_id}),
-                        authority_ref=recovery_authority,
+                        implementation_ref=recovery_implementation,
                     ),
                     timeout_seconds=self.bus_timeout_seconds,
                 )
@@ -225,17 +225,17 @@ class BusConversationProjection:
                     conversation_id,
                     exc_info=True,
                 )
-        for authority_ref in authorities:
+        for implementation_ref in implementations:
             cached = self._identity_cache.get(conversation_id)
             if not cached:
                 log.warning(
                     "publish_events: cannot recover canonical identity for %s on %s; skipping",
                     conversation_id,
-                    authority_ref,
+                    implementation_ref,
                 )
                 continue
             try:
-                resolved_agent_id = self._resolved_agent_id(authority_ref)
+                resolved_agent_id = self._resolved_agent_id(implementation_ref)
                 create_payload = json.dumps({
                     "target_agent_id": resolved_agent_id,
                     "origin_channel": cached["origin_channel"],
@@ -245,10 +245,10 @@ class BusConversationProjection:
                 await self._bus.request(
                     ControlCommand(
                         command_id=uuid4().hex,
-                        capability="conversation_projection",
-                        operation="create_conversation",
+                        admin_interface="conversation_projection",
+                        admin_operation="create_conversation",
                         payload_json=create_payload,
-                        authority_ref=authority_ref,
+                        implementation_ref=implementation_ref,
                         idempotency_key=(
                             f"{resolved_agent_id}:{cached['origin_channel']}:"
                             f"{cached['external_conversation_ref']}"
@@ -259,7 +259,7 @@ class BusConversationProjection:
             except Exception:
                 log.warning(
                     "create-before-publish failed on %s for conversation %s; proceeding with publish anyway",
-                    authority_ref,
+                    implementation_ref,
                     conversation_id,
                     exc_info=True,
                 )
@@ -271,17 +271,17 @@ class BusConversationProjection:
                 await self._bus.submit(
                     ControlCommand(
                         command_id=uuid4().hex,
-                        capability="conversation_projection",
-                        operation="publish_events",
+                        admin_interface="conversation_projection",
+                        admin_operation="publish_events",
                         payload_json=payload,
-                        authority_ref=authority_ref,
+                        implementation_ref=implementation_ref,
                         idempotency_key=f"{conversation_id}:{','.join(e.event_id for e in events)}",
                     )
                 )
             except Exception:
                 log.warning(
                     "publish_events failed on %s for conversation %s",
-                    authority_ref,
+                    implementation_ref,
                     conversation_id,
                     exc_info=True,
                 )
@@ -289,12 +289,12 @@ class BusConversationProjection:
                     await self._bus.submit(
                         ControlCommand(
                             command_id=uuid4().hex,
-                            capability="mirror_retry",
-                            operation="publish_events",
+                            admin_interface="conversation_projection",
+                            admin_operation="publish_events",
                             payload_json=payload,
-                            authority_ref=authority_ref,
+                            implementation_ref=implementation_ref,
                             idempotency_key=(
-                                f"mirror:publish:{conversation_id}:"
+                                f"projection-retry:publish:{conversation_id}:"
                                 f"{','.join(e.event_id for e in events)}"
                             ),
                             max_retries=10,
@@ -302,8 +302,8 @@ class BusConversationProjection:
                     )
                 except Exception:
                     log.warning(
-                        "Failed to submit mirror_retry publish_events for %s",
-                        authority_ref,
+                        "Failed to submit conversation_projection retry for publish_events on %s",
+                        implementation_ref,
                         exc_info=True,
                     )
 
@@ -313,26 +313,26 @@ class BusConversationProjection:
         conversation_id: str,
         text: str,
     ) -> MessageRecord:
-        authorities = sorted(
-            self._directory.authorities_for_capability("conversation_projection")
+        implementations = sorted(
+            self._directory.implementations_for_admin_interface("conversation_projection")
         )
-        if not authorities:
-            raise RuntimeError("no authority registered for conversation_projection")
+        if not implementations:
+            raise RuntimeError("no implementation registered for conversation_projection")
         payload = AddConversationMessagePayload(
             conversation_id=conversation_id,
             text=text,
         )
         first_success: MessageRecord | None = None
         last_error = "add_message failed on all authorities"
-        for authority_ref in authorities:
+        for implementation_ref in implementations:
             try:
                 reply = await self._bus.request(
                     ControlCommand(
                         command_id=uuid4().hex,
-                        capability="conversation_projection",
-                        operation="add_message",
+                        admin_interface="conversation_projection",
+                        admin_operation="add_message",
                         payload_json=payload.model_dump_json(),
-                        authority_ref=authority_ref,
+                        implementation_ref=implementation_ref,
                         idempotency_key=f"{conversation_id}:message:{text}",
                     ),
                     timeout_seconds=self.bus_timeout_seconds,
@@ -356,26 +356,26 @@ class BusConversationProjection:
         conversation_id: str,
         envelope: CoordinationActionEnvelope,
     ) -> CoordinationActionResult:
-        authorities = sorted(
-            self._directory.authorities_for_capability("conversation_projection")
+        implementations = sorted(
+            self._directory.implementations_for_admin_interface("conversation_projection")
         )
-        if not authorities:
-            raise RuntimeError("no authority registered for conversation_projection")
+        if not implementations:
+            raise RuntimeError("no implementation registered for conversation_projection")
         payload = SubmitConversationActionPayload(
             conversation_id=conversation_id,
             envelope=envelope,
         )
         first_success: CoordinationActionResult | None = None
         last_error = "submit_action failed on all authorities"
-        for authority_ref in authorities:
+        for implementation_ref in implementations:
             try:
                 reply = await self._bus.request(
                     ControlCommand(
                         command_id=uuid4().hex,
-                        capability="conversation_projection",
-                        operation="submit_action",
+                        admin_interface="conversation_projection",
+                        admin_operation="submit_action",
                         payload_json=payload.model_dump_json(),
-                        authority_ref=authority_ref,
+                        implementation_ref=implementation_ref,
                         idempotency_key=envelope.action_id,
                     ),
                     timeout_seconds=self.bus_timeout_seconds,

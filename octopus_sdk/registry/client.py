@@ -33,6 +33,8 @@ from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
     ProtocolTemplateCreateRecord,
     ProtocolTemplateSummaryRecord,
+    ProtocolArtifactAccessPort,
+    ProtocolAuthoringPort,
     ProtocolInvocationPort,
     ProtocolObservationPort,
 )
@@ -160,7 +162,7 @@ def _validated_model(
     return schema.model_validate(dict(value))
 
 
-class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
+class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObservationPort, ProtocolArtifactAccessPort):
     """Async HTTP client wrapping the registry's /v1/ endpoints."""
 
     def __init__(
@@ -246,6 +248,64 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
             if response.headers.get("content-type", "").startswith("application/json"):
                 return response.json()
             return response.text
+
+        if self._client is not None:
+            return await _do(self._client)
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            return await _do(client)
+
+    async def _request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        require_auth: bool = True,
+        extra_headers: Mapping[str, str] | None = None,
+        **kwargs: object,
+    ) -> bytes:
+        headers = self._headers(require_auth=require_auth)
+        if extra_headers:
+            headers.update({str(key): str(value) for key, value in extra_headers.items() if str(value or "").strip()})
+
+        async def _do(client: httpx.AsyncClient) -> bytes:
+            try:
+                response = await client.request(
+                    method,
+                    f"{self._base_url}{path}",
+                    headers=headers,
+                    **kwargs,
+                )
+            except httpx.TimeoutException as exc:
+                raise RegistryClientError(
+                    f"Registry {method} {path} timed out",
+                    error_code="registry_timeout",
+                    operator_detail=f"Registry {method} {path} timed out ({exc.__class__.__name__}).",
+                ) from exc
+            except httpx.RequestError as exc:
+                raise RegistryClientError(
+                    f"Registry {method} {path} failed",
+                    error_code="registry_unreachable",
+                    operator_detail=f"Registry {method} {path} failed with {exc.__class__.__name__}.",
+                ) from exc
+            if response.status_code >= 400:
+                payload: object = {}
+                if response.headers.get("content-type", "").startswith("application/json"):
+                    try:
+                        payload = response.json().get("detail", response.json())
+                    except Exception:
+                        payload = {}
+                error_code, message, details = _detail_error_payload(payload)
+                raise RegistryClientError(
+                    message or f"Registry {method} {path} failed: HTTP {response.status_code}",
+                    error_code=error_code or _registry_http_error_code(response.status_code),
+                    operator_detail=(
+                        message
+                        or f"Registry {method} {path} failed with HTTP {response.status_code}."
+                    ),
+                    details=details,
+                    status_code=response.status_code,
+                )
+            return bytes(response.content or b"")
 
         if self._client is not None:
             return await _do(self._client)
@@ -546,6 +606,20 @@ class RegistryClient(ProtocolInvocationPort, ProtocolObservationPort):
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/artifacts")
         rows = result.get("artifacts", result)
         return [ProtocolArtifactRecord.model_validate(item) for item in rows]
+
+    async def get_run_artifact_content(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        download: bool = False,
+    ) -> bytes:
+        params = {"download": "1"} if download else None
+        return await self._request_bytes(
+            "GET",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content",
+            params=params,
+        )
 
     async def list_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/timeline")

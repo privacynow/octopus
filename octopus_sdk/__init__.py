@@ -26,7 +26,7 @@ from octopus_sdk.realtime import (
     RealtimeProgressEnvelope,
 )
 from octopus_sdk.transport import (
-    TransportCapabilities,
+    TransportEgressFeatures,
     TransportDescriptor,
     TransportEgress,
     TransportImplementation,
@@ -205,7 +205,7 @@ __all__ = [
     "RegistryAuthorityMirror",
     "RegistryAuthorityEnrollment",
     "RegistryAuthorityDelivery",
-    "TransportCapabilities",
+    "TransportEgressFeatures",
     "TransportDescriptor",
     "TransportDispatcher",
     "TransportEgress",

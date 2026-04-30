@@ -104,13 +104,13 @@ CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen
 CREATE TABLE IF NOT EXISTS bot_runtime.control_plane_commands (
     seq BIGSERIAL PRIMARY KEY,
     command_id TEXT NOT NULL UNIQUE,
-    capability TEXT NOT NULL,
-    operation TEXT NOT NULL,
+    admin_interface TEXT NOT NULL,
+    admin_operation TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'pending',
     priority INTEGER NOT NULL DEFAULT 0,
     correlation_id TEXT NOT NULL DEFAULT '',
-    authority_ref TEXT NOT NULL,
+    implementation_ref TEXT NOT NULL,
     idempotency_key TEXT NOT NULL DEFAULT '',
     result_json TEXT,
     error TEXT,
@@ -123,16 +123,60 @@ CREATE TABLE IF NOT EXISTS bot_runtime.control_plane_commands (
     next_attempt_at TIMESTAMPTZ,
     CONSTRAINT control_plane_commands_state_check
         CHECK (state IN ('pending', 'claimed', 'completed', 'failed', 'dead_letter')),
-    CONSTRAINT control_plane_commands_authority_ref_nonempty
-        CHECK (authority_ref <> '')
+    CONSTRAINT control_plane_commands_implementation_ref_nonempty
+        CHECK (implementation_ref <> '')
 );
+ALTER TABLE bot_runtime.control_plane_commands
+    ADD COLUMN IF NOT EXISTS admin_interface TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS admin_operation TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS implementation_ref TEXT NOT NULL DEFAULT '';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'bot_runtime'
+          AND table_name = 'control_plane_commands'
+          AND column_name = 'capability'
+    ) THEN
+        UPDATE bot_runtime.control_plane_commands
+        SET admin_interface = capability
+        WHERE admin_interface = ''
+          AND capability <> '';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'bot_runtime'
+          AND table_name = 'control_plane_commands'
+          AND column_name = 'operation'
+    ) THEN
+        UPDATE bot_runtime.control_plane_commands
+        SET admin_operation = operation
+        WHERE admin_operation = ''
+          AND operation <> '';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'bot_runtime'
+          AND table_name = 'control_plane_commands'
+          AND column_name = 'authority_ref'
+    ) THEN
+        UPDATE bot_runtime.control_plane_commands
+        SET implementation_ref = authority_ref
+        WHERE implementation_ref = ''
+          AND authority_ref <> '';
+    END IF;
+END $$;
+ALTER TABLE bot_runtime.control_plane_commands
+    DROP COLUMN IF EXISTS capability,
+    DROP COLUMN IF EXISTS operation,
+    DROP COLUMN IF EXISTS authority_ref;
 CREATE INDEX IF NOT EXISTS idx_cp_state
     ON bot_runtime.control_plane_commands (state, next_attempt_at, priority DESC, seq);
 CREATE INDEX IF NOT EXISTS idx_cp_correlation
     ON bot_runtime.control_plane_commands (correlation_id)
     WHERE correlation_id <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cp_idempotency
-    ON bot_runtime.control_plane_commands (capability, operation, authority_ref, idempotency_key)
+    ON bot_runtime.control_plane_commands (admin_interface, admin_operation, implementation_ref, idempotency_key)
     WHERE idempotency_key <> '';
 
 CREATE TABLE IF NOT EXISTS bot_runtime.deferred_notifications (
@@ -172,8 +216,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     connectivity_state TEXT NOT NULL DEFAULT 'standalone',
     current_capacity INTEGER NOT NULL DEFAULT 0,
     max_capacity INTEGER NOT NULL DEFAULT 1,
-    channel_capabilities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-    management_capabilities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    transport_implementations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    supported_admin_operations JSONB NOT NULL DEFAULT '[]'::jsonb,
     version TEXT NOT NULL DEFAULT '',
     runtime_health_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     trust_tier TEXT NOT NULL DEFAULT 'community',
@@ -183,8 +227,35 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     last_heartbeat_at TEXT NOT NULL
 );
 ALTER TABLE agent_registry.agents
+    ADD COLUMN IF NOT EXISTS transport_implementations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS supported_admin_operations JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN IF NOT EXISTS trust_tier TEXT NOT NULL DEFAULT 'community',
     ADD COLUMN IF NOT EXISTS soft_deleted_at TEXT NOT NULL DEFAULT '';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'agent_registry'
+          AND table_name = 'agents'
+          AND column_name = 'transport_implementations_json'
+    ) THEN
+        UPDATE agent_registry.agents
+        SET transport_implementations = transport_implementations_json
+        WHERE transport_implementations = '[]'::jsonb
+          AND transport_implementations_json <> '[]'::jsonb;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'agent_registry'
+          AND table_name = 'agents'
+          AND column_name = 'management_capabilities_json'
+    ) THEN
+        UPDATE agent_registry.agents
+        SET supported_admin_operations = management_capabilities_json
+        WHERE supported_admin_operations = '[]'::jsonb
+          AND management_capabilities_json <> '[]'::jsonb;
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_registry_agents_state
     ON agent_registry.agents (connectivity_state);
 CREATE INDEX IF NOT EXISTS idx_registry_agents_name
@@ -232,7 +303,6 @@ CREATE TABLE IF NOT EXISTS agent_registry.management_requests (
     request_id TEXT PRIMARY KEY,
     target_agent_id TEXT NOT NULL,
     operation TEXT NOT NULL,
-    capability TEXT NOT NULL DEFAULT '',
     payload_json JSONB NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
     delivery_id TEXT NOT NULL DEFAULT '',
@@ -248,6 +318,8 @@ CREATE INDEX IF NOT EXISTS idx_registry_management_requests_agent_status
 CREATE TABLE IF NOT EXISTS agent_registry.conversations (
     conversation_id TEXT PRIMARY KEY,
     target_agent_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'human',
+    hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     title TEXT NOT NULL DEFAULT '',
     conversation_type TEXT NOT NULL DEFAULT 'conversation',
     origin_channel TEXT NOT NULL DEFAULT 'registry',
@@ -256,8 +328,35 @@ CREATE TABLE IF NOT EXISTS agent_registry.conversations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.conversations
+    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'human',
+    ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_registry.conversations
+    ALTER COLUMN hidden_from_default_views SET DEFAULT FALSE;
+UPDATE agent_registry.conversations
+SET
+    source_kind = CASE
+        WHEN conversation_type = 'task_thread' OR external_conversation_ref LIKE 'routed-task:%' THEN 'delegation'
+        WHEN external_conversation_ref LIKE 'protocol-run:%' THEN 'protocol_run'
+        WHEN lower(title) LIKE '%rehearsal%' OR lower(external_conversation_ref) LIKE '%rehearsal%' THEN 'rehearsal'
+        WHEN lower(title) LIKE '%test%' OR lower(external_conversation_ref) LIKE '%test%' THEN 'test'
+        ELSE source_kind
+    END,
+    hidden_from_default_views = COALESCE(hidden_from_default_views, FALSE)
+        OR lower(title) LIKE '%rehearsal%'
+        OR lower(external_conversation_ref) LIKE '%rehearsal%'
+        OR lower(title) LIKE '%test%'
+        OR lower(external_conversation_ref) LIKE '%test%';
+ALTER TABLE agent_registry.conversations
+    ALTER COLUMN hidden_from_default_views SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_registry_conversations_updated
     ON agent_registry.conversations (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_conversations_default_updated
+    ON agent_registry.conversations (hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_conversations_type_default_updated
+    ON agent_registry.conversations (conversation_type, hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_conversations_agent_default_updated
+    ON agent_registry.conversations (target_agent_id, hidden_from_default_views, updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_external
     ON agent_registry.conversations (target_agent_id, origin_channel, external_conversation_ref);
 
@@ -266,6 +365,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.routed_tasks (
     parent_conversation_id TEXT NOT NULL,
     origin_agent_id TEXT NOT NULL,
     target_agent_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'delegation',
+    hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     title TEXT NOT NULL,
     request_json JSONB NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
@@ -274,8 +375,36 @@ CREATE TABLE IF NOT EXISTS agent_registry.routed_tasks (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.routed_tasks
+    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'delegation',
+    ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_registry.routed_tasks
+    ALTER COLUMN hidden_from_default_views SET DEFAULT FALSE;
+UPDATE agent_registry.routed_tasks
+SET
+    source_kind = CASE
+        WHEN COALESCE(request_json #>> '{context,protocol_run_id}', '') <> '' THEN 'protocol_stage'
+        WHEN lower(title) LIKE '%rehearsal%' THEN 'rehearsal'
+        WHEN lower(title) LIKE '%test%' THEN 'test'
+        ELSE source_kind
+    END,
+    hidden_from_default_views = COALESCE(hidden_from_default_views, FALSE)
+        OR COALESCE(request_json #>> '{context,protocol_run_id}', '') <> ''
+        OR lower(title) LIKE '%rehearsal%'
+        OR lower(title) LIKE '%test%';
+ALTER TABLE agent_registry.routed_tasks
+    ALTER COLUMN hidden_from_default_views SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_updated
     ON agent_registry.routed_tasks (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_default_updated
+    ON agent_registry.routed_tasks (hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_status_default_updated
+    ON agent_registry.routed_tasks (status, hidden_from_default_views, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_parent_updated
+    ON agent_registry.routed_tasks (parent_conversation_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_routed_tasks_protocol_run
+    ON agent_registry.routed_tasks ((request_json #>> '{context,protocol_run_id}'), updated_at DESC)
+    WHERE (request_json #>> '{context,protocol_run_id}') <> '';
 
 CREATE TABLE IF NOT EXISTS agent_registry.events (
     seq BIGSERIAL PRIMARY KEY,
@@ -348,6 +477,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
     protocol_run_id TEXT PRIMARY KEY,
     protocol_id TEXT NOT NULL,
     protocol_definition_version_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'protocol_run',
+    hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     entry_agent_id TEXT NOT NULL DEFAULT '',
     entry_authority_ref TEXT NOT NULL DEFAULT '',
     is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE,
@@ -374,6 +505,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
     completed_at TEXT NOT NULL DEFAULT ''
 );
 ALTER TABLE agent_registry.protocol_runs
+    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'protocol_run',
+    ADD COLUMN IF NOT EXISTS hidden_from_default_views BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS blocked_code TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS blocked_detail TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS run_org_id TEXT NOT NULL DEFAULT 'local',
@@ -382,6 +515,20 @@ ALTER TABLE agent_registry.protocol_runs
     ADD COLUMN IF NOT EXISTS retention_until TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS last_transition_at TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_registry.protocol_runs
+    ALTER COLUMN hidden_from_default_views SET DEFAULT FALSE;
+UPDATE agent_registry.protocol_runs
+SET
+    source_kind = CASE
+        WHEN is_rehearsal THEN 'rehearsal'
+        WHEN lower(problem_statement) LIKE '%test%' THEN 'test'
+        ELSE source_kind
+    END,
+    hidden_from_default_views = COALESCE(hidden_from_default_views, FALSE)
+        OR is_rehearsal
+        OR lower(problem_statement) LIKE '%test%';
+ALTER TABLE agent_registry.protocol_runs
+    ALTER COLUMN hidden_from_default_views SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_updated
     ON agent_registry.protocol_runs (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_status
@@ -390,6 +537,8 @@ CREATE INDEX IF NOT EXISTS idx_protocol_runs_org
     ON agent_registry.protocol_runs (run_org_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_rehearsal
     ON agent_registry.protocol_runs (is_rehearsal, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_default_updated
+    ON agent_registry.protocol_runs (hidden_from_default_views, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_protocol_updated
     ON agent_registry.protocol_runs (protocol_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_entry_agent_updated

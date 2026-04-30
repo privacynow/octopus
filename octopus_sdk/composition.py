@@ -50,7 +50,7 @@ class WorkflowComposerError(RuntimeError):
 
 
 class NotConfiguredError(WorkflowComposerError):
-    """A requested workflow capability is not wired into the runtime."""
+    """A requested workflow dependency is not wired into the runtime."""
 
 
 WorkflowNotConfiguredError = NotConfiguredError
@@ -78,11 +78,11 @@ class _UnavailablePort:
     for workflow-port feature detection; revisit only if that changes.
     """
 
-    def __init__(self, capability: str) -> None:
-        self._capability = capability
+    def __init__(self, dependency: str) -> None:
+        self._dependency = dependency
 
     def _raise(self) -> None:
-        raise NotConfiguredError(f"{self._capability} not configured for workflow composition")
+        raise NotConfiguredError(f"{self._dependency} not configured for workflow composition")
 
     def __call__(self, *args, **kwargs):
         del args, kwargs
@@ -271,22 +271,59 @@ class WorkflowComposer:
             _UnavailablePort("deferred notifications"),
         )
 
-        management_capabilities: list[str] = []
+        supported_admin_operations: list[str] = []
         if self._catalog_service is not None and self._import_service is not None:
-            management_capabilities.append("skill_catalog")
+            supported_admin_operations.extend([
+                "list_catalog_skills",
+                "search_catalog_skills",
+                "catalog_skill_detail",
+                "install_catalog_skill",
+                "uninstall_catalog_skill",
+                "update_catalog_skill",
+                "diff_catalog_skill",
+            ])
         if self._catalog_service is not None and self._content_store is not None:
-            management_capabilities.append("skill_lifecycle")
+            supported_admin_operations.extend([
+                "catalog_skill_lifecycle_detail",
+                "edit_catalog_skill_draft",
+                "export_catalog_skill_package",
+                "import_catalog_skill_package",
+                "submit_catalog_skill",
+                "approve_catalog_skill",
+                "reject_catalog_skill",
+                "publish_catalog_skill",
+                "archive_catalog_skill",
+            ])
         if self._guidance_service is not None and self._content_store is not None:
-            management_capabilities.append("provider_guidance")
+            supported_admin_operations.extend([
+                "preview_provider_guidance",
+                "provider_guidance_detail",
+                "edit_provider_guidance_draft",
+                "submit_provider_guidance",
+                "approve_provider_guidance",
+                "reject_provider_guidance",
+                "publish_provider_guidance",
+                "archive_provider_guidance",
+            ])
         if (
             self._catalog_service is not None
             and self._activation_service is not None
             and self._credential_service is not None
             and self._guidance_service is not None
         ):
-            management_capabilities.append("conversation_skills")
+            supported_admin_operations.extend([
+                "conversation_skill_state",
+                "activate_conversation_skill",
+                "deactivate_conversation_skill",
+                "clear_conversation_skills",
+                "submit_conversation_skill_credential",
+            ])
         if self._catalog_service is not None:
-            management_capabilities.append("conversation_settings")
+            supported_admin_operations.extend([
+                "conversation_settings_state",
+                "set_conversation_setting",
+                "reset_conversation",
+            ])
 
         catalog = RuntimeSkillCatalogUseCases(
             catalog_service=catalog_service,
@@ -366,7 +403,7 @@ class WorkflowComposer:
             messages=messages,
             config=config,
             sessions=sessions,
-            management_capabilities=tuple(management_capabilities),
+            supported_admin_operations=tuple(supported_admin_operations),
             text_formatting=text_formatting,
             completion_webhook=completion_webhook,
             trust_tier_resolver=trust_tier_resolver,

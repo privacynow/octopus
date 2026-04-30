@@ -12,6 +12,7 @@ from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUs
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskResult
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation
+from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
 from octopus_sdk.transport import DelegationContinuationRequest
 from octopus_sdk.tests.support import make_sdk_harness, make_transport_identity
 from octopus_sdk.work_queue import WorkItemRecord
@@ -55,6 +56,39 @@ class RestrictiveAuthorization(AuthorizationPort):
         if user is None:
             return "deny"
         return "allow" if str(user.id or "") in self._allowed_actor_keys else "deny"
+
+
+class RecordingTaskRouting:
+    def __init__(self) -> None:
+        self.results: list[RoutedTaskResult] = []
+
+    async def submit_routed_task(self, *, request, authority_ref: str) -> TaskSubmissionResult:
+        del request, authority_ref
+        return TaskSubmissionResult(status="unavailable")
+
+    async def report_routed_task_result(
+        self,
+        *,
+        routed_task_id: str,
+        authority_ref: str,
+        result: RoutedTaskResult,
+    ) -> TaskResultReport:
+        del authority_ref
+        assert result.routed_task_id == routed_task_id
+        self.results.append(result)
+        return TaskResultReport(status="reported", routed_task_id=routed_task_id)
+
+    async def update_routed_task_status(self, *, update, authority_ref: str) -> None:
+        del update, authority_ref
+
+
+class RecordingControlPlane:
+    def __init__(self, task_routing: RecordingTaskRouting) -> None:
+        self.task_routing = task_routing
+        self.conversation_projection = None
+        self.agent_directory = None
+        self.registry_inspection = None
+        self.health_publication = None
 
 
 def test_sdk_wiring_verification_package_has_no_app_or_registry_imports() -> None:
@@ -253,6 +287,43 @@ async def test_sdk_wiring_verification_exercises_full_workflow_lifecycle(tmp_pat
     await runtime.run()
     assert harness.transport.started is True
     assert harness.transport.stopped is True
+
+
+async def test_sdk_wiring_reports_routed_recovery_as_failed_result(tmp_path: Path) -> None:
+    harness = make_sdk_harness(tmp_path, process_role="bot")
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(workflows)
+    task_routing = RecordingTaskRouting()
+    runtime.control_plane = RecordingControlPlane(task_routing)  # type: ignore[assignment]
+
+    event = InboundMessage(
+        user=InboundUser(id="stub:user:recovery", username="recovery"),
+        conversation_key="stub:conversation:recovery",
+        conversation_ref="stub:conversation:recovery",
+        text="recover routed task",
+        source="stub",
+        routed_task_id="protocol-stage:recovered",
+        authority_ref="registry:local",
+        working_dir_hint="/workspace/workspace",
+    )
+    item = WorkItemRecord(
+        id="item-recovery-1",
+        conversation_key="stub:conversation:recovery",
+        event_id="evt-recovery-routed",
+        actor_key="stub:user:recovery",
+        kind="message",
+        state="claimed",
+        dispatch_mode="recovery",
+    )
+
+    await runtime._dispatch_claimed_message(event, item, cancel_event=None)
+
+    assert len(task_routing.results) == 1
+    result = task_routing.results[0]
+    assert result.routed_task_id == "protocol-stage:recovered"
+    assert result.status == "failed"
+    assert "interrupted" in result.full_text.lower()
+    assert result.working_dir == "/workspace/workspace"
 
 
 async def test_sdk_wiring_verification_enqueues_deferred_notification_for_routed_task_completion(

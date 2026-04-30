@@ -898,6 +898,7 @@ def resource_agent_conversations(
     cursor: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     conversation_type: str = Query(default=""),
+    include_generated: bool = Query(default=True),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -908,6 +909,7 @@ def resource_agent_conversations(
         cursor=cursor,
         limit=limit,
         conversation_type=conversation_type,
+        include_generated=include_generated,
     )
     return _json_payload(_paginated_response("conversations", conversations, cursor, limit))
 
@@ -920,6 +922,7 @@ def resource_list_conversations(
     q: str = Query(default=""),
     status: str = Query(default=""),
     conversation_type: str = Query(default=""),
+    include_generated: bool = Query(default=True),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -930,6 +933,7 @@ def resource_list_conversations(
         q=q,
         status=status,
         conversation_type=conversation_type,
+        include_generated=include_generated,
     )
     return _json_payload(_paginated_response("conversations", conversations, cursor, limit))
 
@@ -1218,6 +1222,7 @@ def resource_list_tasks(
     parent_conversation_id: str = Query(default=""),
     protocol_run_id: str = Query(default=""),
     completed_since_iso: str = Query(default=""),
+    include_generated: bool = Query(default=True),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -1229,6 +1234,7 @@ def resource_list_tasks(
         limit=limit,
         status=status,
         completed_since_iso=completed_since_iso,
+        include_generated=include_generated,
     )
     tasks = _tasks_with_protocol_artifacts(tasks, access=_protocol_access(auth), store=store)
     return _json_payload(_paginated_response("tasks", tasks, cursor, limit))
@@ -1391,6 +1397,30 @@ def resource_summary(
 ) -> dict[str, Any]:
     now_iso = utcnow_iso()
     return _json_payload(store.get_summary(now_iso=now_iso))
+
+
+@app.post("/v1/admin/workspace-data/cleanup")
+async def resource_cleanup_workspace_data(
+    request: Request,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    password = str((payload or {}).get("password") or "")
+    confirm = str((payload or {}).get("confirm") or "").strip().upper()
+    if confirm != "CLEAN":
+        raise HTTPException(status_code=400, detail="Type CLEAN to confirm workspace-data cleanup.")
+    if not ui_password_matches(password, settings=load_settings()):
+        raise HTTPException(status_code=403, detail="Registry UI password did not match.")
+    result = store.cleanup_workspace_data()
+    await _broadcast_invalidations(
+        topics=("summary", "conversations", "tasks", "approvals", "protocols"),
+        reason="admin.workspace_data.cleanup",
+    )
+    return _json_payload(result)
 
 
 @app.get("/v1/approvals")

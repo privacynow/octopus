@@ -358,9 +358,9 @@ def build_provider_config(
     ).to_dict()
 
 
-def build_capability_summary(provider: str, skill_names: list[str]) -> str:
-    """Build a human-readable summary of provider-specific capabilities for PreflightContext."""
-    return _compat_guidance_service().capability_summary(provider, skill_names)
+def build_active_skill_tools_summary(provider: str, skill_names: list[str]) -> str:
+    """Build a human-readable summary of provider-specific guidance settings for PreflightContext."""
+    return _compat_guidance_service().active_skill_tools_summary(provider, skill_names)
 
 
 def _compat_track_files(skill_dir: Path) -> tuple[SkillFileRecord, ...]:

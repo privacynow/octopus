@@ -109,7 +109,7 @@ function renderGuidanceEditor(container) {
     }
 
     function _renderAgentOptions() {
-        const agents = UI.filterManagedAgents(availableAgents, 'provider_guidance');
+        const agents = UI.filterManagedAgents(availableAgents, 'provider_guidance_detail');
         if (!agents.length) {
             currentAgentId = '';
             agentDropdown.update([], '');

@@ -10,7 +10,7 @@ import pytest
 from octopus_sdk.transport_dispatcher import TransportDispatcher
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.transport import EditableHandle
-from octopus_sdk.transport import TransportCapabilities
+from octopus_sdk.transport import TransportEgressFeatures
 from octopus_sdk.transport import TransportDescriptor
 from octopus_sdk.transport import TransportEgress
 from octopus_sdk.transport import TransportBindingRecord
@@ -53,13 +53,13 @@ class _DummyHandle(EditableHandle):
 
 class _FakeEgress(TransportEgress):
     def __init__(self, transport_name: str) -> None:
-        self._capabilities = TransportCapabilities(channel_name=transport_name)
+        self._egress_features = TransportEgressFeatures(transport_implementation=transport_name)
         self.bound_title = ""
         self.binding = None
 
     @property
-    def capabilities(self) -> TransportCapabilities:
-        return self._capabilities
+    def egress_features(self) -> TransportEgressFeatures:
+        return self._egress_features
 
     async def send_text(self, text: str, **kwargs: object) -> EditableHandle:
         del text, kwargs
@@ -246,7 +246,7 @@ def test_dispatcher_routes_by_registered_prefix() -> None:
             display_name="Registry Task",
             supports_multiple=True,
             inbound_model="delivery",
-            contributes_transport_capability=False,
+            report_in_agent_status=False,
             accepts_transport_input=False,
             supports_conversation_binding=False,
         ),
@@ -255,9 +255,9 @@ def test_dispatcher_routes_by_registered_prefix() -> None:
     dispatcher.register(registry_task)
 
     cfg = make_config()
-    assert dispatcher.create_egress("telegram:bot123:42", config=cfg).capabilities.channel_name == "telegram"
+    assert dispatcher.create_egress("telegram:bot123:42", config=cfg).egress_features.transport_implementation == "telegram"
     assert (
-        dispatcher.create_egress("registry:prod:task:abc123", config=cfg).capabilities.channel_name
+        dispatcher.create_egress("registry:prod:task:abc123", config=cfg).egress_features.transport_implementation
         == "registry"
     )
     assert dispatcher.descriptor_for_ref("registry:prod:task:abc123") == registry_task.descriptor
@@ -319,7 +319,7 @@ def test_dispatcher_egress_ready_for_ref_checks_runtime_readiness() -> None:
     assert telegram.build_calls == 0
 
 
-def test_active_transport_types_deduplicates_and_skips_non_capability_transports() -> None:
+def test_reported_transport_implementations_deduplicates_and_skips_unreported_transports() -> None:
     dispatcher = TransportDispatcher()
     dispatcher.register(
         _FakeTransport(
@@ -351,14 +351,14 @@ def test_active_transport_types_deduplicates_and_skips_non_capability_transports
                 display_name="Registry Task",
                 supports_multiple=True,
                 inbound_model="delivery",
-                contributes_transport_capability=False,
+                report_in_agent_status=False,
                 accepts_transport_input=False,
                 supports_conversation_binding=False,
             ),
         )
     )
 
-    assert dispatcher.active_transport_types() == ["telegram", "registry"]
+    assert dispatcher.reported_transport_implementations() == ["telegram", "registry"]
 
 
 async def test_start_and_stop_all_transports() -> None:
@@ -381,7 +381,7 @@ async def test_start_and_stop_all_transports() -> None:
                 display_name="Registry Task",
                 supports_multiple=True,
                 inbound_model="delivery",
-                contributes_transport_capability=False,
+                report_in_agent_status=False,
                 accepts_transport_input=False,
                 supports_conversation_binding=False,
             ),

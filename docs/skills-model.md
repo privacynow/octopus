@@ -1,96 +1,60 @@
 # Skills Model
 
-This is the technical model behind the registry `Capabilities` surface.
+`Skill` is the product noun and runtime noun. A skill is a reusable
+instruction/tool package that can be installed, activated, routed to, and
+executed through shared SDK workflows.
 
-The current runtime noun is `skill`. The current UI/product noun is
-`capability`. They refer to the same product concept.
-
-## Core State Layers
+## State Layers
 
 Every client must preserve these distinct states:
 
-1. `Catalog`
-   What skills/capabilities exist.
-2. `Available on this bot`
-   Which skills one agent can use.
-3. `Default for new conversations`
-   Which available skills seed future conversations.
-4. `Active in this conversation`
-   Which skills are active in one conversation.
-5. `Routing skills`
-   Which skills this agent advertises for delegation/routing.
+1. `Catalog`: skills known to Octopus.
+2. `Available on this bot`: skills one agent runtime can use.
+3. `Default for new conversations`: available skills seeded into future
+   conversations.
+4. `Active in this conversation`: skills active in one conversation.
+5. `Routing skills`: derived routing projection for delegated work.
 
 Rules:
 
 - availability does not imply active everywhere
-- default does not update old conversations
+- defaults do not update old conversations
 - conversation activation does not change bot-level availability
 - routing is derived, not separately authored
 
-## Orthogonal Dimensions
+## SDK Interfaces And Implementations
 
-| Dimension | Values |
+The SDK owns the interfaces. Concrete runtimes implement them:
+
+| Interface area | Examples |
 | --- | --- |
-| Source | Core, Store, Custom, Generated |
-| Kind | prompt, executable |
-| Setup | Needs setup, Ready |
-| Lifecycle | Draft, Submitted, Approved, Published, Archived |
+| Transport interfaces | Telegram transport, registry delivery transport. |
+| Registry participant interface | Enrollment, conversations, routed work, events, health. |
+| Management protocol | Skill catalog, skill lifecycle, conversation skills, guidance, execution reset. |
+| Stores/providers | Postgres stores, Claude/Codex providers, credential stores. |
 
-Generated/rehearsal/test skills must be identifiable so default human surfaces
-can hide them.
+Registry UI and Octopus CLI are admin clients. Telegram is a transport client.
+All should use the same SDK workflows and management operations rather than
+inventing client-specific behavior.
 
-## Routing Skills
+## Admin Operations
 
-Routing skills are derived from:
+Management support is expressed as concrete supported admin operations, not as
+generic buckets.
 
-- bot-level availability
-- runtime readiness
-- registry routing policy
+Examples:
 
-Routing may also apply policy dimensions such as region, trust, tier, or
-compliance. Those dimensions do not replace skills and should not be presented
-as another skill catalog.
+- `list_catalog_skills`
+- `search_catalog_skills`
+- `catalog_skill_detail`
+- `catalog_skill_lifecycle_detail`
+- `edit_catalog_skill_draft`
+- `publish_catalog_skill`
+- `conversation_skill_state`
+- `activate_conversation_skill`
+- `clear_conversation_skills`
 
-## Shared Operations
-
-Backend-owned operations include:
-
-- list/search catalog
-- inspect skill
-- install/update/uninstall store skill on a bot
-- activate/deactivate/clear conversation skills
-- start setup and submit credential values
-- create/edit/submit/approve/reject/publish/archive custom skills
-- export/import custom skill packages
-
-Registry UI and Telegram may present these differently, but must call the same
-backend operations.
-
-## Draft Package Model
-
-Custom skills use a package shape compatible with Core and Store skills.
-
-Mutable draft content:
-
-- name
-- display name
-- description
-- instruction body
-- requirements
-- provider config
-- files
-- revision/lifecycle metadata
-
-Derived fields:
-
-- validation problems
-- publish readiness
-- runtime availability
-- unpublished changes
-
-Derived fields may be cached, but they are not a second source of truth.
-
-## On-Disk Package Shape
+## Package Shape
 
 Required:
 
@@ -112,41 +76,11 @@ Policy:
 - 64 KB per file
 - 256 KB total
 
-## Validation And Lifecycle
-
-Validation is backend-owned.
-
-Rules:
-
-- clients do not invent validation rules
-- submit and publish invoke shared validation
-- invalid drafts can be saved only if they satisfy package safety policy
-- publish remains blocked until validation passes
-- lifecycle actions require permissions
-
-## Client Exposure
-
-Registry UI:
-
-- richer editing and review flow
-- search/filter catalog
-- bot availability
-- conversation activation
-- custom draft lifecycle
-- package import/export
-
-Telegram:
-
-- text-oriented commands over the same backend
-- add/remove/list active skills
-- import/export where permitted
-- lifecycle actions only where permissions allow
-
 ## Product Copy
 
-Prefer user-facing copy:
+Prefer:
 
-- Capability
+- Skill
 - Catalog
 - Available on this bot
 - Default for new conversations
@@ -156,5 +90,8 @@ Prefer user-facing copy:
 - Ready
 - Core / Store / Custom / Generated
 
-Avoid exposing internal-only terms such as `builtin` or creating a competing
-end-user noun for the same concept.
+Avoid:
+
+- legacy synonyms for skill
+- vague statements about what an agent "supports"
+- client-specific lifecycle names that bypass SDK workflow terms

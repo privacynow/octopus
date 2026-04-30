@@ -45,6 +45,9 @@ function renderConversationDetail(container, params) {
     let selectedActivationSkill = requestedActivationSkill;
     let selectedProtocolId = '';
     let protocolProblemStatement = '';
+    let protocolLaunchContext = {};
+    let protocolLaunchFieldsByProtocolId = {};
+    const protocolLaunchFieldLoads = new Set();
     let protocolSearchQuery = '';
     let managementReloadDebounce = null;
     let pendingSkillSetup = null;
@@ -127,7 +130,7 @@ function renderConversationDetail(container, params) {
     const skillsManageBtn = document.createElement('button');
     skillsManageBtn.className = 'btn btn-sm conversation-manage-trigger';
     skillsManageBtn.type = 'button';
-    skillsManageBtn.textContent = 'Capabilities';
+    skillsManageBtn.textContent = 'Skills';
     skillsManageBtn.hidden = true;
     actionGroup.appendChild(skillsManageBtn);
 
@@ -517,7 +520,7 @@ function renderConversationDetail(container, params) {
         }
     }
 
-    function isCapabilityUnavailableError(err) {
+    function isSkillUnavailableError(err) {
         const message = String((err && err.message) || '');
         return message.startsWith('409:');
     }
@@ -555,12 +558,12 @@ function renderConversationDetail(container, params) {
         const hasExecutable = items.some((skill) => String(skill?.skill_kind || '').trim() === 'executable');
         const hasPrompt = items.some((skill) => String(skill?.skill_kind || '').trim() !== 'executable');
         if (hasPrompt && hasExecutable) {
-            return 'Prompt capabilities apply as operator-selected instructions here. Executable capabilities run through Octopus runtime orchestration.';
+            return 'Prompt skills apply as operator-selected instructions here. Executable skills run through Octopus runtime orchestration.';
         }
         if (hasExecutable) {
-            return 'Executable capabilities run through Octopus runtime orchestration for this conversation.';
+            return 'Executable skills run through Octopus runtime orchestration for this conversation.';
         }
-        return 'Prompt capabilities apply as operator-selected instructions for this conversation until they are deactivated.';
+        return 'Prompt skills apply as operator-selected instructions for this conversation until they are deactivated.';
     }
 
     async function refreshConversationSkillState({ soft = true } = {}) {
@@ -619,7 +622,7 @@ function renderConversationDetail(container, params) {
             if (result.status === 'needs_confirmation') {
                 skillsStatusMessage = `Confirm activation for ${normalizedSkill}.`;
                 renderSkillsPanel();
-                UI.showConfirm('Activate Capability', 'This capability may increase prompt size. Continue?', async () => {
+                UI.showConfirm('Activate Skill', 'This skill may increase prompt size. Continue?', async () => {
                     try {
                         const confirmed = await runManagementRequest(() => runActivation(true));
                         if (confirmed.status === 'needs_setup' && confirmed.first_requirement) {
@@ -761,7 +764,7 @@ function renderConversationDetail(container, params) {
             statusMessage: String(skillsStatusMessage || ''),
         }, (state) => {
             const nodes = [];
-            const header = createManagementHeader('Conversation capabilities');
+            const header = createManagementHeader('Conversation skills');
             if (state.supported && (state.skillState.active_skills || []).length) {
                 const clearBtn = document.createElement('button');
                 clearBtn.className = 'btn btn-sm';
@@ -771,7 +774,7 @@ function renderConversationDetail(container, params) {
                     clearBtn.disabled = true;
                     try {
                         const result = await runManagementRequest(() => API.clearConversationSkills(agentId, managementConversationPath()));
-                        skillsStatusMessage = result.status === 'cleared' ? 'Cleared active capabilities.' : String(result.status || 'Updated');
+                        skillsStatusMessage = result.status === 'cleared' ? 'Cleared active skills.' : String(result.status || 'Updated');
                         pendingSkillSetup = null;
                         selectedActivationSkill = '';
                         await refreshConversationSkillState();
@@ -787,7 +790,7 @@ function renderConversationDetail(container, params) {
             nodes.push(header);
 
             if (!state.supported) {
-                nodes.push(UI.renderEmptyState('This bot does not expose conversation capabilities in the registry.', true));
+                nodes.push(UI.renderEmptyState('This bot does not expose conversation skills in the registry.', true));
                 return nodes;
             }
 
@@ -800,7 +803,7 @@ function renderConversationDetail(container, params) {
 
             const explainer = document.createElement('p');
             explainer.className = 'quiet-note';
-            explainer.textContent = 'Use this panel to choose what is active in this conversation. Prompt capabilities apply as conversation instructions here; executable capabilities run through runtime orchestration. To install, update, or edit capabilities for this bot, open the Capabilities page.';
+            explainer.textContent = 'Use this panel to choose what is active in this conversation. Prompt skills apply as conversation instructions here; executable skills run through runtime orchestration. To install, update, or edit skills for this bot, open the Skills page.';
             nodes.push(explainer);
 
             if (state.pendingSetup) {
@@ -812,10 +815,10 @@ function renderConversationDetail(container, params) {
                 const description = document.createElement('p');
                 description.className = 'conversation-setup-copy';
                 if (foreignSetup) {
-                    description.textContent = `Another operator started setup for ${state.pendingSetup.skillName || 'this capability'} (${state.pendingSetup.ownerActor}). Finish it there or cancel the active setup first.`;
+                    description.textContent = `Another operator started setup for ${state.pendingSetup.skillName || 'this skill'} (${state.pendingSetup.ownerActor}). Finish it there or cancel the active setup first.`;
                     setupBox.appendChild(description);
                 } else if (requirement) {
-                    description.textContent = requirement.prompt || `Enter the next credential value for ${state.pendingSetup.skillName || 'this capability'}.`;
+                    description.textContent = requirement.prompt || `Enter the next credential value for ${state.pendingSetup.skillName || 'this skill'}.`;
                     setupBox.appendChild(description);
                     if (requirement.help_url) {
                         const help = document.createElement('a');
@@ -899,7 +902,7 @@ function renderConversationDetail(container, params) {
                             }
                             pendingSkillSetup = null;
                             skillsStatusMessage = result.status === 'ready'
-                                ? `Finished setup for ${result.skill_name || state.pendingSetup.skillName || 'the capability'}.`
+                                ? `Finished setup for ${result.skill_name || state.pendingSetup.skillName || 'the skill'}.`
                                 : String(result.status || 'Updated');
                             selectedActivationSkill = '';
                             await refreshConversationSkillState();
@@ -923,7 +926,7 @@ function renderConversationDetail(container, params) {
             activeSection.appendChild(activeTitle);
             const activeSkills = state.skillState.active_skill_details || [];
             if (!activeSkills.length) {
-                activeSection.appendChild(UI.renderEmptyState('No active capabilities in this conversation.', true));
+                activeSection.appendChild(UI.renderEmptyState('No active skills in this conversation.', true));
             } else {
                 const list = document.createElement('div');
                 list.className = 'conversation-skill-list';
@@ -936,7 +939,7 @@ function renderConversationDetail(container, params) {
                         skill.source_label || skill.source_kind || '',
                         skill.requires_credentials ? 'setup required' : '',
                     ].filter(Boolean).join(' • ');
-                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Capability')}</strong><span class="settings-row-sublabel">${UI.esc(summaryBits || 'Capability active in this conversation')}</span></div>`;
+                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Skill')}</strong><span class="settings-row-sublabel">${UI.esc(summaryBits || 'Skill active in this conversation')}</span></div>`;
                     const actions = document.createElement('div');
                     actions.className = 'event-card-actions';
                     const deactivate = document.createElement('button');
@@ -975,7 +978,7 @@ function renderConversationDetail(container, params) {
             activateTitle.textContent = 'Available on this bot';
             activateSection.appendChild(activateTitle);
             if (!state.activatable.length) {
-                activateSection.appendChild(UI.renderEmptyState('No additional available capabilities are ready to activate here.', true));
+                activateSection.appendChild(UI.renderEmptyState('No additional available skills are ready to activate here.', true));
             } else {
                 const controls = document.createElement('div');
                 controls.className = 'conversation-management-form';
@@ -983,7 +986,7 @@ function renderConversationDetail(container, params) {
                 select.className = 'input';
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
-                placeholder.textContent = 'Choose an available capability';
+                placeholder.textContent = 'Choose an available skill';
                 select.appendChild(placeholder);
                 state.activatable.forEach((skill) => {
                     const option = document.createElement('option');
@@ -1325,6 +1328,57 @@ function renderConversationDetail(container, params) {
         };
     }
 
+    function protocolRunInputFieldsFromDefinitionJson(definitionJson) {
+        const rawDocument = definitionJson && typeof definitionJson === 'object'
+            ? definitionJson
+            : {};
+        const document = rawDocument.root && typeof rawDocument.root === 'object'
+            ? rawDocument.root
+            : rawDocument;
+        const metadata = document.metadata && typeof document.metadata === 'object'
+            ? document.metadata
+            : {};
+        const fields = metadata.run_inputs;
+        return Array.isArray(fields) && fields.length
+            ? fields
+                .filter((field) => field && typeof field === 'object')
+                .map((field) => ({ ...field }))
+            : [];
+    }
+
+    function conversationProtocolLaunchFields(protocolId) {
+        const key = String(protocolId || '').trim();
+        const fields = key ? protocolLaunchFieldsByProtocolId[key] : null;
+        return Array.isArray(fields) && fields.length
+            ? fields.map((field) => ({ ...field }))
+            : null;
+    }
+
+    async function ensureConversationProtocolLaunchFields(protocol) {
+        const protocolId = String(protocol?.id || protocol?.protocol_id || '').trim();
+        const versionId = String(protocol?.versionId || protocol?.current_version_id || '').trim();
+        if (!protocolId || !versionId) return;
+        if (Object.prototype.hasOwnProperty.call(protocolLaunchFieldsByProtocolId, protocolId)) return;
+        if (protocolLaunchFieldLoads.has(protocolId)) return;
+        protocolLaunchFieldLoads.add(protocolId);
+        try {
+            const version = await API.getProtocolVersion(protocolId, versionId);
+            protocolLaunchFieldsByProtocolId = {
+                ...protocolLaunchFieldsByProtocolId,
+                [protocolId]: protocolRunInputFieldsFromDefinitionJson(version?.definition_json),
+            };
+        } catch (err) {
+            protocolLaunchFieldsByProtocolId = {
+                ...protocolLaunchFieldsByProtocolId,
+                [protocolId]: [],
+            };
+            UI.reportError('Failed to load protocol run inputs', err, { context: 'Conversation protocol launch inputs failed' });
+        } finally {
+            protocolLaunchFieldLoads.delete(protocolId);
+            renderProtocolsPanel();
+        }
+    }
+
     function renderProtocolsPanel() {
         const agentId = managementAgentId();
         syncManagementControls();
@@ -1357,8 +1411,10 @@ function renderConversationDetail(container, params) {
                 label: conversationProtocolLabel(item),
                 rawLabel: String(item.display_name || item.slug || item.protocol_id || ''),
                 slug: String(item.slug || ''),
+                versionId: String(item.current_version_id || ''),
                 generated: Boolean(conversationProtocolTimestamp(item)),
                 timestamp: conversationProtocolTimestamp(item),
+                launchFields: conversationProtocolLaunchFields(item.protocol_id),
             })),
             linkedRuns: (linkedProtocolRuns || []).map((run) => ({
                 id: String(run.protocol_run_id || ''),
@@ -1467,6 +1523,7 @@ function renderConversationDetail(container, params) {
 
             const selectedProtocol = state.availableProtocols.find((item) => item.id === state.selectedProtocolId) || state.availableProtocols[0] || null;
             if (selectedProtocol) {
+                ensureConversationProtocolLaunchFields(selectedProtocol);
                 const scope = document.createElement('div');
                 scope.className = 'settings-row';
                 let rawScope = '';
@@ -1479,16 +1536,26 @@ function renderConversationDetail(container, params) {
                 form.appendChild(scope);
             }
 
-            const problem = document.createElement('textarea');
-            problem.className = 'input';
-            problem.rows = 4;
-            problem.placeholder = 'Describe the concrete run context for this protocol';
-            problem.setAttribute('aria-label', 'Describe what this protocol should accomplish');
-            problem.value = state.problemStatement;
-            problem.addEventListener('input', () => {
-                protocolProblemStatement = String(problem.value || '');
+            const launchForm = Kit.protocolRunLaunchForm({
+                values: {
+                    problem_statement: state.problemStatement,
+                    ...(protocolLaunchContext || {}),
+                },
+                fields: selectedProtocol?.launchFields || null,
+                includeWorkspace: false,
+                onInput: (key, value) => {
+                    const text = String(value || '');
+                    if (key === 'problem_statement') {
+                        protocolProblemStatement = text;
+                        return;
+                    }
+                    protocolLaunchContext = {
+                        ...(protocolLaunchContext || {}),
+                        [key]: text,
+                    };
+                },
             });
-            form.appendChild(problem);
+            form.appendChild(launchForm.element);
 
             const actions = document.createElement('div');
             actions.className = 'event-card-actions';
@@ -1498,7 +1565,8 @@ function renderConversationDetail(container, params) {
             start.textContent = 'Start protocol';
             start.addEventListener('click', async () => {
                 const protocolId = String(select.value || selectedProtocolId || '').trim();
-                const problemStatement = String(problem.value || '').trim();
+                const launchValues = launchForm.readValues();
+                const problemStatement = String(launchValues.problem_statement || '').trim();
                 if (!protocolId || !problemStatement) {
                     protocolsStatusMessage = 'Select a published protocol and describe the problem to solve.';
                     renderProtocolsPanel();
@@ -1507,6 +1575,12 @@ function renderConversationDetail(container, params) {
                 }
                 start.disabled = true;
                 try {
+                    const constraints = {};
+                    Object.keys(launchValues).forEach((key) => {
+                        if (['problem_statement', 'workspace_ref'].includes(key)) return;
+                        const text = String(launchValues[key] || '').trim();
+                        if (text) constraints[key] = text;
+                    });
                     const response = await runManagementRequest(() => API.createProtocolRun({
                         protocol_id: protocolId,
                         entry_agent_id: agentId,
@@ -1514,7 +1588,7 @@ function renderConversationDetail(container, params) {
                         origin_channel: String((meta && meta.origin_channel) || 'registry'),
                         workspace_ref: protocolWorkspaceRef(),
                         problem_statement: problemStatement,
-                        constraints_json: {},
+                        constraints_json: constraints,
                     }));
                     const run = response.run || null;
                     const launched = state.availableProtocols.find((item) => item.id === protocolId);
@@ -1559,6 +1633,15 @@ function renderConversationDetail(container, params) {
                     const row = document.createElement('div');
                     row.className = 'settings-row';
                     row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(protocolDisplayName(run.protocolId))}</strong><span class="settings-row-sublabel">${UI.esc([protocolRunSummary({ current_stage_key: run.stage, status: run.status }), run.updatedLabel].filter(Boolean).join(' • ') || `run ${run.id.slice(0, 8)}`)}</span></div>`;
+                    const main = row.querySelector('.settings-row-main');
+                    if (main && run.stage) {
+                        main.appendChild(Kit.runStageProgressRail({
+                            stages: [{ stage_key: run.stage, display_name: run.stage }],
+                            currentStageKey: run.stage,
+                            runStatus: run.status,
+                            compact: true,
+                        }));
+                    }
                     const actions = document.createElement('div');
                     actions.className = 'event-card-actions';
                     const openRun = document.createElement('a');
@@ -1612,7 +1695,7 @@ function renderConversationDetail(container, params) {
                 void handleRequestedSkillActivation();
             }
         } catch (err) {
-            if (isCapabilityUnavailableError(err)) {
+            if (isSkillUnavailableError(err)) {
                 managementSupport.skills = false;
                 conversationSkills = null;
                 availableConversationSkills = [];
@@ -1621,11 +1704,11 @@ function renderConversationDetail(container, params) {
                 return;
             }
             if (soft && conversationSkills) {
-                UI.reportError('Failed to refresh conversation capabilities', err, { context: 'Conversation skill refresh failed' });
+                UI.reportError('Failed to refresh conversation skills', err, { context: 'Conversation skill refresh failed' });
                 return;
             }
             UI.clearMemoizedRender(skillsPanel);
-            UI.reconcileChildren(skillsPanel, [UI.createErrorCard('Failed to load conversation capabilities: ' + err.message, loadConversationSkills)]);
+            UI.reconcileChildren(skillsPanel, [UI.createErrorCard('Failed to load conversation skills: ' + err.message, loadConversationSkills)]);
         }
     }
 
@@ -1641,7 +1724,7 @@ function renderConversationDetail(container, params) {
             managementSupport.settings = true;
             renderSettingsPanel();
         } catch (err) {
-            if (isCapabilityUnavailableError(err)) {
+            if (isSkillUnavailableError(err)) {
                 managementSupport.settings = false;
                 conversationSettings = null;
                 renderSettingsPanel();
@@ -2286,14 +2369,14 @@ function renderConversationDetail(container, params) {
             activeRow.dataset.key = 'active-skills-inline';
             const label = document.createElement('span');
             label.className = 'detail-label';
-                label.textContent = activeSkills.length === 1 ? 'Active capability' : 'Active capabilities';
+                label.textContent = activeSkills.length === 1 ? 'Active skill' : 'Active skills';
             activeRow.appendChild(label);
             const chips = document.createElement('div');
             chips.className = 'chip-row';
             activeSkills.forEach((skill) => {
                 const chip = document.createElement('span');
                 chip.className = 'quickstart-chip static';
-                chip.textContent = UI.visibleLabel(skill.display_name, skill.name, 'Capability');
+                chip.textContent = UI.visibleLabel(skill.display_name, skill.name, 'Skill');
                 chips.appendChild(chip);
             });
             activeRow.appendChild(chips);
@@ -2454,6 +2537,7 @@ function renderConversationDetail(container, params) {
                 const data = await API.listTasks({
                     parent_conversation_id: convoId,
                     limit: 100,
+                    include_generated: '1',
                 });
                 relatedTasks = data.tasks || data || [];
             }

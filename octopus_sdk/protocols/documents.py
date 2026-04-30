@@ -339,7 +339,7 @@ def _draft_validation_issues(
     for index, stage in enumerate(stages):
         stage_key = str(stage.get("stage_key", "") or "").strip()
         participant_key = str(stage.get("participant_key", "") or "").strip()
-        stage_label = stage_key or f"stage {index + 1}"
+        stage_label = str(stage.get("display_name", "") or "").strip() or stage_key or f"stage {index + 1}"
         source_stage = source_stages[index] if index < len(source_stages) else stage
         has_raw_selector, selector_kind, selector_value = _source_selector_parts(source_stage)
         effective_selector = _stage_selector_from_source(source_stage, participant_selectors=participant_selector_sources)
@@ -675,25 +675,62 @@ def protocol_participant_session_key(run_id: str, participant_key: str) -> str:
 
 
 def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) -> str:
+    artifact_instruction = (
+        "update the assigned output artifacts in the workspace"
+        if stage.outputs
+        else "do not create or update protocol artifacts for this stage"
+    )
     if stage.stage_kind == "work":
         if stage.strict_completion:
             return (
-                "Complete the work for this stage, update the required artifacts in the workspace, "
+                f"Complete the work for this stage, {artifact_instruction}, "
                 "and end your final response with explicit protocol control lines:\n"
                 "PROTOCOL_DECISION: completed\n"
                 "PROTOCOL_SUMMARY: one short sentence describing the completed work"
             )
         return (
-            "Complete the work for this stage, update the required artifacts in the workspace, "
+            f"Complete the work for this stage, {artifact_instruction}, "
             "and end your final response with a short `PROTOCOL_SUMMARY:` line."
         )
     allowed = ", ".join(stage.allowed_decisions())
+    review_artifact_instruction = (
+        f"Complete the review, {artifact_instruction}, and end your final response with explicit protocol control lines:"
+        if stage.outputs
+        else "You must end your final response with explicit protocol control lines:"
+    )
     return (
-        "You must end your final response with explicit protocol control lines:\n"
+        f"{review_artifact_instruction}\n"
         f"PROTOCOL_DECISION: one of [{allowed}]\n"
         "PROTOCOL_SUMMARY: one short sentence explaining the decision\n"
         "Keep the rest of the response as the detailed review or acceptance rationale."
     )
+
+
+def _render_run_constraints(constraints: object) -> str:
+    data = _coerce_mapping(constraints)
+    if not data:
+        return ""
+    labels = {
+        "context": "Context",
+        "constraints": "Constraints",
+        "expected_outputs": "Expected outputs",
+        "source_context": "Files or data context",
+        "relationship_context": "Keys and relationships",
+        "desired_outputs": "Expected outputs",
+        "privacy_constraints": "Privacy or execution constraints",
+    }
+    lines: list[str] = []
+    for key, value in data.items():
+        if value in (None, "", [], {}):
+            continue
+        label = labels.get(str(key), str(key).replace("_", " ").strip().title())
+        if isinstance(value, str):
+            text = value.strip()
+        else:
+            text = json.dumps(value, indent=2, sort_keys=True)
+        if text:
+            lines.append(f"{label}:\n{text}")
+    return "\n\n".join(lines)
 
 
 def render_protocol_stage_prompt(
@@ -731,6 +768,9 @@ def render_protocol_stage_prompt(
     ]
     if run.workspace_ref:
         lines.append(f"Workspace/project: {run.workspace_ref}")
+    rendered_constraints = _render_run_constraints(run.constraints_json)
+    if rendered_constraints:
+        lines.append("Run context and constraints:\n" + rendered_constraints)
     if artifact_lines:
         lines.append("Artifacts for this stage:\n" + "\n".join(artifact_lines))
     if participant.instructions:
@@ -789,7 +829,7 @@ def parse_protocol_stage_decision(
 def stage_target_for_decision(stage: ProtocolStageDefinitionRecord, decision: str) -> str:
     normalized = str(decision or "").strip().lower()
     if stage.stage_kind == "work" and not stage.transitions.as_dict():
-        return ""
+        return "__complete__" if normalized == "completed" else ""
     target = stage.transition_target(normalized)
     if not target and stage.stage_kind == "work" and normalized == "completed":
         return ""

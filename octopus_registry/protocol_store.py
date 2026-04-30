@@ -48,7 +48,6 @@ from octopus_sdk.protocols import (
     ProtocolTransitionRecord,
     RegistryJsonRecord,
     TargetSelector,
-    builtin_protocol_template_summaries,
     canonical_protocol_document,
     normalize_protocol_document_format,
     protocol_current_review_state,
@@ -62,7 +61,6 @@ from octopus_sdk.protocols import (
     validate_protocol_document,
 )
 from octopus_sdk.protocols.documents import draft_protocol_document_data
-from octopus_sdk.protocols.builtins import builtin_protocol_document
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 
@@ -263,6 +261,8 @@ class ProtocolPostgresAdapter:
                 "protocol_run_id": row["protocol_run_id"],
                 "protocol_id": row["protocol_id"],
                 "protocol_definition_version_id": row["protocol_definition_version_id"],
+                "source_kind": row.get("source_kind", "protocol_run") or "protocol_run",
+                "hidden_from_default_views": bool(row.get("hidden_from_default_views", False)),
                 "entry_agent_id": row["entry_agent_id"],
                 "entry_authority_ref": row["entry_authority_ref"],
                 "is_rehearsal": bool(row.get("is_rehearsal", False)),
@@ -459,18 +459,12 @@ class ProtocolPostgresAdapter:
 
     def _unique_protocol_slug(self, conn, base_slug: str, *, protocol_id: str = "") -> str:
         normalized = str(base_slug or "").strip().lower() or f"protocol-{uuid.uuid4().hex[:8]}"
-        builtin_slugs = {
-            str(item.slug or "").strip()
-            for item in builtin_protocol_template_summaries()
-            if str(item.slug or "").strip()
-        }
         candidate = normalized
         suffix = 1
         while True:
             row = self._protocol_row_for_slug(conn, candidate)
             if (
-                candidate not in builtin_slugs
-                and (row is None or str(row.get("protocol_id", "") or "") == str(protocol_id or ""))
+                row is None or str(row.get("protocol_id", "") or "") == str(protocol_id or "")
             ):
                 return candidate
             suffix += 1
@@ -1473,19 +1467,11 @@ class ProtocolPostgresAdapter:
         created_after: str = "",
         include_drafts: bool | None = None,
     ) -> list[ProtocolDefinitionRecord]:
-        builtin_slugs = [
-            str(item.slug or "").strip()
-            for item in builtin_protocol_template_summaries()
-            if str(item.slug or "").strip()
-        ]
         if include_drafts is None:
             include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         clauses: list[str] = []
         params: list[object] = []
         clauses.append("visibility <> 'registry_template'")
-        for builtin_slug in builtin_slugs:
-            clauses.append("slug <> %s")
-            params.append(builtin_slug)
         if lifecycle_state:
             params.append(lifecycle_state)
             clauses.append("lifecycle_state = %s")
@@ -1534,7 +1520,7 @@ class ProtocolPostgresAdapter:
                 if not self._protocol_visible_to_access(row, access=access, include_drafts=False):
                     raise PermissionError(normalized_slug)
                 return self._protocol_template_document_from_row(conn, row)
-        return builtin_protocol_document(normalized_slug)
+        raise KeyError(normalized_slug)
 
     def list_protocol_templates(
         self,
@@ -1545,8 +1531,6 @@ class ProtocolPostgresAdapter:
             return []
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             return []
-        builtin_summaries = list(builtin_protocol_template_summaries())
-        builtin_slugs = {str(item.slug or "").strip() for item in builtin_summaries if str(item.slug or "").strip()}
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
@@ -1561,9 +1545,8 @@ class ProtocolPostgresAdapter:
                 self._protocol_template_summary_from_row(conn, row)
                 for row in rows
                 if self._protocol_visible_to_access(row, access=access, include_drafts=False)
-                and str(row.get("slug", "") or "").strip() not in builtin_slugs
             ]
-        return builtin_summaries + authored_summaries
+        return authored_summaries
 
     def get_protocol_authoring_options(
         self,
@@ -2125,7 +2108,7 @@ class ProtocolPostgresAdapter:
         if not loaded.ok or loaded.protocol is None:
             return loaded
         if str(loaded.protocol.visibility or "") == "registry_template":
-            return ProtocolMutationRecord(ok=False, status="invalid_action", message="Protocol templates are already reusable starters.")
+            return ProtocolMutationRecord(ok=False, status="invalid_action", message="Protocol templates are already reusable.")
         current_version_id = str(loaded.protocol.current_version_id or "").strip()
         if str(loaded.protocol.lifecycle_state or "") != "published" or not current_version_id:
             return ProtocolMutationRecord(
@@ -2311,6 +2294,7 @@ class ProtocolPostgresAdapter:
         entry_agent_id: str = "",
         root_conversation_id: str = "",
         origin_channel: str = "",
+        include_generated: bool = True,
     ) -> list[ProtocolRunRecord]:
         page_limit = max(1, int(limit or 25))
         page_cursor = max(0, int(cursor or 0))
@@ -2334,6 +2318,8 @@ class ProtocolPostgresAdapter:
         if origin_channel:
             params.append(origin_channel)
             clauses.append("pr.origin_channel = %s")
+        if not include_generated:
+            clauses.append("pr.hidden_from_default_views = FALSE")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
@@ -2656,6 +2642,8 @@ class ProtocolPostgresAdapter:
                 )
             document = canonical_protocol_document(version_row["definition_json"])
             run_id = uuid.uuid4().hex
+            source_kind = "rehearsal" if request.is_rehearsal else "protocol_run"
+            hidden_from_default_views = bool(request.is_rehearsal)
             root_conversation_id = str(request.root_conversation_id or "").strip()
             if not root_conversation_id:
                 created = shared_create_conversation(
@@ -2665,6 +2653,8 @@ class ProtocolPostgresAdapter:
                     title=document.display_name or document.slug or "Protocol run",
                     origin_channel="registry",
                     external_conversation_ref=f"protocol-run:{run_id}",
+                    source_kind=source_kind,
+                    hidden_from_default_views=hidden_from_default_views,
                     now=now,
                 )
                 root_conversation_id = str(created.conversation_id or "")
@@ -2673,19 +2663,22 @@ class ProtocolPostgresAdapter:
                     f"""
                     INSERT INTO {SCHEMA}.protocol_runs (
                         protocol_run_id, protocol_id, protocol_definition_version_id,
+                        source_kind, hidden_from_default_views,
                         entry_agent_id, entry_authority_ref, is_rehearsal, root_conversation_id,
                         origin_channel, workspace_ref, repo_ref, branch_ref,
                         problem_statement, constraints_json, status,
                         current_stage_execution_id, current_stage_key, termination_summary,
                         blocked_code, blocked_detail, run_org_id, started_by, version,
                         retention_until, last_transition_at, created_at, updated_at, completed_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued', '', '', '', '', '', %s, %s, 1, %s, '', %s, %s, '')
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued', '', '', '', '', '', %s, %s, 1, %s, '', %s, %s, '')
                     RETURNING *
                     """,
                     (
                         run_id,
                         protocol_row["protocol_id"],
                         version_row["protocol_definition_version_id"],
+                        source_kind,
+                        hidden_from_default_views,
                         request.entry_agent_id,
                         request.entry_authority_ref,
                         bool(request.is_rehearsal),

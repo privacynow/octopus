@@ -1,211 +1,247 @@
-# Local Data Analytics Demo
+# Local Manufacturing Analytics Demo
 
-This guide describes a customer-facing demo for data analytics and reporting
-when the customer does not want raw CSV data uploaded or pasted into a model
-prompt.
+This guide is the customer-safe demo for analytics and reporting when the
+customer does not want proprietary CSV rows sent to a model provider.
 
 ## Demo Message
 
-Octopus can help build local analytics tooling. The model writes and revises
-code. The code runs locally against customer files. The customer controls what
-summaries, logs, and artifacts are shared back into the conversation.
+Octopus can help build repeatable local analytics tooling. The assistant
+generates and reviews code. The code runs inside the customer's workspace
+against local files. The customer decides which summaries, logs, and output
+artifacts are shared back into the conversation or protocol run.
 
-Do not claim that the model can never see data unless the deployment has
-technical controls enforcing that boundary. The safe claim for this demo is:
+Safe claim for this demo:
 
 - raw CSVs stay in the local workspace
-- the model is asked to generate/review scripts
+- model-visible context is limited to schema, counts, relationship checks, and
+  aggregate summaries
 - scripts process the files locally
-- only controlled summaries, errors, or selected outputs are shared back
+- findings, flags, charts, and manifests are generated as local artifacts
+- the workflow can be repeated as a protocol run
+
+Do not claim absolute data isolation unless the deployment enforces that
+boundary technically.
 
 ## Customer Scenario
 
-The customer has property information in CSV files and wants:
+The customer has manufacturing data from several process stages:
 
-- data profiling
-- data quality checks
-- aggregate reporting
-- market/property summaries
-- repeatable report generation
-- downloadable artifacts
+- cell or component records
+- panel or assembly records
+- mapping records that relate components to assemblies
+- test results by manufacturing stage
 
-They do not want to provide raw property rows to the model.
+The files have primary and foreign keys such as `panel_id` and `cell_id`.
+The user wants to detect how parameters change across stages, identify defect
+signals, and produce a daily repeatable report without uploading raw data.
 
-## Prepare The Demo
+## UI-First Protocol Build
 
-Use synthetic data with the same general shape as the customer's data.
+The customer-facing proof is not a prepackaged template and not a database seed.
+Build a protocol manually in the Registry UI so the customer can repeat the
+same steps.
 
-Recommended local structure:
+Create a protocol named:
 
 ```text
-workspace/
-  data/
-    properties.csv
-  scripts/
-  reports/
+Customer Local Analytics Tool Builder
 ```
 
-Synthetic columns can include:
+Use customer-readable stages. The verified real-Safari run used:
 
-- `property_id`
-- `address_city`
-- `address_state`
-- `zip`
-- `property_type`
-- `bedrooms`
-- `bathrooms`
-- `square_feet`
-- `lot_square_feet`
-- `year_built`
-- `assessed_value`
-- `sale_price`
-- `sale_date`
-- `occupancy_status`
+1. `Define local data contract`
+2. `Build local browser analytics tool`
+3. `Review local tool outputs`
 
-Use fake values only.
+Use these stage outputs:
 
-## Demo Flow
+- `apps/manufacturing-analytics/index.html`
+- `apps/manufacturing-analytics/README.md`
+- `reports/local-tool-validation.md`
+- `reports/manufacturing-analytics-findings.md`
 
-### 1. Start Octopus
+Use these stage relationships:
+
+- `Build local browser analytics tool` produces the app and app README.
+- `Review local tool outputs` consumes the app and README, then produces the
+  validation report and findings report.
+- The review stage transitions to successful completion only when the generated
+  tool is local-only, usable, and produces aggregate outputs.
+
+Stage instructions should ask the agent to generate a single self-contained
+HTML/CSS/JavaScript app. The app must let a user generate synthetic
+manufacturing data, upload local CSVs, define primary/foreign keys, run
+in-browser analytics, view findings, and export reports. The app must not make
+network calls for uploaded data.
+
+From the protocol page, click `Run protocol`, choose an entry agent, and fill:
+
+- `What should this run accomplish?`: `Build a self-contained local
+  manufacturing analytics browser app and review its outputs for customer
+  handoff readiness without exposing raw customer data to a model provider.`
+- `Files or data context`: `Use schemas and synthetic examples for panels.csv,
+  cells.csv, panel_cells.csv, test_results.csv, and optional measurements.csv.
+  The generated tool must let the user upload real CSVs locally in the browser
+  later.`
+- `Keys and relationships`: `panels.panel_id joins test_results.panel_id and
+  panel_cells.panel_id; cells.cell_id joins panel_cells.cell_id; measurements
+  may join either panel_id or cell_id. Preserve key lineage in the generated app
+  outputs.`
+- `Expected outputs`: `Self-contained
+  apps/manufacturing-analytics/index.html,
+  apps/manufacturing-analytics/README.md,
+  reports/local-tool-validation.md, and
+  reports/manufacturing-analytics-findings.md. No customer handoff guide
+  artifact.`
+- `Privacy or execution constraints`: `Do not include raw private data rows in
+  model-visible context. Generate tools that process private data locally when
+  needed.`
+
+Open the run from the Runs page, then use the artifact actions to open or
+download `apps/manufacturing-analytics/index.html`. In the opened app:
+
+1. set `Key faults` to `Clean relationships`,
+2. click `Generate synthetic data`,
+3. click `Validate keys`,
+4. click `Run analytics`,
+5. confirm validation passes,
+6. confirm findings and key lineage render,
+7. export aggregate findings from the app.
+
+Do not add a `Customer handoff guide` output to the protocol. The customer
+handoff script is repository documentation in `docs/customer-handoff-guide.md`.
+The protocol's generated documentation should be scoped to the generated local
+tool, for example `apps/manufacturing-analytics/README.md` and
+`reports/local-tool-validation.md`.
+
+## Internal Regression Fixture
+
+The repository contains a deterministic local script that verifies the
+analytics artifact expectations. This is useful for development and regression
+testing, but it is not the customer path and does not prove that the product UI
+is handoff-ready.
+
+Run the deterministic local fixture from a fresh clone:
 
 ```bash
-./octopus
-./octopus status
+./.venv/bin/python scripts/demo/manufacturing_local_analytics/run_demo.py \
+  --workspace .tmp/demo/manufacturing-local-analytics
 ```
 
-Open the registry URL printed by status.
+The command creates synthetic manufacturing CSVs, copies the local scripts into
+the workspace, runs the profiler and analyzer, validates privacy checks, and
+writes the full artifact set.
 
-### 2. Open A Conversation
+Expected output includes:
 
-In the registry UI, open or create a conversation with the target agent.
+- `reports/manufacturing_findings.md`
+- `reports/quality_flags.csv`
+- `reports/defect_summary.csv`
+- `reports/defect_heatmap.html`
+- `reports/run_manifest.json`
 
-Explain the privacy boundary before sending the prompt:
+Known deterministic findings:
+
+- Vendor `V2` has elevated high-risk rate.
+- High lamination temperature appears in the flagged population.
+- Night-shift records contain missing final test rows.
+
+The fixture must stay separate from customer acceptance. Customer acceptance
+requires building the protocol from blank in `Build -> Protocols`, publishing
+it, running it, and opening/downloading the produced artifacts from the UI.
+
+## Telegram Inspection
+
+After a run exists, Telegram can inspect it through the same protocol service:
 
 ```text
-The CSV stays local. We are asking the assistant to write scripts that inspect
-and process it locally. We will share schema summaries, logs, and aggregate
-outputs only when we choose to.
+/protocol status <run_id>
+/protocol artifacts <run_id>
+/protocol artifacts <run_id> download <artifact_key>
 ```
 
-### 3. Send The Analytics Prompt
+Use the download command for concrete artifacts when the bot should send the
+file into the chat instead of only linking back to Registry.
 
-Example prompt:
+## Live Conversation Script
+
+Use this when demonstrating the product to a customer:
 
 ```text
-Build a local property analytics pipeline for CSV files in ./data.
+We are not going to paste your CSV rows into chat. We will ask Octopus to build
+scripts that run locally. The only information we share with the model is the
+schema, row counts, relationship checks, aggregate profile, logs, and selected
+outputs we approve.
+```
+
+Then ask the agent:
+
+```text
+Use the Manufacturing Local Analytics skill.
+
+Build a local manufacturing analytics pipeline for CSV files in ./data.
 
 Privacy rule: do not ask me to paste raw CSV rows into chat. Write scripts that
 run locally against the files. If you need to inspect the data, create a
-profiling script that outputs column names, data types, missing-value counts,
-row counts, basic numeric summaries, and validation warnings. Use only those
-controlled summaries for follow-up reasoning.
+profiling script that outputs table names, columns, row counts, missing-value
+counts, relationship checks, and aggregate summaries only.
+
+Expected files:
+- data/panels.csv
+- data/cells.csv
+- data/panel_cells.csv
+- data/test_results.csv
+
+Join keys:
+- panels.panel_id -> panel_cells.panel_id
+- panels.panel_id -> test_results.panel_id
+- cells.cell_id -> panel_cells.cell_id
 
 Create:
-- scripts/profile_properties.py
-- scripts/build_property_report.py
-- reports/property_profile.md
-- reports/property_summary.md
-- reports/property_summary.csv
+- scripts/profile_manufacturing_data.py
+- scripts/analyze_manufacturing_quality.py
+- reports/profile_summary.md
+- reports/model_visible_context.md
+- reports/manufacturing_findings.md
+- reports/quality_flags.csv
+- reports/defect_summary.csv
+- reports/defect_heatmap.html
+- reports/run_manifest.json
 
-The report should include:
-- record count
-- missing-value summary
-- price distribution
-- median sale price by ZIP
-- median assessed value by property type
-- top data quality warnings
-- recommended follow-up analyses
-
-Make the scripts safe to rerun and document how to run them.
+The report should flag vendor, shift, line, temperature, missing final tests,
+and hotspot/visual defect signals. Make the scripts deterministic and safe to
+rerun.
 ```
 
-### 4. Have The Agent Generate Code
+## What To Show
 
-The expected output is code and instructions, not raw data analysis performed
-inside the prompt.
-
-The useful artifacts are:
-
-- profiling script
-- report-building script
-- markdown report
-- CSV summary
-- optional chart outputs
-
-### 5. Run Scripts Locally
-
-Run the generated scripts in the local workspace or bot shell, depending on the
-deployment:
-
-```bash
-python scripts/profile_properties.py data/properties.csv reports/property_profile.md
-python scripts/build_property_report.py data/properties.csv reports/
-```
-
-If a script fails, paste the error/log excerpt into the conversation. Do not
-paste raw rows.
-
-### 6. Iterate
-
-Example follow-up:
-
-```text
-The profiling script found missing assessed_value in 8% of rows and sale_price
-outliers above the 99th percentile. Update the report script to flag those
-records in a separate QA output and add a short executive summary.
-```
-
-### 7. Review Artifacts
-
-Use the registry conversation/run/work context to inspect generated artifacts
-where available.
-
-Expected artifact examples:
-
-- `scripts/profile_properties.py`
-- `scripts/build_property_report.py`
-- `reports/property_profile.md`
-- `reports/property_summary.md`
-- `reports/property_summary.csv`
-- `reports/property_quality_flags.csv`
-
-If an artifact is produced but cannot be previewed/downloaded from a surface
-that references it, note that as a product gap rather than changing the demo
-story.
-
-## Optional Protocol Framing
-
-If protocol flows are stable in the demo environment, present the workflow as a
-repeatable protocol:
-
-1. profile data
-2. review profile summary
-3. generate analytics script
-4. run analytics script locally
-5. review report
-6. revise or publish outputs
-
-If protocol authoring/runtime is not stable enough for a live customer demo,
-keep the demo in a conversation and explain that the same workflow can be made
-repeatable as a protocol.
+1. Open `reports/model_visible_context.md` and point out that it contains schema
+   and aggregates, not raw source rows.
+2. Open `scripts/analyze_manufacturing_quality.py` and explain that it reads
+   local files.
+3. Open `reports/manufacturing_findings.md` and show the executive summary.
+4. Open `reports/quality_flags.csv` and show panel-level output generated by
+   the local script.
+5. Open `reports/defect_heatmap.html` and show the renderable chart artifact.
+6. Open `reports/run_manifest.json` and show validation status and artifact
+   paths.
 
 ## What To Avoid
 
 - Do not use real customer CSVs in a sales demo.
 - Do not paste raw rows into the conversation.
 - Do not upload private files to the model.
-- Do not claim absolute data isolation unless the deployment enforces it.
-- Do not demo unfinished protocol/UI paths if the conversation workflow is more
-  reliable.
-- Do not hide script failures. Use them to show local iteration and debugging.
+- Do not claim prediction when the demo only proves detection and correlation.
+- Do not present rehearsal as provider-backed autonomous execution.
+- Do not hide script failures. Use failures to show local iteration.
 
 ## Success Criteria
 
 The customer should understand:
 
-- Octopus can orchestrate local analytic work.
-- The model can generate and revise analysis code.
-- Customer data can remain in the local workspace.
-- Scripts can produce repeatable reports and QA outputs.
-- Generated code and reports are traceable as artifacts.
-- The workflow can later become a reusable protocol.
+- Octopus can help build local analytics code without raw data prompts.
+- Scripts can transform local CSVs into repeatable reports.
+- Generated reports and scripts are visible as artifacts.
+- Protocols make the workflow repeatable.
+- The product boundary is honest: the model helps write and revise tooling; the
+  local runtime processes private data.

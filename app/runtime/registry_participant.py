@@ -12,7 +12,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from app.registry_errors import registry_error_detail
-from app.agents.registry_capabilities import registry_id_from_authority_ref
+from app.agents.registry_projection_interfaces import registry_id_from_implementation_ref
 from app.agents.state import (
     RegistryConnectionState,
     load_runtime_registry_connection_state,
@@ -87,8 +87,8 @@ class AgentRuntime:
         provider=None,
         registry: RegistryConnectionConfig | None = None,
         routing_skills_resolver: Callable[[], tuple[str, ...]] | None = None,
-        channel_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
-        management_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
+        transport_implementations_resolver: Callable[[], tuple[str, ...]] | None = None,
+        supported_admin_operations_resolver: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
         self.config = config
         self._delivery_handler = delivery_handler
@@ -96,8 +96,8 @@ class AgentRuntime:
             raise ValueError("AgentRuntime requires an explicit registry connection in registry mode")
         self._registry = registry
         self._routing_skills_resolver = routing_skills_resolver
-        self._channel_capabilities_resolver = channel_capabilities_resolver
-        self._management_capabilities_resolver = management_capabilities_resolver
+        self._transport_implementations_resolver = transport_implementations_resolver
+        self._supported_admin_operations_resolver = supported_admin_operations_resolver
         if self._registry is None:
             self._state = RegistryConnectionState(registry_id="", registry_scope="full")
         else:
@@ -114,9 +114,9 @@ class AgentRuntime:
     def state(self) -> RegistryConnectionState:
         return self._state
 
-    def _channel_capabilities(self) -> tuple[str, ...]:
-        if self._channel_capabilities_resolver is not None:
-            return self._channel_capabilities_resolver()
+    def _transport_implementations(self) -> tuple[str, ...]:
+        if self._transport_implementations_resolver is not None:
+            return self._transport_implementations_resolver()
         channels: list[str] = []
         if self.config.telegram_token:
             channels.append("telegram")
@@ -134,11 +134,15 @@ class AgentRuntime:
             return ""
         return self._registry.enroll_token
 
-    def _management_capabilities(self) -> tuple[str, ...]:
-        capabilities = list(self._management_capabilities_resolver() if self._management_capabilities_resolver is not None else ())
-        if "agent_runtime" not in capabilities:
-            capabilities.append("agent_runtime")
-        return tuple(capabilities)
+    def _supported_admin_operations(self) -> tuple[str, ...]:
+        operations = list(
+            self._supported_admin_operations_resolver()
+            if self._supported_admin_operations_resolver is not None
+            else ()
+        )
+        if "reset_execution_fault" not in operations:
+            operations.append("reset_execution_fault")
+        return tuple(operations)
 
     def requested_card(self) -> AgentCard:
         routing_skills = self._effective_routing_skills()
@@ -155,8 +159,8 @@ class AgentRuntime:
             connectivity_state=self._state.connectivity_state,
             current_capacity=0,
             max_capacity=1,
-            channel_capabilities=list(self._channel_capabilities()),
-            management_capabilities=list(self._management_capabilities()),
+            transport_implementations=list(self._transport_implementations()),
+            supported_admin_operations=list(self._supported_admin_operations()),
             version="",
             bot_key=bot_identity(self.config.data_dir),
         )
@@ -474,7 +478,7 @@ def _registry_scope(config: BotConfig, registry_id: str) -> str:
 
 
 def _state_for_authority(config: BotConfig, authority_ref: str):
-    registry_id = registry_id_from_authority_ref(str(authority_ref))
+    registry_id = registry_id_from_implementation_ref(str(authority_ref))
     return load_runtime_registry_connection_state(
         config.data_dir,
         registry_id,

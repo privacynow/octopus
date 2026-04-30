@@ -19,7 +19,7 @@ Rules:
 - shared behavior belongs in `octopus_sdk/`
 - registry and Telegram are clients over shared rules
 - do not create a second lifecycle/validation path in UI or Telegram
-- do not create a second skill/capability model
+- do not create a second skill model
 - do not create a second protocol runtime model
 - do not create direct DB shortcuts as proof of product behavior
 
@@ -49,7 +49,7 @@ Start in:
 
 Examples:
 
-- skill/capability lifecycle rules
+- skill lifecycle rules
 - guidance preview/composition rules
 - routing decisions
 - conversation workflow logic
@@ -107,9 +107,9 @@ Rules:
 - route changes must update docs and OpenAPI where applicable
 - artifact actions should use shared artifact helpers
 
-## Skills And Capabilities
+## Skills
 
-The UI label is `Capabilities`; runtime code still says `skills`.
+The UI label is `Skills`; runtime code still says `skills`.
 
 When extending:
 

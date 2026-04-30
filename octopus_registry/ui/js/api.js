@@ -193,6 +193,8 @@ const API = (() => {
         // Agents
         getSummary: () =>
             request('GET', '/v1/summary'),
+        cleanupWorkspaceData: (body = {}) =>
+            request('POST', '/v1/admin/workspace-data/cleanup', { body }),
         listApprovals: (opts = {}) =>
             request('GET', '/v1/approvals', { params: opts }),
         listAgents: (opts = {}) =>
@@ -294,6 +296,8 @@ const API = (() => {
             request('GET', '/v1/protocol-authoring/options'),
         listProtocolTemplates: () =>
             request('GET', '/v1/protocol-templates'),
+        getProtocolTemplate: (slug) =>
+            request('GET', `/v1/protocol-templates/${encodeURIComponent(slug)}`),
         getProtocol: (id) =>
             request('GET', `/v1/protocols/${encodeURIComponent(id)}`),
         getProtocolVersion: (protocolId, versionId) =>

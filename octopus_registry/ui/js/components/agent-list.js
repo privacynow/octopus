@@ -23,7 +23,7 @@ function renderAgentList(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Agents</h2><p>Start work with a real enrolled agent, inspect its capabilities, or open recent activity.</p>';
+    header.innerHTML = '<h2>Agents</h2><p>Start work with a real enrolled agent, inspect its skills, or open recent activity.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');
@@ -86,7 +86,7 @@ function renderAgentList(container) {
         return '/ui/agents/' + encodeURIComponent(agent.id || agent.agent_id || '');
     }
 
-    function _agentCapabilitiesHref(agent) {
+    function _agentSkillsHref(agent) {
         return '/ui/skills?agent_id=' + encodeURIComponent(agent.id || agent.agent_id || '');
     }
 
@@ -111,11 +111,11 @@ function renderAgentList(container) {
         openProfile.textContent = 'Open agent workspace';
         actions.appendChild(openProfile);
 
-        const openCapabilities = document.createElement('a');
-        openCapabilities.className = 'btn btn-sm';
-        openCapabilities.href = _agentCapabilitiesHref(agent || raw);
-        openCapabilities.textContent = 'Open capabilities';
-        actions.appendChild(openCapabilities);
+        const openSkills = document.createElement('a');
+        openSkills.className = 'btn btn-sm';
+        openSkills.href = _agentSkillsHref(agent || raw);
+        openSkills.textContent = 'Open skills';
+        actions.appendChild(openSkills);
 
         panel.appendChild(actions);
         return panel;

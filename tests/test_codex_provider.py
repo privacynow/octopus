@@ -199,7 +199,7 @@ async def test_file_policy_inspect_sets_sandbox_readonly():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         file_policy="inspect",
@@ -226,7 +226,7 @@ async def test_file_policy_edit_uses_default_sandbox():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         file_policy="edit",
@@ -253,7 +253,7 @@ async def test_file_policy_inspect_overrides_provider_config_sandbox():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord({"sandbox": "workspace-write"}),
         credential_env=CredentialEnvRecord(),
         file_policy="inspect",
@@ -281,7 +281,7 @@ async def test_provider_config_sandbox_applies_without_inspect():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord({"sandbox": "read-only"}),
         credential_env=CredentialEnvRecord(),
         file_policy="edit",
@@ -308,7 +308,7 @@ async def test_provider_config_invalid_sandbox_is_rejected(caplog):
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord({"sandbox": "off"}),
         credential_env=CredentialEnvRecord(),
         file_policy="edit",
@@ -337,7 +337,7 @@ async def test_provider_config_allowlisted_override_is_passed_through():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord({"config_overrides": [override]}),
         credential_env=CredentialEnvRecord(),
         file_policy="edit",
@@ -364,7 +364,7 @@ async def test_provider_config_non_allowlisted_override_is_rejected(caplog):
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord({"config_overrides": [override]}),
         credential_env=CredentialEnvRecord(),
         file_policy="edit",
@@ -392,7 +392,7 @@ async def test_provider_config_flag_like_override_value_is_rejected(caplog):
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord({"config_overrides": [override]}),
         credential_env=CredentialEnvRecord(),
         file_policy="edit",
@@ -420,7 +420,7 @@ async def test_provider_config_flag_entry_is_rejected(caplog):
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord({"config_overrides": [override]}),
         credential_env=CredentialEnvRecord(),
         file_policy="edit",
@@ -449,7 +449,7 @@ async def test_skip_permissions_fresh_exec_forces_dangerous_without_sandbox():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         skip_permissions=True,
@@ -476,7 +476,7 @@ async def test_skip_permissions_fresh_exec_adds_dangerous_when_needed():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         skip_permissions=True,
@@ -502,7 +502,7 @@ async def test_skip_permissions_resume():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         skip_permissions=True,
@@ -1003,7 +1003,7 @@ async def test_run_uses_context_working_dir_for_new_and_resume():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         working_dir="/workspace/workspace",
@@ -1037,7 +1037,7 @@ async def test_run_preflight_uses_context_working_dir():
     context = RunContext(
         extra_dirs=[],
         system_prompt="",
-        capability_summary="",
+        active_skill_tools_summary="",
         provider_config=ProviderConfigRecord(),
         credential_env=CredentialEnvRecord(),
         working_dir="/workspace/workspace",

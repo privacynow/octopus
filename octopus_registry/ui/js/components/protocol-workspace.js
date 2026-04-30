@@ -8103,10 +8103,10 @@ function renderProtocolRuns(container) {
         loadRuns(),
         loadIssues({ rerender: true }),
     ]), 400);
-    UI.subscribeWithRefresh(cleanups, 'agents', async () => {
-        await loadAssignmentCatalog({ quiet: true });
-        render();
-    }, 400);
+    UI.subscribeWithRefresh(cleanups, 'agents', () => Promise.all([
+        loadRuns(),
+        currentRunId ? loadRunDetail({ soft: true }) : Promise.resolve(),
+    ]), 400);
     UI.subscribeWithRefresh(cleanups, 'protocols', () => Promise.all([
         loadRuns(),
         currentRunId ? loadRunDetail({ soft: true }) : Promise.resolve(),

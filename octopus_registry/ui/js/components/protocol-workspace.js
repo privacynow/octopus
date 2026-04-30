@@ -7477,6 +7477,18 @@ function renderProtocolRuns(container) {
         stageAttemptsByKey.forEach((items, key) => {
             latestStageExecutionByKey.set(key, latestStageExecution(items));
         });
+        const stageOrdinalFor = (stageKey) => {
+            const key = String(stageKey || '').trim();
+            if (key && stageOrderByKey.has(key)) return Number(stageOrderByKey.get(key) || 0) + 1;
+            const fallbackIndex = Array.from(stageAttemptsByKey.keys()).findIndex((item) => item === key);
+            return fallbackIndex >= 0 ? fallbackIndex + 1 : 0;
+        };
+        const runStageCount = () => {
+            const definitionCount = Array.isArray(currentRun.version?.definition_json?.stages)
+                ? currentRun.version.definition_json.stages.length
+                : 0;
+            return Math.max(definitionCount, stageAttemptsByKey.size);
+        };
         const isPreviousStageAttempt = (item) => {
             const key = String(item?.stage_key || '').trim();
             const latest = key ? latestStageExecutionByKey.get(key) : null;
@@ -7532,8 +7544,8 @@ function renderProtocolRuns(container) {
             const status = String(run.status || 'queued').trim().toLowerCase();
             const active = !['completed', 'failed', 'cancelled'].includes(status);
             const currentStage = currentRunStageExecution();
-            const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : 0;
-            const totalStages = Math.max(stageRows.length, currentRun.version?.definition_json?.stages?.length || 0);
+            const currentStageOrdinal = currentStage ? stageOrdinalFor(currentStage.stage_key) : 0;
+            const totalStages = runStageCount();
             const currentStageDef = currentStage
                 ? stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {}
                 : {};
@@ -7609,7 +7621,7 @@ function renderProtocolRuns(container) {
             metrics.className = 'run-focus-metrics';
             [
                 { label: 'Status', value: run.status || 'queued' },
-                { label: 'Stage', value: totalStages ? `${currentStageIndex + 1} / ${totalStages}` : 'n/a' },
+                { label: 'Stage', value: totalStages ? `${currentStageOrdinal || 1} / ${totalStages}` : 'n/a' },
                 { label: 'Outputs', value: `${artifactRows.length}${pendingArtifactRows.length ? ` / ${artifactRows.length + pendingArtifactRows.length}` : ''}` },
                 { label: 'Issues', value: String(currentIssues.length) },
                 { label: 'Elapsed', value: elapsed },
@@ -7649,7 +7661,7 @@ function renderProtocolRuns(container) {
             const status = String(run.status || '').trim().toLowerCase();
             const active = !['completed', 'failed', 'cancelled'].includes(status);
             const currentStage = currentRunStageExecution();
-            const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : 0;
+            const currentStageOrdinal = currentStage ? stageOrdinalFor(currentStage.stage_key) : 0;
             const currentStageDef = currentStage
                 ? stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {}
                 : {};
@@ -7661,7 +7673,7 @@ function renderProtocolRuns(container) {
             card.dataset.key = 'run-liveness';
 
             const label = active && currentStage
-                ? `Running stage ${currentStageIndex + 1} of ${Math.max(stageRows.length, currentRun.version?.definition_json?.stages?.length || 0)}: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`
+                ? `Running stage ${currentStageOrdinal || 1} of ${runStageCount() || 1}: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`
                 : `Run ${status || 'state'}`;
             card.appendChild(UI.renderListRow({
                 label,

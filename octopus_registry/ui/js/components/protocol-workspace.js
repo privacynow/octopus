@@ -1916,6 +1916,53 @@ function renderProtocolWorkspace(container) {
             : Kit.protocolRunLaunchFields();
     }
 
+    function _normalizeExpectedOutputToken(value) {
+        return String(value || '')
+            .trim()
+            .replace(/^[-*]\s+/, '')
+            .replace(/^`|`$/g, '')
+            .replace(/^["']|["']$/g, '')
+            .replace(/[.;]+$/g, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    function _expectedOutputTokens(value) {
+        return String(value || '')
+            .split(/[\n,]+/g)
+            .map(_normalizeExpectedOutputToken)
+            .filter(Boolean)
+            .filter((item) => /[./*]/.test(item) || /^[\w -]+\.[a-z0-9]{2,8}$/i.test(item));
+    }
+
+    function _declaredArtifactIdentifiers(doc = draft.document) {
+        const identifiers = new Set();
+        (doc?.artifacts || []).forEach((artifact) => {
+            [
+                artifact?.artifact_key,
+                artifact?.display_name,
+                artifact?.path,
+                artifact?.workspace_path,
+                artifact?.location,
+            ].forEach((value) => {
+                const normalized = _normalizeExpectedOutputToken(value);
+                if (normalized) identifiers.add(normalized);
+            });
+        });
+        return identifiers;
+    }
+
+    function _expectedOutputMatchesDeclared(token, declared) {
+        if (!token || declared.has(token)) return true;
+        const basename = token.split('/').filter(Boolean).pop() || token;
+        if (declared.has(basename)) return true;
+        if (!token.includes('*')) return false;
+        const pattern = new RegExp(`^${token
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*/g, '.*')}$`);
+        return Array.from(declared).some((item) => pattern.test(item));
+    }
+
     function _openRunProtocolDialog() {
         if (_blockConflictAction('Run protocol')) return;
         if (!currentProtocolId) return;
@@ -1967,14 +2014,29 @@ function renderProtocolWorkspace(container) {
         agentLabel.appendChild(agentHelp);
         body.appendChild(agentLabel);
 
+        const outputAlignmentNote = document.createElement('p');
+        outputAlignmentNote.className = 'quiet-note';
+        outputAlignmentNote.hidden = true;
         const launchForm = Kit.protocolRunLaunchForm({
             values: {
                 problem_statement: draft.description,
             },
             fields: _protocolRunLaunchFields(),
             includeWorkspace: true,
+            onInput: (key) => {
+                if (String(key || '') !== 'expected_outputs') return;
+                const values = launchForm.readValues();
+                const declared = _declaredArtifactIdentifiers(draft.document);
+                const missing = _expectedOutputTokens(values.expected_outputs)
+                    .filter((item) => !_expectedOutputMatchesDeclared(item, declared));
+                outputAlignmentNote.hidden = !missing.length;
+                outputAlignmentNote.textContent = missing.length
+                    ? `Expected outputs not declared as protocol artifacts: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''}. The run can still start, but the protocol will only verify declared artifacts.`
+                    : '';
+            },
         });
         body.appendChild(launchForm.element);
+        body.appendChild(outputAlignmentNote);
 
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
@@ -2483,6 +2545,8 @@ function renderProtocolWorkspace(container) {
     }
 
     function _showPendingStageInsertChoice(sourceStageKey = '', decision = '') {
+        const currentSourceStageKey = String(editorMode.sourceStageKey || '');
+        const currentDecision = String(editorMode.decision || '').trim().toLowerCase();
         const body = document.createElement('div');
         body.className = 'kit-selector-editor-note';
         body.textContent = 'You already have an unfinished step draft. Continue it, move it to this position, or discard it and start a new step here.';
@@ -2504,7 +2568,7 @@ function renderProtocolWorkspace(container) {
         });
         continueBtn.addEventListener('click', () => {
             dialog.close();
-            render();
+            _setStageInsertAnchor(currentSourceStageKey, currentDecision, { keepDraft: true });
         });
         moveBtn.addEventListener('click', () => {
             dialog.close();
@@ -2523,7 +2587,7 @@ function renderProtocolWorkspace(container) {
             && String(editorMode.sourceStageKey || '') === nextSourceStageKey
             && String(editorMode.decision || '') === nextDecision;
         if (sameInsert) {
-            render();
+            _setStageInsertAnchor(nextSourceStageKey, nextDecision, { keepDraft: true });
             return;
         }
         if (editorMode.kind === 'insert-stage') {
@@ -5655,6 +5719,7 @@ function renderProtocolWorkspace(container) {
         onCommit = null,
         artifactOptions = [],
         context = null,
+        deferCatalogUntilStageCreated = false,
     } = {}) {
         const shell = document.createElement('div');
         shell.className = 'kit-stage-artifacts';
@@ -5692,10 +5757,12 @@ function renderProtocolWorkspace(container) {
         if (!artifactOptions.length) {
             const note = document.createElement('p');
             note.className = 'kit-stage-editor-hero-note';
-            note.textContent = 'Define the shared files or outputs this step should read or write, then attach them here.';
+            note.textContent = deferCatalogUntilStageCreated
+                ? 'Create this step before defining new workflow files or outputs. This keeps the unsaved step draft visible and prevents file definitions from being attached to a step that does not exist yet.'
+                : 'Define the shared files or outputs this step should read or write, then attach them here.';
             shell.appendChild(note);
             shell.appendChild(UI.renderEmptyState('No workflow files or outputs are defined yet.', true));
-            if (!readOnly) {
+            if (!readOnly && !deferCatalogUntilStageCreated) {
                 const actions = document.createElement('div');
                 actions.className = 'kit-stage-routing-actions';
                 const button = document.createElement('button');
@@ -5724,11 +5791,22 @@ function renderProtocolWorkspace(container) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'btn btn-small';
-            button.textContent = 'Manage workflow files';
-            button.addEventListener('click', () => {
-                _openArtifactCatalog('', { stageKey: normalizedStageKey, surfaceKey: 'local' });
-            });
-            actions.appendChild(button);
+            if (deferCatalogUntilStageCreated) {
+                button.textContent = 'Create step before managing files';
+                button.disabled = true;
+                button.title = 'Save the new step first, then manage workflow files from the saved step.';
+                actions.appendChild(button);
+                const note = document.createElement('p');
+                note.className = 'quiet-note';
+                note.textContent = 'Existing workflow files can be attached now. New file definitions are managed after the step is created.';
+                actions.appendChild(note);
+            } else {
+                button.textContent = 'Manage workflow files';
+                button.addEventListener('click', () => {
+                    _openArtifactCatalog('', { stageKey: normalizedStageKey, surfaceKey: 'local' });
+                });
+                actions.appendChild(button);
+            }
             shell.appendChild(actions);
         }
         return shell;
@@ -5980,6 +6058,7 @@ function renderProtocolWorkspace(container) {
             onCommit,
             artifactOptions,
             context: editorContext,
+            deferCatalogUntilStageCreated: Boolean(createAction),
         });
 
         const panelOptions = [

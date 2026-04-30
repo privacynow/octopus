@@ -371,6 +371,13 @@ test.describe('protocol authoring live', () => {
     if (!availableSkillValues.length) {
       await expect(draftAssignment).toContainText('No available skills were loaded from the registry.');
     }
+    const draftFiles = await openStagePanel(page, draftStageEditor, {
+      tab: 'Files & outputs',
+      heading: 'Inputs and outputs',
+    });
+    await expect(draftFiles).toContainText('Create this step before defining new workflow files or outputs.');
+    await expect(draftFiles.getByRole('button', { name: 'Define files and outputs', exact: true })).toHaveCount(0);
+    await expect(draftStageEditor.getByRole('button', { name: 'Create step', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Cancel' }).click();
 
     const defaultAssignmentKind = availableSkillValues.length ? 'skill' : 'agent';

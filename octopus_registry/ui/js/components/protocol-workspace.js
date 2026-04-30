@@ -61,10 +61,12 @@ function _protocolArtifactPreviewable(item) {
 function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
     const available = !missing && artifact?.exists !== false;
+    const browsable = available && UI.isLikelyDirectoryArtifactPath(displayPath);
     return UI.createArtifactActionRow({
         previewable: available && _protocolArtifactPreviewable(artifact),
         previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
         openHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
+        browseHref: browsable ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { browse: true }) : '',
         downloadHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }) : '',
         copyPathText: displayPath,
         available,
@@ -6602,6 +6604,8 @@ function renderProtocolRuns(container) {
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
     let runPaginator = null;
+    let runRefreshTimer = 0;
+    let runsRouteDisposed = false;
 
     const runPaginationEl = document.createElement('div');
     runPaginationEl.className = 'pagination-shell';
@@ -6645,6 +6649,7 @@ function renderProtocolRuns(container) {
             runDetailLoading = false;
             runDetailRequestToken += 1;
             _bindRunSubscription();
+            _syncRunRefreshTimer();
             _writeState();
         },
     });
@@ -6669,6 +6674,24 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _currentRunIsActive() {
+        const status = String(currentRun?.run?.status || '').trim().toLowerCase();
+        return Boolean(currentRunId) && !['completed', 'failed', 'cancelled'].includes(status);
+    }
+
+    function _syncRunRefreshTimer() {
+        clearTimeout(runRefreshTimer);
+        runRefreshTimer = 0;
+        if (runsRouteDisposed || !_currentRunIsActive() || UI.isBackgrounded()) return;
+        runRefreshTimer = setTimeout(() => {
+            void Promise.all([
+                loadRunDetail({ soft: true }),
+                loadRuns(),
+                loadIssues({ rerender: true }),
+            ]).finally(_syncRunRefreshTimer);
+        }, 2500);
+    }
+
     function _setRunSelection(nextRunId, { push = true } = {}) {
         const normalizedRunId = String(nextRunId || '');
         if (normalizedRunId && normalizedRunId === String(currentRunId || '')) {
@@ -6690,6 +6713,7 @@ function renderProtocolRuns(container) {
             runDetailLoading = true;
             _writeState({ push });
             renderRunsRoute();
+            _syncRunRefreshTimer();
             void loadRunDetail();
             return;
         }
@@ -6698,6 +6722,7 @@ function renderProtocolRuns(container) {
         runDetailLoading = false;
         _writeState({ push });
         _bindRunSubscription();
+        _syncRunRefreshTimer();
         renderRunsRoute();
     }
 
@@ -7440,6 +7465,24 @@ function renderProtocolRuns(container) {
                 return itemTime >= bestTime ? item : best;
             }, null);
         };
+        const stageAttemptsByKey = new Map();
+        stageRows.forEach((item) => {
+            const key = String(item.stage_key || '').trim();
+            if (!key) return;
+            const bucket = stageAttemptsByKey.get(key) || [];
+            bucket.push(item);
+            stageAttemptsByKey.set(key, bucket);
+        });
+        const latestStageExecutionByKey = new Map();
+        stageAttemptsByKey.forEach((items, key) => {
+            latestStageExecutionByKey.set(key, latestStageExecution(items));
+        });
+        const isPreviousStageAttempt = (item) => {
+            const key = String(item?.stage_key || '').trim();
+            const latest = key ? latestStageExecutionByKey.get(key) : null;
+            if (!latest || !item) return false;
+            return String(latest.protocol_stage_execution_id || '') !== String(item.protocol_stage_execution_id || '');
+        };
 
         const currentRunStageExecution = () => {
             const run = currentRun.run || {};
@@ -7659,9 +7702,13 @@ function renderProtocolRuns(container) {
             const participant = participantByKey.get(String(item.participant_key || '')) || {};
             const stageTransitions = transitionsForStage(item.protocol_stage_execution_id);
             const stageIssues = issuesByStageKey.get(String(item.stage_key || '')) || [];
+            const previousAttempt = isPreviousStageAttempt(item);
 
             const card = document.createElement('article');
             card.className = 'protocol-lineage-card';
+            if (previousAttempt) {
+                card.classList.add('is-previous-attempt');
+            }
             card.dataset.stageKey = String(item.stage_key || '');
 
             const head = document.createElement('div');
@@ -7687,6 +7734,12 @@ function renderProtocolRuns(container) {
                 badge.textContent = item.decision;
                 head.appendChild(badge);
             }
+            if (previousAttempt) {
+                const badge = document.createElement('span');
+                badge.className = 'badge';
+                badge.textContent = 'previous attempt';
+                head.appendChild(badge);
+            }
             card.appendChild(head);
 
             if (stageIssues.length) {
@@ -7705,6 +7758,7 @@ function renderProtocolRuns(container) {
             note.className = 'protocol-lineage-note';
             note.textContent = [
                 `Attempt ${String(item.attempt || 1)}`,
+                previousAttempt ? 'Superseded by a newer attempt' : '',
                 item.completed_at
                     ? `Completed ${UI.relativeTime(item.completed_at)}`
                     : item.started_at
@@ -7730,7 +7784,12 @@ function renderProtocolRuns(container) {
                 outputsLabel.textContent = 'Outputs';
                 card.appendChild(outputsLabel);
                 card.appendChild(createArtifactList(producedArtifacts, {
-                    relationshipFor: () => 'Produced by this stage',
+                    relationshipFor: (artifact) => {
+                        if (!previousAttempt) return 'Produced by this stage';
+                        return artifact?.exists === false
+                            ? 'Missing output from previous attempt'
+                            : 'Output from previous attempt';
+                    },
                 }));
             }
 
@@ -8020,6 +8079,7 @@ function renderProtocolRuns(container) {
             runDetailLoading = false;
             _writeState();
             _bindRunSubscription();
+            _syncRunRefreshTimer();
             renderRunsRoute();
             return;
         }
@@ -8043,6 +8103,7 @@ function renderProtocolRuns(container) {
             _writeState();
             _bindRunSubscription();
             renderRunsRoute();
+            _syncRunRefreshTimer();
         } catch (err) {
             if (requestToken !== runDetailRequestToken || requestedRunId !== String(currentRunId || '')) {
                 return;
@@ -8052,6 +8113,7 @@ function renderProtocolRuns(container) {
                 UI.reportError('Failed to refresh the protocol run detail', err, {
                     context: 'Protocol run detail refresh failed',
                 });
+                _syncRunRefreshTimer();
                 return;
             }
             throw err;
@@ -8073,10 +8135,13 @@ function renderProtocolRuns(container) {
     }
 
     cleanups.add(() => {
+        runsRouteDisposed = true;
         if (currentRunSubscription) {
             currentRunSubscription();
             currentRunSubscription = null;
         }
+        clearTimeout(runRefreshTimer);
+        runRefreshTimer = 0;
         currentRun = null;
         currentIssues = [];
         protocolIssues = [];

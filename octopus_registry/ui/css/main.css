@@ -2260,6 +2260,11 @@ select {
     min-width: 0;
 }
 
+.protocol-lineage-card.is-previous-attempt {
+    background: color-mix(in srgb, var(--bg-secondary) 86%, transparent);
+    box-shadow: none;
+}
+
 .protocol-lineage-head {
     display: flex;
     align-items: flex-start;

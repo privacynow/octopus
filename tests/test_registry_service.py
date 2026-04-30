@@ -4111,6 +4111,10 @@ def test_task_artifact_content_route_opens_directory_index_and_downloads_zip(mon
     )
     try:
         open_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content")
+        browse_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content?browse=1")
+        member_response = client.get(
+            "/v1/tasks/protocol-stage:stage-1/artifacts/package/content?path=samples%2Fcells.csv"
+        )
         download_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content?download=1")
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
@@ -4119,6 +4123,11 @@ def test_task_artifact_content_route_opens_directory_index_and_downloads_zip(mon
     assert open_response.status_code == 200
     assert "<title>Offline app</title>" in open_response.text
     assert "text/html" in open_response.headers.get("content-type", "")
+    assert browse_response.status_code == 200
+    assert "Directory artifact contents" in browse_response.text
+    assert "samples/cells.csv" in browse_response.text
+    assert member_response.status_code == 200
+    assert member_response.text == "cell_id,value\nC-1,10\n"
     assert download_response.status_code == 200
     assert "application/zip" in download_response.headers.get("content-type", "")
     assert 'filename="package.zip"' in download_response.headers.get("content-disposition", "")
@@ -4286,6 +4295,10 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
     )
     try:
         open_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content")
+        browse_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content?browse=1")
+        member_response = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/content?path=samples%2Fpanels.csv"
+        )
         download_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content?download=1")
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
@@ -4294,6 +4307,11 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
     assert open_response.status_code == 200
     assert "<title>Offline package</title>" in open_response.text
     assert "text/html" in open_response.headers.get("content-type", "")
+    assert browse_response.status_code == 200
+    assert "Directory artifact contents" in browse_response.text
+    assert "samples/panels.csv" in browse_response.text
+    assert member_response.status_code == 200
+    assert member_response.text == "panel_id,value\nP-1,20\n"
     assert download_response.status_code == 200
     assert "application/zip" in download_response.headers.get("content-type", "")
     assert 'filename="offline-package.zip"' in download_response.headers.get("content-disposition", "")

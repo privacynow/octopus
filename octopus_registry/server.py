@@ -33,14 +33,12 @@ from .auth import (
     validate_settings,
 )
 from .artifact_paths import (
-    artifact_directory_download_name,
     artifact_download_name,
-    directory_artifact_manifest,
-    directory_artifact_zip_bytes,
     resolve_protocol_artifact_path,
     resolve_task_artifact_path,
     resolve_task_artifact_rehearsal_text,
 )
+from .artifact_responses import workspace_artifact_content_response
 from .ws import WebSocketManager
 from .rehearsal import RehearsalSessionManager
 from .routing_skill_service import RoutingSkillService
@@ -1266,9 +1264,12 @@ def resource_get_task(
 
 @app.get("/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content")
 def resource_get_task_artifact_content(
+    request: Request,
     routed_task_id: str,
     artifact_key: str,
     download: bool = Query(default=False),
+    browse: bool = Query(default=False),
+    member_path: str = Query(default="", alias="path"),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> Response:
@@ -1331,35 +1332,15 @@ def resource_get_task_artifact_content(
                 headers={"Content-Disposition": f'{disposition}; filename="{preferred_name}"'},
             )
         raise HTTPException(status_code=409, detail="Artifact path is not available on this host.")
-    if resolved_path.is_dir():
-        if download:
-            zip_name = artifact_directory_download_name(
-                artifact_key=str(artifact_key or ""),
-                preferred_path=preferred_path or str(resolved_path.name or ""),
-            )
-            return Response(
-                content=directory_artifact_zip_bytes(resolved_path),
-                media_type="application/zip",
-                headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
-            )
-        index_path = resolved_path / "index.html"
-        if index_path.is_file():
-            return FileResponse(
-                path=index_path,
-                media_type="text/html",
-                filename="index.html",
-                content_disposition_type="inline",
-            )
-        return Response(
-            content=directory_artifact_manifest(resolved_path).encode("utf-8"),
-            media_type="text/markdown",
-            headers={"Content-Disposition": f'inline; filename="{preferred_name}.md"'},
-        )
-    return FileResponse(
-        path=resolved_path,
-        media_type=media_type,
-        filename=preferred_name or resolved_path.name,
-        content_disposition_type="attachment" if download else "inline",
+    return workspace_artifact_content_response(
+        resolved_path=resolved_path,
+        artifact_key=str(artifact_key or ""),
+        preferred_path=preferred_path or str(resolved_path.name or ""),
+        preferred_name=preferred_name,
+        download=download,
+        browse=browse,
+        member_path=member_path,
+        request=request,
     )
 
 

@@ -286,6 +286,12 @@ const API = (() => {
             if (opts.download) {
                 url.searchParams.set('download', '1');
             }
+            if (opts.browse) {
+                url.searchParams.set('browse', '1');
+            }
+            if (opts.path) {
+                url.searchParams.set('path', String(opts.path || ''));
+            }
             return url.toString();
         },
 
@@ -352,6 +358,12 @@ const API = (() => {
             const url = new URL(_protocolArtifactContentPath(id, artifactKey), window.location.origin);
             if (opts.download) {
                 url.searchParams.set('download', '1');
+            }
+            if (opts.browse) {
+                url.searchParams.set('browse', '1');
+            }
+            if (opts.path) {
+                url.searchParams.set('path', String(opts.path || ''));
             }
             return url.toString();
         },

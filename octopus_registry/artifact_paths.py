@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from html import escape
 from io import BytesIO
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlencode
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from octopus_sdk.protocols import ProtocolArtifactRecord, ProtocolRunDetailRecord
@@ -145,6 +147,103 @@ def directory_artifact_manifest(path: Path) -> str:
     return "\n".join(lines)
 
 
+def directory_artifact_index_html(
+    path: Path,
+    *,
+    artifact_title: str,
+    base_href: str,
+    max_entries: int = 500,
+) -> str:
+    root = path.resolve()
+    title = str(artifact_title or path.name or "Artifact contents").strip()
+    base = str(base_href or "").strip() or "."
+    entries: list[tuple[str, int]] = []
+    truncated = False
+    for child in sorted(path.rglob("*")):
+        if child.is_symlink() or not child.is_file():
+            continue
+        try:
+            relative_child = child.resolve().relative_to(root).as_posix()
+        except Exception:
+            continue
+        if len(entries) >= max_entries:
+            truncated = True
+            break
+        entries.append((relative_child, child.stat().st_size))
+
+    def href_for(relative_path: str, *, download: bool = False) -> str:
+        params: dict[str, str] = {"path": relative_path}
+        if download:
+            params["download"] = "1"
+        return f"{base}?{urlencode(params)}"
+
+    rows = []
+    for relative_child, size_bytes in entries:
+        rows.append(
+            "<tr>"
+            f"<td><a href=\"{escape(href_for(relative_child), quote=True)}\">{escape(relative_child)}</a></td>"
+            f"<td>{size_bytes:,} bytes</td>"
+            f"<td><a href=\"{escape(href_for(relative_child, download=True), quote=True)}\">Download</a></td>"
+            "</tr>"
+        )
+    if not rows:
+        rows.append("<tr><td colspan=\"3\">No files found.</td></tr>")
+
+    truncated_note = (
+        f"<p class=\"note\">Showing the first {max_entries:,} files. Download the package to inspect every file.</p>"
+        if truncated
+        else ""
+    )
+    return "\n".join(
+        [
+            "<!doctype html>",
+            "<html lang=\"en\">",
+            "<head>",
+            "<meta charset=\"utf-8\">",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+            f"<title>{escape(title)}</title>",
+            "<style>",
+            "body{margin:0;padding:32px;font:14px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f8fb;color:#172033;}",
+            "main{max-width:1040px;margin:0 auto;display:grid;gap:18px;}",
+            "header{display:grid;gap:8px;}",
+            "h1{margin:0;font-size:24px;line-height:1.2;}",
+            "p{margin:0;color:#5f6b7a;}",
+            ".actions{display:flex;flex-wrap:wrap;gap:10px;}",
+            "a{color:#2458d3;text-decoration:none;font-weight:600;}",
+            "a:hover{text-decoration:underline;}",
+            ".button{display:inline-flex;align-items:center;min-height:34px;padding:0 12px;border:1px solid #cfd6e4;border-radius:6px;background:#fff;color:#172033;}",
+            "table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #dbe1ec;border-radius:8px;overflow:hidden;}",
+            "th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #e6ebf3;vertical-align:top;}",
+            "th{font-size:12px;text-transform:uppercase;letter-spacing:0;color:#667085;background:#f0f3f8;}",
+            "td:nth-child(2){white-space:nowrap;color:#667085;}",
+            "tr:last-child td{border-bottom:0;}",
+            ".note{padding:10px 12px;border:1px solid #dbe1ec;border-radius:6px;background:#fff;}",
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<header>",
+            f"<h1>{escape(title)}</h1>",
+            "<p>Directory artifact contents. Open individual files inline or download the complete package.</p>",
+            "<div class=\"actions\">",
+            f"<a class=\"button\" href=\"{escape(base, quote=True)}\">Open default</a>",
+            f"<a class=\"button\" href=\"{escape(base + '?download=1', quote=True)}\">Download package</a>",
+            "</div>",
+            "</header>",
+            truncated_note,
+            "<table>",
+            "<thead><tr><th>File</th><th>Size</th><th>Action</th></tr></thead>",
+            "<tbody>",
+            *rows,
+            "</tbody>",
+            "</table>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
 def directory_artifact_zip_bytes(path: Path) -> bytes:
     buffer = BytesIO()
     root = path.resolve()
@@ -159,6 +258,24 @@ def directory_artifact_zip_bytes(path: Path) -> bytes:
                 continue
             archive.write(resolved_child, arcname=relative_child)
     return buffer.getvalue()
+
+
+def resolve_directory_artifact_member(root: Path, relative_path: str) -> Path | None:
+    normalized = str(relative_path or "").strip().replace("\\", "/")
+    if not normalized:
+        return root if root.exists() else None
+    candidate = Path(normalized)
+    if candidate.is_absolute():
+        return None
+    try:
+        resolved_root = root.resolve()
+        resolved = (root / candidate).resolve()
+        resolved.relative_to(resolved_root)
+    except Exception:
+        return None
+    if not resolved.exists() or resolved.is_symlink():
+        return None
+    return resolved
 
 
 def resolve_workspace_artifact_target(*, workspace_ref: str = "", artifact_path: str = "") -> Path | None:

@@ -9297,6 +9297,26 @@
             }
           },
           {
+            "in": "query",
+            "name": "browse",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Browse",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -11728,6 +11748,26 @@
               "default": false,
               "title": "Download",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "browse",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Browse",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
             }
           },
           {

@@ -638,6 +638,15 @@ window.UI = (() => {
         return /\.(md|markdown|txt|log|json|jsonl|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|sql|rb|go|java|rs|php)$/i.test(String(path || '').trim());
     }
 
+    function isLikelyDirectoryArtifactPath(path) {
+        const value = String(path || '').trim();
+        if (!value) return false;
+        if (value.endsWith('/')) return true;
+        const basename = basenameDisplayPath(value);
+        if (!basename || basename === '.' || basename === '..') return false;
+        return !/\.[A-Za-z0-9]{1,12}$/.test(basename);
+    }
+
     function generatedTimestamp(value) {
         const match = String(value || '').trim().match(/(?:^|[\s_-])(\d{10,})(?:\b|$)/);
         return match ? match[1] : '';
@@ -841,6 +850,7 @@ window.UI = (() => {
         previewHref = '',
         previewTitle = 'Artifact preview',
         openHref = '',
+        browseHref = '',
         downloadHref = '',
         copyPathText = '',
         available = true,
@@ -888,6 +898,17 @@ window.UI = (() => {
             openLink.textContent = 'Open';
             openLink.addEventListener('click', stop);
             actionRow.appendChild(openLink);
+        }
+
+        if (available && String(browseHref || '').trim()) {
+            const browseLink = document.createElement('a');
+            browseLink.href = String(browseHref || '').trim();
+            browseLink.className = 'btn btn-sm';
+            browseLink.target = '_blank';
+            browseLink.rel = 'noreferrer noopener';
+            browseLink.textContent = 'Contents';
+            browseLink.addEventListener('click', stop);
+            actionRow.appendChild(browseLink);
         }
 
         if (available && String(downloadHref || '').trim()) {
@@ -966,10 +987,13 @@ window.UI = (() => {
         const resolvedPath = taskArtifactDisplayPath(task, artifact, expectedOutput);
         const hasTaskArtifactContent = !!(task?.routed_task_id && artifactKey);
         const available = artifact?.exists !== false && hasTaskArtifactContent;
+        const artifactPath = String(expectedOutput?.path || artifact?.path || '');
+        const browsable = available && isLikelyDirectoryArtifactPath(artifactPath || resolvedPath);
         const actionRow = createArtifactActionRow({
             previewable: available && taskArtifactPreviewable(artifact, expectedOutput),
             previewTitle: `${artifactKey || 'artifact'} preview`,
             openHref: available ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey) : '',
+            browseHref: browsable ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey, { browse: true }) : '',
             downloadHref: available ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey, { download: true }) : '',
             copyPathText: resolvedPath || String(expectedOutput?.path || artifact?.path || ''),
             available,
@@ -1605,6 +1629,7 @@ window.UI = (() => {
         joinDisplayPath,
         basenameDisplayPath,
         isPreviewableFilePath,
+        isLikelyDirectoryArtifactPath,
         generatedTimestamp,
         isGeneratedTimestampName,
         isHumanAssignableSkillName,

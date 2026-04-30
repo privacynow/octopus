@@ -5,14 +5,15 @@ a new session/model can resume without relying on prior chat context.
 
 ## Resume Here
 
-Start with P0-2: remove analytics-specific defaults from generic protocol run
-launch. The run launch surface must be generic unless the selected protocol
-itself defines custom run inputs.
+Resume from the generic offline-analytics scenario acceptance run. Directory
+artifact verification has been fixed and deployed; the current product focus is
+artifact package browsing, linked-run freshness, retry-attempt clarity, and a
+full Safari rerun from the UI.
 
 Current git state at the time this section was added:
 
-- `issues.md` is modified and not committed.
-- The latest deployed code before this plan-only edit was commit `51734f43`.
+- The latest deployed code before the current artifact-browse/linked-run edit
+  was commit `df253abf`.
 
 Acceptance sequencing is non-negotiable:
 
@@ -67,7 +68,8 @@ Repository:
 - Working repo: `/Users/tinker/output/bots/telegram-agent-bot`
 - Deployment checkout: `/Users/tinker/octopus`
 - Current branch: `feature/protocol`
-- Latest deployed commit before this plan rewrite: `51734f43`
+- Latest deployed commit before the current artifact-browse/linked-run edit:
+  `df253abf`
 - M1 and M2 are the required working topology for customer/demo acceptance.
 - M3/Claude is optional unless Claude auth is configured. A stopped M3 with
   `claude not configured` is not a handoff blocker.
@@ -960,6 +962,17 @@ Blocker found:
   contents, let run/task artifact routes open `index.html` from a directory,
   and download directory artifacts as zip files.
 
+Resolution already verified:
+
+- Commit `df253abf` added generic directory artifact verification and deploy
+  support. After redeploy, retrying the same run from Safari completed stage 2
+  and stage 3. The package artifact was verified as a directory output and the
+  validator accepted it.
+- The generated SPA opened from the protocol run artifact in Safari and
+  successfully generated default synthetic data, profiled 6 tables / 948 rows,
+  inferred relationship candidates, rendered aggregation results, and displayed
+  bar, trend, heat-map, and aggregate-table views.
+
 UX issues observed:
 
 - The runs page did not reliably live-refresh. It stayed on stage 1 with a
@@ -978,6 +991,17 @@ UX issues observed:
   intentionally contains `index.html`, README, samples, and reports. The UI
   should explain whether the user should declare one package output or each
   contained file.
+- Package artifacts need a contents browser. `Open` correctly launches
+  `index.html`, and `Download` retrieves a zip, but users also need to preview
+  and download individual files such as README and sample CSVs from the run UI.
+- Retry history needs clearer language. The successful retry and the previous
+  failed attempt can appear in the same evidence trail, and old missing outputs
+  need to be explicitly marked as previous/superseded attempt evidence.
+- Manual Safari testing of the generated SPA found that inferred relationship
+  Accept/Reject controls did not visibly update the confirmed relationship
+  count. The validator accepted the artifact without catching that interactive
+  defect, so the scenario rerun must include direct browser interaction checks,
+  not just static file validation.
 
 ## Open Blockers
 
@@ -988,8 +1012,8 @@ UX issues observed:
 | P0-3 | Critical | Customer-handoff language can leak into protocol/runtime/artifacts. | Remove from product/runtime prompt paths; keep only repo planning docs. |
 | P0-4 | Critical | Runs need animated, scalable stage progress. | Build shared stage-progress rail with current/previous/next focus and compressed large-stage behavior. |
 | P1-1 | High | Protocol authoring assignment matrix not fully reverified after latest changes. | Run real Safari matrix from blank protocol. |
-| P1-2 | High | Artifact actions are not proven across all reference surfaces. | Verify/fix run, stage, task, conversation, dashboard, Telegram. |
-| P1-3 | High | Conversations/runs/delegations can still feel unrelated. | Consolidate lineage display and drill-through. |
+| P1-2 | High | Artifact actions are not proven across all reference surfaces. | Verify package Contents/Open/Download in run, stage, task, conversation, dashboard, and Telegram surfaces. |
+| P1-3 | High | Conversations/runs/delegations can still feel unrelated or stale. | Consolidate lineage display, subscribe linked work to run updates, and verify drill-through freshness. |
 | P1-4 | High | Telegram protocol parity needs live recheck. | Verify list/start/status/watch/artifacts against shared SDK path. |
 | P1-5 | High | Full desktop/narrow Safari audit is not complete after current blockers. | Run only after P0/P1 blockers are fixed. |
 | P2-1 | Medium | Clean-clone/customer-self-service pass remains unproven. | Run setup from docs in clean environment and fix docs/product gaps. |
@@ -998,13 +1022,15 @@ UX issues observed:
 
 ## Implementation Order
 
-1. Remove analytics/handoff leakage from generic protocol run launch and prompt
-   defaults.
-2. Fix workflow-builder skill continuity.
-3. Implement shared run stage-progress rail.
-4. Re-run blank protocol authoring matrix in real Safari.
-5. Verify artifact actions across all reference surfaces.
-6. Verify conversation/delegation/run lineage.
+1. Commit, push, pull, and redeploy the current package-browser and linked-run
+   freshness fixes.
+2. Hard-refresh Safari and rerun the offline analytics protocol from the UI.
+3. Verify the final package from the run UI: Open SPA, Contents browser,
+   README/sample CSV preview, zip download, and generated SPA interaction.
+4. If the generated SPA still fails interactive checks, use protocol UI actions
+   to retry/send back with specific artifact feedback.
+5. Verify artifact actions across remaining reference surfaces.
+6. Verify conversation/delegation/run lineage freshness.
 7. Verify Telegram parity.
 8. Run clean-clone/docs pass.
 9. Run full desktop/narrow Safari audit.

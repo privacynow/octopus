@@ -2260,6 +2260,11 @@ select {
     min-width: 0;
 }
 
+.protocol-lineage-card.is-previous-attempt {
+    background: color-mix(in srgb, var(--bg-secondary) 86%, transparent);
+    box-shadow: none;
+}
+
 .protocol-lineage-head {
     display: flex;
     align-items: flex-start;
@@ -5505,13 +5510,16 @@ select {
     min-width: 0;
     color: var(--text-secondary);
     font-size: var(--text-sm);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
 }
 
 .run-focus-live.is-live {
     border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
+.run-focus-live.is-quiet {
+    border-style: dashed;
 }
 
 .run-focus-metrics {
@@ -5561,6 +5569,10 @@ select {
 
 .run-focus-actions .editor-actions {
     justify-content: flex-start;
+}
+
+.run-focus-action-note {
+    margin: 0;
 }
 
 .run-focus-summary-card {

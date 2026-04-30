@@ -509,6 +509,39 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
+  test('top add step appends to an existing workflow', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openBlankDraft(page);
+
+    await createStep(page, {
+      name: 'Requirements',
+      key: 'requirements',
+      roleName: 'Requirements owner',
+      roleKey: 'requirements-owner',
+      selectorKind: 'agent',
+      selectorValue: '__first__',
+    });
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await waitForSaved(page);
+
+    await page.getByRole('button', { name: /(\+ )?Add step/i }).first().click();
+    await expect(page).toHaveURL(/panel=new-stage/);
+    const draftStageEditor = page
+      .locator('.kit-stage-editor')
+      .filter({ has: page.getByRole('button', { name: 'Create step', exact: true }) })
+      .last();
+    await expect(draftStageEditor).toBeVisible();
+    await expect(draftStageEditor.getByRole('heading', { name: 'Step basics' })).toBeVisible();
+    await expect(draftStageEditor).toContainText('This step will be inserted on completed after Requirements.');
+
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
   test('template deep link without saved templates falls back to blank catalog', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 

@@ -18,6 +18,7 @@ function renderConversationDetail(container, params) {
     let latestSeq = 0;
     let hasMoreBefore = false;
     let loadingOlder = false;
+    let conversationDisposed = false;
     const initialViewState = _readConversationViewState();
     let activeView = initialViewState.value;
     let activeViewExplicit = initialViewState.explicit;
@@ -42,6 +43,7 @@ function renderConversationDetail(container, params) {
     let availableConversationProtocols = [];
     let conversationProtocolsLoaded = false;
     let linkedProtocolRuns = [];
+    const linkedRunSubscriptions = new Map();
     let selectedActivationSkill = requestedActivationSkill;
     let selectedProtocolId = '';
     let protocolProblemStatement = '';
@@ -50,6 +52,7 @@ function renderConversationDetail(container, params) {
     const protocolLaunchFieldLoads = new Set();
     let protocolSearchQuery = '';
     let managementReloadDebounce = null;
+    let linkedRunsReloadDebounce = null;
     let pendingSkillSetup = null;
     let managementMode = 'closed';
     let managementIdleTimer = null;
@@ -1602,6 +1605,7 @@ function renderConversationDetail(container, params) {
                             run,
                             ...(linkedProtocolRuns || []).filter((item) => String(item.protocol_run_id || '') !== String(run.protocol_run_id || '')),
                         ];
+                        bindLinkedRunSubscriptions();
                         showProgressBanner(`Started protocol run ${String(run.protocol_run_id || '').slice(0, 8)}.`);
                     }
                     renderMetaCard(meta || {});
@@ -1760,6 +1764,7 @@ function renderConversationDetail(container, params) {
                 && String(item.current_version_id || '').trim(),
             );
             linkedProtocolRuns = runData || [];
+            bindLinkedRunSubscriptions();
             managementSupport.protocols = true;
             conversationProtocolsLoaded = true;
             renderProtocolsPanel();
@@ -1780,6 +1785,7 @@ function renderConversationDetail(container, params) {
         try {
             const conversationData = meta || await API.getConversation(convoId);
             linkedProtocolRuns = await API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 });
+            bindLinkedRunSubscriptions();
             if (meta) renderMetaCard(meta);
             if (managementMode === 'protocols') {
                 renderProtocolsPanel();
@@ -1801,6 +1807,49 @@ function renderConversationDetail(container, params) {
             void loadConversationSettings({ soft: true });
             void loadConversationProtocols({ soft: true });
             void loadConversation();
+        }, 350);
+    }
+
+    function bindLinkedRunSubscriptions() {
+        if (conversationDisposed) {
+            clearLinkedRunSubscriptions();
+            return;
+        }
+        const nextIds = new Set(
+            (linkedProtocolRuns || [])
+                .map((run) => String(run?.protocol_run_id || '').trim())
+                .filter(Boolean),
+        );
+        Array.from(linkedRunSubscriptions.keys()).forEach((runId) => {
+            if (nextIds.has(runId)) return;
+            const unsubscribe = linkedRunSubscriptions.get(runId);
+            if (typeof unsubscribe === 'function') unsubscribe();
+            linkedRunSubscriptions.delete(runId);
+        });
+        nextIds.forEach((runId) => {
+            if (linkedRunSubscriptions.has(runId)) return;
+            const unsubscribe = WS.subscribe(`protocol-run:${runId}`, () => {
+                scheduleLinkedRunsRefresh();
+            });
+            linkedRunSubscriptions.set(runId, unsubscribe);
+        });
+    }
+
+    function clearLinkedRunSubscriptions() {
+        linkedRunSubscriptions.forEach((unsubscribe) => {
+            if (typeof unsubscribe === 'function') unsubscribe();
+        });
+        linkedRunSubscriptions.clear();
+    }
+
+    function scheduleLinkedRunsRefresh() {
+        if (conversationDisposed || UI.isBackgrounded()) return;
+        clearTimeout(linkedRunsReloadDebounce);
+        linkedRunsReloadDebounce = setTimeout(() => {
+            void loadConversationLinkedRuns({ soft: true });
+            if (activeView === 'tasks') {
+                void loadRelatedTasks({ soft: true, silent: true });
+            }
         }, 350);
     }
 
@@ -2802,6 +2851,7 @@ function renderConversationDetail(container, params) {
             const invalidation = msg.data || {};
             if (!invalidation.conversation_id || String(invalidation.conversation_id) === String(convoId)) {
                 scheduleConversationManagementRefresh();
+                scheduleLinkedRunsRefresh();
                 if (activeView === 'tasks') {
                     scheduleRelatedTasksRefresh();
                 }
@@ -2817,6 +2867,7 @@ function renderConversationDetail(container, params) {
         const event = msg.data;
         if (['delegation.proposed', 'delegation.submitted', 'delegation.completed', 'task.status'].includes(event.kind || '')) {
             scheduleRelatedTasksRefresh();
+            scheduleLinkedRunsRefresh();
         }
         if (activeView === 'tasks') {
             if (meta) {
@@ -2880,6 +2931,11 @@ function renderConversationDetail(container, params) {
     cleanups.add(() => clearTimeout(progressTimer));
     cleanups.add(() => clearTimeout(relatedTasksReloadDebounce));
     cleanups.add(() => clearTimeout(managementReloadDebounce));
+    cleanups.add(() => clearTimeout(linkedRunsReloadDebounce));
+    cleanups.add(() => {
+        conversationDisposed = true;
+        clearLinkedRunSubscriptions();
+    });
     cleanups.add(clearManagementTimers);
     updateComposerAssist();
     syncManagementControls();

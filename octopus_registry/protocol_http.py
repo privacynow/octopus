@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from pydantic import ValidationError
 
 from octopus_sdk.protocols import (
@@ -19,7 +19,12 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
 
-from .artifact_paths import artifact_download_name, resolve_protocol_artifact_path, resolve_protocol_artifact_rehearsal_text
+from .artifact_paths import (
+    artifact_download_name,
+    resolve_protocol_artifact_path,
+    resolve_protocol_artifact_rehearsal_text,
+)
+from .artifact_responses import workspace_artifact_content_response
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .rehearsal import RehearsalSessionManager
@@ -524,9 +529,12 @@ def build_protocol_router(
 
     @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content")
     def resource_get_protocol_run_artifact_content(
+        request: Request,
         run_id: str,
         artifact_key: str,
         download: bool = Query(default=False),
+        browse: bool = Query(default=False),
+        member_path: str = Query(default="", alias="path"),
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> Response:
@@ -567,11 +575,15 @@ def build_protocol_router(
                     "location": artifact.location,
                 },
             )
-        return FileResponse(
-            path=resolved_path,
-            media_type=media_type,
-            filename=preferred_name or resolved_path.name,
-            content_disposition_type="attachment" if download else "inline",
+        return workspace_artifact_content_response(
+            resolved_path=resolved_path,
+            artifact_key=str(artifact.artifact_key or artifact_key or ""),
+            preferred_path=str(artifact.workspace_path or artifact.location or ""),
+            preferred_name=preferred_name,
+            download=download,
+            browse=browse,
+            member_path=member_path,
+            request=request,
         )
 
     @router.get("/v1/protocol-runs/{run_id}/timeline")

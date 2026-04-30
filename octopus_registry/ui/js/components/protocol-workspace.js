@@ -6786,8 +6786,23 @@ function renderProtocolRuns(container) {
         return { key: 'other', label: 'Other runs', rank: 4 };
     }
 
+    function _compactRunText(value, maxLength = 76) {
+        const text = String(value || '').replace(/\s+/g, ' ').trim();
+        if (!text || text.length <= maxLength) return text;
+        return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+    }
+
+    function _shortRunId(value) {
+        return String(value || '').trim().slice(0, 8);
+    }
+
     function _runDisplayTitle(run) {
-        return String(run?.protocol_display_name || run?.protocol_name || run?.protocol_id || 'Protocol run').trim();
+        const named = String(run?.protocol_display_name || run?.protocol_name || '').trim();
+        if (named) return named;
+        const problem = _compactRunText(run?.problem_statement || '', 82);
+        if (problem) return problem;
+        const runId = _shortRunId(_runRecordId(run));
+        return runId ? `Protocol run ${runId}` : 'Protocol run';
     }
 
     function _runStageListLabel(run) {
@@ -7145,8 +7160,11 @@ function renderProtocolRuns(container) {
                 attention: issue ? _issueAttentionLabel(issue) : '',
                 attentionStatus: issue ? 'blocked' : '',
                 title: _runDisplayTitle(item),
-                subtitle: item.problem_statement || stageLabel || item.protocol_run_id,
-                badge: runId ? runId.slice(0, 8) : '',
+                subtitle: [
+                    stageLabel,
+                    item.protocol_id ? `Protocol ${_shortRunId(item.protocol_id)}` : '',
+                ].filter(Boolean).join(' · '),
+                badge: _shortRunId(runId),
                 meta: [
                     stageLabel,
                     item.updated_at ? `Updated ${UI.relativeTime(item.updated_at)}` : '',

@@ -6671,12 +6671,18 @@ function renderProtocolRuns(container) {
     let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let activeRunDetailSection = '';
     let activeRunStageExecutionId = '';
+    let activeRunStageFollowsCurrent = true;
     let activeRunArtifactStageExecutionId = '';
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
     let runPaginator = null;
     let runRefreshTimer = 0;
     let runsRouteDisposed = false;
+
+    function _resetRunStageEvidenceSelection() {
+        activeRunStageExecutionId = '';
+        activeRunStageFollowsCurrent = true;
+    }
 
     const runPaginationEl = document.createElement('div');
     runPaginationEl.className = 'pagination-shell';
@@ -6715,7 +6721,7 @@ function renderProtocolRuns(container) {
             currentIssues = [];
             lastRunEvent = null;
             activeRunDetailSection = '';
-            activeRunStageExecutionId = '';
+            _resetRunStageEvidenceSelection();
             activeRunArtifactStageExecutionId = '';
             runDetailLoading = false;
             runDetailRequestToken += 1;
@@ -6777,7 +6783,7 @@ function renderProtocolRuns(container) {
         currentIssues = [];
         lastRunEvent = null;
         activeRunDetailSection = '';
-        activeRunStageExecutionId = '';
+        _resetRunStageEvidenceSelection();
         activeRunArtifactStageExecutionId = '';
         if (normalizedRunId && normalizedRunId !== String(currentRunId || '')) {
             currentRunId = normalizedRunId;
@@ -7330,7 +7336,7 @@ function renderProtocolRuns(container) {
                 currentIssues = [];
                 lastRunEvent = null;
                 activeRunDetailSection = '';
-                activeRunStageExecutionId = '';
+                _resetRunStageEvidenceSelection();
                 activeRunArtifactStageExecutionId = '';
                 runDetailLoading = false;
                 runDetailRequestToken += 1;
@@ -7406,16 +7412,26 @@ function renderProtocolRuns(container) {
         const stageValueForStageKey = (stageKey) => {
             const normalizedStageKey = String(stageKey || '').trim();
             if (!normalizedStageKey) return '';
-            const index = stageRows.findIndex((item) => String(item.stage_key || '') === normalizedStageKey);
+            let index = -1;
+            stageRows.forEach((item, itemIndex) => {
+                if (String(item.stage_key || '') === normalizedStageKey) {
+                    index = itemIndex;
+                }
+            });
             return index >= 0 ? stageValueFor(stageRows[index], index) : normalizedStageKey;
         };
         const selectRunStageEvidence = (stageInfo = {}) => {
             activeRunDetailSection = 'stages';
-            activeRunStageExecutionId = String(
+            const nextStageValue = String(
                 stageInfo.executionId
                 || stageValueForStageKey(stageInfo.stageKey)
                 || '',
             );
+            activeRunStageExecutionId = nextStageValue;
+            const currentStage = currentRunStageExecution();
+            const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : -1;
+            const currentStageValue = currentStage ? stageValueFor(currentStage, currentStageIndex) : '';
+            activeRunStageFollowsCurrent = Boolean(nextStageValue && currentStageValue && nextStageValue === currentStageValue);
             UI.clearMemoizedRender(contentEl);
             renderRunsRoute();
         };
@@ -8026,6 +8042,7 @@ function renderProtocolRuns(container) {
                     badgeText: currentStage.decision || currentStage.status || '',
                     onClick: () => {
                         activeRunDetailSection = 'stages';
+                        activeRunStageFollowsCurrent = true;
                         activeRunStageExecutionId = String(
                             currentStage.protocol_stage_execution_id
                             || currentStage.stage_key
@@ -8063,8 +8080,12 @@ function renderProtocolRuns(container) {
             const preferredStage = currentRunStageExecution();
             const currentStageIndex = Math.max(stageRows.indexOf(preferredStage), 0);
             const currentStage = stageRows[currentStageIndex] || stageRows[0];
-            if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
-                activeRunStageExecutionId = stageValueFor(currentStage, currentStageIndex);
+            const currentStageValue = currentStage ? stageValueFor(currentStage, currentStageIndex) : '';
+            if (activeRunStageFollowsCurrent && currentStageValue) {
+                activeRunStageExecutionId = currentStageValue;
+            } else if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
+                activeRunStageExecutionId = currentStageValue || stageValueFor(stageRows[0], 0);
+                activeRunStageFollowsCurrent = true;
             }
             const stageList = document.createElement('div');
             stageList.className = 'run-stage-timeline-list';
@@ -8083,6 +8104,7 @@ function renderProtocolRuns(container) {
                 button.addEventListener('click', () => {
                     activeRunDetailSection = 'stages';
                     activeRunStageExecutionId = value;
+                    activeRunStageFollowsCurrent = value === currentStageValue;
                     UI.clearMemoizedRender(contentEl);
                     renderRunsRoute();
                 });
@@ -8200,6 +8222,7 @@ function renderProtocolRuns(container) {
             includeGenerated,
             activeRunDetailSection,
             activeRunStageExecutionId,
+            activeRunStageFollowsCurrent,
             activeRunArtifactStageExecutionId,
         }, () => {
             const workbench = document.createElement('div');

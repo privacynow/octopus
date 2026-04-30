@@ -1240,6 +1240,10 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "run-focus-live" in workspace
     assert "function _protocolEventText(event)" in workspace
     assert "quietProgressText" in workspace
+    assert "let activeRunStageFollowsCurrent = true" in workspace
+    assert "function _resetRunStageEvidenceSelection()" in workspace
+    assert "activeRunStageFollowsCurrent && currentStageValue" in workspace
+    assert "activeRunStageFollowsCurrent = value === currentStageValue" in workspace
     assert "transitionLabelForStage(transition, item.protocol_stage_execution_id)" in workspace
     assert "Operator controls" in workspace
     assert "normalizedRunId === String(currentRunId || '')" in workspace

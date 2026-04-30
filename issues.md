@@ -5,15 +5,16 @@ a new session/model can resume without relying on prior chat context.
 
 ## Resume Here
 
-Resume from the generic offline-analytics scenario acceptance run. Directory
-artifact verification has been fixed and deployed; the current product focus is
-artifact package browsing, linked-run freshness, retry-attempt clarity, and a
-full Safari rerun from the UI.
+Resume from the verified generic offline-analytics scenario acceptance run.
+Directory/package artifacts, linked-run freshness, retry-attempt clarity, and
+run progress feedback have been fixed and deployed. The latest real Safari run
+completed from the visible UI, produced the package artifact, delegated the
+build stage to M2, and opened the generated SPA from the run artifact action.
 
 Current git state at the time this section was added:
 
-- The latest deployed code before the current artifact-browse/linked-run edit
-  was commit `df253abf`.
+- The latest deployed product code before this documentation update was commit
+  `311a57fb`.
 
 Acceptance sequencing is non-negotiable:
 
@@ -37,7 +38,7 @@ Do not repeat these mistakes:
 - Do not send users from stage assignment to a dead-end Skills Catalog page.
   Skill selection/creation must preserve stage context and return to the stage.
 
-First verification target after P0-2:
+First verification target after this scenario:
 
 - Create a generic non-analytics protocol from blank in the UI.
 - Publish and run it.
@@ -68,8 +69,7 @@ Repository:
 - Working repo: `/Users/tinker/output/bots/telegram-agent-bot`
 - Deployment checkout: `/Users/tinker/octopus`
 - Current branch: `feature/protocol`
-- Latest deployed commit before the current artifact-browse/linked-run edit:
-  `df253abf`
+- Latest deployed product commit before this documentation update: `311a57fb`
 - M1 and M2 are the required working topology for customer/demo acceptance.
 - M3/Claude is optional unless Claude auth is configured. A stopped M3 with
   `claude not configured` is not a handoff blocker.
@@ -85,9 +85,9 @@ Verified recently:
 
 Important caveat:
 
-- The latest real Safari protocol evidence overfit the local analytics use case.
-  That scenario is useful, but it must not become the product default, runtime
-  default, protocol-run default, or artifact vocabulary.
+- The local analytics scenario is useful acceptance evidence, but it must not
+  become the product default, runtime default, protocol-run default, or
+  artifact vocabulary.
 
 ## Product Vocabulary
 
@@ -218,34 +218,22 @@ Acceptance:
   any stage data.
 - Confirm no unrelated catalog dead-end is used as the primary flow.
 
-### P0: Protocol Run Launch Is Overfit To Local Analytics
+### Resolved: Protocol Run Launch Genericity
 
-Observed:
+Previously observed:
 
 - Protocol run launch is now too tightly tied to the data analytics example.
 - The product risks looking like it exists only to build a manufacturing/local
   analytics tool.
 
-Expected:
+Current verified behavior:
 
-- Protocol run launch must be generic.
-- Protocol-specific questions must come from user-authored protocol metadata,
-  stage inputs, or run-input definitions.
-- Local analytics is one acceptance scenario, not a default runtime surface.
-
-Implementation guidance:
-
-- Define or reuse one generic run-launch form model.
-- The base form should ask only generic run inputs:
-  - goal/problem statement,
-  - optional context,
-  - optional constraints,
-  - optional expected outputs,
-  - entry agent/workspace if needed.
-- Any specialized fields must be generated from the selected protocol's own
-  authored run-input schema, not hardcoded into the Registry UI.
-- If protocol metadata does not define custom prompts, show generic prompts.
-- Do not include `customer handoff` language in any run prompt.
+- Run launch uses generic goal, context, constraints, and expected-output
+  fields unless the selected protocol supplies authored custom inputs.
+- The latest Safari analytics run used only those generic fields. Manufacturing
+  wording came from the user-authored run prompt, not product defaults.
+- Expected-output warnings now understand declared package paths and did not
+  warn for the verified package artifact run.
 
 Acceptance:
 
@@ -253,8 +241,8 @@ Acceptance:
   fields appear.
 - Run a document/review protocol and confirm no manufacturing/data-specific
   fields appear.
-- Run a local analytics protocol and confirm its specific fields appear only
-  because that protocol authored them.
+- Run a local analytics protocol and confirm any scenario wording appears only
+  because the user authored it.
 
 ### P0: Product Must Not Emit Customer-Handoff Language In Protocols
 
@@ -288,14 +276,16 @@ Acceptance:
 - Confirm "customer handoff" is absent unless typed by the user as part of their
   own requested output.
 
-### P0: Runs Need Live, Scalable Stage Visualization
+### P1: Runs Need Continued Progress UX Audit
 
 Observed:
 
-- Runs show useful data, but the experience is static and not visually clear
-  enough while work is happening.
-- Large protocols can overwhelm the UI.
-- Previous attempts expanded too much at once or showed inconsistent run tabs.
+- Runs now show live grounded progress, including current stage/task,
+  participant, elapsed time, stage rail state, and clearer stage evidence.
+- The latest Safari acceptance run was understandable from the run page while
+  it progressed and after it completed.
+- Broad non-analytics and large-protocol runs still need audit so the same
+  component stays readable outside the analytics scenario.
 
 Expected:
 
@@ -934,12 +924,16 @@ Pass criteria:
 
 ## Current Safari Run Notes - 2026-04-30
 
-Real Safari run:
+Latest verified real Safari run:
 
 - Protocol: `Generic Offline CSV Analytics Builder`
-- Run: `af676ede29424f6687299a51992d32a6`
+- Protocol id: `aa64d5be4eba410cab39ab1676565264`
+- Run: `afe7792a151c4e3ab74d4de7a7e2ec79`
 - Created from a blank protocol through the UI.
 - Published and started from the UI.
+- Run inputs were sanitized generic local-CSV analytics requirements. They did
+  not include real names, raw meeting transcript text, customer rows, or
+  proprietary data.
 - Stages:
   1. Define local analytics requirements - M1
   2. Build offline CSV analytics package - M2
@@ -947,111 +941,99 @@ Real Safari run:
 
 Confirmed behavior:
 
-- Stage 1 completed and produced `artifacts/requirements.md`.
-- Stage 2 delegated to M2 correctly and completed the package build.
+- Stage 1 completed and produced `artifacts/requirements.md`
+  (`artifact_1`, verified).
+- Stage 2 delegated to M2 correctly and produced
+  `artifacts/offline-analytics-package` (`artifact_2`, directory/package,
+  verified, 71,969 bytes, sha prefix `91fcece63558`).
+- Stage 3 completed on M1 and accepted the package: "Offline analytics package
+  validated successfully with no blocking handoff issues."
+- The run page showed `completed`, `3 / 3` stages, two output artifacts, zero
+  issues, and package actions `Open`, `Contents`, `Download`, and `Copy path`.
+- The package contents contained `index.html`, `README.md`,
+  `validation-report.md`, and five sample CSV files under `samples/`.
+- Registry and agent logs confirmed the M2 build stage executed through the
+  normal protocol/delegation path; no database or API setup was used for
+  scenario acceptance.
 - The generated package was intentionally scenario-shaped, but the product
-  protocol, launch fields, and runtime stayed generic.
-
-Blocker found:
-
-- Stage 2 produced `artifacts/offline-analytics-package`, but the run blocked
-  with `artifact_missing` because the declared output was a directory/package
-  path. SDK finalization only verified regular files, so directory artifacts
-  were reported as missing even when the agent created them.
-- Generic fix required: verify directory workspace artifacts, hash directory
-  contents, let run/task artifact routes open `index.html` from a directory,
-  and download directory artifacts as zip files.
-
-Resolution already verified:
-
-- Commit `df253abf` added generic directory artifact verification and deploy
-  support. After redeploy, retrying the same run from Safari completed stage 2
-  and stage 3. The package artifact was verified as a directory output and the
-  validator accepted it.
-- Commit `46849c4e` added generic package artifact browsing from run/task
-  artifact routes and UI action rows. Package artifacts now expose `Open`,
-  `Contents`, `Download`, and `Copy path` without adding analytics-specific
-  product behavior.
-- Commit `865addc2` fixed retried run stage counting. The same run now shows
-  `3 / 3` stages instead of counting the failed attempt as a fourth workflow
-  stage.
-- The generated SPA opened from the protocol run artifact in Safari and
-  successfully generated default synthetic data, profiled 6 tables / 948 rows,
-  inferred relationship candidates, rendered aggregation results, and displayed
-  bar, trend, heat-map, and aggregate-table views.
-- The package contents browser opened in Safari and listed the expected handoff
-  files: `README.md`, `index.html`, sample CSVs, and `validation-report.md`.
+  protocol, launch fields, runtime, package verification, and package browsing
+  stayed generic.
 
 UX issues resolved during this pass:
 
-- The stale linked-run behavior was addressed by subscribing conversation
-  linked work to protocol-run websocket updates.
-- The contradictory package artifact state was addressed by verifying directory
-  artifacts through the same artifact finalization path as file artifacts.
-- Package contents browsing was added generically for directory/package
-  artifacts.
-- Retry evidence now marks previous attempts instead of presenting stale output
+- Stale linked-run behavior was addressed by subscribing conversation linked
+  work to protocol-run websocket updates.
+- Directory/package artifacts verify through the same artifact finalization
+  path as file artifacts.
+- Package contents browsing works generically for directory/package artifacts.
+- Retry evidence marks previous attempts instead of presenting stale output
   state as current run state.
+- Run progress now surfaces the live/current stage, task, participant, elapsed
+  time, and clearer stage evidence labels.
+- Expected-output warnings correctly accept a declared package directory that
+  contains `index.html`, README, samples, and reports.
 
-UX issues still open:
+Generated SPA validation from the latest package:
 
-- The generated SPA still needs a full fresh interactive rerun after the latest
-  UI fixes. Safari verified the final package contents, but the desktop
-  automation bridge stopped returning window state before a complete second
-  from-blank run could be driven end to end.
-- Full activity is no longer blank, but the newest progress is still dense:
-  rows are collapsed, the page does not clearly auto-follow the latest event,
-  and the user has to infer whether the run is still healthy.
-- Conversation linked work and full activity eventually showed useful progress,
-  but conversation drill-through should be rechecked from a new run after the
-  package browser deployment.
-- The run launch warning for "expected outputs not declared" is useful for
-  strict artifacts, but it becomes confusing when a declared package directory
-  intentionally contains `index.html`, README, samples, and reports. The UI
-  should explain whether the user should declare one package output or each
-  contained file.
-- Manual Safari testing of the generated SPA found that inferred relationship
-  Accept/Reject controls did not visibly update the confirmed relationship
-  count. The validator accepted the artifact without catching that interactive
-  defect, so the scenario rerun must include direct browser interaction checks,
-  not just static file validation.
-- Real Safari is the required acceptance browser. If the desktop automation
-  bridge is unavailable again, use manual Safari inspection for acceptance and
-  only use Playwright as a secondary regression aid.
+- The package `Open` action opened
+  `artifacts/offline-analytics-package/index.html` in real Safari from the run
+  artifact UI.
+- First load rendered a self-contained offline multi-CSV analytics app with
+  upload, schema, relationship, aggregation, chart, heat-map, export, and
+  synthetic-data controls.
+- `Generate default synthetic data` produced 6 tables, 948 rows, 25 inferred
+  candidates, and zero confirmed relationships.
+- Accepting `Cells.panel_id -> Panels.panel_id` and
+  `Process Measurements.panel_id -> Panels.panel_id` visibly updated the
+  confirmed relationship count to 2 and reduced candidate count to 23.
+- `Run aggregation` produced 432 joined source rows, 5 result groups, one join
+  path, and rendered bar chart, trend chart, heat map, and aggregate table.
+- The validator report inside the package recorded a pass, confirmed inline
+  CSS/JS with no external script/CDN/fetch/XHR/sendBeacon/storage/API/database
+  dependency, and exercised sample CSV loading plus adapted synthetic data in a
+  JS harness.
+
+Remaining issues after the latest scenario pass:
+
+- Relationship inference remains heuristic and can present ambiguous
+  high-confidence suggestions. This is acceptable for exploration because the
+  app treats them as suggestions until the user confirms them.
+- After accepting a relationship, aggregate helper text can remain stale until
+  `Run aggregation` is clicked again. The run still produced correct results
+  after the explicit aggregation action.
+- Artifact package actions still need a broad surface check outside the run
+  artifact page: stage detail, linked work, delegation/task detail, dashboard
+  references, and Telegram.
+- Telegram protocol parity still needs a live Telegram recheck, even though the
+  Registry protocol path verified M1-to-M2 delegation.
+- Full desktop and narrow Safari audits remain open for broad product polish.
 
 ## Open Blockers
 
 | ID | Severity | Blocker | Required Fix |
 | --- | --- | --- | --- |
 | P0-1 | Critical | Workflow builder skill catalog breaks assignment continuity. | Implement stage-scoped skill select/create/return flow. |
-| P0-2 | Critical | Protocol run launch is overfit to local analytics. | Replace hardcoded analytics launch fields with generic launch plus protocol-authored custom inputs. |
-| P0-3 | Critical | Customer-handoff language can leak into protocol/runtime/artifacts. | Remove from product/runtime prompt paths; keep only repo planning docs. |
-| P0-4 | Critical | Run progress is improved but still not obvious enough during active execution. | Make stage liveness more prominent, show current stage movement grounded in real run state, and reduce dense activity context. |
+| P0-2 | Critical | Customer-handoff language can leak into protocol/runtime/artifacts. | Remove from product/runtime prompt paths; keep only repo planning docs. |
 | P1-1 | High | Protocol authoring assignment matrix not fully reverified after latest changes. | Run real Safari matrix from blank protocol. |
 | P1-2 | High | Package artifact actions are verified on the run artifact page but not yet across every reference surface. | Verify package Contents/Open/Download in run, stage, task, conversation, dashboard, and Telegram surfaces. |
 | P1-3 | High | Conversations/runs/delegations can still feel unrelated or stale. | Consolidate lineage display, subscribe linked work to run updates, and verify drill-through freshness. |
 | P1-4 | High | Telegram protocol parity needs live recheck. | Verify list/start/status/watch/artifacts against shared SDK path. |
-| P1-5 | High | Full desktop/narrow Safari audit is not complete after current blockers. | Run only after P0/P1 blockers are fixed. |
+| P1-5 | High | Run progress is improved but needs broad non-analytics scale verification. | Test active execution with a larger generic protocol and keep stage liveness readable without dense activity overload. |
+| P1-6 | High | Full desktop/narrow Safari audit is not complete after current blockers. | Run after the assignment, artifact-surface, lineage, and Telegram checks. |
 | P2-1 | Medium | Clean-clone/customer-self-service pass remains unproven. | Run setup from docs in clean environment and fix docs/product gaps. |
 | P2-2 | Medium | Workspace cleanup UI needs post-deploy Safari verification. | Verify password + `CLEAN` flow preserves agents/skills/guidance. |
 | P2-3 | Medium | Stale/interrupted run recovery needs UI confirmation after redeploy. | Interrupt/redeploy during a run and confirm terminal retryable state. |
-| P2-4 | Medium | Real Safari desktop automation became unavailable during the final contents check. | Treat as test-environment risk: recover Safari automation or perform documented manual Safari acceptance before closing the scenario. |
 
 ## Implementation Order
 
-1. Recover real Safari interaction or arrange manual Safari acceptance if the
-   automation bridge remains unavailable.
-2. Start a fresh offline analytics protocol run from the UI using the deployed
-   package-browser build.
-3. Verify the final package from the run UI: Open SPA, Contents browser,
-   README/sample CSV preview, zip download, and generated SPA interaction.
-4. If the generated SPA still fails interactive checks, use protocol UI actions
-   to retry/send back with specific artifact feedback.
-5. Verify artifact actions across remaining reference surfaces.
-6. Verify conversation/delegation/run lineage freshness.
-7. Verify Telegram parity.
-8. Run clean-clone/docs pass.
-9. Run full desktop/narrow Safari audit.
+1. Verify stage-scoped skill select/create/return from a blank protocol.
+2. Verify artifact actions across remaining reference surfaces.
+3. Verify conversation/delegation/run lineage freshness from a new run.
+4. Verify Telegram protocol parity against the shared SDK behavior.
+5. Run a larger generic protocol to audit progress visualization at scale.
+6. Run clean-clone/docs pass.
+7. Verify workspace cleanup and stale/interrupted run recovery from the UI.
+8. Run full desktop/narrow Safari audit.
 
 Do not start the broad 500+ screenshot audit until P0 and P1 blockers are
 closed. Broad screenshots are breadth; the golden scenarios above are depth.

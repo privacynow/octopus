@@ -282,7 +282,7 @@ Key files:
 | `octopus_sdk/registry/management.py` | Management request/result types for skills, guidance, settings, reset. |
 | `octopus_sdk/registry_participant.py` | Participant interfaces for enrollment, health, discovery, mirroring, coordination. |
 | `octopus_sdk/workflows/` | Conversation, delegation, pending, recovery, skills, guidance, lifecycle use cases. |
-| `octopus_sdk/protocols/` | Protocol models, documents, built-ins, engine, service, launch helpers. |
+| `octopus_sdk/protocols/` | Protocol models, documents, validation, prompt rendering, engine, service, launch helpers. |
 | `octopus_sdk/events.py` | Typed event taxonomy and metadata validation. |
 | `octopus_sdk/testing/` | Non-production test fakes. |
 
@@ -507,6 +507,24 @@ Protocol document model:
 | Stages | `stage_key`, participant, selector, stage kind, instructions, inputs, outputs, transitions, write access, strict completion, timeout. |
 | Policies | Single active writer, max review rounds. |
 
+Run launch model:
+
+| Input | Owner | Notes |
+| --- | --- | --- |
+| `entry_agent_id` | Launching surface | Required. Owns the root run conversation; stage selectors still decide which agent receives each step. |
+| `workspace_ref` | Launching surface/user | Optional workspace/project reference for generated artifacts. |
+| `problem_statement` | Launching surface/user | Required run goal visible to assigned agents. |
+| `constraints_json` | Launching surface/user | Holds generic fields such as context, constraints, expected outputs, plus any protocol-authored custom run inputs. |
+| `metadata.run_inputs` | Protocol author | Optional protocol document metadata that replaces the conservative default launch form across UI/Telegram/SDK surfaces. |
+
+The default launch form is intentionally generic: workspace, concrete goal,
+context, constraints, and expected outputs. Product surfaces must not invent
+scenario-specific launch fields. If a workflow needs specialized run fields,
+the protocol author defines them in `metadata.run_inputs` so every launch
+surface reads the same contract. The Registry UI may warn when expected outputs
+entered at launch do not match declared protocol artifacts; the run can still
+start, but only declared artifacts are contract-verified.
+
 Runtime lineage:
 
 ```mermaid
@@ -564,6 +582,11 @@ duplicate operator mutations and stale UI writes from corrupting run state.
 Rehearsal runs use `REHEARSAL_AUTHORITY_REF = "rehearsal"` and resolve stages to
 rehearsal agents/sessions. Rehearsal is dry-run execution for protocol behavior,
 not a second protocol model.
+
+Protocol templates and scenarios are supporting records. Templates are created
+from user-authored protocols and copied back into editable protocols. Scenarios
+support rehearsal/testing workflows. Neither is a built-in starter gallery or a
+product-default workflow path.
 
 ## Artifacts
 

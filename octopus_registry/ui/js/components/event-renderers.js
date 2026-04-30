@@ -1,4 +1,4 @@
-function _createConversationEventElement(event, convoId, taskContext = []) {
+function _createConversationEventElement(event, convoId, taskContext = [], options = {}) {
     const kind = event.kind || '';
     if (kind === 'message.user' || kind === 'message.bot') {
         return _renderMessageBubble(event, kind);
@@ -6,7 +6,7 @@ function _createConversationEventElement(event, convoId, taskContext = []) {
 
     const card = document.createElement('article');
     card.className = `event-card ${_eventCardClass(kind)}`;
-    card.dataset.key = event.event_id || String(event.seq || `${kind}:${event.created_at || ''}`);
+    card.dataset.key = _eventRenderKey(event);
 
     const header = document.createElement('button');
     header.className = 'event-card-header';
@@ -76,7 +76,10 @@ function _createConversationEventElement(event, convoId, taskContext = []) {
             break;
     }
 
-    const startExpanded = kind === 'approval.requested' || _shouldStartExpanded(kind, event);
+    const startExpanded = kind === 'approval.requested' || _shouldStartExpanded(kind, event, options);
+    if (startExpanded) {
+        card.classList.add('is-open-by-default');
+    }
     if (_shouldStackSummary(kind, event)) {
         header.classList.add('event-card-header-stacked');
         summary.classList.add('event-summary-stacked');
@@ -652,6 +655,10 @@ function _eventActorLabel(event) {
     return event.actor || '';
 }
 
+function _eventRenderKey(event) {
+    return String(event?.event_id || event?.seq || `${event?.kind || 'event'}:${event?.created_at || ''}`);
+}
+
 function _delegationTaskTargetLabel(task, taskContext = []) {
     const routedTaskId = String(task.routed_task_id || '').trim();
     if (routedTaskId) {
@@ -732,9 +739,17 @@ function _formatConversationStatusLabel(status) {
     return value.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
-function _shouldStartExpanded(kind, event) {
+function _shouldStartExpanded(kind, event, options = {}) {
+    if (options?.defaultExpanded) return true;
+    const expandedIds = options?.expandedEventIds;
+    if (expandedIds && typeof expandedIds.has === 'function' && expandedIds.has(_eventRenderKey(event))) {
+        return true;
+    }
+    if (kind === 'error') return true;
     if (kind !== 'task.status') return false;
-    return false;
+    const status = String((event.metadata && event.metadata.status) || '').trim().toLowerCase();
+    return Boolean(String(event.content || '').trim())
+        && ['failed', 'cancelled', 'timed_out'].includes(status);
 }
 
 function _shouldStackSummary(kind, event) {

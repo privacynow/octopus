@@ -26,6 +26,8 @@ You can currently:
 - show the workflow map on demand
 - validate and publish
 - publish a protocol as a user-authored template
+- start a real run from the latest published version
+- run a rehearsal/dry run where supported
 
 The UI is being consolidated around one progressive stage editor. If a change
 introduces a separate drawer, duplicate editor, or disconnected assignment
@@ -45,6 +47,10 @@ A protocol definition contains:
 
 Drafts can change. Published versions are immutable execution contracts.
 JSON and YAML are two text views over the same canonical protocol document.
+
+Protocol metadata may include `run_inputs` when a workflow needs specialized
+launch fields. If `run_inputs` is absent, launch surfaces use the shared generic
+form: workspace, goal, context, constraints, and expected outputs.
 
 ## Stages
 
@@ -143,6 +149,12 @@ Recommended workflow:
 9. validate
 10. publish
 11. optionally publish as template
+12. start a run from the published version
+
+When starting a run, the dialog uses the latest published version, not unsaved
+or unpublished draft edits. If `Expected outputs` names files that are not
+declared as protocol artifacts, the UI warns before launch. Treat that warning
+as a contract mismatch to fix unless the extra text is intentionally advisory.
 
 ## JSON/YAML Contract
 

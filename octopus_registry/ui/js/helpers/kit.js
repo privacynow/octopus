@@ -2427,13 +2427,38 @@ window.Kit = (() => {
         onStatusFilter = null,
         onSelect = null,
         renderExpanded = null,
+        filtersMode = 'inline',
         emptyHint = '',
     } = {}) {
         const root = document.createElement('div');
         root.className = 'kit-runs-list';
 
-        const filters = document.createElement('div');
-        filters.className = 'kit-runs-filters';
+        const filters = filtersMode === 'disclosure'
+            ? document.createElement('details')
+            : document.createElement('div');
+        filters.className = filtersMode === 'disclosure'
+            ? 'kit-runs-filters kit-runs-filter-disclosure'
+            : 'kit-runs-filters';
+        if (filtersMode === 'disclosure' && (String(search || '').trim() || String(statusFilter || '').trim())) {
+            filters.open = true;
+        }
+        if (filtersMode === 'disclosure') {
+            const summary = document.createElement('summary');
+            summary.className = 'kit-runs-filter-summary';
+            const label = document.createElement('span');
+            label.textContent = dictValue('runs.filters.summary', 'Find and filter runs');
+            summary.appendChild(label);
+            const activeFilter = document.createElement('small');
+            activeFilter.textContent = [
+                String(search || '').trim() ? 'search active' : '',
+                String(statusFilter || '').trim() ? String(statusFilter || '') : '',
+            ].filter(Boolean).join(' · ') || 'All runs';
+            summary.appendChild(activeFilter);
+            filters.appendChild(summary);
+        }
+
+        const filterContent = document.createElement('div');
+        filterContent.className = 'kit-runs-filter-content';
         const searchInput = document.createElement('input');
         searchInput.className = 'kit-runs-search';
         searchInput.type = 'search';
@@ -2442,7 +2467,7 @@ window.Kit = (() => {
         if (typeof onSearch === 'function') {
             searchInput.addEventListener('input', (e) => onSearch(String(e.target.value || '')));
         }
-        filters.appendChild(searchInput);
+        filterContent.appendChild(searchInput);
 
         const filterRow = document.createElement('div');
         filterRow.className = 'kit-runs-filter-chips';
@@ -2460,7 +2485,8 @@ window.Kit = (() => {
             }
             filterRow.appendChild(chip);
         });
-        filters.appendChild(filterRow);
+        filterContent.appendChild(filterRow);
+        filters.appendChild(filterContent);
         root.appendChild(filters);
 
         const list = document.createElement('div');
@@ -2471,7 +2497,7 @@ window.Kit = (() => {
                 emptyHint || dictValue('runs.empty', 'No runs match this filter.'),
             ));
         } else {
-            entries.forEach((run) => {
+            const renderEntry = (run) => {
                 const selected = String(run.id || '') === String(selectedId || '');
                 const entry = document.createElement('article');
                 entry.className = 'kit-runs-list-entry';
@@ -2516,6 +2542,18 @@ window.Kit = (() => {
                     sub.textContent = String(run.subtitle);
                     row.appendChild(sub);
                 }
+                const metaItems = Array.isArray(run.meta) ? run.meta.filter(Boolean) : [];
+                if (metaItems.length) {
+                    const meta = document.createElement('div');
+                    meta.className = 'kit-runs-list-row-meta';
+                    metaItems.slice(0, 4).forEach((item) => {
+                        const chip = document.createElement('span');
+                        chip.className = 'kit-runs-list-row-meta-chip';
+                        chip.textContent = String(item || '');
+                        meta.appendChild(chip);
+                    });
+                    row.appendChild(meta);
+                }
                 if (run.stageProgress) {
                     row.appendChild(runStageProgressRail({
                         ...run.stageProgress,
@@ -2538,8 +2576,51 @@ window.Kit = (() => {
                         entry.appendChild(expanded);
                     }
                 }
-                list.appendChild(entry);
-            });
+                return entry;
+            };
+            const grouped = entries.some((run) => String(run.groupLabel || '').trim());
+            if (grouped) {
+                const groups = [];
+                const groupByKey = new Map();
+                entries.forEach((run) => {
+                    const label = String(run.groupLabel || 'Other runs').trim();
+                    const key = String(run.groupKey || label).trim();
+                    if (!groupByKey.has(key)) {
+                        const group = {
+                            key,
+                            label,
+                            rank: Number.isFinite(Number(run.groupRank)) ? Number(run.groupRank) : groups.length + 50,
+                            meta: String(run.groupMeta || '').trim(),
+                            runs: [],
+                        };
+                        groupByKey.set(key, group);
+                        groups.push(group);
+                    }
+                    groupByKey.get(key).runs.push(run);
+                });
+                groups
+                    .sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label))
+                    .forEach((group) => {
+                        const section = document.createElement('section');
+                        section.className = 'kit-runs-list-group';
+                        section.dataset.groupKey = group.key;
+                        const groupHead = document.createElement('div');
+                        groupHead.className = 'kit-runs-list-group-head';
+                        const groupTitle = document.createElement('span');
+                        groupTitle.className = 'kit-runs-list-group-title';
+                        groupTitle.textContent = group.label;
+                        groupHead.appendChild(groupTitle);
+                        const groupMeta = document.createElement('span');
+                        groupMeta.className = 'kit-runs-list-group-meta';
+                        groupMeta.textContent = group.meta || `${group.runs.length} run${group.runs.length === 1 ? '' : 's'}`;
+                        groupHead.appendChild(groupMeta);
+                        section.appendChild(groupHead);
+                        group.runs.forEach((run) => section.appendChild(renderEntry(run)));
+                        list.appendChild(section);
+                    });
+            } else {
+                entries.forEach((run) => list.appendChild(renderEntry(run)));
+            }
         }
         root.appendChild(list);
         return root;
@@ -2633,6 +2714,9 @@ window.Kit = (() => {
         runStatus = '',
         issues = [],
         compact = false,
+        selectedStageKey = '',
+        selectedStageExecutionId = '',
+        onStageSelect = null,
     } = {}) {
         const executionByStage = _latestStageExecutions(stageExecutions);
         const issueByStage = new Map();
@@ -2691,6 +2775,7 @@ window.Kit = (() => {
             return {
                 index,
                 key: stage.stage_key,
+                executionId: String(execution?.protocol_stage_execution_id || ''),
                 label: _runStageLabel(stage),
                 state,
                 status: executionStatus || (stage.stage_key === String(currentStageKey || '') ? normalizedRunStatus : ''),
@@ -2713,7 +2798,23 @@ window.Kit = (() => {
             const item = entry.item;
             li.className = `kit-run-stage-progress-node is-${item.state}`;
             li.dataset.stageKey = item.key;
+            if (item.executionId) {
+                li.dataset.stageExecutionId = item.executionId;
+            }
             li.dataset.state = item.state;
+            const selected = (
+                selectedStageExecutionId
+                && item.executionId
+                && String(item.executionId) === String(selectedStageExecutionId || '')
+            ) || (
+                !selectedStageExecutionId
+                && selectedStageKey
+                && String(item.key || '') === String(selectedStageKey || '')
+            );
+            if (selected) {
+                li.classList.add('is-selected');
+                li.setAttribute('aria-current', 'step');
+            }
             const marker = document.createElement('span');
             marker.className = 'kit-run-stage-progress-marker';
             marker.textContent = String(item.index + 1);
@@ -2733,7 +2834,31 @@ window.Kit = (() => {
                     : item.state;
             copy.appendChild(state);
             li.appendChild(copy);
-            li.setAttribute('aria-label', `${item.index + 1}. ${item.label}: ${state.textContent}`);
+            const ariaLabel = `${item.index + 1}. ${item.label}: ${state.textContent}`;
+            if (typeof onStageSelect === 'function') {
+                li.classList.add('is-selectable');
+                li.tabIndex = 0;
+                li.setAttribute('aria-label', `${ariaLabel}. Inspect stage evidence.`);
+                const selectStage = (event) => {
+                    if (event && typeof event.stopPropagation === 'function') {
+                        event.stopPropagation();
+                    }
+                    onStageSelect({
+                        stageKey: item.key,
+                        executionId: item.executionId,
+                        index: item.index,
+                        state: item.state,
+                    });
+                };
+                li.addEventListener('click', selectStage);
+                li.addEventListener('keydown', (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    selectStage(event);
+                });
+            } else {
+                li.setAttribute('aria-label', ariaLabel);
+            }
             root.appendChild(li);
         });
         return root;

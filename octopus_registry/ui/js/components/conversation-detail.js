@@ -64,6 +64,7 @@ function renderConversationDetail(container, params) {
     let settingsStatusMessage = '';
     let protocolsStatusMessage = '';
     let latestConversationMessageCount = 0;
+    let eventLoadRequestToken = 0;
 
     const page = document.createElement('section');
     page.className = 'conversation-page';
@@ -2211,6 +2212,60 @@ function renderConversationDetail(container, params) {
         return [];
     }
 
+    function eventRenderKey(event) {
+        return String(event?.event_id || event?.seq || `${event?.kind || 'event'}:${event?.created_at || ''}`);
+    }
+
+    function isTerminalTaskEvent(event) {
+        if (String(event?.kind || '') !== 'task.status') return false;
+        const status = String(event?.metadata?.status || '').trim().toLowerCase();
+        return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
+    }
+
+    function eventShouldOpenByDefault(event) {
+        const kind = String(event?.kind || '');
+        if (kind === 'approval.requested' || kind === 'error') return true;
+        if (isTerminalTaskEvent(event)) return Boolean(String(event?.content || '').trim());
+        return false;
+    }
+
+    function activityExpansionState(events = []) {
+        const expandedEventIds = new Set();
+        if (activeView !== 'activity') return { expandedEventIds };
+
+        const latestTerminalByTask = new Map();
+        (Array.isArray(events) ? events : []).forEach((event) => {
+            const key = eventRenderKey(event);
+            if (!key) return;
+            if (eventShouldOpenByDefault(event)) {
+                expandedEventIds.add(key);
+            }
+            if (isTerminalTaskEvent(event) && String(event?.content || '').trim()) {
+                const taskId = String(event?.metadata?.routed_task_id || '').trim();
+                if (taskId) latestTerminalByTask.set(taskId, key);
+            }
+        });
+        latestTerminalByTask.forEach((key) => expandedEventIds.add(key));
+
+        if (!expandedEventIds.size) {
+            const lastUsefulEvent = [...(Array.isArray(events) ? events : [])]
+                .reverse()
+                .find((event) => !['provider.request', 'provider.response'].includes(String(event?.kind || '')));
+            const fallbackEvent = lastUsefulEvent || events[events.length - 1];
+            if (fallbackEvent) {
+                expandedEventIds.add(eventRenderKey(fallbackEvent));
+            }
+        }
+        return { expandedEventIds };
+    }
+
+    function renderEventElement(event, options = {}) {
+        return _createConversationEventElement(event, convoId, relatedTasks, {
+            view: activeView,
+            ...options,
+        });
+    }
+
     function protocolDisplayName(protocolId = '') {
         const target = String(protocolId || '').trim();
         if (!target) return 'Protocol run';
@@ -2596,7 +2651,7 @@ function renderConversationDetail(container, params) {
         try {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
-            maybeAdoptOperationalView({ load: false });
+            maybeAdoptOperationalView();
             syncManagementControls();
             if (requestedActivationSkill && requestedManagementMode === 'closed') {
                 openManagement('skills');
@@ -2618,6 +2673,9 @@ function renderConversationDetail(container, params) {
     }
 
     async function reloadEvents() {
+        const requestToken = eventLoadRequestToken + 1;
+        eventLoadRequestToken = requestToken;
+        const requestView = activeView;
         if (topObserver) {
             topObserver.disconnect();
             topObserver = null;
@@ -2629,13 +2687,13 @@ function renderConversationDetail(container, params) {
                 limit: UI.EVENT_PAGE_LIMIT,
                 kind: currentKindFilter(),
             });
+            if (requestToken !== eventLoadRequestToken || requestView !== activeView) {
+                return;
+            }
             const events = result.events || [];
             latestConversationMessageCount = events.filter(shouldRenderConversationEvent).length;
-            if (!activeViewExplicit && maybeAdoptOperationalView({ load: false })) {
-                if (activeView === 'tasks') {
-                    void loadRelatedTasks({ soft: true });
-                    return;
-                }
+            if (!activeViewExplicit && maybeAdoptOperationalView()) {
+                return;
             }
             const visibleEvents = visibleTimelineEvents(events);
             hasMoreBefore = !!result.has_more_before;
@@ -2652,7 +2710,8 @@ function renderConversationDetail(container, params) {
                 )]);
                 syncConversationDensityForCurrentView();
             } else {
-                UI.reconcileChildren(eventList, visibleEvents.map((event) => _createConversationEventElement(event, convoId, relatedTasks)));
+                const expansionState = activityExpansionState(visibleEvents);
+                UI.reconcileChildren(eventList, visibleEvents.map((event) => renderEventElement(event, expansionState)));
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
@@ -2672,12 +2731,17 @@ function renderConversationDetail(container, params) {
         updateHistoryStatus();
         const anchor = eventList.firstElementChild;
         const previousTop = anchor ? anchor.getBoundingClientRect().top : timeline.scrollTop;
+        const requestToken = eventLoadRequestToken;
+        const requestView = activeView;
         try {
             const result = await API.getEvents(convoId, {
                 before_seq: beforeSeq,
                 limit: UI.EVENT_PAGE_LIMIT,
                 kind: currentKindFilter(),
             });
+            if (requestToken !== eventLoadRequestToken || requestView !== activeView) {
+                return;
+            }
             const events = result.events || [];
             const visibleEvents = visibleTimelineEvents(events);
             if (!events.length) {
@@ -2690,7 +2754,7 @@ function renderConversationDetail(container, params) {
                 if (empty) empty.remove();
                 const fragment = document.createDocumentFragment();
                 visibleEvents.forEach((event) => {
-                    fragment.appendChild(_createConversationEventElement(event, convoId, relatedTasks));
+                    fragment.appendChild(renderEventElement(event));
                 });
                 eventList.prepend(fragment);
             }
@@ -2705,9 +2769,10 @@ function renderConversationDetail(container, params) {
             });
         } catch (err) {
             UI.reportError('Failed to load older activity', err, { context: 'Conversation load older failed' });
+        } finally {
+            loadingOlder = false;
+            updateHistoryStatus();
         }
-        loadingOlder = false;
-        updateHistoryStatus();
     }
 
     function initHistoryObserver() {
@@ -2775,7 +2840,9 @@ function renderConversationDetail(container, params) {
         const shouldStick = isNearBottom();
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
-        eventList.appendChild(_createConversationEventElement(event, convoId, relatedTasks));
+        eventList.appendChild(renderEventElement(event, {
+            defaultExpanded: activeView === 'activity' && eventShouldOpenByDefault(event),
+        }));
         syncConversationDensityForCurrentView();
         if (seq) latestSeq = Math.max(latestSeq, seq);
         if (

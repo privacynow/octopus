@@ -114,33 +114,20 @@ Use the registry to:
 For the browser workflow, use
 [docs/registry-user-guide.md](docs/registry-user-guide.md).
 
-## Demo Use Case: Local Manufacturing Analytics Without Uploading Raw CSVs
+## Scenario Guides
 
-One practical customer workflow is local data analytics and reporting.
+Product docs in this README stay use-case neutral. Tested customer scenarios
+live in separate guides so examples do not become product defaults.
 
-The intended pattern is:
+Current scenario guide:
 
-- keep customer CSVs in a local workspace
-- ask the bot to generate or revise Python/R/SQL scripts for the analysis
-- run those scripts locally against the CSVs
-- share only controlled schema summaries, aggregate profiles, logs, test
-  failures, or selected report outputs back into the conversation
-- keep generated code, reports, and charts as local artifacts
+- [docs/local-data-analytics-demo.md](docs/local-data-analytics-demo.md):
+  UI-only blank-protocol walkthrough for generating and validating an offline
+  multi-CSV browser analytics SPA.
 
-This lets a customer use Octopus to build a repeatable analytics/reporting
-pipeline without pasting raw manufacturing records into the model prompt. The
-operator still controls the boundary: do not paste raw rows or attach private
-files to chat unless that is explicitly approved for the deployment.
-
-For development regression checks, run the deterministic local fixture:
-
-```bash
-./.venv/bin/python scripts/demo/manufacturing_local_analytics/run_demo.py \
-  --workspace .tmp/demo/manufacturing-local-analytics
-```
-
-For a step-by-step demo, use
-[docs/local-data-analytics-demo.md](docs/local-data-analytics-demo.md).
+Development-only deterministic fixtures, when present under `scripts/demo/`,
+are regression aids. They do not replace customer-facing acceptance through the
+Registry UI, Telegram, or documented CLI commands.
 
 ## Use Telegram
 
@@ -219,6 +206,11 @@ Current behavior:
 - inspect run overview, stages, artifacts, and audit data
 - intervene with `retry`, `accept`, `send-back`, and `cancel` where permitted
 - inspect declared and produced artifacts where artifact actions are available
+- launch runs with the generic run form (`Workspace`, goal, context,
+  constraints, expected outputs) unless the protocol author defines custom
+  `metadata.run_inputs`
+- warn at run start when requested expected outputs do not match declared
+  protocol artifacts
 
 Current constraints and known gaps:
 
@@ -236,6 +228,7 @@ Protocol docs:
 - [docs/author-protocol-guide.md](docs/author-protocol-guide.md)
 - [docs/operator-protocol-guide.md](docs/operator-protocol-guide.md)
 - [docs/protocol_assignment_audit.md](docs/protocol_assignment_audit.md)
+- [docs/customer-handoff-guide.md](docs/customer-handoff-guide.md)
 
 ## Architecture And Development
 

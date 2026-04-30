@@ -160,6 +160,27 @@ controls must stay gated.
 Current publish validation still requires stages to resolve an assignment. Draft
 authoring may allow incomplete steps while the author is building.
 
+### Starting Protocol Runs
+
+Runs start from the latest published protocol version. The run dialog asks for
+an entry agent plus launch context. Unless the protocol author defined custom
+`metadata.run_inputs`, the shared fields are:
+
+- `Workspace`
+- a concrete goal/problem statement
+- context
+- constraints
+- expected outputs
+
+The UI warns when expected outputs entered at launch do not match declared
+protocol artifacts. The run may still start, but the warning means the author
+and operator should check whether the artifact contract is wrong or the launch
+text contains advisory output notes that are not meant to be verified.
+
+Product launch fields should stay generic. Scenario-specific fields belong in a
+protocol's authored `run_inputs` contract or in the user's run text, not in the
+default product form.
+
 ## Skills
 
 Use `Skills` to manage skills.

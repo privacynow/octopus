@@ -344,6 +344,69 @@ def test_extract_target_selector_message_accepts_leading_skill_phrase():
     assert instructions == "give me a system design review"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_kind", "expected_value", "expected_instructions"),
+    [
+        (
+            "Ask m2 what is the current temperature",
+            "agent",
+            "m2",
+            "what is the current temperature",
+        ),
+        (
+            "Ok then ask what is 2 plus 2 from @m2 if you can",
+            "agent",
+            "m2",
+            "what is 2 plus 2",
+        ),
+        (
+            "please have @m2 review this",
+            "agent",
+            "m2",
+            "review this",
+        ),
+        (
+            "route this to @skill:architecture: review the API",
+            "skill",
+            "architecture",
+            "review the API",
+        ),
+        (
+            "@m2, return only the answer",
+            "agent",
+            "m2",
+            "return only the answer",
+        ),
+    ],
+)
+def test_extract_target_selector_message_accepts_conservative_natural_delegation_forms(
+    text,
+    expected_kind,
+    expected_value,
+    expected_instructions,
+):
+    extracted = extract_target_selector_message(text)
+
+    assert extracted is not None
+    selector, instructions = extracted
+    assert selector.kind == expected_kind
+    assert selector.value == expected_value
+    assert instructions == expected_instructions
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what does m2 mean?",
+        "ask what is m2?",
+        "email m2 tomorrow",
+        "can m2 be used here?",
+    ],
+)
+def test_extract_target_selector_message_ignores_non_delegation_mentions(text):
+    assert extract_target_selector_message(text) is None
+
+
 def test_pending_delegation_transition_derives_partial_failure__child_states():
     result = apply_pending_delegation_transition(
         PendingDelegationSnapshot(status="submitted", task_statuses=("completed", "failed")),

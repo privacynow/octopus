@@ -2253,8 +2253,8 @@ function renderConversationDetail(container, params) {
         return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');
     }
 
-    function visibleTimelineEvents(events) {
-        if (activeView === 'activity') return compactActivityEvents(events);
+    function visibleTimelineEvents(events, options = {}) {
+        if (activeView === 'activity') return compactActivityEvents(events, options);
         if (activeView === 'conversation') {
             return events.filter(shouldRenderConversationEvent);
         }
@@ -2288,7 +2288,7 @@ function renderConversationDetail(container, params) {
         return `status:${String(event?.metadata?.status || '')}`;
     }
 
-    function compactActivityEvents(events = []) {
+    function compactActivityEvents(events = [], options = {}) {
         const rows = Array.isArray(events) ? events : [];
         const terminalTaskIds = new Set(
             rows
@@ -2296,6 +2296,11 @@ function renderConversationDetail(container, params) {
                 .map(taskStatusEventTaskId)
                 .filter(Boolean),
         );
+        if (options.suppressTaskIds && typeof options.suppressTaskIds.forEach === 'function') {
+            options.suppressTaskIds.forEach((taskId) => {
+                if (taskId) terminalTaskIds.add(String(taskId));
+            });
+        }
         const latestStatusByTask = new Map();
         const compacted = [];
         rows.forEach((event) => {
@@ -2368,6 +2373,10 @@ function renderConversationDetail(container, params) {
         if (activeView === 'activity' && isCompactTaskStatusEvent(event)) {
             element.dataset.compactTaskStatusKey = taskStatusCompactKey(event);
         }
+        if (activeView === 'activity' && isTerminalTaskEvent(event)) {
+            const taskId = taskStatusEventTaskId(event);
+            if (taskId) element.dataset.terminalTaskStatusKey = taskId;
+        }
         return element;
     }
 
@@ -2379,6 +2388,15 @@ function renderConversationDetail(container, params) {
                 child.remove();
             }
         });
+    }
+
+    function renderedTerminalTaskIds() {
+        const ids = new Set();
+        Array.from(eventList.children).forEach((child) => {
+            const taskId = child?.dataset?.terminalTaskStatusKey;
+            if (taskId) ids.add(taskId);
+        });
+        return ids;
     }
 
     function protocolDisplayName(protocolId = '') {
@@ -2862,7 +2880,9 @@ function renderConversationDetail(container, params) {
                 return;
             }
             const events = result.events || [];
-            const visibleEvents = visibleTimelineEvents(events);
+            const visibleEvents = visibleTimelineEvents(events, {
+                suppressTaskIds: renderedTerminalTaskIds(),
+            });
             if (!events.length) {
                 hasMoreBefore = false;
                 updateHistoryStatus();

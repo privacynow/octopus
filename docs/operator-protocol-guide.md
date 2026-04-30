@@ -13,8 +13,14 @@ From the registry UI:
 
 1. open `Protocols`
 2. choose a published protocol
-3. start a run with the required problem/workspace context
+3. start a run with an entry agent and the required problem/workspace context
 4. inspect the run from `Runs`
+
+Unless the protocol author defined custom `metadata.run_inputs`, the launch
+form is generic: workspace, goal/problem statement, context, constraints, and
+expected outputs. If the UI warns that expected outputs are not declared
+artifacts, treat it as a contract mismatch to inspect before relying on the
+run's artifact verification.
 
 From Telegram:
 

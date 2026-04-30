@@ -477,7 +477,10 @@ by the user. They are not product defaults.
 
 ## Planned Test: Offline CSV Analytics SPA From UI-Only Protocol
 
-Status: initial Safari run executed; product blockers found.
+Status: follow-up Safari run completed after generic product authoring fixes;
+the scenario is now deliverable through a UI-authored generic protocol, with
+one remaining generated-artifact quality risk around relationship suggestion
+precision.
 
 Goal:
 
@@ -615,6 +618,117 @@ Findings from the first UI-only attempt:
   update did not persist before publication. This needs product-side review even
   if some friction is automation-specific, because a human must be able to
   verify and trust stage instructions before publishing.
+
+Product fixes applied before the second attempt:
+
+- Preserved unsaved stage drafts while managing workflow files/artifacts.
+- Fixed the `+ Add step` pending-draft anchor so the new-stage form reliably
+  opens after artifact work.
+- Added a run-start warning when expected outputs do not match declared
+  protocol artifacts.
+- Added Playwright coverage for the draft/artifact authoring flow.
+
+Second Safari evidence after product fixes:
+
+- Protocol authored through real Safari from a blank protocol:
+  `Offline CSV Analytics SPA Build Protocol`
+  (`68586540cd7c4dd9a4aa960dc1b1f13d`).
+- Run started through the visible Safari UI:
+  `18bc37bf7faa40feb544c990fc36b156`.
+- The run used sanitized generic local-CSV/manufacturing analytics
+  requirements. It did not include real customer names, raw meeting transcript
+  text, or real data.
+- The published protocol had three meaningful stages: define requirements,
+  build the offline SPA package, and validate the Safari package.
+- The run completed all three stages and produced six verified artifacts with
+  zero missing declared outputs: `artifacts/requirements.md`,
+  `artifacts/index.html`, `artifacts/README.md`,
+  `artifacts/samples/cells.csv`, `artifacts/samples/panels.csv`, and
+  `artifacts/validation-report.md`.
+- The generated `index.html` opened from the run artifact UI in real Safari and
+  rendered as a self-contained browser app with upload, synthetic generation,
+  schema profile, relationship inference, relationship editing, aggregation,
+  chart, heat-map, and export controls.
+- Default synthetic generation worked in Safari: 6 tables, 948 rows, 29
+  confirmed relationships, 46 inferred candidates, and a cross-table aggregate
+  over 432 joined rows with chart and heat-map output.
+- Artifact download/upload loop worked in Safari using generated CSV artifacts
+  plus a generated table export: 3 files uploaded, 3 logical tables, 56 rows,
+  12 relationship candidates, and manual acceptance of an inferred relationship
+  updated the confirmed relationship count.
+- Uploaded-schema synthetic adaptation worked in Safari: the SPA generated 3
+  synthetic tables and 120 rows from the uploaded schema profiles, with session
+  notes stating that rows were regenerated rather than copied wholesale.
+- Dynamic aggregation worked after adaptation: grouping by a selected uploaded
+  schema field produced 3 result groups and updated the bar chart and aggregate
+  table.
+- Relationship JSON export downloaded successfully from Safari.
+- Product genericity held: the product UI, persisted protocol machinery, and
+  code changes remained use-case neutral; manufacturing-specific wording stayed
+  inside this user-authored protocol/run and generated artifacts.
+
+Generated artifact defects from the second run:
+
+- `Clear session` resets counters/results but leaves stale aggregation status
+  text from the previous run. This is a generated SPA state-management defect.
+- `Export synthetic CSVs` is Safari-fragile. It triggered only one CSV download
+  (`panel_tests*.csv`) instead of one file per loaded/synthetic table. Generated
+  apps should prefer one explicit bundle/download or per-table export buttons
+  over rapid multi-download loops.
+- Relationship inference is useful for exploration but too eager after
+  synthetic adaptation. It showed reciprocal and ambiguous high-confidence
+  links, including `line_id` to `panel_id` candidates caused by regenerated
+  identifier patterns. These should remain suggestions unless explicitly
+  confirmed by the user.
+- Inferred candidates that have already been accepted remain visible as
+  candidates. That makes the relationship state harder to audit.
+
+Current conclusion:
+
+- The product can handle this scenario as a generic UI-authored protocol and
+  produce a working offline SPA artifact through a real Safari run.
+- No new generic product blocker was found in the second attempt. The remaining
+  issues are generated-artifact quality issues, not a reason to hardcode this
+  scenario into the product.
+
+Follow-up generated-artifact iteration:
+
+- A corrected second iteration was launched through the visible Safari UI
+  against the same generic protocol:
+  `9e9eca08818f436b85164228610b290f`.
+- The follow-up prompt was sanitized defect feedback. It did not include real
+  customer names, raw meeting transcript text, or real data, and it did not ask
+  for product code or UI to become manufacturing-specific.
+- The run completed all three stages. The run detail showed status
+  `completed`, stage progress for define/build/validate all completed, and
+  `Artifacts (6)`.
+- The build produced the corrected browser artifact
+  `artifacts/index.html` (`artifact_2`, 46,373 bytes), `README.md`, sample
+  CSV artifacts, and an updated `artifacts/validation-report.md`.
+- The corrected `index.html` opened from the run artifact UI in real Safari.
+- Real Safari default synthetic generation worked: 6 tables, 948 browser-local
+  rows, schema profiles, inferred relationship candidates, dynamic aggregate
+  defaults, a 432-row aggregate, 5 result groups, bar chart, trend chart, heat
+  map, and aggregate table.
+- Real Safari `Clear session` now resets counters, schema sections,
+  relationships, aggregate counts, charts, and session notes without retaining
+  stale `Aggregated ...` status text.
+- The corrected synthetic export flow now renders one explicit button per
+  synthetic table under `Synthetic CSV Exports` instead of triggering a rapid
+  multi-download loop. A real Safari click on `Export Panels CSV` updated the
+  app note to `Exported synthetic table Panels.` and produced the expected
+  `panels` CSV download.
+- Candidate acceptance was verified on the generated artifact through the
+  browser automation surface: accepting one inferred relationship reduced the
+  candidate action count from 19 to 18 and added one confirmed relationship.
+  This fixes the accepted-candidate visibility problem observed in the second
+  run.
+- The remaining generated-artifact quality risk is relationship precision.
+  The app still presents many high-confidence suggestions and some ambiguous
+  relationship directions. This is acceptable for an exploratory offline SPA
+  only because suggestions remain unconfirmed until the user accepts them; it
+  should be improved in future generated-app guidance if this scenario becomes
+  a repeated customer workflow.
 
 ## Testing Policy
 

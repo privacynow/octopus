@@ -153,6 +153,46 @@ def _artifact_observation_for_path(
             exists=False,
             verification_state="missing",
         )
+    if safe_path.is_dir():
+        digest = hashlib.sha256()
+        digest.update(b"workspace-directory\n")
+        total_size = 0
+        latest_mtime = float(stat.st_mtime)
+        for child in sorted(safe_path.rglob("*")):
+            try:
+                if child.is_symlink() or not child.is_file():
+                    continue
+                resolved_child = child.resolve()
+                resolved_child.relative_to(safe_path)
+                relative_child = resolved_child.relative_to(safe_path).as_posix()
+                child_stat = resolved_child.stat()
+                latest_mtime = max(latest_mtime, float(child_stat.st_mtime))
+                total_size += int(child_stat.st_size or 0)
+                digest.update(relative_child.encode("utf-8"))
+                digest.update(b"\0")
+                with resolved_child.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                digest.update(b"\0")
+            except Exception:
+                log.warning("Failed to inspect protocol artifact directory entry %s", child, exc_info=True)
+                return ProtocolArtifactObservationRecord(
+                    artifact_key=artifact_key,
+                    artifact_kind=artifact_kind,
+                    path=relative_path,
+                    exists=False,
+                    verification_state="missing",
+                )
+        return ProtocolArtifactObservationRecord(
+            artifact_key=artifact_key,
+            artifact_kind=artifact_kind,
+            path=relative_path,
+            exists=True,
+            size_bytes=total_size,
+            content_hash=digest.hexdigest(),
+            modified_at=datetime.fromtimestamp(latest_mtime, tz=timezone.utc).isoformat(),
+            verification_state="verified",
+        )
     if not safe_path.is_file():
         return ProtocolArtifactObservationRecord(
             artifact_key=artifact_key,

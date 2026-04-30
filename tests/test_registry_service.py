@@ -2,11 +2,13 @@
 
 import contextlib
 from datetime import datetime, timezone
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import zipfile
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -4068,6 +4070,62 @@ def test_task_artifact_content_route_falls_back_to_mounted_workspace(monkeypatch
     assert response.text == "document body"
 
 
+def test_task_artifact_content_route_opens_directory_index_and_downloads_zip(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "index.html").write_text("<!doctype html><title>Offline app</title>", encoding="utf-8")
+    samples = package_dir / "samples"
+    samples.mkdir()
+    (samples / "cells.csv").write_text("cell_id,value\nC-1,10\n", encoding="utf-8")
+
+    class _Store:
+        def get_task(self, routed_task_id: str):
+            assert routed_task_id == "protocol-stage:stage-1"
+            return TaskRecord(
+                routed_task_id="protocol-stage:stage-1",
+                origin_agent_id="agent-1",
+                target_agent_id="agent-2",
+                protocol_stage_execution_id="stage-1",
+                working_dir=str(tmp_path),
+                result=RegistryJsonRecord.model_validate(
+                    {
+                        "artifacts": [
+                            {
+                                "artifact_key": "package",
+                                "path": "package",
+                                "exists": True,
+                                "verification_state": "verified",
+                            }
+                        ]
+                    }
+                ),
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        open_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content")
+        download_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content?download=1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert open_response.status_code == 200
+    assert "<title>Offline app</title>" in open_response.text
+    assert "text/html" in open_response.headers.get("content-type", "")
+    assert download_response.status_code == 200
+    assert "application/zip" in download_response.headers.get("content-type", "")
+    assert 'filename="package.zip"' in download_response.headers.get("content-disposition", "")
+    with zipfile.ZipFile(io.BytesIO(download_response.content)) as archive:
+        assert sorted(archive.namelist()) == ["index.html", "samples/cells.csv"]
+
+
 def test_protocol_artifact_content_route_uses_rehearsal_text_when_file_unavailable(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -4185,6 +4243,62 @@ def test_protocol_artifact_content_route_prefers_inline_artifact_contents_when_f
     assert response.status_code == 200
     assert response.text == "# Quarterly Risk Summary\n\n## Executive summary\nBelievable rehearsal body."
     assert 'filename="document.md"' in response.headers.get("content-disposition", "")
+
+
+def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    package_dir = tmp_path / "offline-package"
+    package_dir.mkdir()
+    (package_dir / "index.html").write_text("<!doctype html><title>Offline package</title>", encoding="utf-8")
+    samples = package_dir / "samples"
+    samples.mkdir()
+    (samples / "panels.csv").write_text("panel_id,value\nP-1,20\n", encoding="utf-8")
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(package_dir),
+                        workspace_path="offline-package",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                        verification_state="verified",
+                    )
+                ],
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        open_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content")
+        download_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content?download=1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert open_response.status_code == 200
+    assert "<title>Offline package</title>" in open_response.text
+    assert "text/html" in open_response.headers.get("content-type", "")
+    assert download_response.status_code == 200
+    assert "application/zip" in download_response.headers.get("content-type", "")
+    assert 'filename="offline-package.zip"' in download_response.headers.get("content-disposition", "")
+    with zipfile.ZipFile(io.BytesIO(download_response.content)) as archive:
+        assert sorted(archive.namelist()) == ["index.html", "samples/panels.csv"]
 
 
 def test_task_artifact_content_route_uses_rehearsal_text_when_file_unavailable(monkeypatch, tmp_path: Path):

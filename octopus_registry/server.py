@@ -33,7 +33,10 @@ from .auth import (
     validate_settings,
 )
 from .artifact_paths import (
+    artifact_directory_download_name,
     artifact_download_name,
+    directory_artifact_manifest,
+    directory_artifact_zip_bytes,
     resolve_protocol_artifact_path,
     resolve_task_artifact_path,
     resolve_task_artifact_rehearsal_text,
@@ -1328,6 +1331,30 @@ def resource_get_task_artifact_content(
                 headers={"Content-Disposition": f'{disposition}; filename="{preferred_name}"'},
             )
         raise HTTPException(status_code=409, detail="Artifact path is not available on this host.")
+    if resolved_path.is_dir():
+        if download:
+            zip_name = artifact_directory_download_name(
+                artifact_key=str(artifact_key or ""),
+                preferred_path=preferred_path or str(resolved_path.name or ""),
+            )
+            return Response(
+                content=directory_artifact_zip_bytes(resolved_path),
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+            )
+        index_path = resolved_path / "index.html"
+        if index_path.is_file():
+            return FileResponse(
+                path=index_path,
+                media_type="text/html",
+                filename="index.html",
+                content_disposition_type="inline",
+            )
+        return Response(
+            content=directory_artifact_manifest(resolved_path).encode("utf-8"),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'inline; filename="{preferred_name}.md"'},
+        )
     return FileResponse(
         path=resolved_path,
         media_type=media_type,

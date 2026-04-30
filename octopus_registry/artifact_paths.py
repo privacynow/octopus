@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from io import BytesIO
 from functools import lru_cache
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from octopus_sdk.protocols import ProtocolArtifactRecord, ProtocolRunDetailRecord
 from octopus_sdk.registry.models import TaskRecord
@@ -18,7 +20,7 @@ def _resolve_artifact_file_path(
 
     for candidate in normalized_paths:
         path = Path(candidate)
-        if path.is_absolute() and path.is_file():
+        if path.is_absolute() and (path.is_file() or path.is_dir()):
             return path
 
     relative_path = next((item for item in normalized_paths if not Path(item).is_absolute()), "")
@@ -35,7 +37,7 @@ def _resolve_artifact_file_path(
             resolved.relative_to(root_path.resolve())
         except Exception:
             continue
-        if resolved.is_file():
+        if resolved.is_file() or resolved.is_dir():
             return resolved
     return None
 
@@ -115,6 +117,48 @@ def artifact_download_name(*, artifact_key: str, preferred_path: str = "") -> st
         if name:
             return name
     return str(artifact_key or "").strip() or "artifact"
+
+
+def artifact_directory_download_name(*, artifact_key: str, preferred_path: str = "") -> str:
+    candidate = artifact_download_name(artifact_key=artifact_key, preferred_path=preferred_path)
+    if candidate.lower().endswith(".zip"):
+        return candidate
+    return f"{candidate}.zip"
+
+
+def directory_artifact_manifest(path: Path) -> str:
+    lines = [f"# {path.name or 'artifact'}", "", "Directory artifact contents:", ""]
+    entries: list[str] = []
+    for child in sorted(path.rglob("*")):
+        if child.is_symlink() or not child.is_file():
+            continue
+        try:
+            relative_child = child.resolve().relative_to(path.resolve()).as_posix()
+        except Exception:
+            continue
+        entries.append(f"- {relative_child} ({child.stat().st_size} bytes)")
+    if entries:
+        lines.extend(entries)
+    else:
+        lines.append("- No files found.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def directory_artifact_zip_bytes(path: Path) -> bytes:
+    buffer = BytesIO()
+    root = path.resolve()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        for child in sorted(path.rglob("*")):
+            if child.is_symlink() or not child.is_file():
+                continue
+            try:
+                resolved_child = child.resolve()
+                relative_child = resolved_child.relative_to(root).as_posix()
+            except Exception:
+                continue
+            archive.write(resolved_child, arcname=relative_child)
+    return buffer.getvalue()
 
 
 def resolve_workspace_artifact_target(*, workspace_ref: str = "", artifact_path: str = "") -> Path | None:

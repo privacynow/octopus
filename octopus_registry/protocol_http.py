@@ -19,7 +19,14 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
 
-from .artifact_paths import artifact_download_name, resolve_protocol_artifact_path, resolve_protocol_artifact_rehearsal_text
+from .artifact_paths import (
+    artifact_directory_download_name,
+    artifact_download_name,
+    directory_artifact_manifest,
+    directory_artifact_zip_bytes,
+    resolve_protocol_artifact_path,
+    resolve_protocol_artifact_rehearsal_text,
+)
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .rehearsal import RehearsalSessionManager
@@ -566,6 +573,31 @@ def build_protocol_router(
                     "workspace_path": artifact.workspace_path,
                     "location": artifact.location,
                 },
+            )
+        if resolved_path.is_dir():
+            preferred_path = str(artifact.workspace_path or artifact.location or "")
+            if download:
+                zip_name = artifact_directory_download_name(
+                    artifact_key=str(artifact.artifact_key or ""),
+                    preferred_path=preferred_path,
+                )
+                return Response(
+                    content=directory_artifact_zip_bytes(resolved_path),
+                    media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+                )
+            index_path = resolved_path / "index.html"
+            if index_path.is_file():
+                return FileResponse(
+                    path=index_path,
+                    media_type="text/html",
+                    filename="index.html",
+                    content_disposition_type="inline",
+                )
+            return Response(
+                content=directory_artifact_manifest(resolved_path).encode("utf-8"),
+                media_type="text/markdown",
+                headers={"Content-Disposition": f'inline; filename="{preferred_name}.md"'},
             )
         return FileResponse(
             path=resolved_path,

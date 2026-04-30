@@ -222,6 +222,68 @@ async def test_finalization_uses_execution_working_dir_for_protocol_artifacts(tm
 
 
 @pytest.mark.asyncio
+async def test_finalization_verifies_protocol_directory_artifacts(tmp_path: Path) -> None:
+    reported: list[object] = []
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "index.html").write_text("<!doctype html><title>Package</title>", encoding="utf-8")
+    samples = package / "samples"
+    samples.mkdir()
+    (samples / "cells.csv").write_text("cell_id,value\nC-1,10\n", encoding="utf-8")
+
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            del routed_task_id, authority_ref
+            reported.append(result)
+            return TaskResultReport(status="reported", routed_task_id="task-directory-artifact")
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(
+            status="completed",
+            reply_text="done",
+            working_dir=str(tmp_path),
+        ),
+        context=FinalizationContext(
+            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            item_id="item-directory-artifacts",
+            conversation_key="registry:conv-directory-artifacts",
+            runtime_chat="registry:conv-directory-artifacts",
+            conversation_ref="registry:conv-directory-artifacts",
+            routed_task_id="task-directory-artifact",
+            authority_ref=registry_implementation_ref("default"),
+            task_routing=FakeTaskRouting(),
+            protocol_stage_contract={
+                "protocol_run_id": "run-1",
+                "protocol_stage_execution_id": "stage-exec-1",
+                "participant_key": "builder",
+                "stage_key": "build-package",
+                "stage_kind": "work",
+                "output_artifacts": [
+                    {
+                        "artifact_key": "package",
+                        "artifact_kind": "workspace_file",
+                        "path": "package",
+                        "verify": True,
+                    }
+                ],
+            },
+            working_dir_hint=str(tmp_path),
+        ),
+    )
+
+    assert result.routed_result_status == "reported"
+    assert len(reported) == 1
+    payload = reported[0]
+    assert len(payload.artifacts) == 1
+    assert payload.artifacts[0]["artifact_key"] == "package"
+    assert payload.artifacts[0]["path"] == "package"
+    assert payload.artifacts[0]["exists"] is True
+    assert payload.artifacts[0]["size_bytes"] > 0
+    assert payload.artifacts[0]["content_hash"]
+    assert payload.artifacts[0]["verification_state"] == "verified"
+
+
+@pytest.mark.asyncio
 async def test_finalization_uses_event_contract_and_working_dir_hint_without_registry_inspection(tmp_path: Path) -> None:
     reported: list[object] = []
     artifact_path = tmp_path / "source-data.csv"

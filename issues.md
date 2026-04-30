@@ -930,6 +930,55 @@ Pass criteria:
 - Artifact state matches.
 - Protocol behavior comes from shared SDK path.
 
+## Current Safari Run Notes - 2026-04-30
+
+Real Safari run:
+
+- Protocol: `Generic Offline CSV Analytics Builder`
+- Run: `af676ede29424f6687299a51992d32a6`
+- Created from a blank protocol through the UI.
+- Published and started from the UI.
+- Stages:
+  1. Define local analytics requirements - M1
+  2. Build offline CSV analytics package - M2
+  3. Validate offline analytics package - M1
+
+Confirmed behavior:
+
+- Stage 1 completed and produced `artifacts/requirements.md`.
+- Stage 2 delegated to M2 correctly and completed the package build.
+- The generated package was intentionally scenario-shaped, but the product
+  protocol, launch fields, and runtime stayed generic.
+
+Blocker found:
+
+- Stage 2 produced `artifacts/offline-analytics-package`, but the run blocked
+  with `artifact_missing` because the declared output was a directory/package
+  path. SDK finalization only verified regular files, so directory artifacts
+  were reported as missing even when the agent created them.
+- Generic fix required: verify directory workspace artifacts, hash directory
+  contents, let run/task artifact routes open `index.html` from a directory,
+  and download directory artifacts as zip files.
+
+UX issues observed:
+
+- The runs page did not reliably live-refresh. It stayed on stage 1 with a
+  stale `4s` elapsed counter while the linked conversation showed stage 2
+  running.
+- Conversation linked work and full activity eventually showed useful progress,
+  but both needed manual navigation/reload to reveal newer runtime events.
+- Full activity is no longer blank, but the newest progress is hard to follow:
+  rows are collapsed, the page does not auto-follow the latest event, and the
+  user has to infer whether the run is still healthy.
+- The run page showed contradictory artifact language for the same output:
+  "Produced by this stage" and "Declared artifact, not produced yet." The
+  directory-artifact fix should remove this contradiction for package outputs.
+- The run launch warning for "expected outputs not declared" is useful for
+  strict artifacts, but it becomes confusing when a declared package directory
+  intentionally contains `index.html`, README, samples, and reports. The UI
+  should explain whether the user should declare one package output or each
+  contained file.
+
 ## Open Blockers
 
 | ID | Severity | Blocker | Required Fix |

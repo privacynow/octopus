@@ -2380,6 +2380,16 @@ select {
     overflow: visible;
 }
 
+#content > .content-inner.protocol-runs-route-shell .kit-runs-list-entry.is-selected .kit-runs-list-row {
+    gap: var(--space-0-5);
+    padding-block: var(--space-2);
+}
+
+#content > .content-inner.protocol-runs-route-shell .kit-runs-list-entry.is-selected .kit-runs-list-row-subtitle,
+#content > .content-inner.protocol-runs-route-shell .kit-runs-list-entry.is-selected .kit-runs-list-row-meta {
+    display: none;
+}
+
 #content > .content-inner.protocol-runs-route-shell .protocol-surface-shell {
     min-height: 0;
     overflow: visible;
@@ -5470,6 +5480,40 @@ select {
     gap: var(--space-3);
 }
 
+.run-focus-progress {
+    width: 100%;
+}
+
+.run-focus-live {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
+}
+
+.run-focus-live strong {
+    color: var(--text);
+    font-size: var(--text-sm);
+}
+
+.run-focus-live span {
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.run-focus-live.is-live {
+    border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
 .run-focus-metrics {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
@@ -5573,6 +5617,24 @@ select {
     border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
 }
 
+.run-stage-timeline-item.is-running .run-stage-timeline-marker,
+.run-stage-timeline-item.is-submitted .run-stage-timeline-marker,
+.run-stage-timeline-item.is-leased .run-stage-timeline-marker {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+}
+
+.run-stage-timeline-item.is-completed .run-stage-timeline-marker {
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    color: var(--success);
+}
+
+.run-stage-timeline-item.is-failed .run-stage-timeline-marker,
+.run-stage-timeline-item.is-blocked .run-stage-timeline-marker {
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    color: var(--danger);
+}
+
 .run-stage-timeline-button {
     appearance: none;
     width: 100%;
@@ -5674,6 +5736,10 @@ select {
     .runs-overview-strip,
     .run-focus-metrics {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .run-focus-live {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -5820,11 +5886,20 @@ select {
     .kit-run-stage-progress-node.is-current .kit-run-stage-progress-marker {
         animation: kit-run-stage-pulse 1.8s ease-in-out infinite;
     }
+
+    .kit-run-stage-progress-node.is-current {
+        animation: kit-run-stage-current-glow 2.4s ease-in-out infinite;
+    }
 }
 
 @keyframes kit-run-stage-pulse {
     0%, 100% { transform: scale(1); }
     50% { transform: scale(1.08); }
+}
+
+@keyframes kit-run-stage-current-glow {
+    0%, 100% { box-shadow: var(--focus-ring); }
+    50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 }
 
 /* --- Kit agents widgets (Step 8) ------------------------------------- */

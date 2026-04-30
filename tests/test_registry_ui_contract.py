@@ -904,6 +904,11 @@ def test_conversation_tab_keeps_the_parent_view_conversational() -> None:
     assert "label: 'Linked work'" in detail
     assert "label: 'Tasks'" not in detail
     assert "return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');" in detail
+    assert "let eventLoadRequestToken = 0" in detail
+    assert "maybeAdoptOperationalView();" in detail
+    assert "if (requestToken !== eventLoadRequestToken || requestView !== activeView)" in detail
+    assert "const expansionState = activityExpansionState(visibleEvents);" in detail
+    assert "renderEventElement(event, expansionState)" in detail
     assert "@role:' + role" not in detail
     assert "@skill:' + value" not in detail
     assert "agent.role_selector" in detail
@@ -1228,6 +1233,9 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "workbench.appendChild(_buildRunDetailPanel());" not in workspace
     assert "function _buildRunsOverviewStrip(" in workspace
     assert "const buildRunFocusHero = () => {" in workspace
+    assert "const progressRail = Kit.runStageProgressRail({" in workspace
+    assert "onStageSelect: selectRunStageEvidence" in workspace
+    assert "run-focus-live" in workspace
     assert "normalizedRunId === String(currentRunId || '')" in workspace
     assert "run-expansion-panel" in workspace
     assert "run-feed-panel" in workspace
@@ -1241,6 +1249,9 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "kit-run-stage-progress-node is-" in kit
     assert ".runs-overview-strip" in css
     assert ".run-focus-hero" in css
+    assert ".run-focus-live" in css
+    assert "kit-run-stage-current-glow" in css
+    assert ".kit-runs-list-entry.is-selected .kit-runs-list-row-subtitle" in css
     assert ".run-expansion-panel" in css
     assert ".run-stage-timeline-button" in css
     assert ".run-audit-disclosure" in css
@@ -1434,6 +1445,8 @@ def test_task_event_cards_render_outcomes_in_expandable_body_without_duplicate_l
     assert "const leadText = _eventLeadText(" not in event_renderers
     assert "event-card-lead" not in event_renderers
     assert "content.className = terminalWithOutcome ? 'event-text-block event-text-block-outcome' : 'event-text-block';" in event_renderers
+    assert "card.classList.add('is-open-by-default');" in event_renderers
+    assert "expandedIds.has(_eventRenderKey(event))" in event_renderers
     assert ".event-text-block-outcome {" in css
     assert "UI.renderMetadataGrid([" in task_list
     assert ".task-item-facts {" in css

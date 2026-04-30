@@ -7516,6 +7516,37 @@ function renderProtocolRuns(container) {
 
             const state = document.createElement('div');
             state.className = 'run-focus-state';
+
+            const progressRail = Kit.runStageProgressRail({
+                ..._runStageProgressData(currentRun),
+                selectedStageExecutionId: activeRunStageExecutionId,
+                selectedStageKey: String(currentStage?.stage_key || run.current_stage_key || ''),
+                onStageSelect: selectRunStageEvidence,
+            });
+            progressRail.classList.add('run-focus-progress');
+            state.appendChild(progressRail);
+
+            const latestEvent = lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || '')
+                ? lastRunEvent
+                : null;
+            const live = document.createElement('div');
+            live.className = `run-focus-live${active ? ' is-live' : ''}`;
+            const liveLabel = document.createElement('strong');
+            liveLabel.textContent = active ? 'Live update' : 'Latest update';
+            live.appendChild(liveLabel);
+            const liveCopy = document.createElement('span');
+            liveCopy.textContent = latestEvent
+                ? [
+                    String(latestEvent.event_kind || '').replace(/_/g, ' ') || 'runtime event',
+                    latestEvent.reason || '',
+                    latestEvent.created_at ? UI.relativeTime(latestEvent.created_at) : '',
+                ].filter(Boolean).join(' · ')
+                : active
+                    ? 'Waiting for the next runtime event.'
+                    : run.termination_summary || 'Run is no longer active.';
+            live.appendChild(liveCopy);
+            state.appendChild(live);
+
             const metrics = document.createElement('div');
             metrics.className = 'run-focus-metrics';
             [
@@ -7803,8 +7834,9 @@ function renderProtocolRuns(container) {
                 const value = stageValueFor(stageItem, index);
                 const producedArtifacts = artifactsByProducer.get(String(stageItem.protocol_stage_execution_id || '')) || [];
                 const selected = value === String(activeRunStageExecutionId || '');
+                const normalizedStageStatus = String(stageItem.status || 'pending').trim().toLowerCase() || 'pending';
                 const item = document.createElement('article');
-                item.className = `run-stage-timeline-item${selected ? ' is-expanded' : ''}`;
+                item.className = `run-stage-timeline-item is-${normalizedStageStatus}${selected ? ' is-expanded' : ''}`;
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'run-stage-timeline-button';

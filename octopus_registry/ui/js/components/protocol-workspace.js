@@ -253,6 +253,39 @@ function _titleCaseWords(value) {
         .join(' ');
 }
 
+function _protocolEventKindLabel(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    const labels = {
+        'protocol_run.updated': 'Run updated',
+        'protocol_run.terminal': 'Run finished',
+        'protocol.run.accept': 'Operator accepted',
+        'protocol.run.send-back': 'Operator sent back',
+        'protocol.run.send_back': 'Operator sent back',
+        'protocol.run.cancel': 'Run cancelled',
+        'protocol.run.retry': 'Run retried',
+        operator_accept: 'Operator accepted',
+        operator_send_back: 'Operator sent back',
+        operator_cancel: 'Run cancelled',
+        operator_retry: 'Run retried',
+    };
+    if (labels[normalized]) return labels[normalized];
+    return _titleCaseWords(normalized.replace(/[._]+/g, ' ')) || 'Runtime event';
+}
+
+function _protocolEventText(event) {
+    if (!event) return '';
+    const kind = _protocolEventKindLabel(event.event_kind);
+    const reason = String(event.reason || '').trim();
+    const reasonLabel = reason && /^protocol[._]run[._-]/i.test(reason)
+        ? _protocolEventKindLabel(reason)
+        : reason;
+    return [
+        kind,
+        reasonLabel && reasonLabel !== kind ? reasonLabel : '',
+        event.created_at ? UI.relativeTime(event.created_at) : '',
+    ].filter(Boolean).join(' · ');
+}
+
 /*
  * Protocol authoring workspace — one progressive workflow stage stack and one
  * optional map. The old overview/detail/topology split is gone.
@@ -1941,12 +1974,51 @@ function renderProtocolWorkspace(container) {
             .toLowerCase();
     }
 
+    function _looksLikeExpectedOutputToken(value) {
+        const normalized = _normalizeExpectedOutputToken(value);
+        if (!normalized) return false;
+        if (/[/*]/.test(normalized)) return true;
+        return /^[\w .-]+\.[a-z0-9]{2,12}$/i.test(normalized);
+    }
+
+    function _pathExpectedOutputTokens(value) {
+        const source = String(value || '');
+        const matches = [];
+        const pathPattern = /(?:^|[\s([{"'`])((?:\.{0,2}\/)?[a-z0-9][a-z0-9_.-]*(?:\/[a-z0-9_*?.-]+)+)/gi;
+        let match;
+        while ((match = pathPattern.exec(source)) !== null) {
+            const normalized = _normalizeExpectedOutputToken(match[1]);
+            if (normalized && _looksLikeExpectedOutputToken(normalized)) {
+                matches.push(normalized);
+            }
+        }
+        return matches;
+    }
+
     function _expectedOutputTokens(value) {
-        return String(value || '')
-            .split(/[\n,]+/g)
-            .map(_normalizeExpectedOutputToken)
-            .filter(Boolean)
-            .filter((item) => /[./*]/.test(item) || /^[\w -]+\.[a-z0-9]{2,8}$/i.test(item));
+        const tokens = [];
+        String(value || '').split(/\n+/g).forEach((rawLine) => {
+            const line = String(rawLine || '').trim();
+            if (!line) return;
+            const containerBoundary = line.search(/\b(containing|contains|including|includes|inside|with)\b/i);
+            const pathScope = containerBoundary >= 0 ? line.slice(0, containerBoundary) : line;
+            const pathTokens = _pathExpectedOutputTokens(pathScope);
+            if (pathTokens.length) {
+                tokens.push(...pathTokens);
+                return;
+            }
+            const commaParts = line.split(',').map(_normalizeExpectedOutputToken).filter(Boolean);
+            const commaTokens = commaParts.filter(_looksLikeExpectedOutputToken);
+            if (commaTokens.length && commaTokens.length === commaParts.length) {
+                tokens.push(...commaTokens);
+                return;
+            }
+            const normalized = _normalizeExpectedOutputToken(line);
+            if (_looksLikeExpectedOutputToken(normalized) && !/\s/.test(normalized)) {
+                tokens.push(normalized);
+            }
+        });
+        return Array.from(new Set(tokens));
     }
 
     function _declaredArtifactIdentifiers(doc = draft.document) {
@@ -6910,7 +6982,7 @@ function renderProtocolRuns(container) {
                 stageProgress: _runStageProgressData(currentRun),
             },
             liveEventText: (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || ''))
-                ? `Live update: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')} · ${lastRunEvent.reason || ''}`
+                ? `Live update: ${_protocolEventText(lastRunEvent)}`
                 : '',
         });
     }
@@ -6941,6 +7013,19 @@ function renderProtocolRuns(container) {
         const status = String(currentRun?.run.status || '');
         const active = !['completed', 'failed', 'cancelled'].includes(status);
         const allowedDecisions = _currentRunAllowedDecisions();
+        const currentStageExecutionId = String(currentRun?.run?.current_stage_execution_id || '').trim();
+        const currentStageKey = String(currentRun?.run?.current_stage_key || '').trim();
+        const stageRows = Array.isArray(currentRun?.stage_executions) ? currentRun.stage_executions : [];
+        const currentStageExecution = stageRows.find((item) =>
+            currentStageExecutionId && String(item?.protocol_stage_execution_id || '') === currentStageExecutionId,
+        ) || [...stageRows].reverse().find((item) =>
+            currentStageKey && String(item?.stage_key || '') === currentStageKey,
+        ) || null;
+        const currentStageStatus = String(currentStageExecution?.status || '').trim().toLowerCase();
+        const currentStageBusy = ['queued', 'submitted', 'leased', 'running'].includes(currentStageStatus);
+        const interventionNote = currentStageBusy
+            ? ' This is an operator intervention while the current stage may still be working.'
+            : '';
         return [
             {
                 action: 'retry',
@@ -6955,22 +7040,24 @@ function renderProtocolRuns(container) {
             {
                 action: 'accept',
                 label: 'Accept',
-                note: 'Accept records an operator review decision for the current stage using the reason you provide as audit context.',
+                note: `Accept records an operator review decision for the current stage using the reason you provide as audit context.${interventionNote}`,
                 confirmLabel: 'Accept run',
                 successMessage: 'Protocol run accepted.',
                 requireReason: false,
                 visible: active && allowedDecisions.has('accept'),
                 enabled: active && allowedDecisions.has('accept'),
+                intervention: currentStageBusy,
             },
             {
                 action: 'send-back',
                 label: 'Send back',
-                note: 'Send back records an operator revise decision and requires a short reason that explains what needs to change.',
+                note: `Send back records an operator revise decision and requires a short reason that explains what needs to change.${interventionNote}`,
                 confirmLabel: 'Send back',
                 successMessage: 'Protocol run sent back.',
                 requireReason: true,
                 visible: active && allowedDecisions.has('revise'),
                 enabled: active && allowedDecisions.has('revise'),
+                intervention: currentStageBusy,
             },
             {
                 action: 'cancel',
@@ -7056,10 +7143,10 @@ function renderProtocolRuns(container) {
         });
     }
 
-    function _buildRunActionBar({ sticky = false } = {}) {
+    function _buildRunActionBar({ sticky = false, specs = null } = {}) {
         const runActionBar = document.createElement('div');
         runActionBar.className = sticky ? 'editor-actions protocol-sticky-actions' : 'editor-actions';
-        _runActionSpecs().filter((spec) => spec.visible !== false).forEach((spec) => {
+        (specs || _runActionSpecs()).filter((spec) => spec.visible !== false).forEach((spec) => {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = spec.action === 'cancel' ? 'btn' : 'btn btn-primary';
@@ -7447,6 +7534,52 @@ function renderProtocolRuns(container) {
             String(item.to_stage_execution_id || '') === String(stageExecutionId || '')
             || String(item.from_stage_execution_id || '') === String(stageExecutionId || ''),
         );
+        const stageLabelForExecutionId = (stageExecutionId) => {
+            const stage = stageById.get(String(stageExecutionId || ''));
+            const stageDef = stage ? stageDefinitionByKey.get(String(stage.stage_key || '')) || {} : {};
+            return stage ? String(stageDef.display_name || stage.stage_key || 'Stage') : '';
+        };
+        const transitionDirectionForStage = (transition, stageExecutionId) => {
+            const stageId = String(stageExecutionId || '');
+            const fromId = String(transition?.from_stage_execution_id || '');
+            const toId = String(transition?.to_stage_execution_id || '');
+            if (fromId === stageId && toId === stageId) return 'within';
+            if (fromId === stageId && toId) return 'outgoing';
+            if (toId === stageId && fromId) return 'incoming';
+            if (fromId === stageId) return 'from-stage';
+            if (toId === stageId) return 'to-stage';
+            return '';
+        };
+        const transitionLabelForStage = (transition, stageExecutionId) => {
+            const kind = String(transition?.transition_kind || '').trim().toLowerCase();
+            const decision = String(transition?.decision || '').trim();
+            const direction = transitionDirectionForStage(transition, stageExecutionId);
+            if (kind === 'dispatch') return 'Dispatched to agent';
+            if (kind === 'advance' && direction === 'incoming') return 'Arrived from previous stage';
+            if (kind === 'advance' && direction === 'outgoing') return 'Completed and advanced';
+            if (kind === 'terminal') return 'Finished run';
+            if (kind === 'blocked') return 'Blocked';
+            if (kind === 'retry') return 'Retry requested';
+            return [
+                _titleCaseWords(kind || 'transition'),
+                decision ? _protocolDecisionLabel(decision) || decision : '',
+            ].filter(Boolean).join(' · ');
+        };
+        const transitionSummaryForStage = (transition, stageExecutionId) => {
+            const direction = transitionDirectionForStage(transition, stageExecutionId);
+            const fromLabel = stageLabelForExecutionId(transition?.from_stage_execution_id);
+            const toLabel = stageLabelForExecutionId(transition?.to_stage_execution_id);
+            const directionText = direction === 'incoming' && fromLabel
+                ? `from ${fromLabel}`
+                : direction === 'outgoing' && toLabel
+                    ? `to ${toLabel}`
+                    : '';
+            return [
+                transition?.reason || transition?.actor_ref || '',
+                directionText,
+                transition?.error_code || '',
+            ].filter(Boolean).join(' · ');
+        };
 
         const timestampMs = (value) => {
             const parsed = Date.parse(String(value || ''));
@@ -7599,20 +7732,30 @@ function renderProtocolRuns(container) {
             const latestEvent = lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || '')
                 ? lastRunEvent
                 : null;
+            const currentTask = taskById.get(String(currentStage?.routed_task_id || '')) || null;
+            const currentParticipant = participantByKey.get(String(currentStage?.participant_key || '')) || {};
+            const currentStageStartedMs = timestampMs(currentStage?.started_at || currentStage?.updated_at);
+            const currentStageAge = currentStageStartedMs ? durationLabel(Date.now() - currentStageStartedMs) : '';
+            const quietProgressText = currentStage
+                ? [
+                    `Stage ${currentStageOrdinal || 1}${totalStages ? ` / ${totalStages}` : ''}`,
+                    currentStageDef.display_name || currentStage.stage_key || 'Current stage',
+                    currentStage.status || run.status || 'running',
+                    currentTask ? `task ${currentTask.target_display_name || currentTask.target_agent_id || currentStage.routed_task_id}` : '',
+                    currentParticipant.display_name ? `participant ${currentParticipant.display_name}` : '',
+                    currentStageAge ? `active ${currentStageAge}` : '',
+                ].filter(Boolean).join(' · ')
+                : 'Waiting for the first stage to dispatch.';
             const live = document.createElement('div');
-            live.className = `run-focus-live${active ? ' is-live' : ''}`;
+            live.className = `run-focus-live${active ? ' is-live' : ''}${active && !latestEvent ? ' is-quiet' : ''}`;
             const liveLabel = document.createElement('strong');
             liveLabel.textContent = active ? 'Live update' : 'Latest update';
             live.appendChild(liveLabel);
             const liveCopy = document.createElement('span');
             liveCopy.textContent = latestEvent
-                ? [
-                    String(latestEvent.event_kind || '').replace(/_/g, ' ') || 'runtime event',
-                    latestEvent.reason || '',
-                    latestEvent.created_at ? UI.relativeTime(latestEvent.created_at) : '',
-                ].filter(Boolean).join(' · ')
+                ? _protocolEventText(latestEvent)
                 : active
-                    ? 'Waiting for the next runtime event.'
+                    ? quietProgressText
                     : run.termination_summary || 'Run is no longer active.';
             live.appendChild(liveCopy);
             state.appendChild(live);
@@ -7643,13 +7786,22 @@ function renderProtocolRuns(container) {
             lower.className = 'run-focus-lower';
             const actions = document.createElement('div');
             actions.className = 'run-focus-actions';
-            const actionTitle = document.createElement('div');
-            actionTitle.className = 'detail-label';
-            actionTitle.textContent = 'Next action';
-            actions.appendChild(actionTitle);
-            actions.appendChild(_buildRunActionBar());
+            const actionSpecs = _runActionSpecs().filter((spec) => spec.visible !== false);
+            if (actionSpecs.length) {
+                const actionTitle = document.createElement('div');
+                actionTitle.className = 'detail-label';
+                actionTitle.textContent = 'Operator controls';
+                actions.appendChild(actionTitle);
+                if (actionSpecs.some((spec) => spec.intervention)) {
+                    const actionNote = document.createElement('p');
+                    actionNote.className = 'quiet-note run-focus-action-note';
+                    actionNote.textContent = 'These controls can intervene in the current stage; use them only when the displayed stage evidence is enough to make that decision.';
+                    actions.appendChild(actionNote);
+                }
+                actions.appendChild(_buildRunActionBar({ specs: actionSpecs }));
+            }
             lower.appendChild(actions);
-            if (actions.childElementCount > 1) {
+            if (actions.childElementCount) {
                 hero.appendChild(lower);
             }
 
@@ -7693,14 +7845,16 @@ function renderProtocolRuns(container) {
             ], { compact: true }));
             if (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || '')) {
                 card.appendChild(UI.renderListRow({
-                    label: `Latest event: ${String(lastRunEvent.event_kind || '').replace(/_/g, ' ')}`,
-                    sublabel: lastRunEvent.reason || 'Live event received from the registry.',
+                    label: `Latest event: ${_protocolEventKindLabel(lastRunEvent.event_kind)}`,
+                    sublabel: _protocolEventText(lastRunEvent) || 'Live event received from the registry.',
                     badgeText: 'event',
                 }));
             } else if (active) {
                 card.appendChild(UI.renderListRow({
-                    label: 'Waiting for the next runtime update',
-                    sublabel: 'The registry refreshes this run as agents create tasks, decisions, and artifacts.',
+                    label: 'Watching current stage',
+                    sublabel: currentStage
+                        ? `${currentStageDef.display_name || currentStage.stage_key || 'Current stage'} is ${currentStage.status || run.status || 'running'}. Refreshes arrive as agents create tasks, decisions, and artifacts.`
+                        : 'The registry refreshes this run as the first stage is dispatched.',
                     badgeText: 'watching',
                 }));
             }
@@ -7812,8 +7966,8 @@ function renderProtocolRuns(container) {
                 card.appendChild(decisionsLabel);
                 const decisionList = document.createElement('div');
                 const decisionRows = stageTransitions.slice(0, 3).map((transition) => UI.renderListRow({
-                    label: `${transition.transition_kind} · ${transition.decision || 'n/a'}`,
-                    sublabel: [transition.reason || transition.actor_ref || '', transition.error_code || ''].filter(Boolean).join(' · '),
+                    label: transitionLabelForStage(transition, item.protocol_stage_execution_id),
+                    sublabel: transitionSummaryForStage(transition, item.protocol_stage_execution_id),
                     badgeText: String(transition.metadata_json?.target_agent_id || ''),
                 }));
                 UI.reconcileChildren(decisionList, decisionRows);

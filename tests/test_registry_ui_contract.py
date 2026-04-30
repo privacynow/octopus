@@ -1107,6 +1107,8 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "context" in kit
     assert "constraints" in kit
     assert "expected_outputs" in kit
+    assert "function _pathExpectedOutputTokens(value)" in workspace
+    assert "const containerBoundary = line.search" in workspace
     assert "manufacturing analytics" not in kit
     assert "raw private data" not in kit
     assert "function _openRunProtocolDialog()" in workspace
@@ -1236,6 +1238,10 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "const progressRail = Kit.runStageProgressRail({" in workspace
     assert "onStageSelect: selectRunStageEvidence" in workspace
     assert "run-focus-live" in workspace
+    assert "function _protocolEventText(event)" in workspace
+    assert "quietProgressText" in workspace
+    assert "transitionLabelForStage(transition, item.protocol_stage_execution_id)" in workspace
+    assert "Operator controls" in workspace
     assert "normalizedRunId === String(currentRunId || '')" in workspace
     assert "run-expansion-panel" in workspace
     assert "run-feed-panel" in workspace

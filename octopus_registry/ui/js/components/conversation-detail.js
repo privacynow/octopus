@@ -2290,11 +2290,20 @@ function renderConversationDetail(container, params) {
 
     function compactActivityEvents(events = []) {
         const rows = Array.isArray(events) ? events : [];
+        const terminalTaskIds = new Set(
+            rows
+                .filter(isTerminalTaskEvent)
+                .map(taskStatusEventTaskId)
+                .filter(Boolean),
+        );
         const latestStatusByTask = new Map();
         const compacted = [];
         rows.forEach((event) => {
             if (isCompactTaskStatusEvent(event)) {
-                latestStatusByTask.set(taskStatusCompactKey(event), event);
+                const taskId = taskStatusEventTaskId(event);
+                if (!taskId || !terminalTaskIds.has(taskId)) {
+                    latestStatusByTask.set(taskStatusCompactKey(event), event);
+                }
                 return;
             }
             if (isTerminalTaskEvent(event)) {

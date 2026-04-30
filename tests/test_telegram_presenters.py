@@ -159,6 +159,31 @@ def test_protocol_artifacts_message_distinguishes_available_and_missing_artifact
     assert rendered.reply_markup.inline_keyboard[0][0].text == "Open Run in Registry"
 
 
+def test_protocol_artifacts_message_omits_localhost_url_buttons():
+    detail = SimpleNamespace(
+        run=SimpleNamespace(protocol_run_id="run-1"),
+        artifacts=[
+            SimpleNamespace(
+                artifact_key="plan",
+                verification_state="verified",
+                state="available",
+                exists=True,
+                workspace_path="plan.md",
+                size_bytes=42,
+            ),
+        ],
+    )
+
+    rendered = protocol_run_artifacts_message(
+        detail,
+        deep_link="http://127.0.0.1:8787/ui/runs?run_id=run-1",
+        artifact_links={"plan": "http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content"},
+    )
+
+    assert "http://127.0.0.1:8787/ui/runs?run_id=run-1" in rendered.text
+    assert rendered.reply_markup is None
+
+
 def test_recovery_notice_markup_renders_expected_buttons():
     markup = recovery_notice_markup("tg:601", "Run again", "Skip")
 

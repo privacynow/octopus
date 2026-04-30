@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 from app.agents.state import load_runtime_registry_connection_state
 from app.channels.telegram.state import TelegramRuntime
@@ -53,11 +54,34 @@ def registry_client_for_runtime(runtime: TelegramRuntime) -> tuple[RegistryClien
     return None
 
 
-def protocol_run_url(runtime: TelegramRuntime, run_id: str, *, registry_url: str = "") -> str:
+def _human_registry_base_url(raw_base: str) -> str:
+    explicit = (
+        os.environ.get("BOT_REGISTRY_PUBLIC_URL")
+        or os.environ.get("OCTOPUS_REGISTRY_PUBLIC_URL")
+        or os.environ.get("REGISTRY_PUBLIC_URL")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit.rstrip("/")
+    base = str(raw_base or "").strip()
+    parsed = urlparse(base)
+    if (parsed.hostname or "").strip().lower() != "registry":
+        return base.rstrip("/")
+    port = parsed.port or 8787
+    netloc = f"127.0.0.1:{port}"
+    return urlunparse((parsed.scheme or "http", netloc, "", "", "", "")).rstrip("/")
+
+
+def _configured_registry_url(runtime: TelegramRuntime, registry_url: str = "") -> str:
     base = str(registry_url or "").strip()
     if not base:
         registry = next(iter(runtime.config.agent_registries), None)
         base = str(getattr(registry, "url", "") or "").strip() if registry is not None else ""
+    return _human_registry_base_url(base) if base else ""
+
+
+def protocol_run_url(runtime: TelegramRuntime, run_id: str, *, registry_url: str = "") -> str:
+    base = _configured_registry_url(runtime, registry_url)
     if not base:
         return ""
     return f"{base.rstrip('/')}/ui/runs?run_id={quote(str(run_id or '').strip())}"
@@ -72,10 +96,7 @@ def protocol_artifact_url(
     download: bool = False,
     browse: bool = False,
 ) -> str:
-    base = str(registry_url or "").strip()
-    if not base:
-        registry = next(iter(runtime.config.agent_registries), None)
-        base = str(getattr(registry, "url", "") or "").strip() if registry is not None else ""
+    base = _configured_registry_url(runtime, registry_url)
     if not base:
         return ""
     run_token = quote(str(run_id or "").strip())

@@ -539,6 +539,7 @@ def test_connect_bot_to_remote_registry_writes_registry_record(tmp_path: Path) -
     assert values["BOT_AGENT_REGISTRY_1_URL"] == "http://registry.example.internal:9000"
     assert values["BOT_AGENT_REGISTRY_1_ENROLL_TOKEN"] == "remote-secret"
     assert values["BOT_AGENT_REGISTRY_1_SCOPE"] == "observe"
+    assert "BOT_REGISTRY_PUBLIC_URL" not in values
     assert connection.registry_id == "registry-example-internal-9000"
     assert restarted == ["m1"]
     assert verified == [("m1", "registry-example-internal-9000")]
@@ -567,6 +568,7 @@ def test_prepare_bot_for_local_registry_writes_registry_record_without_restart(t
     assert values["BOT_AGENT_REGISTRY_1_URL"] == "http://registry:8787"
     assert values["BOT_AGENT_REGISTRY_1_ENROLL_TOKEN"] == "local-secret"
     assert values["BOT_AGENT_REGISTRY_1_SCOPE"] == "full"
+    assert values["BOT_REGISTRY_PUBLIC_URL"] == "http://127.0.0.1:8787"
     assert connection.registry_id == "local"
     assert cleared == []
 
@@ -615,6 +617,7 @@ def test_add_bot_interactive_prepares_local_registry_before_start(tmp_path: Path
     assert values["BOT_AGENT_REGISTRY_1_ID"] == "local"
     assert values["BOT_AGENT_REGISTRY_1_URL"] == "http://registry:8787"
     assert values["BOT_AGENT_REGISTRY_1_ENROLL_TOKEN"] == "local-secret"
+    assert values["BOT_REGISTRY_PUBLIC_URL"] == "http://127.0.0.1:8787"
     assert started == ["example-bot"]
     assert verified == [("example-bot", "local")]
 

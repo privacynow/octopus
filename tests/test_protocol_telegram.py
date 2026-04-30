@@ -79,6 +79,32 @@ def test_protocol_run_url_targets_protocol_runs_route():
     assert url == "http://registry.local/ui/runs?run_id=run-1"
 
 
+def test_protocol_urls_translate_local_registry_for_humans(monkeypatch):
+    monkeypatch.delenv("BOT_REGISTRY_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("OCTOPUS_REGISTRY_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("REGISTRY_PUBLIC_URL", raising=False)
+    runtime = SimpleNamespace(config=SimpleNamespace(agent_registries=[]))
+
+    url = telegram_protocols.protocol_artifact_url(
+        runtime,
+        "run-1",
+        "report",
+        registry_url="http://registry:8787",
+        download=True,
+    )
+
+    assert url == "http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/report/content?download=true"
+
+
+def test_protocol_urls_prefer_configured_public_registry_url(monkeypatch):
+    monkeypatch.setenv("BOT_REGISTRY_PUBLIC_URL", "http://mybox.local:9000")
+    runtime = SimpleNamespace(config=SimpleNamespace(agent_registries=[]))
+
+    url = telegram_protocols.protocol_run_url(runtime, "run-1", registry_url="http://registry:8787")
+
+    assert url == "http://mybox.local:9000/ui/runs?run_id=run-1"
+
+
 def test_protocol_start_args_parse_rich_launch_fields():
     slug, inputs = telegram_protocols.parse_protocol_start_args(
         [

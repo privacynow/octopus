@@ -1227,10 +1227,22 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "workbench.appendChild(_buildRunDetailPanel());" in workspace
     assert "function _buildRunsOverviewStrip(" in workspace
     assert "const buildRunFocusHero = () => {" in workspace
+    assert "normalizedRunId === String(currentRunId || '')" in workspace
+    assert "onStageSelect: selectRunStageEvidence" in workspace
+    assert "run-detail-panel" in workspace
+    assert "run-navigator-panel" in workspace
     assert "Run inspector" in workspace
     assert "issuesByRunId" in workspace
+    kit = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    assert "onStageSelect = null" in kit
+    assert "kit-run-stage-progress-node is-" in kit
     assert ".runs-overview-strip" in css
     assert ".run-focus-hero" in css
+    assert ".run-focus-summary-card" in css
+    assert ".kit-run-stage-progress-node.is-selectable" in css
+    assert ".protocol-panel.run-detail-panel" in css
     assert ".kit-runs-list-group" in css
 
 

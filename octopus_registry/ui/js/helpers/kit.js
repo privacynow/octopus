@@ -2688,6 +2688,9 @@ window.Kit = (() => {
         runStatus = '',
         issues = [],
         compact = false,
+        selectedStageKey = '',
+        selectedStageExecutionId = '',
+        onStageSelect = null,
     } = {}) {
         const executionByStage = _latestStageExecutions(stageExecutions);
         const issueByStage = new Map();
@@ -2746,6 +2749,7 @@ window.Kit = (() => {
             return {
                 index,
                 key: stage.stage_key,
+                executionId: String(execution?.protocol_stage_execution_id || ''),
                 label: _runStageLabel(stage),
                 state,
                 status: executionStatus || (stage.stage_key === String(currentStageKey || '') ? normalizedRunStatus : ''),
@@ -2768,7 +2772,23 @@ window.Kit = (() => {
             const item = entry.item;
             li.className = `kit-run-stage-progress-node is-${item.state}`;
             li.dataset.stageKey = item.key;
+            if (item.executionId) {
+                li.dataset.stageExecutionId = item.executionId;
+            }
             li.dataset.state = item.state;
+            const selected = (
+                selectedStageExecutionId
+                && item.executionId
+                && String(item.executionId) === String(selectedStageExecutionId || '')
+            ) || (
+                !selectedStageExecutionId
+                && selectedStageKey
+                && String(item.key || '') === String(selectedStageKey || '')
+            );
+            if (selected) {
+                li.classList.add('is-selected');
+                li.setAttribute('aria-current', 'step');
+            }
             const marker = document.createElement('span');
             marker.className = 'kit-run-stage-progress-marker';
             marker.textContent = String(item.index + 1);
@@ -2788,7 +2808,31 @@ window.Kit = (() => {
                     : item.state;
             copy.appendChild(state);
             li.appendChild(copy);
-            li.setAttribute('aria-label', `${item.index + 1}. ${item.label}: ${state.textContent}`);
+            const ariaLabel = `${item.index + 1}. ${item.label}: ${state.textContent}`;
+            if (typeof onStageSelect === 'function') {
+                li.classList.add('is-selectable');
+                li.tabIndex = 0;
+                li.setAttribute('aria-label', `${ariaLabel}. Inspect stage evidence.`);
+                const selectStage = (event) => {
+                    if (event && typeof event.stopPropagation === 'function') {
+                        event.stopPropagation();
+                    }
+                    onStageSelect({
+                        stageKey: item.key,
+                        executionId: item.executionId,
+                        index: item.index,
+                        state: item.state,
+                    });
+                };
+                li.addEventListener('click', selectStage);
+                li.addEventListener('keydown', (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    selectStage(event);
+                });
+            } else {
+                li.setAttribute('aria-label', ariaLabel);
+            }
             root.appendChild(li);
         });
         return root;

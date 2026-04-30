@@ -6656,6 +6656,14 @@ function renderProtocolRuns(container) {
 
     function _setRunSelection(nextRunId, { push = true } = {}) {
         const normalizedRunId = String(nextRunId || '');
+        if (normalizedRunId && normalizedRunId === String(currentRunId || '')) {
+            if (!currentRun && !runDetailLoading) {
+                runDetailLoading = true;
+                renderRunsRoute();
+                void loadRunDetail();
+            }
+            return;
+        }
         currentRun = null;
         currentIssues = [];
         lastRunEvent = null;
@@ -7060,7 +7068,7 @@ function renderProtocolRuns(container) {
     function _buildRunNavigatorPanel() {
         const issueListActive = Boolean(issueKindFilter);
         const panel = document.createElement('section');
-        panel.className = 'editor-panel protocol-panel';
+        panel.className = 'editor-panel protocol-panel run-navigator-panel';
 
         const title = document.createElement('div');
         title.className = 'editor-section-title';
@@ -7241,7 +7249,7 @@ function renderProtocolRuns(container) {
     function _buildRunDetailPanel() {
         const issueListActive = Boolean(issueKindFilter);
         const detailPanel = document.createElement('section');
-        detailPanel.className = 'editor-panel protocol-panel';
+        detailPanel.className = 'editor-panel protocol-panel run-detail-panel';
 
         const detailTitle = document.createElement('div');
         detailTitle.className = 'editor-section-title';
@@ -7285,6 +7293,23 @@ function renderProtocolRuns(container) {
             if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt;
             return String(left.started_at || '').localeCompare(String(right.started_at || ''));
         });
+        const stageValueFor = (item, index = 0) => String(item?.protocol_stage_execution_id || item?.stage_key || `stage-${index}`);
+        const stageValueForStageKey = (stageKey) => {
+            const normalizedStageKey = String(stageKey || '').trim();
+            if (!normalizedStageKey) return '';
+            const index = stageRows.findIndex((item) => String(item.stage_key || '') === normalizedStageKey);
+            return index >= 0 ? stageValueFor(stageRows[index], index) : normalizedStageKey;
+        };
+        const selectRunStageEvidence = (stageInfo = {}) => {
+            activeRunDetailSection = 'stages';
+            activeRunStageExecutionId = String(
+                stageInfo.executionId
+                || stageValueForStageKey(stageInfo.stageKey)
+                || '',
+            );
+            UI.clearMemoizedRender(contentEl);
+            renderRunsRoute();
+        };
         const { transitionRows } = _filteredProtocolTimelineData(currentRun, '');
         const stageById = new Map(
             (currentRun.stage_executions || []).map((item) => [String(item.protocol_stage_execution_id || ''), item]),
@@ -7509,7 +7534,12 @@ function renderProtocolRuns(container) {
 
             const state = document.createElement('div');
             state.className = 'run-focus-state';
-            state.appendChild(Kit.runStageProgressRail(_runStageProgressData(currentRun)));
+            state.appendChild(Kit.runStageProgressRail({
+                ..._runStageProgressData(currentRun),
+                selectedStageExecutionId: activeRunStageExecutionId,
+                selectedStageKey: String(currentStage?.stage_key || run.current_stage_key || ''),
+                onStageSelect: selectRunStageEvidence,
+            }));
             const metrics = document.createElement('div');
             metrics.className = 'run-focus-metrics';
             [
@@ -7541,15 +7571,34 @@ function renderProtocolRuns(container) {
             artifactTitle.className = 'detail-label';
             artifactTitle.textContent = 'Outputs';
             artifacts.appendChild(artifactTitle);
-            if (artifactRows.length) {
-                artifacts.appendChild(createArtifactList(artifactRows.slice(0, 3), {
-                    relationshipFor: () => 'Produced output',
-                }));
-            } else if (pendingArtifactRows.length) {
-                artifacts.appendChild(UI.renderEmptyState(`${pendingArtifactRows.length} declared output${pendingArtifactRows.length === 1 ? '' : 's'} not produced yet.`, true));
-            } else {
-                artifacts.appendChild(UI.renderEmptyState('No outputs recorded yet.', true));
-            }
+            const artifactSummary = document.createElement('div');
+            artifactSummary.className = 'run-focus-summary-card';
+            const artifactCount = document.createElement('strong');
+            artifactCount.textContent = artifactRows.length
+                ? `${artifactRows.length} available`
+                : pendingArtifactRows.length
+                    ? `${pendingArtifactRows.length} pending`
+                    : 'None yet';
+            artifactSummary.appendChild(artifactCount);
+            const artifactCopy = document.createElement('span');
+            artifactCopy.textContent = pendingArtifactRows.length
+                ? `${pendingArtifactRows.length} declared output${pendingArtifactRows.length === 1 ? '' : 's'} not produced yet.`
+                : artifactRows.length
+                    ? 'Open the Artifacts section for preview, download, and path actions.'
+                    : 'Outputs will appear after stages record artifacts.';
+            artifactSummary.appendChild(artifactCopy);
+            const artifactOpen = document.createElement('button');
+            artifactOpen.type = 'button';
+            artifactOpen.className = 'btn btn-sm';
+            artifactOpen.textContent = 'Open artifacts';
+            artifactOpen.addEventListener('click', () => {
+                activeRunDetailSection = 'artifacts';
+                activeRunArtifactStageExecutionId = '';
+                UI.clearMemoizedRender(contentEl);
+                renderRunsRoute();
+            });
+            artifactSummary.appendChild(artifactOpen);
+            artifacts.appendChild(artifactSummary);
             lower.appendChild(artifacts);
             const actions = document.createElement('div');
             actions.className = 'run-focus-actions';
@@ -7828,7 +7877,6 @@ function renderProtocolRuns(container) {
         } else if (activeRunDetailSection === 'stages') {
             appendSectionTitle(sectionPanel, 'Stages', 'Workflow evidence is ordered by the authored protocol, not by reverse event chronology.');
             if (stageRows.length) {
-                const stageValueFor = (item, index = 0) => String(item?.protocol_stage_execution_id || item?.stage_key || `stage-${index}`);
                 const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
                 const preferredStage = currentRunStageExecution();
                 const currentStageIndex = Math.max(stageRows.indexOf(preferredStage), 0);

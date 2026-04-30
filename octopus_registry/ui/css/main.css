@@ -2361,14 +2361,20 @@ select {
     align-items: stretch;
 }
 
-.protocol-runs-workbench[data-has-selection="true"] > .protocol-panel + .protocol-panel {
-    overflow: auto;
-}
-
 #content > .content-inner.protocol-runs-route-shell .protocol-runs-workbench .protocol-panel {
     display: flex;
     flex-direction: column;
     max-height: calc(100dvh - 10rem);
+}
+
+#content > .content-inner.protocol-runs-route-shell .protocol-runs-workbench > .protocol-panel.run-detail-panel {
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+#content > .content-inner.protocol-runs-route-shell .protocol-runs-workbench > .protocol-panel.run-navigator-panel {
+    overflow: hidden;
 }
 
 #content > .content-inner.protocol-runs-route-shell .kit-runs-list {
@@ -5467,6 +5473,28 @@ select {
     justify-content: flex-start;
 }
 
+.run-focus-summary-card {
+    display: grid;
+    gap: var(--space-1-5);
+    align-content: start;
+    min-width: 0;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-primary) 78%, transparent);
+}
+
+.run-focus-summary-card strong {
+    color: var(--text);
+    font-size: var(--text-md);
+}
+
+.run-focus-summary-card span {
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+}
+
 @media (max-width: 1080px) {
     .run-focus-lower {
         grid-template-columns: 1fr;
@@ -5577,6 +5605,25 @@ select {
 .kit-run-stage-progress-node.is-current .kit-run-stage-progress-marker {
     background: color-mix(in srgb, var(--accent) 24%, transparent);
     color: var(--accent);
+}
+
+.kit-run-stage-progress-node.is-selectable {
+    cursor: pointer;
+}
+
+.kit-run-stage-progress-node.is-selectable:hover {
+    border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
+}
+
+.kit-run-stage-progress-node.is-selectable:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
+    outline-offset: 2px;
+}
+
+.kit-run-stage-progress-node.is-selected {
+    border-color: color-mix(in srgb, var(--accent) 56%, var(--border));
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
 }
 
 .kit-run-stage-progress-node.is-failed,

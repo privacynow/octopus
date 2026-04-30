@@ -4490,11 +4490,10 @@ function renderProtocolWorkspace(container) {
                         text: 'Open the workflow map only when you want route context or a spatial review of the whole flow.',
                     },
                 ],
-                note: 'For assistant-building flows, open the skills catalog to publish or install a skill first, then come back here and assign steps by skill.',
+                note: 'Use the Assignment panel on each step to choose an existing skill, pin a specific agent, or mark a new skill needed without leaving the workflow.',
                 actions: [
                     { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
                     { label: 'Define shared files', tone: '', onClick: () => _openArtifactCatalog() },
-                    { label: 'Open skills catalog', tone: '', onClick: () => Router.navigate('/ui/skills') },
                     ...(protocolTemplates.length
                         ? [{ label: Kit.dict.label('protocol.catalog.template'), tone: '', onClick: _openTemplateChooser }]
                         : []),

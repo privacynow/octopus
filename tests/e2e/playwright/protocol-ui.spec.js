@@ -331,8 +331,9 @@ test.describe('protocol authoring live', () => {
     await expect(lifecycle.getByLabel('Name')).toHaveValue('');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start the workflow');
     await expect(page.locator('.kit-workflow-first-run')).toContainText('Start with the first step');
+    await expect(page.locator('.kit-workflow-first-run')).toContainText('Use the Assignment panel on each step');
     await expect(page.getByRole('button', { name: 'Define shared files', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Open skills catalog', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open skills catalog', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /\+ Add participant/i })).toHaveCount(0);
 
     await page.getByRole('button', { name: /(\+ )?Add (first )?step/i }).first().click();

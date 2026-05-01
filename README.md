@@ -11,7 +11,8 @@ Use Octopus when you want more than a single chat thread:
 - reuse skills and provider guidance
 - inspect what happened after a run
 - export or import protocol packages
-- use the browser Registry UI, and optionally Telegram, over the same backend
+- use the browser Registry UI, with Telegram-backed local agents over the same
+  backend
 
 This repository is the shipped Python/FastAPI product. `plan_java.md` is
 planning material only; it is not the runtime described here.
@@ -30,8 +31,10 @@ Choose the path that matches what you need today.
 | Walk through a complete example | [docs/examples/README.md](docs/examples/README.md) |
 
 If you are brand new, read `GETTING_STARTED.md` first. It explains Docker
-Desktop, model provider login, the `./octopus` command, and the first healthy
-browser check without assuming you already know those tools.
+Desktop, Telegram-backed agent setup, model provider login, the `./octopus`
+command, and the first healthy browser check without assuming you already know
+those tools. In the current product, new local agents are created through the
+Telegram-backed bot setup flow before they appear in the Registry.
 
 ## How To Think About Octopus
 

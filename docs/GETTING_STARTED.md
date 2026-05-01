@@ -14,7 +14,7 @@ Octopus runs several local services on your computer:
 - the Registry backend and browser UI
 - a local database for Registry state
 - one or more agent runtimes
-- optional Telegram-facing bot access
+- a Telegram-backed bot configuration for each local agent you create today
 
 Octopus uses Docker to run those services. Docker is the local app that keeps
 the Registry, database, and agents isolated from the rest of your computer. For
@@ -24,6 +24,11 @@ The `./octopus` command is the Octopus control panel. It starts the local stack,
 shows health, helps configure agents, and provides operator actions such as
 logs, diagnostics, restarts, and provider login.
 
+Important current constraint: new local agents are created through
+Telegram-backed bot setup. You can use the browser Registry as your main product
+surface after that, but the first working agent still needs a Telegram bot token
+today.
+
 ## What You Need
 
 You need:
@@ -31,15 +36,17 @@ You need:
 - Docker Desktop or Docker Engine
 - Git
 - Python 3
+- a Telegram account so you can create a bot token with BotFather
 - access to at least one model provider used by your agents, such as Codex or
   Claude
-- a Telegram bot token only if the CLI asks you to create a Telegram-backed
-  agent or you plan to use Telegram
 
 Provider authentication means Octopus can use your approved model-provider
 account inside the local agent container. It is not a Telegram token and it is
 not the Registry login. Without provider auth, an agent may appear in the UI but
 fail when it tries to do model-backed work.
+
+A Telegram bot token creates the local agent identity. Provider auth lets that
+agent use a model. You need both for a useful first environment.
 
 ## Mac Setup
 
@@ -47,19 +54,28 @@ fail when it tries to do model-backed work.
 2. Open Docker Desktop.
 3. Wait until Docker Desktop says it is running.
 4. Install Git if it is not already installed. On many Macs, this command opens
-   Apple's installer:
+   Apple's command line tools installer:
 
 ```bash
 xcode-select --install
 ```
 
-5. Confirm Python 3 exists:
+5. Confirm Git and Python 3 exist:
 
 ```bash
+git --version
 python3 --version
 ```
 
-If that prints a Python version, continue.
+If Python is missing, or if later setup says `venv` is unavailable, install a
+current Python 3 from [python.org](https://www.python.org/downloads/macos/) or
+with Homebrew:
+
+```bash
+brew install python
+```
+
+Then open a new terminal and run `python3 --version` again.
 
 ## Windows Setup
 
@@ -87,6 +103,11 @@ docker ps
 
 If Docker is not reachable from Ubuntu, check Docker Desktop's WSL integration
 settings before continuing.
+
+Keep the Octopus checkout inside Ubuntu's Linux filesystem, for example
+`~/octopus`. Avoid cloning under `/mnt/c/...`; that Windows-mounted path is
+slower and can create file permission problems. When the Registry is running,
+open `http://127.0.0.1:8787/ui` from your normal Windows browser.
 
 ## Linux Or Ubuntu Setup
 
@@ -118,12 +139,13 @@ sudo apt install -y git python3 python3-venv
 Choose a directory where you keep projects, then clone the repository:
 
 ```bash
-git clone git@github.com:privacynow/octopus.git ~/octopus
+git clone https://github.com/privacynow/octopus.git ~/octopus
 cd ~/octopus
 ```
 
-If you do not use SSH keys with GitHub, use the HTTPS clone URL your team
-provides.
+If your team uses a private repository URL, use the HTTPS clone URL they provide
+and sign in when Git asks. SSH clone URLs are fine too, but only use them if you
+already have GitHub SSH keys configured.
 
 ## Start Octopus
 
@@ -136,18 +158,21 @@ Run:
 The first run may take longer because Octopus creates a Python virtual
 environment and builds local images.
 
-If the CLI shows recommended actions, start there. Common first-run actions are:
+If the CLI shows recommended actions, start there. For a first environment, the
+usual order is:
 
-- add a bot or agent configuration
-- authenticate a provider such as Codex or Claude
-- start the Registry
-- start stopped bots
+1. add a bot or agent configuration
+2. authenticate that agent's provider, such as Codex or Claude
+3. start the Registry
+4. start stopped bots
+5. run `./octopus status`
 
-## Add Or Check An Agent
+## Create The First Agent
 
-Octopus needs at least one agent before it can do useful work.
+Octopus needs at least one agent before it can do useful work. Today, the
+supported CLI path creates that agent as a Telegram-backed bot runtime.
 
-If the CLI asks for a Telegram bot token, create one with BotFather:
+Create a Telegram bot token with BotFather:
 
 1. Open Telegram.
 2. Start a chat with [BotFather](https://t.me/BotFather).
@@ -159,9 +184,13 @@ If the CLI asks for a Telegram bot token, create one with BotFather:
 
 Then choose the provider for that agent, such as `codex` or `claude`.
 
+Treat the Telegram token like a password. Do not paste it into documents,
+screenshots, chats, or tickets.
+
 You can still use the browser Registry UI as the main product surface. Telegram
-is optional as a user interface, but a Telegram-backed bot configuration may be
-part of the local agent setup.
+chat is optional for day-to-day use, but the Telegram-backed bot setup is
+currently how new local agents are created. If no Telegram-backed agents have
+been configured and started, the Registry will not have agents to show.
 
 ## Authenticate The Model Provider
 
@@ -180,14 +209,20 @@ Diagnose -> Provider auth
 Pick the provider that needs login, such as `codex` or `claude`, and finish the
 provider's login flow.
 
-What this means:
+What to expect:
 
-- Codex-backed agents need Codex authentication.
-- Claude-backed agents need Claude authentication.
+- Codex-backed agents usually show a device-login URL and code. Open the URL in
+  your browser, enter the code, sign in, approve access, then return to the
+  terminal.
+- Claude-backed agents usually open an interactive Claude session. If it is not
+  already logged in, run `/login`, finish the browser or token flow, then run
+  `/exit`.
 - Each provider is checked separately.
 - If you do not plan to use a provider, that provider can remain unconfigured.
 
 Healthy provider auth means the agent can actually execute model-backed work.
+After login, run `./octopus status` again and confirm the provider no longer
+shows as unconfigured.
 
 ## Check Status
 
@@ -204,6 +239,17 @@ For a usable first environment, look for:
 - the target agent marked execution healthy
 - provider auth configured for the provider you plan to use
 - a Registry URL, normally `http://127.0.0.1:8787/ui`
+
+A healthy first environment should look broadly like this:
+
+```text
+Registry: running
+Registry UI: http://127.0.0.1:8787/ui
+Connected bots:
+  - my-agent: connected, execution healthy, provider codex
+Provider auth:
+  codex: configured
+```
 
 If an optional bot is stopped because its provider is not configured, that does
 not block your first use as long as at least one intended agent is connected and
@@ -271,7 +317,8 @@ recommended start action.
 `No connected bots`
 
 No agent is running or enrolled with the Registry. Run `./octopus status`, then
-start or configure a bot from the CLI.
+start or configure a Telegram-backed bot from the CLI. Until at least one of
+those bots is configured and started, `Work -> Agents` will be empty.
 
 `Provider auth not configured`
 
@@ -283,10 +330,17 @@ The agent cannot use its model provider yet. Run `./octopus`, then
 The Registry can see the agent, but the agent cannot complete model-backed
 work. Check provider auth and run `./octopus doctor <bot>`.
 
+`Telegram bot token missing or rejected`
+
+The first supported local agent setup needs a Telegram bot token. Create a token
+with BotFather, paste the token exactly, and make sure the bot username ends in
+`bot`.
+
 `Telegram commands do not work`
 
-The Telegram bot token or Telegram-side setup is incomplete. Use
-[TELEGRAM.md](TELEGRAM.md) after the browser workflow is healthy.
+The Telegram bot token or Telegram-side command setup is incomplete. The agent
+can still be useful through the browser Registry if it is connected and
+execution-healthy. Use [TELEGRAM.md](TELEGRAM.md) for Telegram command details.
 
 ## After Setup
 

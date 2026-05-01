@@ -26,9 +26,10 @@ A ready Octopus environment should let a user:
 
 - Docker Desktop is running.
 - Git is installed.
+- At least one Telegram-backed local agent is configured and started.
 - Provider authentication is configured for at least one execution agent that
   will perform model-backed work.
-- Telegram is optional unless that channel is part of the evaluation.
+- Telegram chat usage is optional unless that channel is part of the evaluation.
 - The default local Registry URL is `http://127.0.0.1:8787/ui`.
 
 Plain-language setup details for Docker Desktop, Windows WSL2, model provider
@@ -148,7 +149,9 @@ the customer-facing surface where it appears, record that as a product issue.
 
 ## Telegram Parity
 
-Only include Telegram when the environment is configured for it.
+Only include Telegram chat checks when the evaluation needs that surface. The
+underlying local agent may still be Telegram-backed even when users operate
+through the browser Registry.
 
 Useful protocol commands:
 

@@ -7,7 +7,9 @@ Registry yet, start with [GETTING_STARTED.md](GETTING_STARTED.md).
 
 Use this guide when you want to understand the product: how to talk to agents,
 use skills, run protocols, inspect outputs, and decide what to do when work
-looks stuck.
+looks stuck. It assumes at least one local agent has already been created and
+started. Today, that first local agent is created through Telegram-backed bot
+setup in the `./octopus` CLI.
 
 ## The Product In One Minute
 
@@ -38,8 +40,9 @@ Octopus is a shared control center for AI agent work.
 
 ## First 20 Minutes
 
-This path proves the basic product without requiring a customer scenario,
-Telegram, or direct database access.
+This path proves the basic product without requiring a customer scenario or
+direct database access. It does not require using Telegram chat, but it does
+require the Telegram-backed agent created during setup.
 
 1. Open the Registry URL from `./octopus status`.
 2. Open `Work -> Agents`.
@@ -48,15 +51,18 @@ Telegram, or direct database access.
 5. Start a conversation with that agent.
 6. Send a short non-sensitive request.
 7. Confirm the response appears in the conversation timeline.
-8. Open `Build -> Protocols`.
-9. Inspect an existing protocol or create a simple blank protocol.
-10. Run a published protocol.
-11. Open the run from `Work -> Runs`.
-12. Check the current status, stages, artifacts, and audit history.
+8. Open `Work -> Agents` again and confirm the agent still looks healthy.
+9. Open `Operations -> Dashboard` and confirm there is no blocking issue for
+   the agent you plan to use.
 
 If step 3 fails, the product is not ready for normal use yet. Ask the operator
 to check [GETTING_STARTED.md](GETTING_STARTED.md) or
 [OPERATIONS.md](OPERATIONS.md).
+
+After this basic path works, move to `Build -> Protocols` when you are ready to
+run a repeatable staged workflow. Do not make a new user create a blank protocol
+as their first proof that the product works; start from a published protocol or
+a guided scenario in [PROTOCOLS.md](PROTOCOLS.md).
 
 ## Navigation
 
@@ -212,15 +218,19 @@ issues, not a normal user burden.
 
 ## Use Telegram
 
-Telegram is optional. It is a peer client over the same registry/runtime
-backend, not a separate product model.
+Telegram has two roles today:
+
+- setup role: the current CLI path creates local agents as Telegram-backed bot
+  runtimes
+- user-facing role: Telegram can also be a chat and control surface over the
+  same Registry/runtime backend
 
 Use Telegram for quick chat, status checks, protocol run controls, and artifact
 links when a Telegram bot token is configured. Use [TELEGRAM.md](TELEGRAM.md)
 for setup notes and command details.
 
-If you are new, learn the browser Registry workflow first. It exposes more
-context and is easier to inspect when something goes wrong.
+If you are new, learn the browser Registry workflow first after the agent exists.
+It exposes more context and is easier to inspect when something goes wrong.
 
 ## If Something Looks Wrong
 

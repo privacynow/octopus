@@ -29,6 +29,8 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "Diagnose -> Provider auth" in getting_started
     assert "Docker Desktop" in getting_started
     assert "Provider authentication means" in getting_started
+    assert "new local agents are created through" in getting_started
+    assert "Telegram bot token creates the local agent identity" in getting_started
     assert "Work -> Agents" in getting_started
 
     assert "## First 20 Minutes" in user_guide
@@ -38,6 +40,7 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "Routing skills" in user_guide
     assert "[PROTOCOLS.md](PROTOCOLS.md)" in user_guide
     assert "[TELEGRAM.md](TELEGRAM.md)" in user_guide
+    assert "does not require using Telegram chat" in user_guide
 
     assert "## Export And Import" in protocol_guide
     assert "Protocol packages are single text documents in JSON or YAML" in protocol_guide
@@ -54,6 +57,7 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "[docs/registry-openapi.json]" in operations_guide
 
     assert "[GETTING_STARTED.md](GETTING_STARTED.md)" in telegram_guide
+    assert "creates new local agents as Telegram-backed bot runtimes" in telegram_guide
     assert "/protocol recent" in telegram_guide
     assert "/protocol watch latest|<number|short_id>" in telegram_guide
     assert "/protocol unwatch latest|<number|short_id>" in telegram_guide

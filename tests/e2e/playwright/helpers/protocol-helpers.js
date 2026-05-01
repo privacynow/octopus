@@ -233,6 +233,7 @@ async function createStep(page, {
   roleKey = '',
   selectorKind = 'skill',
   selectorValue = '',
+  selectorPreferredAgent = '',
   stageKind = '',
   instructions = '',
   openEditor = true,
@@ -337,6 +338,30 @@ async function createStep(page, {
     } else {
       await valueControl.fill(selectorValue);
       await valueControl.blur();
+    }
+    if (selectorKind === 'skill' && selectorPreferredAgent) {
+      const pinGroup = assignmentSection.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]').first();
+      if (await pinGroup.count() && await pinGroup.isVisible().catch(() => false)) {
+        const pinButtons = pinGroup.getByRole('button');
+        const targetPin = selectorPreferredAgent === '__last__'
+          ? pinButtons.last()
+          : pinGroup.getByRole('button', { name: selectorPreferredAgent, exact: true }).first();
+        await targetPin.click();
+        await expect(targetPin).toHaveAttribute('aria-pressed', 'true');
+      } else {
+        const pinSelect = assignmentSection.getByLabel('Pin matching agent (optional)', { exact: true }).first();
+        await expect(pinSelect).toBeVisible();
+        let targetPinValue = selectorPreferredAgent;
+        if (selectorPreferredAgent === '__last__') {
+          targetPinValue = await pinSelect.locator('option').evaluateAll((options) =>
+            options.map((option) => String(option.value || '')).filter(Boolean).pop() || '',
+          );
+        }
+        if (!targetPinValue) {
+          throw new Error(`No matching agent option is available for ${key || name}`);
+        }
+        await setSelectValue(pinSelect, targetPinValue);
+      }
     }
     await page.waitForTimeout(150);
   }

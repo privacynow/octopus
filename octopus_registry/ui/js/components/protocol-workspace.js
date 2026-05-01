@@ -2454,7 +2454,8 @@ function renderProtocolWorkspace(container) {
     }
 
     function _syncPendingStageFromMountedEditor() {
-        const editor = contentEl.querySelector('.kit-stage-editor-grid');
+        const editor = contentEl.querySelector('.kit-stage-editor-grid[data-pending-stage-editor="true"]')
+            || contentEl.querySelector('.kit-stage-editor-grid');
         if (!(editor instanceof Element)) return;
         const readValue = (selector, fallback = '') => {
             const control = editor.querySelector(selector);
@@ -6162,6 +6163,9 @@ function renderProtocolWorkspace(container) {
         const workspace = document.createElement('div');
         workspace.className = 'kit-stage-editor-grid kit-stage-workspace-panel';
         workspace.dataset.panel = String(activePanelKey || 'basics');
+        if (createAction) {
+            workspace.dataset.pendingStageEditor = 'true';
+        }
         if (stageWorkspaceAnchorKey) {
             workspace.dataset.stageWorkspaceAnchor = stageWorkspaceAnchorKey;
         }

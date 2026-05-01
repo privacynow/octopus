@@ -519,6 +519,43 @@ test.describe('protocol authoring live', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
   });
 
+  test('blank draft preserves a pinned matching agent on a new skill step', async ({ page }) => {
+    const { consoleErrors, pageErrors } = attachErrorCapture(page);
+
+    await login(page);
+    await openBlankDraft(page);
+
+    const stageKey = await createStep(page, {
+      name: 'Pinned skill route',
+      key: 'pinned-skill-route',
+      roleName: 'Pinned owner',
+      roleKey: 'pinned-owner',
+      selectorKind: 'skill',
+      selectorValue: '__first__',
+      selectorPreferredAgent: '__last__',
+    });
+
+    await selectStep(page, stageKey);
+    const stageEditor = page.locator('.kit-stage-editor').last();
+    const assignment = await openStagePanel(page, stageEditor, {
+      tab: 'Assignment',
+      heading: 'Assignment',
+    });
+    await expect(assignment).toContainText('and pins the step to');
+    const pinGroup = assignment.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]').first();
+    if (await pinGroup.count() && await pinGroup.isVisible().catch(() => false)) {
+      await expect(pinGroup.getByRole('button', { name: 'Dynamic', exact: true })).toHaveAttribute('aria-pressed', 'false');
+      await expect(pinGroup.locator('.quickstart-chip[aria-pressed="true"]')).toHaveCount(1);
+    } else {
+      const pinSelect = assignment.getByLabel('Pin matching agent (optional)', { exact: true }).first();
+      await expect(pinSelect).not.toHaveValue('');
+    }
+
+    await discardDraft(page);
+    expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
+    expect(consoleErrors, `console errors: ${consoleErrors.join('\n')}`).toEqual([]);
+  });
+
   test('top add step appends to an existing workflow', async ({ page }) => {
     const { consoleErrors, pageErrors } = attachErrorCapture(page);
 

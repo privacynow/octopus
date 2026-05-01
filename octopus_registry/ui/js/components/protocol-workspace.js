@@ -2686,7 +2686,20 @@ function renderProtocolWorkspace(container) {
     }
 
     function _confirmStageInsert() {
+        const committedSelectorBeforeSync = {
+            kind: String(pendingStage.selector_kind || ''),
+            value: String(pendingStage.selector_value || ''),
+            preferredAgentId: String(pendingStage.selector_preferred_agent_id || ''),
+        };
         _syncPendingStageFromMountedEditor();
+        if (
+            committedSelectorBeforeSync.preferredAgentId
+            && String(pendingStage.selector_kind || '') === committedSelectorBeforeSync.kind
+            && String(pendingStage.selector_value || '') === committedSelectorBeforeSync.value
+            && !String(pendingStage.selector_preferred_agent_id || '').trim()
+        ) {
+            pendingStage.selector_preferred_agent_id = committedSelectorBeforeSync.preferredAgentId;
+        }
         const displayName = String(pendingStage.display_name || '').trim();
         if (!displayName) {
             UI.notify('Give this step a name before adding it to the workflow.', 'warning');

@@ -180,8 +180,9 @@ def test_protocol_artifacts_message_distinguishes_available_and_missing_artifact
         for row in rendered.reply_markup.inline_keyboard
         for button in row
     ]
-    assert "Preview 1" in button_labels
-    assert "Open 1" in button_labels
+    assert "Preview plan.md" in button_labels
+    assert "Open plan.md" in button_labels
+    assert "Send plan.md" in button_labels
 
 
 def test_protocol_artifacts_message_omits_localhost_url_buttons():

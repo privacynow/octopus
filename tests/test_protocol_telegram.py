@@ -442,8 +442,9 @@ async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert "Preview 1" in buttons
-        assert "Open 1" in buttons
+        assert "Preview plan.md" in buttons
+        assert "Open plan.md" in buttons
+        assert "Send plan.md" in buttons
 
 
 async def test_protocol_artifacts_download_sends_requested_document(monkeypatch):
@@ -564,8 +565,9 @@ async def test_protocol_artifacts_callback_shows_action_buttons(monkeypatch):
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert "Preview 1" in buttons
-        assert "Open 1" in buttons
+        assert "Preview plan.md" in buttons
+        assert "Open plan.md" in buttons
+        assert "Send plan.md" in buttons
 
 
 async def test_protocol_artifacts_download_names_package_zip(monkeypatch):

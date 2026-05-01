@@ -73,6 +73,17 @@ def _telegram_named_link(url: str, label: str) -> str:
     return f'<a href="{html.escape(str(url), quote=True)}">{html.escape(label)}</a>'
 
 
+def _telegram_button_label(action: str, subject: str, max_length: int = 48) -> str:
+    action_text = str(action or "").strip()
+    subject_text = re.sub(r"\s+", " ", str(subject or "").strip())
+    text = f"{action_text} {subject_text}".strip() if subject_text else action_text
+    if len(text) <= max_length:
+        return text
+    suffix = "..."
+    keep = max(max_length - len(suffix), 1)
+    return text[:keep].rstrip() + suffix
+
+
 def _short_run_id(run_id: str) -> str:
     value = str(run_id or "").strip()
     return value[:8] if len(value) > 8 else value
@@ -1664,7 +1675,7 @@ def protocol_run_artifacts_message(
     lines = [
         "<b>Protocol artifacts</b>",
         f"Run: <code>{html.escape(run_short)}</code>",
-        "Tap an artifact action below. Artifact numbers remain available for commands.",
+        "Tap an artifact action below. Numbers are shown only as command fallbacks.",
     ]
     keyboard_rows: list[list[InlineKeyboardButton]] = []
     if deep_link:
@@ -1734,25 +1745,39 @@ def protocol_run_artifacts_message(
             if len(keyboard_rows) < 7:
                 row: list[InlineKeyboardButton] = []
                 button_key = str(index)
+                button_subject = label
                 if preview_link:
-                    button = _telegram_url_button(preview_link, f"Preview {button_key}")
+                    preview_label = _telegram_button_label("Preview", button_subject)
+                    button = _telegram_url_button(preview_link, preview_label)
                     if button is not None:
                         row.append(button)
                     else:
-                        _append_button(row, f"Preview {button_key}", "preview", run.protocol_run_id, button_key)
+                        _append_button(row, preview_label, "preview", run.protocol_run_id, button_key)
                 if open_link:
-                    open_label = f"Open app {button_key}" if browse_link else f"Open {button_key}"
+                    open_label = _telegram_button_label(
+                        "Open app" if browse_link else "Open",
+                        button_subject,
+                    )
                     button = _telegram_url_button(open_link, open_label)
                     if button is not None:
                         row.append(button)
                     else:
                         _append_button(row, open_label, "open", run.protocol_run_id, button_key)
                 if browse_link:
-                    button = _telegram_url_button(browse_link, f"Contents {button_key}")
+                    button = _telegram_url_button(
+                        browse_link,
+                        _telegram_button_label("Contents", button_subject),
+                    )
                     if button is not None:
                         row.append(button)
                 if download_link:
-                    _append_button(row, f"Download {button_key}", "download", run.protocol_run_id, button_key)
+                    _append_button(
+                        row,
+                        _telegram_button_label("Send", button_subject),
+                        "download",
+                        run.protocol_run_id,
+                        button_key,
+                    )
                 if row:
                     keyboard_rows.append(row)
         elif not exists:
@@ -1815,7 +1840,13 @@ def protocol_artifact_preview_message(
                 lines.append(f"{html.escape(open_label)}: {fallback}")
     if download_link:
         if artifact_ref:
-            _append_button(row, "Send file", "download", run_id, artifact_ref)
+            _append_button(
+                row,
+                _telegram_button_label("Send", artifact_label),
+                "download",
+                run_id,
+                artifact_ref,
+            )
         fallback = _telegram_named_link(download_link, "Download")
         if fallback:
             lines.append(f"Download: {fallback}")

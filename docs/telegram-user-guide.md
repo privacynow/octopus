@@ -140,9 +140,10 @@ Behavior:
 - Telegram messages show short run references for normal use. Export filenames
   and browser URLs may still contain the full canonical run id for traceability.
 - Protocol messages include action buttons where Telegram supports them:
-  Status, Artifacts, Preview, Open, Send file, Export, Watch, and Stop updates.
-  These buttons call the same registry-backed protocol service as the slash
-  commands; they are not a separate protocol execution path.
+  Status, Artifacts, named Preview/Open/Send actions for each artifact, Export,
+  Watch, and Stop updates. These buttons call the same registry-backed protocol
+  service as the slash commands; they are not a separate protocol execution
+  path.
 - Partial protocol requests prefer progressive discovery. For example,
   `/protocol status`, `/protocol artifacts`, `/protocol preview`, `/protocol
   export`, `/protocol watch`, and `/protocol unwatch` can use the current

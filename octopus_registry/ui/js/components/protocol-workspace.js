@@ -2459,11 +2459,19 @@ function renderProtocolWorkspace(container) {
         if (!(editor instanceof Element)) return;
         const readValue = (selector, fallback = '') => {
             const control = editor.querySelector(selector);
-            return control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
-                ? String(control.value || '')
-                : control instanceof Element && Object.prototype.hasOwnProperty.call(control.dataset || {}, 'value')
-                    ? String(control.dataset.value || '')
-                : String(fallback || '');
+            if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement) {
+                return String(control.value || '');
+            }
+            if (control instanceof Element && control.dataset?.selectorPillGroup === 'true') {
+                const pressed = control.querySelector('.quickstart-chip[aria-pressed="true"]');
+                return pressed instanceof HTMLElement
+                    ? String(pressed.dataset.value || '')
+                    : String(control.dataset.value || '');
+            }
+            if (control instanceof Element && control.dataset?.value !== undefined) {
+                return String(control.dataset.value || '');
+            }
+            return String(fallback || '');
         };
         pendingStage.display_name = readValue('#kit-details-display_name', pendingStage.display_name);
         pendingStage.participant_key = readValue('#kit-details-participant_key', pendingStage.participant_key);

@@ -953,8 +953,9 @@ Current public documentation map:
 
 | Document | Role |
 | --- | --- |
-| `README.md` | Product overview, quick start, and guide index. |
-| `docs/USER_GUIDE.md` | Primary browser Registry workflow for new users. |
+| `README.md` | Product overview and learning-path index. |
+| `docs/GETTING_STARTED.md` | Zero-to-one setup for new users: Docker, platform notes, provider auth, first agent, first healthy Registry check. |
+| `docs/USER_GUIDE.md` | Primary browser Registry workflow after the environment is running. |
 | `docs/PROTOCOLS.md` | Protocol authoring, run inspection, package export/import, and troubleshooting. |
 | `docs/OPERATIONS.md` | Local stack operation, demo readiness, health checks, logs, and runbook guidance. |
 | `docs/TELEGRAM.md` | Optional Telegram command/reference surface. |
@@ -976,9 +977,9 @@ Documentation rules:
 - Top-level Markdown documents in `docs/` use uppercase names. Scenario files
   under `docs/examples/` use lowercase descriptive slugs. Generated artifacts
   keep their generated names.
-- Put browser workflow guidance in `USER_GUIDE.md`, protocol behavior in
-  `PROTOCOLS.md`, operations in `OPERATIONS.md`, and Telegram command behavior
-  in `TELEGRAM.md`.
+- Put zero-to-one setup in `GETTING_STARTED.md`, browser workflow guidance in
+  `USER_GUIDE.md`, protocol behavior in `PROTOCOLS.md`, operations in
+  `OPERATIONS.md`, and Telegram command behavior in `TELEGRAM.md`.
 - Keep customer or demo scenarios under `docs/examples/` so scenario-specific
   prompts, artifacts, and vocabulary do not become product defaults.
 - Route/API changes update `docs/registry-openapi.json`, the relevant guide,

@@ -5,6 +5,7 @@ they are not default behavior.
 
 Start with the core docs first:
 
+- [Getting Started](../GETTING_STARTED.md)
 - [User Guide](../USER_GUIDE.md)
 - [Protocol Guide](../PROTOCOLS.md)
 - [Operations Guide](../OPERATIONS.md)

@@ -3078,6 +3078,7 @@ select {
 
     #content > .content-inner.protocol-runs-route-shell .task-action-row .btn,
     #content > .content-inner.protocol-runs-route-shell .artifact-action-row .btn {
+        border-radius: var(--radius-sm);
         flex: 1 1 auto;
         min-width: min(9rem, 100%);
     }

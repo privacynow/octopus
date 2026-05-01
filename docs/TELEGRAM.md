@@ -4,8 +4,22 @@ Telegram is an optional chat surface over the same registry/runtime backend as
 the browser UI. It should not have a separate protocol, skill, artifact, or
 guidance model.
 
-Use [USER_GUIDE.md](USER_GUIDE.md) for the main browser workflow and
-[PROTOCOLS.md](PROTOCOLS.md) for protocol concepts.
+Use [GETTING_STARTED.md](GETTING_STARTED.md) if the Telegram-backed agent is
+not configured yet. Use [USER_GUIDE.md](USER_GUIDE.md) for the main browser
+workflow and [PROTOCOLS.md](PROTOCOLS.md) for protocol concepts.
+
+## Before You Use Telegram
+
+Telegram is not required for the browser Registry workflow. If your environment
+does include Telegram, an operator needs:
+
+- a Telegram bot token from BotFather
+- a configured Octopus agent that uses that token
+- provider authentication for the model provider that agent uses
+- a healthy Registry connection
+
+New users should confirm the browser Registry works first. It is easier to see
+agent health, run state, and artifacts there.
 
 ## First Use
 

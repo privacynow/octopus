@@ -1,10 +1,13 @@
 # Operations Guide
 
-This guide is for people starting Octopus, checking health, preparing a demo or
-evaluation, and debugging product behavior through supported surfaces.
+This guide is for people who operate an Octopus environment: checking health,
+preparing a demo or evaluation, restarting services, and debugging product
+behavior through supported surfaces.
 
-For everyday browser use, start with [USER_GUIDE.md](USER_GUIDE.md). For
-workflow design, use [PROTOCOLS.md](PROTOCOLS.md).
+If you are installing Octopus for the first time, start with
+[GETTING_STARTED.md](GETTING_STARTED.md). For everyday browser use, start with
+[USER_GUIDE.md](USER_GUIDE.md). For workflow design, use
+[PROTOCOLS.md](PROTOCOLS.md).
 
 ## Operating Goal
 
@@ -23,9 +26,15 @@ A ready Octopus environment should let a user:
 
 - Docker Desktop is running.
 - Git is installed.
-- Provider authentication is configured for at least one execution agent.
+- Provider authentication is configured for at least one execution agent that
+  will perform model-backed work.
 - Telegram is optional unless that channel is part of the evaluation.
 - The default local Registry URL is `http://127.0.0.1:8787/ui`.
+
+Plain-language setup details for Docker Desktop, Windows WSL2, model provider
+login, and first-run agent creation live in
+[GETTING_STARTED.md](GETTING_STARTED.md). Keep this operations guide focused on
+running and validating an environment that already exists.
 
 ## Start And Verify
 
@@ -47,6 +56,16 @@ Expected healthy state:
 If an optional provider-backed bot is disconnected because credentials are not
 configured, exclude that bot from the ready path.
 
+Provider auth means the agent can use its configured model provider, such as
+Codex or Claude. If `./octopus status` says a provider is not configured, use:
+
+```text
+./octopus
+Diagnose -> Provider auth
+```
+
+Authenticate only the provider you intend to use for the ready path.
+
 ## Common Commands
 
 ```bash
@@ -61,6 +80,9 @@ configured, exclude that bot from the ready path.
 ./octopus doctor m1
 ./octopus clean
 ```
+
+For non-technical users, `./octopus status` is the safest command to ask for:
+it reports what is running without changing the environment.
 
 Use logs for monitoring active work. Avoid waiting blindly when a run is in
 progress; watch the relevant registry run, container logs, and health state.

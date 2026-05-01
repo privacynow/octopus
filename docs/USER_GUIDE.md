@@ -1,72 +1,62 @@
 # User Guide
 
-This guide is for people using Octopus through the browser Registry UI. It
-starts with the smallest useful workflow, then introduces protocols, skills,
-Telegram, and operations only when they become relevant.
+This guide is for people using Octopus through the browser Registry UI.
 
-If you are only operating the stack, use [OPERATIONS.md](OPERATIONS.md). If you
-are designing workflows, use [PROTOCOLS.md](PROTOCOLS.md).
+It assumes Octopus is already installed and running. If you have not opened the
+Registry yet, start with [GETTING_STARTED.md](GETTING_STARTED.md).
+
+Use this guide when you want to understand the product: how to talk to agents,
+use skills, run protocols, inspect outputs, and decide what to do when work
+looks stuck.
 
 ## The Product In One Minute
 
-Octopus gives you a shared control plane for AI agents.
+Octopus is a shared control center for AI agent work.
 
 - Use `Conversations` for open-ended work.
-- Use `Protocols` when the work should follow repeatable stages.
-- Use `Runs` to inspect a protocol execution.
-- Use `Artifacts` to open, preview, or download generated outputs.
+- Use `Agents` to see who is available and healthy.
+- Use `Protocols` for repeatable staged workflows.
+- Use `Runs` to watch protocol execution and inspect what happened.
+- Use `Artifacts` to preview, open, or download outputs.
 - Use `Skills` to make reusable capabilities available to agents.
-- Use `Guidance` for provider baseline policy.
+- Use `Guidance` for provider-level policy.
 - Use `Dashboard`, `Routing`, and `Usage` when you need operational context.
 
 ## Core Vocabulary
 
 | Term | Meaning |
 | --- | --- |
-| Agent | A bot runtime connected to the registry. |
+| Registry | The browser UI and backend that coordinate agents, runs, artifacts, and health. |
+| Agent | A configured bot runtime that can receive work. |
 | Conversation | A thread where a user and agent exchange messages. |
 | Skill | Reusable instructions or tooling an agent can use. |
-| Guidance | Provider-level policy; not a skill. |
+| Guidance | Provider-level policy; not a conversation skill. |
 | Protocol | A reusable staged workflow. |
 | Run | One execution of a published protocol. |
 | Artifact | A declared or produced file/output. |
 | Routing | How Octopus decides which agent receives delegated or staged work. |
 
-## Start And Open
-
-From the repository root:
-
-```bash
-./octopus
-./octopus status
-```
-
-Open the Registry URL printed by `./octopus status`. The default local URL is:
-
-- [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui)
-
-Before doing real work, confirm:
-
-- `Work -> Agents` shows at least one connected agent
-- the target agent is execution-healthy
-- `Operations -> Dashboard` does not show a relevant blocking issue
-
 ## First 20 Minutes
-
-1. Open `Work -> Agents`.
-2. Confirm one agent is connected and execution-healthy.
-3. Open `Work -> Conversations`.
-4. Start a conversation with that agent.
-5. Send a short non-sensitive request.
-6. Confirm the response appears in the conversation timeline.
-7. Open `Build -> Protocols`.
-8. Inspect an existing protocol or create a simple blank protocol.
-9. Run a published protocol.
-10. Open the run from `Work -> Runs`.
-11. Check `Stages`, `Artifacts`, and `Audit`.
 
 This path proves the basic product without requiring a customer scenario,
 Telegram, or direct database access.
+
+1. Open the Registry URL from `./octopus status`.
+2. Open `Work -> Agents`.
+3. Confirm one agent is connected and execution-healthy.
+4. Open `Work -> Conversations`.
+5. Start a conversation with that agent.
+6. Send a short non-sensitive request.
+7. Confirm the response appears in the conversation timeline.
+8. Open `Build -> Protocols`.
+9. Inspect an existing protocol or create a simple blank protocol.
+10. Run a published protocol.
+11. Open the run from `Work -> Runs`.
+12. Check the current status, stages, artifacts, and audit history.
+
+If step 3 fails, the product is not ready for normal use yet. Ask the operator
+to check [GETTING_STARTED.md](GETTING_STARTED.md) or
+[OPERATIONS.md](OPERATIONS.md).
 
 ## Navigation
 
@@ -78,67 +68,77 @@ The Registry is grouped by job.
 | Build | Protocols, Skills, Guidance | Reusable workflow design and runtime capability management. |
 | Operations | Dashboard, Routing, Usage | Health, routing diagnostics, and usage visibility. |
 
-`Tasks` and `Approvals` may appear through links. They are part of the execution
+`Tasks` and `Approvals` may appear through links. They are part of execution
 lineage, not a separate primary app to learn first.
 
-## Conversations
+## Talk To An Agent
 
-Use conversations for ad hoc work.
+Use conversations for ad hoc work: questions, drafting, debugging, planning, or
+one-off analysis.
 
-You can:
+1. Open `Work -> Conversations`.
+2. Choose an existing conversation or start a new one.
+3. Pick a healthy agent when the UI asks for one.
+4. Send a clear request.
+5. Watch the timeline for progress and output.
+6. Open linked work, runs, or artifacts when they appear.
 
-- open an existing thread
-- start a new thread with an agent
-- send registry-origin messages where supported
-- inspect timeline activity
-- see linked work and protocol runs
-- manage conversation-specific skill activation
+Good first requests are small and non-sensitive. For example:
 
-If a conversation has linked work but no clear way to inspect the result, treat
-that as a product issue.
+```text
+Summarize what this workspace appears to contain.
+```
 
-## Agents
+If a conversation mentions linked work but there is no clear way to inspect the
+result, treat that as a product issue.
 
-Use `Work -> Agents` to answer:
+## Check Agent Health
+
+Open `Work -> Agents` to answer:
 
 - which agents are connected?
-- which agents are execution-healthy?
-- what provider and role is each agent using?
-- what routing skills does an agent advertise?
+- which agents can execute work right now?
+- which provider and role is each agent using?
+- what skills or routing labels does an agent advertise?
 - can I open or start a conversation with this agent?
 
-Connected is not the same as execution-healthy. Use the health labels and
-`./octopus doctor <bot>` when the distinction matters.
+Connected means the Registry can see the agent. Execution-healthy means the
+agent can actually do model-backed work. Those are related, but not the same.
 
-## Skills
+If an agent is connected but not execution-healthy, provider authentication is a
+common cause. An operator can check `./octopus status` or
+`./octopus doctor <bot>`.
 
-Skills are reusable instructions or tools. The same skill model is used by the
-Registry UI, Telegram, protocol stages, and routing.
+## Use Skills
+
+Skills are reusable instructions or tools. They can support conversations,
+protocol stages, Telegram, and routing.
 
 | Skill state | Meaning |
 | --- | --- |
 | Catalog | Skills known to Octopus. |
 | Available on this bot | Skills one agent runtime can use. |
-| Default for new conversations | Available skills seeded into future conversations. |
+| Default for new conversations | Skills seeded into future conversations. |
 | Active in this conversation | Skills enabled in one existing thread. |
 | Routing skills | Derived routing projection used for delegation and stage assignment. |
 
-Common workflows:
+Common workflow:
 
 1. Open `Build -> Skills`.
-2. Choose the agent/bot context.
-3. Search or filter rather than scanning long lists.
+2. Choose the agent or bot context.
+3. Search or filter instead of scanning long lists.
 4. Install, enable, activate, import, export, or author a skill where your
    permissions allow it.
+5. Return to the conversation or protocol that needs the skill.
 
 Making a skill available on a bot does not automatically activate it in every
 old conversation. Setting a default affects new conversations, not existing
 ones.
 
-## Guidance
+## Use Guidance
 
-Guidance is provider baseline policy. It is not a skill and it is not activated
-per conversation.
+Guidance is baseline policy for a model provider, such as Codex or Claude. It
+is not a skill and it is not activated per conversation.
 
 Typical workflow:
 
@@ -148,28 +148,54 @@ Typical workflow:
 4. Preview composed runtime guidance.
 5. Submit, approve, publish, or archive where permitted.
 
-## Protocols And Runs
+Most users should not need to change guidance during ordinary work.
 
-Use protocols when the work needs repeatable stages, assigned responsibilities,
+## Run A Protocol
+
+Use protocols when work needs repeatable stages, assigned responsibilities,
 review decisions, or declared artifacts.
 
 For detailed authoring and run behavior, use [PROTOCOLS.md](PROTOCOLS.md).
 
-The short version:
+Short path:
 
 1. Open `Build -> Protocols`.
-2. Create from blank or copy a user-authored template.
-3. Add stages, assignment, transitions, and artifacts.
-4. Validate and publish.
-5. Start a run from the published version.
-6. Inspect the run in `Work -> Runs`.
+2. Choose a published protocol.
+3. Click `Run protocol`.
+4. Select a healthy entry agent.
+5. Fill in the launch fields.
+6. Review the declared artifacts.
+7. Start the run.
+8. Open the run in `Work -> Runs`.
 
 The launch dialog collects run-specific context. Unless a protocol defines
 custom `metadata.run_inputs`, the shared fields are workspace, goal, additional
-context, and constraints. Those inputs help the agents execute the run; they do
-not rewrite the published stage contract or artifact paths.
+context, and constraints. Those inputs help agents execute this run; they do
+not rewrite the published stages, assignments, skills, transitions, or artifact
+paths.
 
-## Artifacts
+## Read A Run
+
+Open `Work -> Runs` when you want to know what happened or what is happening
+now.
+
+A useful run page should answer:
+
+- what protocol ran?
+- which version ran?
+- what stage is active now?
+- which agent is working?
+- what did the latest agent update say?
+- were there review loops or repeated attempts?
+- what outputs were declared?
+- what outputs were produced?
+- what is blocked, waiting, failed, canceled, or complete?
+
+For active runs, watch the run status and latest agent update before retrying.
+A long-running stage is not automatically stuck. It should show enough progress
+or state for a user to understand whether work is still moving.
+
+## Open Artifacts
 
 Artifacts are the visible outputs of work.
 
@@ -184,14 +210,17 @@ Where supported, artifact actions should include preview, open, download, copy
 path, or package browsing. Missing or inconsistent artifact actions are product
 issues, not a normal user burden.
 
-## Telegram
+## Use Telegram
 
 Telegram is optional. It is a peer client over the same registry/runtime
 backend, not a separate product model.
 
 Use Telegram for quick chat, status checks, protocol run controls, and artifact
 links when a Telegram bot token is configured. Use [TELEGRAM.md](TELEGRAM.md)
-for command details.
+for setup notes and command details.
+
+If you are new, learn the browser Registry workflow first. It exposes more
+context and is easier to inspect when something goes wrong.
 
 ## If Something Looks Wrong
 
@@ -212,7 +241,7 @@ Then ask an operator to check:
 ./octopus logs <target> --follow
 ```
 
-Useful status distinctions:
+Useful distinctions:
 
 - connected does not always mean execution-healthy
 - running should mean active work, not stale work
@@ -220,3 +249,12 @@ Useful status distinctions:
   are related but distinct
 - a protocol can declare an artifact before any stage produces it
 - Registry and Telegram should agree about the same run
+
+## Where To Go Next
+
+- [GETTING_STARTED.md](GETTING_STARTED.md) if setup or provider login is the
+  problem
+- [PROTOCOLS.md](PROTOCOLS.md) for protocol authoring, run inspection, export,
+  and import
+- [TELEGRAM.md](TELEGRAM.md) for Telegram usage
+- [OPERATIONS.md](OPERATIONS.md) for health checks, logs, and demo readiness

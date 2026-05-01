@@ -1059,7 +1059,7 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Start a published protocol" in detail
     assert "API.listProtocols({ lifecycle_state: 'published', limit: 100 })" in detail
     assert "API.listConversationProtocolRuns(convoId, conversationData, { limit: 25 })" in detail
-    assert "function ensureConversationProtocolLaunchFields(" in detail
+    assert "function ensureConversationProtocolLaunchDetails(" in detail
     assert "API.getProtocolVersion(protocolId, versionId)" in detail
     assert "function loadConversationLinkedRuns(" in detail
     assert "requestedManagementMode !== 'protocols'" in detail
@@ -1074,6 +1074,7 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "Kit.protocolRunLaunchForm({" in detail
     assert "includeWorkspace: false" in detail
     assert "fields: selectedProtocol?.launchFields || null" in detail
+    assert "Kit.protocolArtifactContractPanel(selectedProtocol.launchDocument)" in detail
     assert "problem_statement: state.problemStatement" in detail
     assert "const launchValues = launchForm.readValues();" in detail
     assert "const problemStatement = String(launchValues.problem_statement || '').trim();" in detail
@@ -1106,9 +1107,8 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "function protocolRunLaunchFields()" in kit
     assert "context" in kit
     assert "constraints" in kit
-    assert "expected_outputs" in kit
-    assert "function _pathExpectedOutputTokens(value)" in workspace
-    assert "const containerBoundary = line.search" in workspace
+    assert "protocolArtifactContractPanel" in kit
+    assert "Expected outputs" not in kit
     assert "manufacturing analytics" not in kit
     assert "raw private data" not in kit
     assert "function _openRunProtocolDialog()" in workspace
@@ -1116,6 +1116,7 @@ def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     assert "Dry-run rehearsal" in workspace
     assert "is_rehearsal: true" in workspace
     assert "Kit.protocolRunLaunchForm({" in workspace
+    assert "Kit.protocolArtifactContractPanel(draft.document)" in workspace
     assert "fields: _protocolRunLaunchFields()" in workspace
     assert "includeWorkspace: true" in workspace
     assert "Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`)" in workspace

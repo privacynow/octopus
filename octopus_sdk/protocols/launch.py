@@ -38,11 +38,14 @@ class ProtocolConversationLaunchResultRecord(RegistryRecordModel):
 DEFAULT_PROTOCOL_RUN_INPUT_FIELDS: tuple[ProtocolRunInputFieldRecord, ...] = (
     ProtocolRunInputFieldRecord(
         key="problem_statement",
-        label="What should this run accomplish?",
-        help="Concrete goal for this run. This is visible to the assigned agents.",
+        label="Run objective",
+        help=(
+            "The objective shared with assigned agents. It parameterizes the published workflow; "
+            "it does not change stages, artifact paths, or assignments."
+        ),
         kind="textarea",
         required=True,
-        placeholder="Describe the outcome this run should produce.",
+        placeholder="Describe the outcome this published workflow should accomplish.",
     ),
     ProtocolRunInputFieldRecord(
         key="workspace_ref",
@@ -54,27 +57,19 @@ DEFAULT_PROTOCOL_RUN_INPUT_FIELDS: tuple[ProtocolRunInputFieldRecord, ...] = (
     ),
     ProtocolRunInputFieldRecord(
         key="context",
-        label="Context",
-        help="Optional background, source material, repository details, or other context for the run.",
+        label="Additional context",
+        help="Optional source material, links, data notes, project background, or prior decisions for this run.",
         kind="textarea",
         required=False,
-        placeholder="Relevant files, links, requirements, prior decisions, or source material.",
+        placeholder="Relevant source material, links, data notes, requirements, or prior decisions.",
     ),
     ProtocolRunInputFieldRecord(
         key="constraints",
         label="Constraints",
-        help="Optional requirements, limits, preferences, or operational constraints.",
+        help="Optional requirements, privacy boundaries, acceptance criteria, limits, or operational constraints.",
         kind="textarea",
         required=False,
-        placeholder="Scope, deadlines, privacy boundaries, tools to use or avoid, or review requirements.",
-    ),
-    ProtocolRunInputFieldRecord(
-        key="expected_outputs",
-        label="Expected outputs",
-        help="Optional deliverables or artifact names the run should produce.",
-        kind="textarea",
-        required=False,
-        placeholder="Patch, report, spreadsheet, deck, app, script, exported file, or review notes.",
+        placeholder="Scope, acceptance criteria, privacy boundaries, tools to use or avoid, or review requirements.",
     ),
 )
 

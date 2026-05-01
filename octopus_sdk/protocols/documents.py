@@ -885,10 +885,8 @@ def _render_run_constraints(constraints: object) -> str:
     labels = {
         "context": "Context",
         "constraints": "Constraints",
-        "expected_outputs": "Expected outputs",
         "source_context": "Files or data context",
         "relationship_context": "Keys and relationships",
-        "desired_outputs": "Expected outputs",
         "privacy_constraints": "Privacy or execution constraints",
     }
     lines: list[str] = []
@@ -950,16 +948,17 @@ def render_protocol_stage_prompt(
         lines.append(f"Workspace/project: {run.workspace_ref}")
     rendered_constraints = _render_run_constraints(run.constraints_json)
     if rendered_constraints:
-        lines.append("Run context and constraints:\n" + rendered_constraints)
+        lines.append("Launch context and constraints:\n" + rendered_constraints)
     if input_artifact_lines:
         lines.append("Input artifacts for this stage (read-only context):\n" + "\n".join(input_artifact_lines))
     if output_artifact_lines:
         lines.append("Output artifacts for this stage (write scope):\n" + "\n".join(output_artifact_lines))
     lines.append(
         "Stage output scope:\n"
-        "Run-level context may describe the desired outcome of the full workflow. "
+        "Launch context parameterizes this run; it does not modify the published protocol contract. "
         "For this stage, create or update only the output artifacts listed above. "
-        "Do not create, overwrite, or pre-fill artifacts assigned to later stages."
+        "Do not create, overwrite, or pre-fill artifacts assigned to later stages. "
+        "If launch context conflicts with declared artifacts or stage instructions, follow the protocol contract and call out the conflict."
     )
     if participant.instructions:
         lines.append("Participant guidance:\n" + participant.instructions.strip())

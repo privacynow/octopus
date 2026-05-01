@@ -104,7 +104,7 @@ Relevant code and docs:
 - Architecture:
   `docs/ARCHITECTURE.md`
 - Existing scenario guide:
-  `docs/local-data-analytics-demo.md`
+  `docs/examples/offline-csv-analytics.md`
 - Active issues:
   `issues.md`
 
@@ -831,7 +831,7 @@ Constraints:
 Final artifact must be a browser-only offline package at artifacts/manufacturing-intelligence/package. It must contain index.html, README.md, data dictionary, sample CSVs, management reports, and validation report. The app must run without a backend and without external network access. It must infer schemas and relationship candidates from uploaded CSVs, require user confirmation before joins, generate default synthetic manufacturing data, adapt synthetic generation to uploaded schemas and confirmed relationships, render charts and heat maps, and export useful outputs. Recommendations must be explainable decision support, not automatic control instructions.
 ```
 
-Expected outputs:
+Declared artifacts:
 
 ```text
 artifacts/manufacturing-intelligence/charter.md
@@ -1010,10 +1010,10 @@ After product fixes and the manufacturing run are verified, update:
 - `docs/ARCHITECTURE.md`
   - update only architecture-level facts
   - preserve SDK/Registry ownership boundaries
-- `docs/local-data-analytics-demo.md`
+- `docs/examples/offline-csv-analytics.md`
   - do not replace it with manufacturing content
 - new scenario doc if needed:
-  `docs/manufacturing-intelligence-demo.md`
+  `docs/examples/manufacturing-intelligence.md`
   - include repeatable UI-only protocol creation steps
   - include sanitized run inputs
   - include artifact verification checklist

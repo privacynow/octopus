@@ -120,8 +120,8 @@ When extending:
 
 Use:
 
-- [skills-guide.md](skills-guide.md)
-- [skills-model.md](skills-model.md)
+- [USER_GUIDE.md](USER_GUIDE.md)
+- [SKILLS_MODEL.md](SKILLS_MODEL.md)
 
 ## Guidance
 
@@ -143,7 +143,7 @@ When extending:
 - do not put protocol state rules in Telegram
 - do not put protocol state rules only in browser JS
 - keep standard/operator authoring separation enforced in backend and UI
-- update `docs/protocol_assignment_audit.md` if assignment behavior changes
+- update `docs/PROTOCOL_ASSIGNMENT_AUDIT.md` if assignment behavior changes
 
 ## Local Development
 

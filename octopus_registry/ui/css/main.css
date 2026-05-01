@@ -2373,6 +2373,33 @@ select {
     margin: 0;
 }
 
+.protocol-artifact-contract-panel {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    min-width: 0;
+}
+
+.protocol-artifact-contract-panel .quiet-note {
+    margin: 0;
+}
+
+.protocol-artifact-contract-list,
+.run-launch-context-list {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.run-launch-context-value {
+    display: block;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .run-evidence-issue-list {
     display: grid;
     border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));

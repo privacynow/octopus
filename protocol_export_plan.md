@@ -145,9 +145,9 @@ Relevant current files:
 - `octopus_registry/store_shared/agents.py`
   - current selector resolution behavior lives here. Import mapping must respect
     that ambiguity behavior.
-- `docs/protocol_assignment_audit.md`
+- `docs/PROTOCOL_ASSIGNMENT_AUDIT.md`
   - assignment belongs to the stage; `stage.selector` is canonical.
-- `docs/skills-model.md`
+- `docs/SKILLS_MODEL.md`
   - skill state layers and product nouns.
 
 Key current model facts:

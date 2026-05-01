@@ -2255,92 +2255,6 @@ function renderProtocolWorkspace(container) {
             : Kit.protocolRunLaunchFields();
     }
 
-    function _normalizeExpectedOutputToken(value) {
-        return String(value || '')
-            .trim()
-            .replace(/^[-*]\s+/, '')
-            .replace(/^`|`$/g, '')
-            .replace(/^["']|["']$/g, '')
-            .replace(/[.;]+$/g, '')
-            .trim()
-            .toLowerCase();
-    }
-
-    function _looksLikeExpectedOutputToken(value) {
-        const normalized = _normalizeExpectedOutputToken(value);
-        if (!normalized) return false;
-        if (/[/*]/.test(normalized)) return true;
-        return /^[\w .-]+\.[a-z0-9]{2,12}$/i.test(normalized);
-    }
-
-    function _pathExpectedOutputTokens(value) {
-        const source = String(value || '');
-        const matches = [];
-        const pathPattern = /(?:^|[\s([{"'`])((?:\.{0,2}\/)?[a-z0-9][a-z0-9_.-]*(?:\/[a-z0-9_*?.-]+)+)/gi;
-        let match;
-        while ((match = pathPattern.exec(source)) !== null) {
-            const normalized = _normalizeExpectedOutputToken(match[1]);
-            if (normalized && _looksLikeExpectedOutputToken(normalized)) {
-                matches.push(normalized);
-            }
-        }
-        return matches;
-    }
-
-    function _expectedOutputTokens(value) {
-        const tokens = [];
-        String(value || '').split(/\n+/g).forEach((rawLine) => {
-            const line = String(rawLine || '').trim();
-            if (!line) return;
-            const containerBoundary = line.search(/\b(containing|contains|including|includes|inside|with)\b/i);
-            const pathScope = containerBoundary >= 0 ? line.slice(0, containerBoundary) : line;
-            const pathTokens = _pathExpectedOutputTokens(pathScope);
-            if (pathTokens.length) {
-                tokens.push(...pathTokens);
-                return;
-            }
-            const commaParts = line.split(',').map(_normalizeExpectedOutputToken).filter(Boolean);
-            const commaTokens = commaParts.filter(_looksLikeExpectedOutputToken);
-            if (commaTokens.length && commaTokens.length === commaParts.length) {
-                tokens.push(...commaTokens);
-                return;
-            }
-            const normalized = _normalizeExpectedOutputToken(line);
-            if (_looksLikeExpectedOutputToken(normalized) && !/\s/.test(normalized)) {
-                tokens.push(normalized);
-            }
-        });
-        return Array.from(new Set(tokens));
-    }
-
-    function _declaredArtifactIdentifiers(doc = draft.document) {
-        const identifiers = new Set();
-        (doc?.artifacts || []).forEach((artifact) => {
-            [
-                artifact?.artifact_key,
-                artifact?.display_name,
-                artifact?.path,
-                artifact?.workspace_path,
-                artifact?.location,
-            ].forEach((value) => {
-                const normalized = _normalizeExpectedOutputToken(value);
-                if (normalized) identifiers.add(normalized);
-            });
-        });
-        return identifiers;
-    }
-
-    function _expectedOutputMatchesDeclared(token, declared) {
-        if (!token || declared.has(token)) return true;
-        const basename = token.split('/').filter(Boolean).pop() || token;
-        if (declared.has(basename)) return true;
-        if (!token.includes('*')) return false;
-        const pattern = new RegExp(`^${token
-            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-            .replace(/\*/g, '.*')}$`);
-        return Array.from(declared).some((item) => pattern.test(item));
-    }
-
     function _openRunProtocolDialog() {
         if (_blockConflictAction('Run protocol')) return;
         if (!currentProtocolId) return;
@@ -2392,29 +2306,17 @@ function renderProtocolWorkspace(container) {
         agentLabel.appendChild(agentHelp);
         body.appendChild(agentLabel);
 
-        const outputAlignmentNote = document.createElement('p');
-        outputAlignmentNote.className = 'quiet-note';
-        outputAlignmentNote.hidden = true;
+        const artifactContractPanel = Kit.protocolArtifactContractPanel(draft.document);
+        if (artifactContractPanel) body.appendChild(artifactContractPanel);
+
         const launchForm = Kit.protocolRunLaunchForm({
             values: {
                 problem_statement: draft.description,
             },
             fields: _protocolRunLaunchFields(),
             includeWorkspace: true,
-            onInput: (key) => {
-                if (String(key || '') !== 'expected_outputs') return;
-                const values = launchForm.readValues();
-                const declared = _declaredArtifactIdentifiers(draft.document);
-                const missing = _expectedOutputTokens(values.expected_outputs)
-                    .filter((item) => !_expectedOutputMatchesDeclared(item, declared));
-                outputAlignmentNote.hidden = !missing.length;
-                outputAlignmentNote.textContent = missing.length
-                    ? `Expected outputs not declared as protocol artifacts: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''}. The run can still start, but the protocol will only verify declared artifacts.`
-                    : '';
-            },
         });
         body.appendChild(launchForm.element);
-        body.appendChild(outputAlignmentNote);
 
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
@@ -7227,6 +7129,59 @@ function renderProtocolRuns(container) {
         return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
     }
 
+    function _runLaunchContextEntries(run) {
+        const labels = {
+            context: 'Additional context',
+            constraints: 'Constraints',
+            source_context: 'Files or data context',
+            relationship_context: 'Keys and relationships',
+            privacy_constraints: 'Privacy or execution constraints',
+            acceptance_criteria: 'Acceptance criteria',
+        };
+        const entries = [];
+        const objective = String(run?.problem_statement || '').trim();
+        if (objective) {
+            entries.push({ label: 'Run objective', value: objective });
+        }
+        const context = run?.constraints_json && typeof run.constraints_json === 'object'
+            ? run.constraints_json
+            : {};
+        Object.entries(context).forEach(([key, value]) => {
+            if (value === null || value === undefined || value === '') return;
+            if (Array.isArray(value) && !value.length) return;
+            if (typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length) return;
+            const text = typeof value === 'string'
+                ? value.trim()
+                : JSON.stringify(value, null, 2);
+            if (!text) return;
+            entries.push({
+                label: labels[key] || String(key || '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
+                value: text,
+            });
+        });
+        return entries;
+    }
+
+    function _runLaunchContextList(run) {
+        const list = document.createElement('div');
+        list.className = 'run-launch-context-list';
+        const entries = _runLaunchContextEntries(run);
+        if (!entries.length) {
+            list.appendChild(UI.renderEmptyState('No launch context was submitted for this run.', true));
+            return list;
+        }
+        entries.forEach((entry) => {
+            const value = document.createElement('span');
+            value.className = 'run-launch-context-value';
+            value.textContent = entry.value;
+            list.appendChild(UI.renderListRow({
+                label: entry.label,
+                sublabelNode: value,
+            }));
+        });
+        return list;
+    }
+
     function _shortRunId(value) {
         return String(value || '').trim().slice(0, 8);
     }
@@ -8479,6 +8434,8 @@ function renderProtocolRuns(container) {
                 { label: 'Created', value: run.created_at ? UI.relativeTime(run.created_at) : '—' },
                 { label: 'Updated', value: run.updated_at ? UI.relativeTime(run.updated_at) : '—' },
             ], { compact: true }));
+            appendSectionTitle(sectionPanel, 'Launch context', 'Submitted launch text is included in stage prompts, but it does not rewrite the published stage or artifact contract.');
+            sectionPanel.appendChild(_runLaunchContextList(run));
             const participantList = document.createElement('div');
             const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
                 label: `${item.display_name || item.participant_key} · ${item.resolution_outcome || item.state || 'queued'}`,

@@ -1,78 +1,47 @@
 # Octopus Agent Platform
 
-Octopus is the current Python/FastAPI based agent platform for running Claude
-or Codex behind managed bot runtimes. It provides:
+Octopus helps teams coordinate AI agents through a local registry, browser UI,
+Telegram, reusable skills, and protocol runs with auditable artifacts.
 
-- a local Docker-managed registry service
-- one or more bot runtime stacks
-- Telegram chat access when a bot token is configured
-- registry-origin browser conversations
-- agent enrollment and health
-- routed work/delegation tracking
-- skills and provider guidance management
-- protocol authoring and protocol runs
-- artifact metadata and artifact download/preview paths where implemented
-- operator views for dashboard, routing, usage, runs, conversations, and agents
+The product is built for practical agentic work: start agents, give them work,
+turn repeated work into protocols, inspect what happened, and hand off the
+outputs without private database edits or hidden setup.
 
-This repo is the shipped product codebase. The Java rebuild plan in
-`plan_java.md` is planning material only; it is not the runtime described by
-this README.
+This repo is the shipped Python/FastAPI product. `plan_java.md` is planning
+material only; it is not the runtime described here.
 
-## Current Product Shape
+## What Octopus Does
 
-The registry UI is grouped by job:
+- runs a local registry and one or more bot runtimes
+- exposes a browser Registry UI for conversations, agents, protocol runs,
+  skills, guidance, routing, and usage
+- optionally exposes Telegram as a chat client over the same backend
+- lets teams author, publish, export, import, and run staged protocols
+- tracks stage work, decisions, artifacts, and operator actions
+- manages reusable skills and provider guidance without creating a second
+  client-specific model
 
-| Area | Current entries | Purpose |
-| --- | --- | --- |
-| Work | Conversations, Runs, Agents | Day-to-day collaboration, protocol run inspection, and agent contact/health. |
-| Build | Protocols, Skills, Guidance | Reusable workflow authoring, skill management, and provider policy. |
-| Operations | Dashboard, Routing, Usage | Stack overview, routing diagnostics, and usage visibility. |
+## How To Think About It
 
-Important current details:
-
-- `Tasks` still exists as the routed-work backing model and API. It is no
-  longer a primary navigation item; it is opened from conversations, runs,
-  dashboard cards, or direct task links when lineage context matters.
-- `Approvals` still exists as a route and API. It is surfaced from Dashboard
-  or direct links rather than as a primary menu item.
-- `Templates` are managed inside Protocols. There is no separate template
-  gallery product surface in the main navigation, and no prepackaged starter
-  protocols are exposed by default.
-- Protocol authoring, run detail, artifacts, and linked work are actively being
-  consolidated around one lineage model. Treat the docs in this repo as the
-  source of truth for current behavior, not old screenshots or prior plans.
-
-## Entrypoint
-
-Use the host-side CLI:
-
-```bash
-./octopus
-```
-
-`./octopus` manages the local Docker deployment under `.deploy/`. In the
-standard local setup it starts:
-
-- the registry stack
-- one bot stack per configured bot
-- the Postgres containers those stacks need
-- registry/bot connectivity wiring
-
-You normally do not wire databases manually.
-
-## Prerequisites
-
-For the standard Telegram-enabled local setup:
-
-- Docker Desktop is running
-- you have a Telegram bot token from `@BotFather`
-- you have provider auth available for Claude or Codex
-- you cloned the repo into a persistent checkout
-
-The runtime can also run in registry-only mode when no Telegram token is
-configured.
+| Concept | Plain meaning |
+| --- | --- |
+| Agent | A configured bot runtime that can receive work. |
+| Conversation | An interactive thread with an agent. |
+| Skill | Reusable instructions or tooling an agent can use. |
+| Guidance | Provider baseline policy; not a conversation skill. |
+| Protocol | A reusable staged workflow with assignments, decisions, and artifacts. |
+| Run | One execution of a published protocol. |
+| Artifact | A declared or produced output from work. |
 
 ## Quick Start
+
+Prerequisites:
+
+- Docker Desktop is running
+- provider auth is configured for at least one execution agent
+- Telegram bot token is configured only if you want Telegram access
+
+Start the local stack:
 
 ```bash
 git clone git@github.com:privacynow/octopus.git ~/octopus
@@ -80,7 +49,7 @@ cd ~/octopus
 ./octopus
 ```
 
-Then verify:
+Verify health:
 
 ```bash
 ./octopus status
@@ -90,84 +59,65 @@ Expected healthy state:
 
 - registry is running
 - configured bots are running
-- registry connection state is connected
-- execution state is healthy
+- target agents are connected
+- target agents are execution-healthy
+- the Registry URL opens in a browser
 
-## Open The Registry
-
-`./octopus status` prints the registry URL. The default local URL is:
+The default local Registry URL is:
 
 - [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui)
 
-Use the registry to:
+## First 20 Minutes
 
-- inspect conversations
-- send registry-origin messages
-- inspect protocol runs
-- inspect agents and agent-generated work
-- manage skills
-- manage provider guidance
-- author and publish protocols/templates
-- inspect routing and usage
-- find approvals or routed work through Dashboard and linked context
+1. Open the Registry URL printed by `./octopus status`.
+2. Go to `Work -> Agents` and confirm at least one agent is connected and
+   execution-healthy.
+3. Go to `Work -> Conversations` and send a short non-sensitive request.
+4. Go to `Build -> Protocols` and inspect or create a simple protocol.
+5. Run a published protocol from the Registry UI.
+6. Inspect the run in `Work -> Runs`, especially `Stages`, `Artifacts`, and
+   `Audit`.
+7. Use `Operations -> Dashboard` if something looks stuck or unhealthy.
 
-For the browser workflow, use
-[docs/registry-user-guide.md](docs/registry-user-guide.md).
+## Documentation Paths
 
-## Scenario Guides
+Start with the guide that matches the job you are doing:
 
-Product docs in this README stay use-case neutral. Tested customer scenarios
-live in separate guides so examples do not become product defaults.
+| Path | Use it when |
+| --- | --- |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | You are new to Octopus or need the normal browser workflow. |
+| [docs/PROTOCOLS.md](docs/PROTOCOLS.md) | You need to author, run, export, import, or troubleshoot protocols. |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | You operate a local stack, prepare demos, inspect health, or debug runs. |
+| [docs/TELEGRAM.md](docs/TELEGRAM.md) | You use Telegram as an optional chat surface. |
+| [docs/examples/README.md](docs/examples/README.md) | You want a concrete scenario walkthrough. |
 
-Current scenario guide:
+Developer references:
 
-- [docs/manufacturing-intelligence-demo.md](docs/manufacturing-intelligence-demo.md):
-  UI-only blank-protocol walkthrough for the manufacturing intelligence command
-  center acceptance run. This is scenario documentation, not product default
-  behavior.
-- [docs/local-data-analytics-demo.md](docs/local-data-analytics-demo.md):
-  UI-only blank-protocol walkthrough for generating and validating an offline
-  multi-CSV browser analytics SPA.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+  Current package boundaries, deployment topology, data model, protocol
+  architecture, UI model, and architecture rules.
+- [docs/SDK_BOT_DEVELOPMENT.md](docs/SDK_BOT_DEVELOPMENT.md)
+  SDK/runtime extension guide.
+- [docs/SKILLS_MODEL.md](docs/SKILLS_MODEL.md)
+  Lower-level skill state model.
+- [docs/PROTOCOL_ASSIGNMENT_AUDIT.md](docs/PROTOCOL_ASSIGNMENT_AUDIT.md)
+  Assignment model audit and validation notes.
+- [docs/registry-openapi.json](docs/registry-openapi.json)
+  Checked-in OpenAPI artifact for the registry API.
 
-Development-only deterministic fixtures, when present under `scripts/demo/`,
-are regression aids. They do not replace customer-facing acceptance through the
-Registry UI, Telegram, or documented CLI commands.
+## Registry Navigation
 
-## Use Telegram
+The Registry UI is grouped by job:
 
-If Telegram is configured:
+| Area | Entries | Purpose |
+| --- | --- | --- |
+| Work | Conversations, Runs, Agents | Day-to-day collaboration, protocol execution, artifacts, and agent health. |
+| Build | Protocols, Skills, Guidance | Reusable workflow authoring and runtime capability management. |
+| Operations | Dashboard, Routing, Usage | Stack overview, routing diagnostics, and usage visibility. |
 
-1. open Telegram
-2. find your bot
-3. send a normal message
-4. use `/help` for the live command set
-
-Common command families:
-
-- `/project`
-- `/skills`
-- `/guidance`
-- `/protocol`
-
-Protocol commands currently include:
-
-- `/protocol list`
-- `/protocol recent`
-- `/protocol start <slug> <problem statement> [--context ...] [--constraints ...] [--expected-outputs ...] [--workspace ...]`
-- `/protocol status latest|<number|short_id>`
-- `/protocol artifacts latest|<number|short_id>`
-- `/protocol artifacts <run> download <artifact_number|artifact_key>`
-- `/protocol preview <run> <artifact_number|artifact_key>`
-- `/protocol export latest|<number|short_id>`
-- `/protocol watch latest|<number|short_id>`
-- `/protocol unwatch latest|<number|short_id>`
-- `/protocol cancel <run> [reason]`
-- `/protocol retry <run> [reason]`
-- `/protocol accept <run> [reason]`
-- `/protocol send-back <run> [reason]`
-
-For Telegram behavior, use
-[docs/telegram-user-guide.md](docs/telegram-user-guide.md).
+`Tasks` and `Approvals` still exist as linked execution surfaces, but they are
+not primary navigation. Open them from conversations, runs, dashboard cards, or
+direct links when lineage context matters.
 
 ## Common CLI Commands
 
@@ -184,72 +134,23 @@ For Telegram behavior, use
 ./octopus clean
 ```
 
-## Skills
+Use the UI or documented APIs for product validation. Direct database edits are
+diagnostic tools, not proof that a customer workflow works.
 
-Use this vocabulary:
+## Examples
 
-- `Catalog`: what exists
-- `Available on this bot`: what one agent can use
-- `Default for new conversations`: what seeds future conversations
-- `Active in this conversation`: what is enabled in one thread
-- `Routing skills`: the skill-derived projection used for delegation/routing
+Examples are intentionally separate from the core product guide so one customer
+scenario does not become the product narrative.
 
-For practical usage, use [docs/skills-guide.md](docs/skills-guide.md).
-For the lower-level model, use [docs/skills-model.md](docs/skills-model.md).
-
-## Protocols
-
-Protocols are reusable multi-stage workflows stored in the registry control
-plane and executed through routed work.
-
-Current behavior:
-
-- author drafts in the Protocols UI
-- create new protocols from blank
-- publish a protocol as a user-authored template and later copy from that saved
-  template
-- publish protocol definitions
-- start runs from registry UI or Telegram
-- inspect run overview, stages, artifacts, and audit data
-- intervene with `retry`, `accept`, `send-back`, and `cancel` where permitted
-- inspect declared and produced artifacts where artifact actions are available
-- launch runs with the generic run form (`Workspace`, goal, context,
-  constraints, expected outputs) unless the protocol author defines custom
-  `metadata.run_inputs`
-- warn at run start when requested expected outputs do not match declared
-  protocol artifacts
-
-Current constraints and known gaps:
-
-- The runtime still uses routed tasks as the execution unit for stage work.
-  The UI is being consolidated so users see this as linked work rather than a
-  separate unrelated Tasks app.
-- Standard protocol authors should not see internal runtime controls. Operator
-  surfaces remain gated separately.
-- Artifact action coverage is expected to be consistent across conversations,
-  work, runs, stages, and Telegram. Any missing preview/download/open action is
-  a product gap to fix, not a separate artifact model.
-
-Protocol docs:
-
-- [docs/author-protocol-guide.md](docs/author-protocol-guide.md)
-- [docs/operator-protocol-guide.md](docs/operator-protocol-guide.md)
-- [docs/protocol_assignment_audit.md](docs/protocol_assignment_audit.md)
-- [docs/customer-handoff-guide.md](docs/customer-handoff-guide.md)
-
-## Architecture And Development
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-  Current architecture, package boundaries, deployment topology, data model,
-  UI model, and known limitations.
-- [docs/sdk-bot-development.md](docs/sdk-bot-development.md)
-  SDK/runtime extension guide.
-- [docs/registry-openapi.json](docs/registry-openapi.json)
-  Checked-in OpenAPI artifact for the registry API.
+- [Manufacturing intelligence](docs/examples/manufacturing-intelligence.md):
+  a customer-facing protocol scenario for creating an offline manufacturing
+  command center artifact.
+- [Offline CSV analytics](docs/examples/offline-csv-analytics.md):
+  a browser-only multi-CSV analytics package scenario.
 
 ## Troubleshooting
 
-Start here:
+Start with:
 
 ```bash
 ./octopus status
@@ -257,19 +158,15 @@ Start here:
 ./octopus logs <target> --follow
 ```
 
-Then check:
+Then inspect the Registry:
 
-- registry reachable at `/ui`
-- bot connected to registry
-- provider auth valid
-- execution fault state
-- relevant conversation/run/work detail in registry
-- artifact availability from the same host/container path expected by the
-  artifact route
+- `Operations -> Dashboard` for stack and work health
+- `Work -> Runs` for protocol execution state
+- `Work -> Conversations` for user-visible thread history
+- `Work -> Agents` for connectivity and execution health
+- `Operations -> Routing` for delegation and skill routing diagnostics
 
-## Documentation Rule
-
-If behavior changes, update the matching guide in the same change. Stale docs
-are a product defect in this repo.
+Treat broken previews, missing artifact actions, stale status labels, or
+client disagreement between Telegram and Registry as product issues to fix.
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

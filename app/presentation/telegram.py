@@ -1449,7 +1449,7 @@ def protocol_usage_message() -> TelegramRenderedMessage:
             "Usage:\n"
             "/protocol list\n"
             "/protocol recent\n"
-            "/protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--expected-outputs <text>] [--workspace <ref>]\n"
+            "/protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--workspace <ref>]\n"
             "/protocol status latest|<number|short_id>\n"
             "/protocol artifacts latest|<number|short_id>\n"
             "/protocol artifacts <run> download <artifact_number|artifact_key>\n"

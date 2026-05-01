@@ -37,12 +37,17 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "[GETTING_STARTED.md](GETTING_STARTED.md)" in user_guide
     assert "Work -> Conversations" in user_guide
     assert "Build -> Protocols" in user_guide
+    assert "## How The Guides Split Responsibilities" in user_guide
     assert "Routing skills" in user_guide
     assert "[PROTOCOLS.md](PROTOCOLS.md)" in user_guide
     assert "[TELEGRAM.md](TELEGRAM.md)" in user_guide
     assert "does not require using Telegram chat" in user_guide
+    assert "Good protocols do not rely on one agent producing the final output in one pass" in user_guide
 
     assert "## Export And Import" in protocol_guide
+    assert "## Review Loop Pattern" in protocol_guide
+    assert "The highest-quality protocol runs usually have feedback loops." in protocol_guide
+    assert "`revise`" in protocol_guide
     assert "Protocol packages are single text documents in JSON or YAML" in protocol_guide
     assert "JSON and YAML are two text views over the same canonical protocol document" in protocol_guide
     assert "`metadata.run_inputs`" in protocol_guide
@@ -64,8 +69,15 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "/protocol preview <run> <artifact_number|artifact_key>" in telegram_guide
     assert "[PROTOCOLS.md](PROTOCOLS.md)" in telegram_guide
 
-    assert "[Manufacturing intelligence](manufacturing-intelligence.md)" in examples_index
+    assert "[Manufacturing intelligence](manufacturing-intelligence/README.md)" in examples_index
     assert "[Offline CSV analytics](offline-csv-analytics.md)" in examples_index
+    manufacturing_walkthrough = repo_root / "docs" / "examples" / "manufacturing-intelligence"
+    assert (manufacturing_walkthrough / "README.md").is_file()
+    assert (manufacturing_walkthrough / "01-preflight.md").is_file()
+    assert (manufacturing_walkthrough / "13-export-import-copy.md").is_file()
+    assert (manufacturing_walkthrough / "assets" / "01-protocol-list-wide.png").is_file()
+    assert (manufacturing_walkthrough / "assets" / "10-run-started-wide.png").is_file()
+    assert (manufacturing_walkthrough / "assets" / "16-artifact-generated-narrow.png").is_file()
 
     assert "`docs/registry-openapi.json`" in architecture
     assert "`docs/GETTING_STARTED.md`" in architecture

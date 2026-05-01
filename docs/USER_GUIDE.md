@@ -11,6 +11,20 @@ looks stuck. It assumes at least one local agent has already been created and
 started. Today, that first local agent is created through Telegram-backed bot
 setup in the `./octopus` CLI.
 
+## How The Guides Split Responsibilities
+
+Use [USER_GUIDE.md](USER_GUIDE.md) for the everyday browser workflow: find
+agents, start conversations, run published protocols, read run progress, and
+open artifacts.
+
+Use [PROTOCOLS.md](PROTOCOLS.md) when you are designing or changing a protocol:
+stages, reviewers, transitions, artifacts, run inputs, import, export, and
+publish behavior.
+
+The overlap is intentional but shallow. This guide gives enough protocol
+context for a user to run and inspect work. The protocol guide is the canonical
+place for authoring patterns and decisions.
+
 ## The Product In One Minute
 
 Octopus is a shared control center for AI agent work.
@@ -161,7 +175,9 @@ Most users should not need to change guidance during ordinary work.
 Use protocols when work needs repeatable stages, assigned responsibilities,
 review decisions, or declared artifacts.
 
-For detailed authoring and run behavior, use [PROTOCOLS.md](PROTOCOLS.md).
+This section is for running an existing published protocol. For creating,
+editing, publishing, importing, exporting, or designing review loops, use
+[PROTOCOLS.md](PROTOCOLS.md).
 
 Short path:
 
@@ -179,6 +195,11 @@ custom `metadata.run_inputs`, the shared fields are workspace, goal, additional
 context, and constraints. Those inputs help agents execute this run; they do
 not rewrite the published stages, assignments, skills, transitions, or artifact
 paths.
+
+If a workflow matters, expect to see explicit review stages in the run history.
+Good protocols do not rely on one agent producing the final output in one pass;
+they route work through planner, implementer, and reviewer responsibilities so
+weak output can be revised before the run completes.
 
 ## Read A Run
 
@@ -264,7 +285,7 @@ Useful distinctions:
 
 - [GETTING_STARTED.md](GETTING_STARTED.md) if setup or provider login is the
   problem
-- [PROTOCOLS.md](PROTOCOLS.md) for protocol authoring, run inspection, export,
-  and import
+- [PROTOCOLS.md](PROTOCOLS.md) for protocol authoring, reviewer loops, run
+  inspection, export, and import
 - [TELEGRAM.md](TELEGRAM.md) for Telegram usage
 - [OPERATIONS.md](OPERATIONS.md) for health checks, logs, and demo readiness

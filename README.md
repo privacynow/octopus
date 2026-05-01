@@ -84,9 +84,9 @@ These are useful after you understand the product path:
 Examples are intentionally separate from the core product guide so one customer
 scenario does not become the product narrative.
 
-- [Manufacturing intelligence](docs/examples/manufacturing-intelligence.md):
-  a protocol scenario for creating an offline manufacturing command center
-  artifact.
+- [Manufacturing intelligence](docs/examples/manufacturing-intelligence/README.md):
+  a step-by-step protocol walkthrough for creating, running, and validating an
+  offline manufacturing command center artifact.
 - [Offline CSV analytics](docs/examples/offline-csv-analytics.md):
   a browser-only multi-CSV analytics package scenario.
 

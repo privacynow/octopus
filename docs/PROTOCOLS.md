@@ -57,10 +57,66 @@ Recommended flow:
 10. Publish.
 11. Start a run from the published version.
 
+For serious work, do not collapse the workflow into one build stage. Put
+planning, making, reviewing, and readiness evidence into separate stages. The
+review stages are not ceremony: they give the protocol a way to reject weak
+work, send it back with specific feedback, and record why the accepted output is
+good enough.
+
 Standard authoring should expose title, instructions, assignment, artifacts,
 routing, validation, and run feedback. It should not expose raw runtime
 selectors, raw stage keys, timeout fields, max-round internals, or custom
 operator controls to normal authors.
+
+## Review Loop Pattern
+
+The highest-quality protocol runs usually have feedback loops.
+
+Use this pattern when the output must be commercially usable, reviewed, or
+shareable:
+
+1. `Plan` stage: define the outcome, constraints, audience, artifacts, and
+   acceptance bar.
+2. `Review plan` stage: accept the plan or revise it before downstream work
+   starts.
+3. `Build/design/model` stage: create one meaningful artifact or decision
+   package.
+4. `Review` stage: inspect the produced artifact against the prior contract.
+5. `Revise` transition: send weak work back to the stage that can fix it.
+6. `Accept` transition: move forward only when the reviewer records why the
+   work is sufficient.
+7. `Readiness evidence` stage: summarize what was produced, what was checked,
+   remaining risks, and next improvements.
+
+For a simple two-agent setup, assign one agent as planner/reviewer and another
+as maker/implementer. In a larger deployment, use specialized reviewer roles:
+domain reviewer, data-model reviewer, security reviewer, UX reviewer, or final
+acceptance reviewer. If only one execution-healthy agent exists, still keep the
+review stages distinct so the run records the feedback and acceptance decisions.
+
+Common transition shape:
+
+| Stage kind | Decision | Next step |
+| --- | --- | --- |
+| Work stage | `completed` | Review stage |
+| Review stage | `accept` | Next work stage |
+| Review stage | `revise` | Prior work stage |
+| Review stage | `fail` | Failed run or operator intervention |
+| Final evidence stage | `completed` | Finish successfully |
+
+Reviewer instructions should be concrete. Tell the reviewer what to accept, what
+to reject, what artifact to write, and what decision words to use. Example:
+
+```text
+Accept only if the artifact is self-contained, readable, responsive, and meets
+the declared acceptance criteria. Choose revise for missing outputs, vague
+analysis, broken interactions, duplicate state, clipped text, or any dependency
+outside the declared contract. End with PROTOCOL_DECISION: accept, revise, or
+fail and PROTOCOL_SUMMARY.
+```
+
+The manufacturing example shows this pattern in practice:
+[Manufacturing intelligence](examples/manufacturing-intelligence/README.md).
 
 ## Stages
 
@@ -74,6 +130,11 @@ Write stage instructions as if the assignee will only see that stage, its
 declared inputs, run context, and the workflow contract. Avoid relying on a
 human to restate artifact filenames or private implementation details at launch
 time.
+
+For review stages, write instructions like an acceptance test. A reviewer should
+not merely summarize work; the reviewer should make a decision, explain it, and
+route the run forward or back. This is how later attempts improve without a
+human manually editing the artifact outside the protocol.
 
 ## Assignment
 

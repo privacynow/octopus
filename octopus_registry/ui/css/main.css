@@ -2976,6 +2976,32 @@ select {
     }
 }
 
+@media (max-width: 820px) {
+    .route-controls,
+    .filter-bar,
+    .conversation-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .segmented-control {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+        width: 100%;
+        justify-content: stretch;
+        overflow: visible;
+        white-space: normal;
+    }
+
+    .segmented-control-btn {
+        min-width: 0;
+        width: 100%;
+        white-space: normal;
+        line-height: 1.2;
+        text-align: center;
+    }
+}
+
 @media (max-width: 560px) {
     .page-header h2,
     .workspace-header h2 {
@@ -5920,6 +5946,46 @@ select {
 @keyframes kit-run-stage-current-glow {
     0%, 100% { box-shadow: var(--focus-ring); }
     50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+}
+
+@media (max-width: 820px) {
+    .kit-runs-list-row-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-1);
+    }
+
+    .kit-runs-list-row-title,
+    .kit-runs-list-row-badge,
+    .kit-runs-list-row-subtitle {
+        width: 100%;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .kit-runs-list-row-meta-chip {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .kit-run-stage-progress,
+    .kit-run-stage-progress.is-compact {
+        grid-auto-flow: row;
+        grid-auto-columns: auto;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .kit-run-stage-progress-node,
+    .kit-run-stage-progress-group {
+        width: 100%;
+    }
+
+    .kit-run-stage-progress-label,
+    .kit-run-stage-progress-state {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
 }
 
 /* --- Kit agents widgets (Step 8) ------------------------------------- */

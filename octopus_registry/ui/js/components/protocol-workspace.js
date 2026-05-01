@@ -2497,10 +2497,6 @@ function renderProtocolWorkspace(container) {
 
     function _bindPendingStageEditorControls(root) {
         if (!(root instanceof Element)) return;
-        const syncAssignment = () => {
-            _syncPendingStageFromMountedEditor();
-            queueMicrotask(() => render());
-        };
         const bindText = (selector, key) => {
             const control = root.querySelector(selector);
             if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLTextAreaElement)) return;
@@ -2517,17 +2513,6 @@ function renderProtocolWorkspace(container) {
             control.__pendingStageBound = true;
             control.addEventListener('change', () => _commitPendingStageField(null, key, control.value));
         };
-        const bindAssignmentControl = (selector, eventName = 'change') => {
-            const control = root.querySelector(selector);
-            if (!(control instanceof HTMLInputElement)
-                && !(control instanceof HTMLSelectElement)
-                && !(control instanceof HTMLTextAreaElement)
-                && !(control instanceof Element && control.dataset.selectorPillGroup === 'true')) return;
-            const bindingKey = `__pendingAssignmentBound_${eventName}`;
-            if (control[bindingKey] === true) return;
-            control[bindingKey] = true;
-            control.addEventListener(control instanceof Element && control.dataset.selectorPillGroup === 'true' ? 'click' : eventName, syncAssignment);
-        };
         bindText('#kit-details-display_name', 'display_name');
         bindSelect('#kit-details-participant_key', 'participant_key');
         bindSelect('#kit-details-stage_kind', 'stage_kind');
@@ -2542,16 +2527,6 @@ function renderProtocolWorkspace(container) {
             button.__pendingStageBound = true;
             button.addEventListener('click', () => _commitPendingStageField(null, 'selector_mode', button.dataset.value || ''));
         });
-        bindAssignmentControl('[aria-label="Required skill"]');
-        bindAssignmentControl('[aria-label="Needed skill"]', 'input');
-        bindAssignmentControl('[aria-label="Needed skill"]', 'change');
-        bindAssignmentControl('[aria-label="Pin matching agent (optional)"]');
-        bindAssignmentControl('[aria-label="Agent"]');
-        bindAssignmentControl('[aria-label="Limit to one of this agent\'s skills (optional)"]');
-        bindAssignmentControl('[aria-label="Custom selector type"]');
-        bindAssignmentControl('[aria-label="Choose runtime role tag"]');
-        bindAssignmentControl('[aria-label="Custom value"]', 'input');
-        bindAssignmentControl('[aria-label="Custom value"]', 'change');
     }
 
     function _bindStageWorkspacePanelControls(root) {

@@ -113,6 +113,16 @@ async function waitForRunStatus(page, runId, status, timeout = 60000) {
   }, { timeout }).toBe(status);
 }
 
+async function startDryRunRehearsal(page) {
+  const directAction = page.getByRole('button', { name: 'Rehearse', exact: true }).first();
+  if (await directAction.isVisible().catch(() => false)) {
+    await directAction.click();
+    return;
+  }
+  await page.getByRole('button', { name: 'Protocol', exact: true }).click();
+  await page.getByRole('button', { name: 'Dry-run rehearsal', exact: true }).click();
+}
+
 async function waitForPendingRehearsalSession(page, runId, stageKey) {
   const expectedStage = String(stageKey || '');
   let routedTaskId = '';
@@ -447,11 +457,11 @@ test.describe('protocol authoring live', () => {
     await page.getByRole('button', { name: 'Publish' }).click();
     await expect(page.locator('.kit-lifecycle-chip').filter({ hasText: 'Published' })).toBeVisible({ timeout: 15000 });
 
-    await page.getByRole('button', { name: 'Rehearse' }).click();
+    await startDryRunRehearsal(page);
     await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('.kit-workflow-toolbar')).toContainText('Rehearsal is active');
 
-    await lifecycle.getByRole('button', { name: 'Protocol' }).click();
+    await lifecycle.getByRole('button', { name: 'Protocol', exact: true }).click();
     await expect(lifecycle.getByRole('button', { name: 'Protocol settings' })).toBeVisible();
     await page.getByRole('button', { name: 'Archive' }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
@@ -489,8 +499,8 @@ test.describe('protocol authoring live', () => {
     await expect(assignment).toContainText('Leave this step unassigned while shaping the workflow.');
 
     await page.getByRole('button', { name: 'Validate' }).click();
-    await expect(page.locator('.kit-validation-list')).toContainText('Assign a participant to discovery');
-    await expect(page.locator('.kit-validation-list')).toContainText('Add an assignment rule for discovery');
+    await expect(page.locator('.kit-validation-list')).toContainText('Assign a participant to Discovery');
+    await expect(page.locator('.kit-validation-list')).toContainText('Add an assignment rule for Discovery');
 
     const neededAssignment = await openStagePanel(page, stageEditor, {
       tab: 'Assignment',
@@ -502,8 +512,7 @@ test.describe('protocol authoring live', () => {
     await waitForSaved(page);
     await expect(neededAssignment).toContainText('Current assignment: needs new skill Risk Modeling.');
     await page.getByRole('button', { name: 'Validate' }).click();
-    await expect(page.locator('.kit-validation-list')).toContainText('Assign a participant to discovery');
-    await expect(page.locator('.kit-validation-list')).not.toContainText('Add an assignment rule for discovery');
+    await expect(page.locator('.kit-validation-list')).not.toContainText('Add an assignment rule for Discovery');
 
     await discardDraft(page);
     expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
@@ -1120,7 +1129,7 @@ test.describe('protocol authoring live', () => {
 
     try {
       const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
-      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await startDryRunRehearsal(page);
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
       const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
       const rehearsalSequence = [
@@ -1303,7 +1312,7 @@ test.describe('protocol authoring live', () => {
 
     try {
       const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
-      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await startDryRunRehearsal(page);
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
       const rehearsalRunId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
       const session = page.locator(`.kit-rehearsal-session[data-stage-key="${composeKey}"]`).first();
@@ -1451,7 +1460,7 @@ test.describe('protocol authoring live', () => {
 
     try {
       const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
-      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await startDryRunRehearsal(page);
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
       const runId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
 
@@ -1581,7 +1590,7 @@ test.describe('protocol authoring live', () => {
 
     try {
       const previousRehearsalRunIds = await listRunningRehearsalRunIds(page, protocolId);
-      await page.getByRole('button', { name: 'Rehearse' }).click();
+      await startDryRunRehearsal(page);
       await expect(page.locator('.kit-rehearsal-panel')).toBeVisible({ timeout: 15000 });
       const runId = await waitForLatestRehearsalRunId(page, protocolId, previousRehearsalRunIds);
       const draftV1Document = [

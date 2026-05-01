@@ -273,8 +273,9 @@ class RuntimeSkillPackageArtifactRecord(RegistryRecordModel):
     name: str = ""
     display_name: str = ""
     file_name: str = ""
-    content_type: str = "application/zip"
-    package_base64: str = ""
+    content_type: str = "application/json"
+    document_text: str = ""
+    format: str = "json"
     revision_scope: str = "draft"
     revision_id: str = ""
 
@@ -619,14 +620,13 @@ def runtime_skill_lifecycle_detail_record(
 def runtime_skill_package_artifact_record(
     artifact: RuntimeSkillPackageArtifact,
 ) -> RuntimeSkillPackageArtifactRecord:
-    import base64
-
     return RuntimeSkillPackageArtifactRecord(
         name=artifact.name,
         display_name=artifact.display_name,
         file_name=artifact.file_name,
         content_type=artifact.content_type,
-        package_base64=base64.b64encode(artifact.content_bytes).decode("ascii"),
+        document_text=artifact.content_text,
+        format=artifact.format,
         revision_scope=artifact.revision_scope,
         revision_id=artifact.revision_id,
     )
@@ -847,6 +847,7 @@ class ExportCatalogSkillPackageRequest(RegistryRecordModel):
     operation: Literal["export_catalog_skill_package"] = "export_catalog_skill_package"
     skill_name: str
     revision_scope: Literal["draft", "published"] = "draft"
+    format: Literal["json", "yaml"] = "json"
 
 
 class ImportCatalogSkillPackageRequest(RegistryRecordModel):
@@ -854,7 +855,8 @@ class ImportCatalogSkillPackageRequest(RegistryRecordModel):
     actor_key: str
     target_skill_name: str = ""
     file_name: str = ""
-    package_base64: str
+    document_text: str
+    format: Literal["json", "yaml"] = "json"
 
 
 class SubmitCatalogSkillRequest(RegistryRecordModel):

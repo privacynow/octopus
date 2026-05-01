@@ -340,6 +340,17 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
         exportProtocolDraft: (id, format = 'json') =>
             request('GET', `/v1/protocols/${encodeURIComponent(id)}/draft/export`, { params: { format } }),
+        exportProtocolPackage: (id, opts = {}) =>
+            request('GET', `/v1/protocols/${encodeURIComponent(id)}/package/export`, {
+                params: {
+                    format: opts.format || 'json',
+                    revision: opts.revision || '',
+                },
+            }),
+        planProtocolPackageImport: (body = {}) =>
+            request('POST', '/v1/protocols/package/import/plan', { body }),
+        applyProtocolPackageImport: (body = {}) =>
+            request('POST', '/v1/protocols/package/import/apply', { body }),
         diffProtocolDraft: (id, format = 'json') =>
             request('GET', `/v1/protocols/${encodeURIComponent(id)}/diff`, { params: { format } }),
         listProtocolRuns: (opts = {}) =>
@@ -417,7 +428,7 @@ const API = (() => {
             request('PUT', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/draft`, { body }),
         exportSkillPackage: (agentId, name, opts = {}) =>
             request('GET', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/export`, {
-                params: { revision: opts.revision || 'draft' },
+                params: { revision: opts.revision || 'draft', format: opts.format || 'json' },
             }),
         importSkillPackage: (agentId, body = {}) =>
             request('POST', `${_agentPath(agentId)}/catalog/skills/import`, { body }),

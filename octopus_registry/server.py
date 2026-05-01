@@ -1533,6 +1533,7 @@ async def api_catalog_skill_export_package(
     agent_id: str,
     skill_name: str,
     revision: str = Query(default="draft"),
+    format: str = Query(default="json"),
     store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
@@ -1542,6 +1543,7 @@ async def api_catalog_skill_export_package(
             agent_id,
             skill_name,
             revision_scope=revision,
+            format=format,
         )
     except RegistryIngressError as exc: _raise_ingress_http_error(exc)
 
@@ -1560,7 +1562,8 @@ async def api_catalog_skill_import_package(
             actor_key=_operator_actor_key(payload.actor_key),
             target_skill_name=payload.target_skill_name,
             file_name=payload.file_name,
-            package_base64=payload.package_base64,
+            document_text=payload.document_text,
+            format=payload.format,
         )
     except RegistryIngressError as exc: _raise_ingress_http_error(exc)
 

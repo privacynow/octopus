@@ -359,13 +359,16 @@ async def export_catalog_skill_package(
     skill_name: str,
     *,
     revision_scope: str = "draft",
+    format: str = "json",
 ) -> dict[str, object]:
+    normalized_format = "yaml" if str(format or "").strip().lower() in {"yaml", "yml"} else "json"
     payload = await _send(
         store,
         agent_id=agent_id,
         payload=ExportCatalogSkillPackageRequest(
             skill_name=skill_name,
             revision_scope="published" if str(revision_scope or "").strip().lower() == "published" else "draft",
+            format=normalized_format,
         ),
     )
     assert isinstance(payload, ExportCatalogSkillPackageResult)
@@ -379,10 +382,12 @@ async def import_catalog_skill_package(
     agent_id: str,
     *,
     actor_key: str,
-    package_base64: str,
+    document_text: str,
+    format: str = "json",
     file_name: str = "",
     target_skill_name: str = "",
 ) -> dict[str, object]:
+    normalized_format = "yaml" if str(format or "").strip().lower() in {"yaml", "yml"} else "json"
     payload = await _send(
         store,
         agent_id=agent_id,
@@ -390,7 +395,8 @@ async def import_catalog_skill_package(
             actor_key=actor_key,
             target_skill_name=target_skill_name,
             file_name=file_name,
-            package_base64=package_base64,
+            document_text=document_text,
+            format=normalized_format,
         ),
     )
     assert isinstance(payload, ImportCatalogSkillPackageResult)

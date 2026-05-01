@@ -5202,10 +5202,15 @@ select {
         padding-inline: 0;
     }
 
-    .kit-lifecycle-slug-input,
+    .kit-lifecycle-title > .kit-lifecycle-slug-input,
     .kit-lifecycle-slug-chip,
     .kit-workflow-viewbar-subtitle {
         display: none;
+    }
+
+    .kit-lifecycle-overflow-row .kit-lifecycle-slug-input {
+        display: block;
+        width: 100%;
     }
 
     .kit-lifecycle-primary {
@@ -6516,6 +6521,68 @@ select {
     letter-spacing: 0.04em;
 }
 
+.protocol-package-dialog {
+    display: grid;
+    gap: var(--space-3);
+}
+.protocol-package-textarea {
+    min-height: 180px;
+    resize: vertical;
+    font-family: var(--font-mono, monospace);
+    line-height: 1.45;
+}
+.protocol-package-plan {
+    display: grid;
+    gap: var(--space-3);
+}
+.protocol-package-summary {
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+.protocol-package-summary h4,
+.protocol-package-mappings h4 {
+    margin: 0;
+    font-size: 0.95rem;
+}
+.protocol-package-message-list,
+.protocol-package-grid,
+.protocol-package-mappings {
+    display: grid;
+    gap: var(--space-2);
+}
+.protocol-package-message,
+.protocol-package-row,
+.protocol-package-mapping-row {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-primary);
+}
+.protocol-package-message.is-blocking {
+    border-color: var(--danger, #bd2c2c);
+}
+.protocol-package-row > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+.protocol-package-row span {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+.protocol-package-mapping-row {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 1.4fr);
+    align-items: center;
+}
+
 @media (max-width: 900px) {
     .kit-runs-list-row-meta-chip,
     .kit-run-status-chip,
@@ -6532,5 +6599,8 @@ select {
         border-radius: 8px;
         line-height: 1.15;
         white-space: normal;
+    }
+    .protocol-package-mapping-row {
+        grid-template-columns: 1fr;
     }
 }

@@ -723,14 +723,14 @@ def runtime_skill_package_export_message(name: str, revision_scope: str) -> Tele
     scope = "published" if str(revision_scope or "").strip().lower() == "published" else "draft"
     return _html_message(
         f"Exported the <code>{html.escape(scope)}</code> package for <code>{html.escape(name)}</code>.\n"
-        "Send a ZIP package with the caption <code>/skills import</code>, or reply to a package with "
+        "Send a JSON/YAML skill package with the caption <code>/skills import</code>, or reply to a package with "
         "<code>/skills import &lt;target-name&gt;</code> to replace a specific custom draft."
     )
 
 
 def runtime_skill_import_usage_message() -> TelegramRenderedMessage:
     return _html_message(
-        "Attach or reply to a skill package ZIP, then use <code>/skills import</code>.\n"
+        "Attach or reply to a skill package JSON/YAML document, then use <code>/skills import</code>.\n"
         "Optionally add a target draft name: <code>/skills import &lt;target-name&gt;</code>."
     )
 
@@ -1149,8 +1149,8 @@ HELP_SKILLS = (
     "/skills clear — deactivate all skills in this conversation\n"
     "/skills create &lt;name&gt; — create a custom draft skill on this bot\n"
     "/skills edit &lt;name&gt; &lt;body&gt; — replace the current draft body\n"
-    "/skills export &lt;name&gt; [draft|published] — export a custom skill package ZIP\n"
-    "/skills import [&lt;target-name&gt;] — import a package ZIP from the attached or replied document\n"
+    "/skills export &lt;name&gt; [draft|published] — export a custom skill package document\n"
+    "/skills import [&lt;target-name&gt;] — import a package document from the attached or replied file\n"
     "/skills history &lt;name&gt; — show revision and approval history\n"
     "/skills submit &lt;name&gt; — submit the draft for review\n"
     "/skills approve|reject|publish|archive &lt;name&gt; — lifecycle admin actions\n\n"

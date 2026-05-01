@@ -22,6 +22,8 @@ from octopus_sdk.protocols import (
     ProtocolDraftCreateRecord,
     ProtocolMutationRecord,
     ProtocolIssueRecord,
+    ProtocolPackageImportApplyResultRecord,
+    ProtocolPackageImportPlanRecord,
     ProtocolTextDocumentRecord,
     ProtocolRunExportRecord,
     ProtocolRunCreateRecord,
@@ -512,6 +514,67 @@ class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObse
             params={"format": format},
         )
         return ProtocolTextDocumentRecord.model_validate(result)
+
+    async def export_protocol_package(
+        self,
+        protocol_id: str,
+        *,
+        format: str = "json",
+        revision: str = "",
+    ) -> dict[str, object]:
+        return await self._request(
+            "GET",
+            f"/v1/protocols/{protocol_id}/package/export",
+            params={"format": format, "revision": revision},
+        )
+
+    async def plan_protocol_package_import(
+        self,
+        *,
+        text: str,
+        format: str = "json",
+        stage_mappings: list[dict[str, object]] | None = None,
+        skill_targets: list[dict[str, object]] | None = None,
+    ) -> ProtocolPackageImportPlanRecord:
+        result = await self._request(
+            "POST",
+            "/v1/protocols/package/import/plan",
+            json={
+                "text": text,
+                "format": format,
+                "stage_mappings": stage_mappings or [],
+                "skill_targets": skill_targets or [],
+            },
+        )
+        return ProtocolPackageImportPlanRecord.model_validate(result)
+
+    async def apply_protocol_package_import(
+        self,
+        *,
+        text: str,
+        format: str = "json",
+        protocol_policy: str = "import_copy",
+        copy_slug: str = "",
+        copy_display_name: str = "",
+        stage_mappings: list[dict[str, object]] | None = None,
+        skill_targets: list[dict[str, object]] | None = None,
+        publish: bool = False,
+    ) -> ProtocolPackageImportApplyResultRecord:
+        result = await self._request(
+            "POST",
+            "/v1/protocols/package/import/apply",
+            json={
+                "text": text,
+                "format": format,
+                "protocol_policy": protocol_policy,
+                "copy_slug": copy_slug,
+                "copy_display_name": copy_display_name,
+                "stage_mappings": stage_mappings or [],
+                "skill_targets": skill_targets or [],
+                "publish": publish,
+            },
+        )
+        return ProtocolPackageImportApplyResultRecord.model_validate(result)
 
     async def diff_protocol_draft(
         self,

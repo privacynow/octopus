@@ -465,7 +465,8 @@ class RuntimeSkillPackageArtifact:
     display_name: str
     file_name: str
     content_type: str
-    content_bytes: bytes
+    content_text: str
+    format: str = "json"
     revision_scope: str = "draft"
     revision_id: str = ""
 
@@ -492,12 +493,14 @@ class RuntimeSkillAuthoringPort(Protocol):
         skill_name: str,
         *,
         revision_scope: str = "draft",
+        format: str = "json",
     ) -> RuntimeSkillPackageArtifact | None: ...
     def import_package(
         self,
         *,
         actor_key: str,
-        package_bytes: bytes,
+        document_text: str,
+        format: str = "json",
         file_name: str = "",
         target_skill_name: str = "",
     ) -> RuntimeSkillLifecycleMutation: ...

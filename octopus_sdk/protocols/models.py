@@ -686,6 +686,96 @@ class ProtocolTextDocumentRecord(RegistryRecordModel):
     validation: ProtocolValidationResultRecord | None = None
 
 
+class ProtocolPackageSourceAgentRecord(RegistryRecordModel):
+    source_agent_key: str = ""
+    source_agent_id: str = ""
+    slug: str = ""
+    display_name: str = ""
+    provider: str = ""
+    role: str = ""
+    advertised_skills: list[str] = Field(default_factory=list)
+
+
+class ProtocolPackageStageBindingRecord(RegistryRecordModel):
+    stage_key: str = ""
+    selector: TargetSelector | None = None
+    source_agent_key: str = ""
+    required_skills: list[str] = Field(default_factory=list)
+
+
+class ProtocolPackageBindingsRecord(RegistryRecordModel):
+    source_agents: list[ProtocolPackageSourceAgentRecord] = Field(default_factory=list)
+    stage_bindings: list[ProtocolPackageStageBindingRecord] = Field(default_factory=list)
+
+
+class ProtocolPackageDocumentRecord(RegistryRecordModel):
+    schema_version: int = 1
+    kind: str = "octopus.protocol_package"
+    protocol: ProtocolDefinitionDocumentRecord
+    skills: list[RegistryJsonRecord] = Field(default_factory=list)
+    bindings: ProtocolPackageBindingsRecord = Field(default_factory=ProtocolPackageBindingsRecord)
+    metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+
+class ProtocolPackageIssueRecord(RegistryRecordModel):
+    code: str = ""
+    message: str = ""
+    severity: str = "warning"
+    field_path: str = ""
+    blocking: bool = False
+
+
+class ProtocolPackageProtocolPlanRecord(RegistryRecordModel):
+    slug: str = ""
+    display_name: str = ""
+    exists: bool = False
+    existing_protocol_id: str = ""
+    identical_to_existing: bool = False
+    available_policies: list[str] = Field(default_factory=list)
+    suggested_copy_slug: str = ""
+    suggested_copy_display_name: str = ""
+
+
+class ProtocolPackageSkillPlanRecord(RegistryRecordModel):
+    name: str = ""
+    package_hash: str = ""
+    status: str = "missing"
+    target_agent_id: str = ""
+    candidates: list[RegistryJsonRecord] = Field(default_factory=list)
+    message: str = ""
+
+
+class ProtocolPackageStageMappingPlanRecord(RegistryRecordModel):
+    stage_key: str = ""
+    selector: TargetSelector | None = None
+    status: str = "requires_mapping"
+    target_agent_id: str = ""
+    candidates: list[RegistryJsonRecord] = Field(default_factory=list)
+    message: str = ""
+
+
+class ProtocolPackageImportPlanRecord(RegistryRecordModel):
+    ok: bool = False
+    format: ProtocolDocumentTextFormat = "json"
+    package_hash: str = ""
+    protocol: ProtocolPackageProtocolPlanRecord = Field(default_factory=ProtocolPackageProtocolPlanRecord)
+    skills: list[ProtocolPackageSkillPlanRecord] = Field(default_factory=list)
+    stage_mappings: list[ProtocolPackageStageMappingPlanRecord] = Field(default_factory=list)
+    blocking_issues: list[ProtocolPackageIssueRecord] = Field(default_factory=list)
+    warnings: list[ProtocolPackageIssueRecord] = Field(default_factory=list)
+
+
+class ProtocolPackageImportApplyResultRecord(RegistryRecordModel):
+    ok: bool = False
+    status: str = ""
+    message: str = ""
+    protocol: ProtocolDefinitionRecord | None = None
+    mutation: ProtocolMutationRecord | None = None
+    plan: ProtocolPackageImportPlanRecord | None = None
+    skill_results: list[RegistryJsonRecord] = Field(default_factory=list)
+    mapping_results: list[RegistryJsonRecord] = Field(default_factory=list)
+
+
 class ProtocolDefinitionDiffRecord(RegistryRecordModel):
     protocol_id: str = ""
     protocol_definition_version_id: str = ""

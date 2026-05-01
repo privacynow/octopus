@@ -1613,6 +1613,295 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    function _agentOptionLabel(agent) {
+        return [
+            String(agent?.display_name || agent?.slug || agent?.agent_id || 'Bot').trim(),
+            String(agent?.provider || '').trim(),
+            String(agent?.role || '').trim(),
+        ].filter(Boolean).join(' · ');
+    }
+
+    function _appendPackageSummary(containerEl, plan, mappingState) {
+        containerEl.replaceChildren();
+        if (!plan) return;
+        const protocol = plan.protocol || {};
+        const summary = document.createElement('div');
+        summary.className = 'protocol-package-summary';
+        const title = document.createElement('h4');
+        title.textContent = protocol.display_name || protocol.slug || 'Protocol package';
+        summary.appendChild(title);
+        const meta = document.createElement('p');
+        meta.className = 'quiet-note';
+        meta.textContent = protocol.exists
+            ? 'A protocol with this slug already exists. Import as copy is selected by default.'
+            : 'This package can be imported as a new protocol draft.';
+        summary.appendChild(meta);
+        containerEl.appendChild(summary);
+
+        const warnings = [...(plan.warnings || []), ...(plan.blocking_issues || [])];
+        if (warnings.length) {
+            const list = document.createElement('div');
+            list.className = 'protocol-package-message-list';
+            warnings.forEach((item) => {
+                const row = document.createElement('div');
+                row.className = `protocol-package-message ${item.blocking ? 'is-blocking' : ''}`;
+                row.textContent = item.message || item.code || 'Package warning';
+                list.appendChild(row);
+            });
+            containerEl.appendChild(list);
+        }
+
+        if ((plan.skills || []).length) {
+            const skillGrid = document.createElement('div');
+            skillGrid.className = 'protocol-package-grid';
+            (plan.skills || []).forEach((skill) => {
+                const row = document.createElement('div');
+                row.className = 'protocol-package-row';
+                const label = document.createElement('div');
+                const name = document.createElement('strong');
+                name.textContent = skill.name || 'Skill';
+                const status = document.createElement('span');
+                status.textContent = skill.status || 'pending';
+                label.append(name, status);
+                row.appendChild(label);
+                skillGrid.appendChild(row);
+            });
+            containerEl.appendChild(skillGrid);
+        }
+
+        const mappings = (plan.stage_mappings || []).filter((item) => item.status === 'requires_mapping' || item.status === 'mapped' || item.status === 'auto_resolved');
+        if (mappings.length) {
+            const mappingWrap = document.createElement('div');
+            mappingWrap.className = 'protocol-package-mappings';
+            const heading = document.createElement('h4');
+            heading.textContent = 'Stage routing';
+            mappingWrap.appendChild(heading);
+            mappings.forEach((item) => {
+                const row = document.createElement('label');
+                row.className = 'protocol-package-mapping-row';
+                const text = document.createElement('span');
+                text.textContent = item.stage_key || 'Stage';
+                row.appendChild(text);
+                const select = document.createElement('select');
+                select.className = 'input';
+                const empty = document.createElement('option');
+                empty.value = '';
+                empty.textContent = 'Choose bot';
+                select.appendChild(empty);
+                const candidateIds = new Set((item.candidates || []).map((agent) => String(agent.agent_id || '')));
+                const options = (candidateIds.size ? (item.candidates || []) : connectedAgents).filter((agent) => String(agent?.agent_id || '').trim());
+                options.forEach((agent) => {
+                    const option = document.createElement('option');
+                    option.value = String(agent.agent_id || '');
+                    option.textContent = _agentOptionLabel(agent);
+                    select.appendChild(option);
+                });
+                select.value = mappingState[item.stage_key] || item.target_agent_id || '';
+                if (select.value) mappingState[item.stage_key] = select.value;
+                select.addEventListener('change', () => {
+                    mappingState[item.stage_key] = select.value;
+                });
+                row.appendChild(select);
+                mappingWrap.appendChild(row);
+            });
+            containerEl.appendChild(mappingWrap);
+        }
+    }
+
+    function _openExportProtocolPackageDialog() {
+        if (!currentProtocolId) return;
+        const form = document.createElement('div');
+        form.className = 'protocol-package-dialog';
+        const formatSelect = document.createElement('select');
+        formatSelect.className = 'input';
+        formatSelect.innerHTML = '<option value="json">JSON</option><option value="yaml">YAML</option>';
+        form.appendChild(formatSelect);
+        const revisionSelect = document.createElement('select');
+        revisionSelect.className = 'input';
+        const hasPublishedVersion = Boolean(currentProtocol?.protocol?.current_version_id || currentProtocol?.version);
+        revisionSelect.innerHTML = `${hasPublishedVersion ? '<option value="published">Published version</option>' : ''}<option value="draft">Draft</option>`;
+        form.appendChild(revisionSelect);
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'The exported package includes this protocol and the skills required by its stages.';
+        form.appendChild(note);
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const exportBtn = document.createElement('button');
+        exportBtn.type = 'button';
+        exportBtn.className = 'btn btn-primary';
+        exportBtn.textContent = 'Export package';
+        const view = UI.showDialog('Export protocol package', form, {
+            actions: [cancelBtn, exportBtn],
+            maxWidth: '520px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        exportBtn.addEventListener('click', async () => {
+            exportBtn.disabled = true;
+            try {
+                const result = await API.exportProtocolPackage(currentProtocolId, {
+                    format: formatSelect.value,
+                    revision: revisionSelect.value,
+                });
+                _downloadProtocolText(
+                    result.file_name || `${UI.safeFilename(draft.slug || 'protocol')}.octopus-protocol.${formatSelect.value}`,
+                    result.text || '',
+                    result.content_type || 'application/json',
+                );
+                view.close();
+                UI.notify('Protocol package exported.', 'success');
+            } catch (err) {
+                UI.reportError('Failed to export the protocol package', err, { context: 'Protocol package export failed' });
+            }
+            exportBtn.disabled = false;
+        });
+    }
+
+    function _openImportProtocolPackageDialog() {
+        const state = { text: '', format: 'json', plan: null, mappings: {} };
+        const form = document.createElement('div');
+        form.className = 'protocol-package-dialog';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.className = 'input';
+        fileInput.accept = '.json,.yaml,.yml,application/json,application/x-yaml,text/yaml';
+        form.appendChild(fileInput);
+        const textArea = document.createElement('textarea');
+        textArea.className = 'input protocol-package-textarea';
+        textArea.placeholder = 'Paste protocol package JSON or YAML';
+        form.appendChild(textArea);
+        const formatSelect = document.createElement('select');
+        formatSelect.className = 'input';
+        formatSelect.innerHTML = '<option value="json">JSON</option><option value="yaml">YAML</option>';
+        form.appendChild(formatSelect);
+        const policySelect = document.createElement('select');
+        policySelect.className = 'input';
+        policySelect.innerHTML = '<option value="create_new">Create new</option><option value="import_copy">Import as copy</option><option value="overwrite_existing">Overwrite existing draft</option><option value="fail_if_exists">Fail if exists</option>';
+        policySelect.value = 'create_new';
+        policySelect.hidden = true;
+        form.appendChild(policySelect);
+        const copySlugInput = document.createElement('input');
+        copySlugInput.className = 'input';
+        copySlugInput.placeholder = 'Copy slug';
+        form.appendChild(copySlugInput);
+        const copyNameInput = document.createElement('input');
+        copyNameInput.className = 'input';
+        copyNameInput.placeholder = 'Copy display name';
+        form.appendChild(copyNameInput);
+        const planEl = document.createElement('div');
+        planEl.className = 'protocol-package-plan';
+        form.appendChild(planEl);
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const planBtn = document.createElement('button');
+        planBtn.type = 'button';
+        planBtn.className = 'btn';
+        planBtn.textContent = 'Review import';
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'btn btn-primary';
+        applyBtn.textContent = 'Import';
+        applyBtn.disabled = true;
+        const view = UI.showDialog('Import protocol package', form, {
+            actions: [cancelBtn, planBtn, applyBtn],
+            maxWidth: '760px',
+        });
+        function invalidatePlan() {
+            state.text = '';
+            state.plan = null;
+            state.mappings = {};
+            planEl.replaceChildren();
+            applyBtn.disabled = true;
+            policySelect.hidden = true;
+            policySelect.value = 'create_new';
+            copySlugInput.value = '';
+            copyNameInput.value = '';
+            copySlugInput.dataset.suggested = '';
+            copyNameInput.dataset.suggested = '';
+            syncCopyInputs();
+        }
+        function syncCopyInputs() {
+            const isCopy = policySelect.value === 'import_copy';
+            copySlugInput.hidden = !isCopy;
+            copyNameInput.hidden = !isCopy;
+            if (isCopy) {
+                if (!copySlugInput.value && copySlugInput.dataset.suggested) copySlugInput.value = copySlugInput.dataset.suggested;
+                if (!copyNameInput.value && copyNameInput.dataset.suggested) copyNameInput.value = copyNameInput.dataset.suggested;
+            }
+        }
+        policySelect.addEventListener('change', syncCopyInputs);
+        syncCopyInputs();
+        cancelBtn.addEventListener('click', () => view.close());
+        fileInput.addEventListener('change', async () => {
+            const file = fileInput.files && fileInput.files[0];
+            if (!file) return;
+            textArea.value = await file.text();
+            formatSelect.value = /\.ya?ml$/i.test(String(file.name || '')) ? 'yaml' : 'json';
+            invalidatePlan();
+        });
+        textArea.addEventListener('input', invalidatePlan);
+        formatSelect.addEventListener('change', invalidatePlan);
+        planBtn.addEventListener('click', async () => {
+            planBtn.disabled = true;
+            applyBtn.disabled = true;
+            try {
+                if (!connectedAgents.length) await loadAssignmentCatalog({ quiet: true });
+                state.text = String(textArea.value || '').trim();
+                state.format = formatSelect.value;
+                state.plan = await API.planProtocolPackageImport({
+                    text: state.text,
+                    format: state.format,
+                    stage_mappings: Object.entries(state.mappings).map(([stage_key, target_agent_id]) => ({ stage_key, target_agent_id })),
+                });
+                copySlugInput.dataset.suggested = state.plan?.protocol?.suggested_copy_slug || '';
+                copyNameInput.dataset.suggested = state.plan?.protocol?.suggested_copy_display_name || '';
+                policySelect.value = state.plan?.protocol?.exists ? 'import_copy' : 'create_new';
+                policySelect.hidden = false;
+                if (policySelect.value === 'import_copy') {
+                    if (copySlugInput.dataset.suggested && !copySlugInput.value) copySlugInput.value = copySlugInput.dataset.suggested;
+                    if (copyNameInput.dataset.suggested && !copyNameInput.value) copyNameInput.value = copyNameInput.dataset.suggested;
+                } else {
+                    copySlugInput.value = '';
+                    copyNameInput.value = '';
+                }
+                syncCopyInputs();
+                _appendPackageSummary(planEl, state.plan, state.mappings);
+                applyBtn.disabled = Boolean(state.plan?.blocking_issues?.length);
+                UI.notify(state.plan?.blocking_issues?.length ? 'Choose required mappings before import.' : 'Import plan ready.', state.plan?.blocking_issues?.length ? 'warning' : 'success');
+            } catch (err) {
+                UI.reportError('Failed to review the protocol package', err, { context: 'Protocol package import plan failed' });
+            }
+            planBtn.disabled = false;
+        });
+        applyBtn.addEventListener('click', async () => {
+            applyBtn.disabled = true;
+            try {
+                const result = await API.applyProtocolPackageImport({
+                    text: state.text || String(textArea.value || '').trim(),
+                    format: state.format || formatSelect.value,
+                    protocol_policy: policySelect.value,
+                    copy_slug: String(copySlugInput.value || '').trim(),
+                    copy_display_name: String(copyNameInput.value || '').trim(),
+                    stage_mappings: Object.entries(state.mappings).map(([stage_key, target_agent_id]) => ({ stage_key, target_agent_id })),
+                    publish: false,
+                });
+                const nextId = String(result?.protocol?.protocol_id || result?.mutation?.protocol?.protocol_id || '');
+                if (nextId) currentProtocolId = nextId;
+                view.close();
+                await loadProtocols({ quiet: true });
+                if (currentProtocolId) await loadProtocolDetail();
+                UI.notify('Protocol package imported.', 'success');
+            } catch (err) {
+                UI.reportError('Failed to import the protocol package', err, { context: 'Protocol package import apply failed' });
+            }
+            applyBtn.disabled = false;
+        });
+    }
+
     async function _validateNow() {
         if (_blockConflictAction('Validate')) return;
         if (!currentProtocolId) return;
@@ -4383,6 +4672,12 @@ function renderProtocolWorkspace(container) {
         const utilityActions = [{
             label: 'Protocol settings',
             onClick: () => _openProtocolSettings(),
+        }, {
+            label: 'Export package',
+            onClick: () => _openExportProtocolPackageDialog(),
+        }, {
+            label: 'Import package',
+            onClick: () => _openImportProtocolPackageDialog(),
         }];
         if (hasPublishedVersion && lifecycleState === 'published' && saveState.state !== 'conflict') {
             utilityActions.push({

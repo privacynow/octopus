@@ -2789,6 +2789,13 @@ select {
         display: inline-flex;
     }
 
+    .hamburger.active {
+        left: min(calc(var(--sidebar-width) - 56px), calc(100vw - 56px));
+        top: var(--space-4);
+        background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+        box-shadow: var(--shadow-card);
+    }
+
     #content {
         margin-left: 0;
         padding: 4.4rem var(--space-4) var(--space-5);

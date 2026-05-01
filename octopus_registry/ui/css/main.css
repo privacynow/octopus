@@ -2948,10 +2948,19 @@ select {
 
     .badge,
     .kit-runs-list-row-badge,
+    .kit-runs-list-row-meta-chip,
+    .kit-run-status-chip,
+    .kit-runs-filter-chip,
+    .kit-agents-filter-chip,
+    .kit-agent-presence-chip,
+    .kit-agent-trust-chip,
+    .kit-lifecycle-slug-chip,
+    .kit-draft-chip,
     .kit-selector-preview-row-badge,
     .kit-stage-routing-badge,
     .kit-workflow-first-run-step-badge,
-    .kit-workflow-node-state {
+    .kit-workflow-node-state,
+    .quickstart-links .section-link {
         border-radius: 8px;
         line-height: 1.15;
         white-space: normal;
@@ -3043,7 +3052,13 @@ select {
     }
 
     .summary-rail {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+        gap: var(--space-2);
+    }
+
+    .stat-card,
+    .summary-stat {
+        padding: 0.82rem 0.9rem;
     }
 
     .list-row-with-artifact-actions {
@@ -3156,7 +3171,7 @@ select {
 
     .segmented-control {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
         width: 100%;
         justify-content: stretch;
         overflow: visible;
@@ -3298,7 +3313,15 @@ select {
         justify-content: flex-start;
     }
 
-    .task-summary-strip,
+    .task-summary-strip {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+        gap: var(--space-2);
+    }
+
+    .task-summary-chip {
+        padding: 0.68rem 0.78rem;
+    }
+
     .metadata-grid,
     .approval-facts {
         grid-template-columns: 1fr;

@@ -6515,3 +6515,22 @@ select {
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
+
+@media (max-width: 900px) {
+    .kit-runs-list-row-meta-chip,
+    .kit-run-status-chip,
+    .kit-runs-filter-chip,
+    .kit-agents-filter-chip,
+    .kit-agent-presence-chip,
+    .kit-agent-trust-chip,
+    .kit-lifecycle-slug-chip,
+    .kit-draft-chip,
+    .kit-selector-preview-row-badge,
+    .kit-stage-routing-badge,
+    .kit-workflow-first-run-step-badge,
+    .kit-workflow-node-state {
+        border-radius: 8px;
+        line-height: 1.15;
+        white-space: normal;
+    }
+}

@@ -28,6 +28,7 @@ from app.presentation.telegram import (
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
+    protocol_artifact_preview_message,
     protocol_run_artifacts_message,
     recovery_notice_markup,
     pending_html_outcome_message,
@@ -151,7 +152,7 @@ def test_protocol_artifacts_message_distinguishes_available_and_missing_artifact
 
     assert rendered.parse_mode == ParseMode.HTML
     assert "1. plan.md: <code>verified</code>" in rendered.text
-    assert "<code>/protocol artifacts run-1 download 1</code>" in rendered.text
+    assert '<a href="http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content">Download</a>' in rendered.text
     assert "2. report.md: <code>declared</code>" in rendered.text
     assert "not produced yet" in rendered.text
     assert rendered.reply_markup is not None
@@ -179,8 +180,26 @@ def test_protocol_artifacts_message_omits_localhost_url_buttons():
         artifact_links={"plan": "http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content"},
     )
 
-    assert "http://127.0.0.1:8787/ui/runs?run_id=run-1" not in rendered.text
-    assert "Open the full run in Registry" in rendered.text
+    assert ">http://127.0.0.1:8787" not in rendered.text
+    assert '<a href="http://127.0.0.1:8787/ui/runs?run_id=run-1">Registry run</a>' in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content">Download</a>' in rendered.text
+    assert rendered.reply_markup is None
+
+
+def test_protocol_artifact_preview_message_uses_named_local_links():
+    rendered = protocol_artifact_preview_message(
+        run_id="run-1",
+        artifact_label="plan.md",
+        preview_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?preview=true",
+        open_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content",
+        download_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?download=true",
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert ">http://127.0.0.1:8787" not in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?preview=true">Rendered preview</a>' in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content">Open</a>' in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?download=true">Download</a>' in rendered.text
     assert rendered.reply_markup is None
 
 

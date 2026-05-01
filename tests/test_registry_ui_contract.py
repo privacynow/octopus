@@ -250,6 +250,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "run.current_stage_execution_id" in workspace
     assert "return latestStageExecution(matchingAttempts)" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
+    assert "UI.subscribeWithRefresh(cleanups, 'tasks'" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
 
@@ -1239,6 +1240,11 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "const progressRail = Kit.runStageProgressRail({" in workspace
     assert "onStageSelect: selectRunStageEvidence" in workspace
     assert "run-focus-live" in workspace
+    assert "const taskForStage = (item) =>" in workspace
+    assert "Latest agent update" in workspace
+    assert "Loop/attempt history" in workspace
+    assert "stageRows.length > stageAttemptsByKey.size" in workspace
+    assert "UI.subscribeWithRefresh(cleanups, 'tasks'" in workspace
     assert "function _protocolEventText(event)" in workspace
     assert "quietProgressText" in workspace
     assert "let activeRunStageFollowsCurrent = true" in workspace
@@ -1257,6 +1263,8 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
     assert "onStageSelect = null" in kit
+    assert "const attemptCountByStage = new Map();" in kit
+    assert "attempt ${item.attempt || item.attemptCount}" in kit
     assert "kit-run-stage-progress-node is-" in kit
     assert ".runs-overview-strip" in css
     assert ".run-focus-hero" in css

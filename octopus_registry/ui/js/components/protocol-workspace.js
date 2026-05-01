@@ -7660,7 +7660,22 @@ function renderProtocolRuns(container) {
         const artifactDefinitionByKey = new Map(
             (currentRun.version?.definition_json?.artifacts || []).map((item) => [String(item.artifact_key || ''), item]),
         );
+        const timestampMs = (value) => {
+            const parsed = Date.parse(String(value || ''));
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+        const taskById = new Map(
+            (currentRun.tasks || []).map((item) => [String(item.routed_task_id || ''), item]),
+        );
+        const stageTimelineMs = (item) => {
+            const task = taskById.get(String(item?.routed_task_id || '')) || null;
+            return timestampMs(item?.started_at || item?.completed_at || item?.updated_at || task?.updated_at);
+        };
         const stageRows = [...(currentRun.stage_executions || [])].sort((left, right) => {
+            const leftTime = stageTimelineMs(left);
+            const rightTime = stageTimelineMs(right);
+            if (leftTime && rightTime && leftTime !== rightTime) return leftTime - rightTime;
+            if (leftTime !== rightTime) return leftTime ? -1 : 1;
             const leftOrder = stageOrderByKey.has(String(left.stage_key || ''))
                 ? stageOrderByKey.get(String(left.stage_key || ''))
                 : Number.MAX_SAFE_INTEGER;
@@ -7671,7 +7686,7 @@ function renderProtocolRuns(container) {
             const leftAttempt = Number(left.attempt || 0);
             const rightAttempt = Number(right.attempt || 0);
             if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt;
-            return String(left.started_at || '').localeCompare(String(right.started_at || ''));
+            return String(left.protocol_stage_execution_id || '').localeCompare(String(right.protocol_stage_execution_id || ''));
         });
         const stageValueFor = (item, index = 0) => String(item?.protocol_stage_execution_id || item?.stage_key || `stage-${index}`);
         const stageValueForStageKey = (stageKey) => {
@@ -7703,9 +7718,6 @@ function renderProtocolRuns(container) {
         const { transitionRows } = _filteredProtocolTimelineData(currentRun, '');
         const stageById = new Map(
             (currentRun.stage_executions || []).map((item) => [String(item.protocol_stage_execution_id || ''), item]),
-        );
-        const taskById = new Map(
-            (currentRun.tasks || []).map((item) => [String(item.routed_task_id || ''), item]),
         );
         const participantByKey = new Map(
             (currentRun.participants || []).map((item) => [String(item.participant_key || ''), item]),
@@ -7861,11 +7873,6 @@ function renderProtocolRuns(container) {
             ].filter(Boolean).join(' · ');
         };
 
-        const timestampMs = (value) => {
-            const parsed = Date.parse(String(value || ''));
-            return Number.isFinite(parsed) ? parsed : 0;
-        };
-
         const latestStageExecution = (items = []) => {
             const rows = Array.isArray(items) ? items.filter(Boolean) : [];
             return rows.reduce((best, item) => {
@@ -7908,6 +7915,27 @@ function renderProtocolRuns(container) {
             if (!latest || !item) return false;
             return String(latest.protocol_stage_execution_id || '') !== String(item.protocol_stage_execution_id || '');
         };
+        const taskForStage = (item) => taskById.get(String(item?.routed_task_id || '')) || null;
+        const taskTargetLabel = (task, fallback = '') => String(
+            task?.target_display_name
+            || task?.target_agent_id
+            || fallback
+            || '',
+        ).trim();
+        const taskStateLabel = (task) => {
+            const status = String(task?.status || '').trim();
+            return status ? _titleCaseWords(status) : '';
+        };
+        const taskUpdateText = (task, limit = 220) => {
+            const taskStatus = String(task?.status || '').trim().toLowerCase();
+            const terminal = ['completed', 'failed', 'cancelled'].includes(taskStatus);
+            const text = String(terminal
+                ? (task?.result_summary || task?.summary || '')
+                : (task?.summary || task?.result_summary || '')).trim();
+            return text ? _compactRunText(text, limit) : '';
+        };
+        const taskUpdatedLabel = (task) => task?.updated_at ? `Updated ${UI.relativeTime(task.updated_at)}` : '';
+        const stageAttemptLabel = (item) => `Attempt ${String(item?.attempt || 1)}`;
 
         const currentRunStageExecution = () => {
             const run = currentRun.run || {};
@@ -8012,31 +8040,44 @@ function renderProtocolRuns(container) {
             const latestEvent = lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || '')
                 ? lastRunEvent
                 : null;
-            const currentTask = taskById.get(String(currentStage?.routed_task_id || '')) || null;
+            const currentTask = taskForStage(currentStage);
+            const currentTaskUpdate = taskUpdateText(currentTask, 260);
+            const currentTaskTarget = taskTargetLabel(currentTask, currentStage?.routed_task_id || '');
+            const currentTaskState = taskStateLabel(currentTask) || currentStage?.status || run.status || '';
+            const currentTaskFreshness = taskUpdatedLabel(currentTask);
             const currentParticipant = participantByKey.get(String(currentStage?.participant_key || '')) || {};
             const currentStageStartedMs = timestampMs(currentStage?.started_at || currentStage?.updated_at);
             const currentStageAge = currentStageStartedMs ? durationLabel(Date.now() - currentStageStartedMs) : '';
+            const taskProgressText = currentTaskUpdate
+                ? [
+                    currentTaskUpdate,
+                    currentTaskTarget ? `Agent ${currentTaskTarget}` : '',
+                    currentTaskState,
+                    currentTaskFreshness,
+                ].filter(Boolean).join(' · ')
+                : '';
             const quietProgressText = currentStage
                 ? [
                     `Stage ${currentStageOrdinal || 1}${totalStages ? ` / ${totalStages}` : ''}`,
                     currentStageDef.display_name || currentStage.stage_key || 'Current stage',
                     currentStage.status || run.status || 'running',
-                    currentTask ? `task ${currentTask.target_display_name || currentTask.target_agent_id || currentStage.routed_task_id}` : '',
+                    currentTaskTarget ? `agent ${currentTaskTarget}` : '',
                     currentParticipant.display_name ? `participant ${currentParticipant.display_name}` : '',
                     currentStageAge ? `active ${currentStageAge}` : '',
                 ].filter(Boolean).join(' · ')
                 : 'Waiting for the first stage to dispatch.';
             const live = document.createElement('div');
-            live.className = `run-focus-live${active ? ' is-live' : ''}${active && !latestEvent ? ' is-quiet' : ''}`;
+            live.className = `run-focus-live${active ? ' is-live' : ''}${active && !latestEvent && !currentTaskUpdate ? ' is-quiet' : ''}`;
             const liveLabel = document.createElement('strong');
-            liveLabel.textContent = active ? 'Live update' : 'Latest update';
+            liveLabel.textContent = currentTaskUpdate ? 'Agent update' : (active ? 'Live update' : 'Latest update');
             live.appendChild(liveLabel);
             const liveCopy = document.createElement('span');
-            liveCopy.textContent = latestEvent
+            liveCopy.textContent = taskProgressText
+                || (latestEvent
                 ? _protocolEventText(latestEvent)
                 : active
                     ? quietProgressText
-                    : run.termination_summary || 'Run is no longer active.';
+                    : run.termination_summary || 'Run is no longer active.');
             live.appendChild(liveCopy);
             state.appendChild(live);
 
@@ -8097,6 +8138,9 @@ function renderProtocolRuns(container) {
             const currentStageDef = currentStage
                 ? stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {}
                 : {};
+            const currentTask = taskForStage(currentStage);
+            const currentTaskUpdate = taskUpdateText(currentTask, 240);
+            const currentTaskTarget = taskTargetLabel(currentTask, currentStage?.routed_task_id || '');
             const startMs = timestampMs(run.created_at || currentStage?.started_at);
             const elapsed = startMs ? durationLabel(Date.now() - startMs) : '';
             const averageMs = averageCompletedRunDurationMs();
@@ -8120,9 +8164,29 @@ function renderProtocolRuns(container) {
             card.appendChild(UI.renderMetadataGrid([
                 { label: 'Current stage', value: currentStage ? (currentStageDef.display_name || currentStage.stage_key || 'Stage') : '—' },
                 { label: 'Stage state', value: currentStage?.status || run.status || '—' },
+                { label: 'Assigned to', value: currentTaskTarget || '—' },
+                { label: 'Task state', value: taskStateLabel(currentTask) || '—' },
                 { label: 'Available outputs', value: String(artifactRows.length) },
                 { label: 'Missing declared outputs', value: String(pendingArtifactRows.length) },
             ], { compact: true }));
+            if (currentTaskUpdate) {
+                card.appendChild(UI.renderListRow({
+                    label: 'Latest agent update',
+                    sublabel: [
+                        currentTaskUpdate,
+                        currentTaskTarget ? `Assigned to ${currentTaskTarget}` : '',
+                        taskUpdatedLabel(currentTask),
+                    ].filter(Boolean).join(' · '),
+                    badgeText: taskStateLabel(currentTask) || currentStage?.status || '',
+                }));
+            }
+            if (stageRows.length > stageAttemptsByKey.size) {
+                card.appendChild(UI.renderListRow({
+                    label: 'Loop/attempt history',
+                    sublabel: `${stageRows.length} stage executions across ${stageAttemptsByKey.size} declared stages. Review loops and send-backs are listed chronologically below.`,
+                    badgeText: 'attempts',
+                }));
+            }
             if (lastRunEvent && String(lastRunEvent.protocol_run_id || '') === String(run.protocol_run_id || '')) {
                 card.appendChild(UI.renderListRow({
                     label: `Latest event: ${_protocolEventKindLabel(lastRunEvent.event_kind)}`,
@@ -8149,6 +8213,10 @@ function renderProtocolRuns(container) {
             const stageTransitions = transitionsForStage(item.protocol_stage_execution_id);
             const stageIssues = issuesByStageKey.get(String(item.stage_key || '')) || [];
             const previousAttempt = isPreviousStageAttempt(item);
+            const taskTarget = taskTargetLabel(task, item.routed_task_id || '');
+            const taskState = taskStateLabel(task);
+            const taskUpdate = taskUpdateText(task, 260);
+            const taskFreshness = taskUpdatedLabel(task);
 
             const card = document.createElement('article');
             card.className = 'protocol-lineage-card';
@@ -8169,7 +8237,8 @@ function renderProtocolRuns(container) {
             subtitle.className = 'protocol-lineage-subtitle';
             subtitle.textContent = [
                 participant.display_name || item.participant_key || '',
-                task ? (task.target_display_name || task.target_agent_id || '') : '',
+                taskTarget,
+                taskState,
                 item.decision_summary || item.failure_detail || '',
             ].filter(Boolean).join(' · ');
             titleWrap.appendChild(subtitle);
@@ -8203,8 +8272,9 @@ function renderProtocolRuns(container) {
             const note = document.createElement('div');
             note.className = 'protocol-lineage-note';
             note.textContent = [
-                `Attempt ${String(item.attempt || 1)}`,
+                stageAttemptLabel(item),
                 previousAttempt ? 'Superseded by a newer attempt' : '',
+                taskFreshness,
                 item.completed_at
                     ? `Completed ${UI.relativeTime(item.completed_at)}`
                     : item.started_at
@@ -8216,9 +8286,23 @@ function renderProtocolRuns(container) {
             ].filter(Boolean).join(' · ');
             card.appendChild(note);
 
+            if (taskUpdate) {
+                card.appendChild(UI.renderListRow({
+                    label: 'Latest agent update',
+                    sublabel: [
+                        taskUpdate,
+                        taskTarget ? `Assigned to ${taskTarget}` : '',
+                        taskFreshness,
+                    ].filter(Boolean).join(' · '),
+                    badgeText: taskState || item.status || '',
+                }));
+            }
+
             const facts = UI.renderMetadataGrid([
                 { label: 'Task', value: item.routed_task_id || '—' },
                 { label: 'Attempt', value: String(item.attempt || 1) },
+                { label: 'Assigned to', value: taskTarget || '—' },
+                { label: 'Task state', value: taskState || '—' },
                 { label: 'Started', value: item.started_at ? UI.relativeTime(item.started_at) : '—' },
                 { label: 'Completed', value: item.completed_at ? UI.relativeTime(item.completed_at) : '—' },
             ], { compact: true });
@@ -8297,10 +8381,13 @@ function renderProtocolRuns(container) {
             if (currentStage) {
                 const currentStageIndex = Math.max(stageRows.indexOf(currentStage), 0);
                 const currentStageDef = stageDefinitionByKey.get(String(currentStage.stage_key || '')) || {};
+                const currentTask = taskForStage(currentStage);
+                const currentTaskUpdate = taskUpdateText(currentTask, 180);
                 section.appendChild(UI.renderListRow({
                     label: `Current step: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`,
                     sublabel: [
                         String(currentStage.status || ''),
+                        currentTaskUpdate ? `Latest agent update: ${currentTaskUpdate}` : '',
                         currentStage.decision_summary || currentStage.failure_detail || '',
                         'Open Stages for task, decision, and output evidence',
                     ].filter(Boolean).join(' · '),
@@ -8340,6 +8427,13 @@ function renderProtocolRuns(container) {
         const stagePanel = document.createElement('div');
         stagePanel.className = 'run-stage-timeline';
         appendSectionTitle(stagePanel, 'Stages', 'Click a stage to see the work, outputs, and decisions for that step.');
+        if (stageRows.length > stageAttemptsByKey.size) {
+            stagePanel.appendChild(UI.renderListRow({
+                label: 'Loop/attempt history',
+                sublabel: `${stageRows.length} stage executions across ${stageAttemptsByKey.size} declared stages. Send-backs and repeated attempts are shown in chronological handoff order below.`,
+                badgeText: 'attempts',
+            }));
+        }
         if (stageRows.length) {
             const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
             const preferredStage = currentRunStageExecution();
@@ -8360,6 +8454,12 @@ function renderProtocolRuns(container) {
                 const producedArtifacts = artifactsByProducer.get(String(stageItem.protocol_stage_execution_id || '')) || [];
                 const selected = value === String(activeRunStageExecutionId || '');
                 const normalizedStageStatus = String(stageItem.status || 'pending').trim().toLowerCase() || 'pending';
+                const task = taskForStage(stageItem);
+                const taskTarget = taskTargetLabel(task, stageItem.routed_task_id || '');
+                const taskState = taskStateLabel(task);
+                const taskUpdate = taskUpdateText(task, 150);
+                const previousAttempt = isPreviousStageAttempt(stageItem);
+                const activeTaskState = !['completed', 'failed', 'cancelled'].includes(String(task?.status || stageItem.status || '').trim().toLowerCase());
                 const item = document.createElement('article');
                 item.className = `run-stage-timeline-item is-${normalizedStageStatus}${selected ? ' is-expanded' : ''}`;
                 const button = document.createElement('button');
@@ -8384,7 +8484,11 @@ function renderProtocolRuns(container) {
                 copy.appendChild(label);
                 const meta = document.createElement('small');
                 meta.textContent = [
-                    stageItem.status || 'pending',
+                    stageAttemptLabel(stageItem),
+                    previousAttempt ? 'previous attempt' : '',
+                    taskState || stageItem.status || 'pending',
+                    taskTarget ? `Agent ${taskTarget}` : '',
+                    activeTaskState ? taskUpdate : '',
                     producedArtifacts.length ? `${producedArtifacts.length} output${producedArtifacts.length === 1 ? '' : 's'}` : '',
                     stageItem.decision_summary || stageItem.failure_detail || '',
                 ].filter(Boolean).join(' · ');
@@ -8613,6 +8717,10 @@ function renderProtocolRuns(container) {
         loadRuns(),
         currentRunId ? loadRunDetail({ soft: true }) : Promise.resolve(),
     ]), 400);
+    UI.subscribeWithRefresh(cleanups, 'tasks', () => Promise.all([
+        loadRuns(),
+        currentRunId ? loadRunDetail({ soft: true }) : Promise.resolve(),
+    ]), 350);
     UI.subscribeWithRefresh(cleanups, 'protocols', () => Promise.all([
         loadRuns(),
         currentRunId ? loadRunDetail({ soft: true }) : Promise.resolve(),

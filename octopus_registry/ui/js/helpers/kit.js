@@ -2771,6 +2771,12 @@ window.Kit = (() => {
         onStageSelect = null,
     } = {}) {
         const executionByStage = _latestStageExecutions(stageExecutions);
+        const attemptCountByStage = new Map();
+        (Array.isArray(stageExecutions) ? stageExecutions : []).forEach((item) => {
+            const key = String(item?.stage_key || '').trim();
+            if (!key) return;
+            attemptCountByStage.set(key, (attemptCountByStage.get(key) || 0) + 1);
+        });
         const issueByStage = new Map();
         (Array.isArray(issues) ? issues : []).forEach((issue) => {
             const key = String(issue?.stage_key || '').trim();
@@ -2801,6 +2807,8 @@ window.Kit = (() => {
         const items = knownStages.map((stage, index) => {
             const execution = executionByStage.get(stage.stage_key) || null;
             const executionStatus = String(execution?.status || '').trim().toLowerCase();
+            const attempt = Number(execution?.attempt || 0);
+            const attemptCount = Math.max(attemptCountByStage.get(stage.stage_key) || 0, attempt);
             const issue = issueByStage.get(stage.stage_key) || null;
             let state = 'waiting';
             if (issue) {
@@ -2831,6 +2839,8 @@ window.Kit = (() => {
                 label: _runStageLabel(stage),
                 state,
                 status: executionStatus || (stage.stage_key === String(currentStageKey || '') ? normalizedRunStatus : ''),
+                attempt,
+                attemptCount,
             };
         });
 
@@ -2879,11 +2889,14 @@ window.Kit = (() => {
             copy.appendChild(label);
             const state = document.createElement('span');
             state.className = 'kit-run-stage-progress-state';
-            state.textContent = item.state === 'current'
+            const baseStateText = item.state === 'current'
                 ? 'running'
                 : item.state === 'attention'
                     ? 'needs attention'
                     : item.state;
+            state.textContent = item.attemptCount > 1
+                ? `${baseStateText} · attempt ${item.attempt || item.attemptCount}`
+                : baseStateText;
             copy.appendChild(state);
             li.appendChild(copy);
             const ariaLabel = `${item.index + 1}. ${item.label}: ${state.textContent}`;
@@ -2900,6 +2913,7 @@ window.Kit = (() => {
                         executionId: item.executionId,
                         index: item.index,
                         state: item.state,
+                        attempt: item.attempt,
                     });
                 };
                 li.addEventListener('click', selectStage);

@@ -16,7 +16,7 @@ Then use an example when you need a full scenario.
 
 | Example | Use it for |
 | --- | --- |
-| [Manufacturing intelligence](manufacturing-intelligence.md) | Customer-facing protocol walkthrough that creates an offline manufacturing intelligence command center artifact. |
+| [Manufacturing intelligence](manufacturing-intelligence/README.md) | Step-by-step protocol walkthrough that creates, runs, and validates an offline manufacturing intelligence command center artifact. |
 | [Offline CSV analytics](offline-csv-analytics.md) | Browser-only multi-CSV analytics package walkthrough with local data handling. |
 
 ## Example Rules

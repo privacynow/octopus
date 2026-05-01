@@ -25,11 +25,13 @@ from app.presentation.telegram import (
     ingress_setup_prompt_message,
     main_help_message,
     pending_plain_outcome_message,
+    parse_protocol_callback_data,
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
     protocol_action_confirmation_message,
     protocol_artifact_preview_message,
+    protocol_callback_data,
     protocol_run_notification_message,
     protocol_run_artifacts_message,
     protocol_run_updated_message,
@@ -151,16 +153,35 @@ def test_protocol_artifacts_message_distinguishes_available_and_missing_artifact
     rendered = protocol_run_artifacts_message(
         detail,
         deep_link="http://registry.local/ui/runs?run_id=run-1",
-        artifact_links={"plan": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content"},
+        artifact_links={
+            "plan": {
+                "preview": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content?preview=true",
+                "open": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content",
+                "download": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content?download=true",
+            }
+        },
     )
 
     assert rendered.parse_mode == ParseMode.HTML
     assert "1. plan.md: <code>verified</code>" in rendered.text
-    assert '<a href="http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content">Download</a>' in rendered.text
+    assert '<a href="http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content?download=true">Download</a>' in rendered.text
     assert "2. report.md: <code>declared</code>" in rendered.text
     assert "not produced yet" in rendered.text
     assert rendered.reply_markup is not None
-    assert rendered.reply_markup.inline_keyboard[0][0].text == "Open Run in Registry"
+    callback_values = [
+        button.callback_data
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert "protocol:download:run-1:1" in callback_values
+    button_labels = [
+        button.text
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+    ]
+    assert "Preview 1" in button_labels
+    assert "Open 1" in button_labels
 
 
 def test_protocol_artifacts_message_omits_localhost_url_buttons():
@@ -187,7 +208,14 @@ def test_protocol_artifacts_message_omits_localhost_url_buttons():
     assert ">http://127.0.0.1:8787" not in rendered.text
     assert '<a href="http://127.0.0.1:8787/ui/runs?run_id=run-1">Registry run</a>' in rendered.text
     assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content">Download</a>' in rendered.text
-    assert rendered.reply_markup is None
+    assert rendered.reply_markup is not None
+    callback_values = [
+        button.callback_data
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert "protocol:download:run-1:1" in callback_values
 
 
 def test_protocol_artifact_preview_message_uses_named_local_links():
@@ -197,6 +225,7 @@ def test_protocol_artifact_preview_message_uses_named_local_links():
         preview_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?preview=true",
         open_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content",
         download_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?download=true",
+        artifact_ref="1",
     )
 
     assert rendered.parse_mode == ParseMode.HTML
@@ -204,7 +233,23 @@ def test_protocol_artifact_preview_message_uses_named_local_links():
     assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?preview=true">Rendered preview</a>' in rendered.text
     assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content">Open</a>' in rendered.text
     assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?download=true">Download</a>' in rendered.text
-    assert rendered.reply_markup is None
+    assert rendered.reply_markup is not None
+    callback_values = [
+        button.callback_data
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert "protocol:download:run-1:1" in callback_values
+    assert "protocol:artifacts:run-1" in callback_values
+
+
+def test_protocol_callback_data_round_trips():
+    data = protocol_callback_data("preview", "abcdef1234567890", "2")
+
+    assert data == "protocol:preview:abcdef1234567890:2"
+    assert parse_protocol_callback_data(data) == ("preview", "abcdef1234567890", "2")
+    assert parse_protocol_callback_data("protocol:missing:run") is None
 
 
 def test_protocol_control_messages_use_short_run_ids():

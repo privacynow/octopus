@@ -108,9 +108,9 @@ def protocol_artifact_url(
     query_items = {
         key: value
         for key, value in (
-            ("download", "true" if download else ""),
-            ("browse", "true" if browse else ""),
-            ("preview", "true" if preview else ""),
+            ("download", "1" if download else ""),
+            ("browse", "1" if browse else ""),
+            ("preview", "1" if preview else ""),
             ("path", str(member_path or "").strip()),
         )
         if value

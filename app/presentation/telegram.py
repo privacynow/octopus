@@ -103,6 +103,17 @@ _PENDING_CALLBACK_ACTIONS = frozenset({
     "retry_skip",
 })
 
+_PROTOCOL_CALLBACK_ACTIONS = frozenset({
+    "status",
+    "artifacts",
+    "preview",
+    "open",
+    "download",
+    "export",
+    "watch",
+    "unwatch",
+})
+
 
 def pending_callback_data(action: str, callback_token: str = "") -> str:
     if action not in _PENDING_CALLBACK_ACTIONS:
@@ -122,6 +133,46 @@ def parse_pending_callback_data(data: str) -> tuple[str, str] | None:
     if not callback_token:
         return None
     return (action, callback_token)
+
+
+def protocol_callback_data(action: str, run_ref: str, artifact_ref: str = "") -> str:
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in _PROTOCOL_CALLBACK_ACTIONS:
+        raise ValueError(f"Unknown protocol callback action: {action}")
+    run_token = str(run_ref or "").strip()
+    if not run_token:
+        raise ValueError("Protocol callback run reference is required")
+    artifact_token = str(artifact_ref or "").strip()
+    parts = ["protocol", normalized_action, run_token]
+    if artifact_token:
+        parts.append(artifact_token)
+    return ":".join(parts)
+
+
+def parse_protocol_callback_data(data: str) -> tuple[str, str, str] | None:
+    text = str(data or "").strip()
+    parts = text.split(":", 3)
+    if len(parts) < 3 or parts[0] != "protocol":
+        return None
+    action = parts[1].strip().lower()
+    run_ref = parts[2].strip()
+    artifact_ref = parts[3].strip() if len(parts) >= 4 else ""
+    if action not in _PROTOCOL_CALLBACK_ACTIONS or not run_ref:
+        return None
+    return (action, run_ref, artifact_ref)
+
+
+def _callback_button(label: str, action: str, run_ref: str, artifact_ref: str = "") -> InlineKeyboardButton | None:
+    try:
+        return InlineKeyboardButton(label, callback_data=protocol_callback_data(action, run_ref, artifact_ref))
+    except ValueError:
+        return None
+
+
+def _append_button(row: list[InlineKeyboardButton], label: str, action: str, run_ref: str, artifact_ref: str = "") -> None:
+    button = _callback_button(label, action, run_ref, artifact_ref)
+    if button is not None:
+        row.append(button)
 
 
 def retry_prompt(denials: Iterable[dict[str, Any]], callback_token: str = "") -> TelegramRenderedMessage:
@@ -1431,14 +1482,23 @@ def protocol_run_started_message(
         f"Protocol: <code>{html.escape(protocol_label)}</code>",
         f"Current stage: <code>{html.escape(current_stage or 'queued')}</code>",
         f"Notifications: <code>{'watching' if watching else 'not watching'}</code>",
-        "Next: <code>/protocol status latest</code> or <code>/protocol artifacts latest</code>",
+        "Next: tap Status or Artifacts below.",
     ]
-    reply_markup = None
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+    action_row: list[InlineKeyboardButton] = []
+    _append_button(action_row, "Status", "status", run_id)
+    _append_button(action_row, "Artifacts", "artifacts", run_id)
+    if watching:
+        _append_button(action_row, "Stop updates", "unwatch", run_id)
+    else:
+        _append_button(action_row, "Watch", "watch", run_id)
+    if action_row:
+        keyboard_rows.append(action_row)
     if deep_link:
         button = _telegram_url_button(deep_link, "Open in Registry")
         if button is not None:
             lines.append("Open the run in Registry from the button below.")
-            reply_markup = InlineKeyboardMarkup([[button]])
+            keyboard_rows.append([button])
         else:
             fallback = _telegram_named_link(deep_link, "Registry run")
             if fallback:
@@ -1446,7 +1506,7 @@ def protocol_run_started_message(
     return TelegramRenderedMessage(
         text="\n".join(lines),
         parse_mode=ParseMode.HTML,
-        reply_markup=reply_markup,
+        reply_markup=InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None,
         disable_web_page_preview=True,
     )
 
@@ -1457,7 +1517,7 @@ def protocol_recent_runs_message(runs: list[Any], *, run_links: Mapping[str, str
     links = run_links or {}
     lines = [
         "<b>Recent protocol runs</b>",
-        "Use the number, <code>latest</code>, or the short id in follow-up commands.",
+        "Tap a run action below. You can also use the number, <code>latest</code>, or the short id in commands.",
     ]
     keyboard_rows: list[list[InlineKeyboardButton]] = []
     for index, raw in enumerate(runs[:10], start=1):
@@ -1468,6 +1528,12 @@ def protocol_recent_runs_message(runs: list[Any], *, run_links: Mapping[str, str
         status = str(item.get("status") or "queued").strip()
         stage = str(item.get("current_stage_key") or "no active stage").strip()
         lines.append(f"{index}. {html.escape(protocol)} · <code>{html.escape(status)}</code> · {html.escape(stage)} · <code>{html.escape(short_id)}</code>")
+        if run_id and len(keyboard_rows) < 10:
+            row: list[InlineKeyboardButton] = []
+            _append_button(row, f"Run {index} status", "status", run_id)
+            _append_button(row, f"Run {index} artifacts", "artifacts", run_id)
+            if row:
+                keyboard_rows.append(row)
         link = str(links.get(run_id) or "").strip()
         if link:
             button = _telegram_url_button(link, f"Open run {index}")
@@ -1493,6 +1559,7 @@ def protocol_run_status_message(
 ) -> TelegramRenderedMessage:
     run = detail.run
     run_short = run.protocol_run_id[:8] if len(run.protocol_run_id) > 8 else run.protocol_run_id
+    run_id = str(run.protocol_run_id or "").strip()
     lines = [
         f"Run: <code>{html.escape(run_short)}</code>",
         f"Status: <code>{html.escape(run.status)}</code>",
@@ -1521,7 +1588,7 @@ def protocol_run_status_message(
             for index, item in enumerate(detail.artifacts[:6])
         )
         lines.append(f"Artifacts: <code>{artifacts}</code>")
-        lines.append("Open: <code>/protocol artifacts latest</code>")
+        lines.append("Artifacts: tap Artifacts below.")
     if detail.stage_executions:
         latest = detail.stage_executions[0]
         lines.append(f"Latest stage: <code>{html.escape(latest.stage_key)} ({html.escape(latest.status)})</code>")
@@ -1529,12 +1596,21 @@ def protocol_run_status_message(
             lines.append(f"Latest summary: {html.escape(latest.decision_summary)}")
         elif latest.failure_detail:
             lines.append(f"Latest failure: {html.escape(latest.failure_detail)}")
-    reply_markup = None
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+    action_row: list[InlineKeyboardButton] = []
+    _append_button(action_row, "Artifacts", "artifacts", run_id)
+    _append_button(action_row, "Export", "export", run_id)
+    if watching:
+        _append_button(action_row, "Stop updates", "unwatch", run_id)
+    else:
+        _append_button(action_row, "Watch", "watch", run_id)
+    if action_row:
+        keyboard_rows.append(action_row)
     if deep_link:
         button = _telegram_url_button(deep_link, "Open in Registry")
         if button is not None:
             lines.append("Open the run in Registry from the button below.")
-            reply_markup = InlineKeyboardMarkup([[button]])
+            keyboard_rows.append([button])
         else:
             fallback = _telegram_named_link(deep_link, "Registry run")
             if fallback:
@@ -1542,7 +1618,7 @@ def protocol_run_status_message(
     return TelegramRenderedMessage(
         text="\n".join(lines),
         parse_mode=ParseMode.HTML,
-        reply_markup=reply_markup,
+        reply_markup=InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None,
         disable_web_page_preview=True,
     )
 
@@ -1562,12 +1638,17 @@ def protocol_run_artifacts_message(
             f"Run: <code>{html.escape(run_short)}</code>",
             "No artifacts are declared for this run yet.",
         ]
-        reply_markup = None
+        keyboard_rows: list[list[InlineKeyboardButton]] = []
+        action_row: list[InlineKeyboardButton] = []
+        _append_button(action_row, "Status", "status", run.protocol_run_id)
+        _append_button(action_row, "Export", "export", run.protocol_run_id)
+        if action_row:
+            keyboard_rows.append(action_row)
         if deep_link:
             button = _telegram_url_button(deep_link, "Open in Registry")
             if button is not None:
                 lines.append("Open the run in Registry from the button below.")
-                reply_markup = InlineKeyboardMarkup([[button]])
+                keyboard_rows.append([button])
             else:
                 fallback = _telegram_named_link(deep_link, "Registry run")
                 if fallback:
@@ -1575,7 +1656,7 @@ def protocol_run_artifacts_message(
         return TelegramRenderedMessage(
             text="\n".join(lines),
             parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup,
+            reply_markup=InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None,
             disable_web_page_preview=True,
         )
 
@@ -1583,9 +1664,8 @@ def protocol_run_artifacts_message(
     lines = [
         "<b>Protocol artifacts</b>",
         f"Run: <code>{html.escape(run_short)}</code>",
-        "Use the artifact number for preview/download commands.",
+        "Tap an artifact action below. Artifact numbers remain available for commands.",
     ]
-    command_run_ref = run_short or "latest"
     keyboard_rows: list[list[InlineKeyboardButton]] = []
     if deep_link:
         button = _telegram_url_button(deep_link, "Open Run in Registry")
@@ -1632,7 +1712,8 @@ def protocol_run_artifacts_message(
             actions: list[str] = []
             if preview_link:
                 fallback = _telegram_named_link(preview_link, "Preview")
-                actions.append(fallback or f"<code>/protocol preview {html.escape(command_run_ref)} {index}</code>")
+                if fallback:
+                    actions.append(fallback)
             if browse_link:
                 open_fallback = _telegram_named_link(open_link, "Open app")
                 browse_fallback = _telegram_named_link(browse_link, "Contents")
@@ -1646,7 +1727,8 @@ def protocol_run_artifacts_message(
                     actions.append(fallback)
             if download_link:
                 fallback = _telegram_named_link(download_link, "Download")
-                actions.append(fallback or f"<code>/protocol artifacts {html.escape(command_run_ref)} download {index}</code>")
+                if fallback:
+                    actions.append(fallback)
             if actions:
                 line += " · " + " · ".join(actions)
             if len(keyboard_rows) < 7:
@@ -1656,19 +1738,21 @@ def protocol_run_artifacts_message(
                     button = _telegram_url_button(preview_link, f"Preview {button_key}")
                     if button is not None:
                         row.append(button)
+                    else:
+                        _append_button(row, f"Preview {button_key}", "preview", run.protocol_run_id, button_key)
                 if open_link:
                     open_label = f"Open app {button_key}" if browse_link else f"Open {button_key}"
                     button = _telegram_url_button(open_link, open_label)
                     if button is not None:
                         row.append(button)
+                    else:
+                        _append_button(row, open_label, "open", run.protocol_run_id, button_key)
                 if browse_link:
                     button = _telegram_url_button(browse_link, f"Contents {button_key}")
                     if button is not None:
                         row.append(button)
                 if download_link:
-                    button = _telegram_url_button(download_link, f"Download {button_key}")
-                    if button is not None:
-                        row.append(button)
+                    _append_button(row, f"Download {button_key}", "download", run.protocol_run_id, button_key)
                 if row:
                     keyboard_rows.append(row)
         elif not exists:
@@ -1702,6 +1786,8 @@ def protocol_artifact_preview_message(
     preview_link: str = "",
     open_link: str = "",
     download_link: str = "",
+    artifact_ref: str = "",
+    open_label: str = "Open",
 ) -> TelegramRenderedMessage:
     short_id = _short_run_id(run_id)
     lines = [
@@ -1720,21 +1806,21 @@ def protocol_artifact_preview_message(
             if fallback:
                 lines.append(f"Rendered preview: {fallback}")
     if open_link:
-        button = _telegram_url_button(open_link, "Open")
+        button = _telegram_url_button(open_link, open_label)
         if button is not None:
             row.append(button)
         else:
-            fallback = _telegram_named_link(open_link, "Open")
+            fallback = _telegram_named_link(open_link, open_label)
             if fallback:
-                lines.append(f"Open: {fallback}")
+                lines.append(f"{html.escape(open_label)}: {fallback}")
     if download_link:
-        button = _telegram_url_button(download_link, "Download")
-        if button is not None:
-            row.append(button)
-        else:
-            fallback = _telegram_named_link(download_link, "Download")
-            if fallback:
-                lines.append(f"Download: {fallback}")
+        if artifact_ref:
+            _append_button(row, "Send file", "download", run_id, artifact_ref)
+        fallback = _telegram_named_link(download_link, "Download")
+        if fallback:
+            lines.append(f"Download: {fallback}")
+    if artifact_ref:
+        _append_button(row, "Artifacts", "artifacts", run_id)
     if row:
         keyboard.append(row)
     return TelegramRenderedMessage(

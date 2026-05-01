@@ -796,6 +796,11 @@ that Registry UI-backed operations use. If a skill or guidance operation exists
 only in browser code and cannot be reached through SDK/management interfaces,
 that is an architecture gap.
 
+Protocol Telegram buttons are presentation affordances only. Button callbacks
+resolve runs and artifacts through `octopus_sdk.protocols.ProtocolService` and
+the same registry-backed ports used by slash commands; they must not introduce a
+Telegram-only protocol execution, artifact, or run-control path.
+
 ## Control Plane
 
 The bot-side control plane under `app/control_plane/` provides typed command

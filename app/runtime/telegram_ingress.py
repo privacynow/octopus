@@ -544,6 +544,16 @@ async def _send_protocol_export(message, protocol_service: ProtocolService, run_
     )
 
 
+async def _send_auto_protocol_session(message, session, runtime: TelegramRuntime, registry_url: str, *, view: str = "summary") -> None:
+    protocol_id = str(getattr(session, "target_protocol_id", "") or "")
+    rendered = telegram_presenters.protocol_auto_session_message(
+        session,
+        registry_link=telegram_protocols.protocol_editor_url(runtime, protocol_id, registry_url=registry_url) if protocol_id else "",
+        view=view,
+    )
+    await message.reply_text(rendered.text, **rendered.kwargs())
+
+
 async def _set_protocol_watch(
     runtime: TelegramRuntime,
     event,
@@ -1130,6 +1140,103 @@ async def cmd_protocol(
         )
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
+    if sub == "auto":
+        auto_action = str(args[1] or "").strip().lower() if len(args) >= 2 else ""
+        if auto_action in {"modify", "revise"}:
+            if len(args) < 4:
+                await update.effective_message.reply_text("Usage: /protocol auto modify latest|<session_id> <change request>")
+                return
+            try:
+                session_id = telegram_protocols.resolve_auto_protocol_session_ref(runtime, event.chat_id, str(args[2] or ""))
+            except KeyError:
+                await update.effective_message.reply_text("No recent Auto Protocol session. Create one with /protocol auto <requirement>.")
+                return
+            change_request = " ".join(args[3:]).strip()
+            if not change_request:
+                await update.effective_message.reply_text("Usage: /protocol auto modify latest|<session_id> <change request>")
+                return
+            try:
+                auto_session = await client.revise_protocol_auto_design_session(
+                    session_id,
+                    {
+                        "mode": "revise",
+                        "surface": "telegram",
+                        "requirement_text": change_request,
+                        "entry_agent_id": agent_id,
+                        "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
+                    },
+                )
+            except RegistryClientError as exc:
+                await update.effective_message.reply_text(f"Failed to modify the generated protocol. {exc}")
+                return
+            telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=auto_session.session_id)
+            await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
+            return
+        if auto_action in {"status", "show"}:
+            try:
+                session_id = telegram_protocols.resolve_auto_protocol_session_ref(
+                    runtime,
+                    event.chat_id,
+                    str(args[2] or "latest") if len(args) >= 3 else "latest",
+                )
+            except KeyError:
+                await update.effective_message.reply_text("No recent Auto Protocol session. Create one with /protocol auto <requirement>.")
+                return
+            try:
+                auto_session = await client.get_protocol_auto_design_session(session_id)
+            except RegistryClientError as exc:
+                await update.effective_message.reply_text(f"Failed to load the generated protocol. {exc}")
+                return
+            await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
+            return
+        requirement = " ".join(args[1:]).strip()
+        if not requirement:
+            await update.effective_message.reply_text("Usage: /protocol auto <requirement>")
+            return
+        session_state = telegram_session_io.load(runtime, event.chat_id)
+        try:
+            auto_session = await client.create_protocol_auto_design_session({
+                "mode": "create",
+                "surface": "telegram",
+                "requirement_text": requirement,
+                "workspace_ref": str(session_state.project_id or ""),
+                "entry_agent_id": agent_id,
+                "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
+            })
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to generate the protocol. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=auto_session.session_id)
+        await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
+        return
+    if sub == "improve":
+        if len(args) < 3:
+            await update.effective_message.reply_text("Usage: /protocol improve <slug> <change request>")
+            return
+        protocol_ref = str(args[1] or "").strip()
+        change_request = " ".join(args[2:]).strip()
+        if not protocol_ref or not change_request:
+            await update.effective_message.reply_text("Usage: /protocol improve <slug> <change request>")
+            return
+        try:
+            match = await protocol_service.resolve_launchable(protocol_ref)
+            auto_session = await client.create_protocol_auto_design_session({
+                "mode": "revise",
+                "surface": "telegram",
+                "target_protocol_id": match.protocol_id,
+                "requirement_text": change_request,
+                "entry_agent_id": agent_id,
+                "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
+            })
+        except KeyError:
+            await update.effective_message.reply_text(f"Unknown published protocol: {protocol_ref}")
+            return
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to improve the protocol. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=auto_session.session_id)
+        await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
+        return
     if sub == "start":
         slug, launch_inputs = telegram_protocols.parse_protocol_start_args(args[1:])
         if not slug or not str(launch_inputs.get("problem_statement") or "").strip():
@@ -1345,12 +1452,90 @@ async def handle_protocol_callback(runtime: TelegramRuntime, event, query) -> No
     if protocol_access is None:
         await query.answer("Protocol control requires a connected registry.", show_alert=True)
         return
-    _client, _agent_id, registry_url, protocol_service = protocol_access
+    client, agent_id, registry_url, protocol_service = protocol_access
     message = query.message
     if message is None:
         await query.answer("Protocol action unavailable.", show_alert=True)
         return
     await query.answer()
+    if action in {"auto_summary", "auto_stages", "auto_artifacts", "auto_warnings"}:
+        try:
+            session = await client.get_protocol_auto_design_session(run_ref)
+        except RegistryClientError as exc:
+            await message.reply_text(f"Failed to load the generated protocol. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=session.session_id)
+        await _send_auto_protocol_session(message, session, runtime, registry_url, view=action.removeprefix("auto_"))
+        return
+    if action == "auto_apply":
+        try:
+            session = await client.apply_protocol_auto_design_session(run_ref)
+        except RegistryClientError as exc:
+            await message.reply_text(f"Failed to apply the generated protocol. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=session.session_id)
+        await _send_auto_protocol_session(message, session, runtime, registry_url)
+        return
+    if action == "auto_publish":
+        try:
+            session = await client.publish_protocol_auto_design_session(run_ref)
+        except RegistryClientError as exc:
+            await message.reply_text(f"Failed to publish the generated protocol. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=session.session_id)
+        await _send_auto_protocol_session(message, session, runtime, registry_url)
+        return
+    if action == "auto_run":
+        try:
+            conversation = await client.create_conversation(
+                target_agent_id=agent_id,
+                origin_channel="telegram",
+                external_conversation_ref=telegram_conversation_ref(runtime.config, event.chat_id),
+                title=f"Telegram chat {event.chat_id}",
+            )
+            session = await client.run_protocol_auto_design_session(
+                run_ref,
+                {
+                    "entry_agent_id": agent_id,
+                    "root_conversation_id": conversation.conversation_id,
+                    "origin_channel": "telegram",
+                },
+            )
+        except RegistryClientError as exc:
+            await message.reply_text(f"Failed to publish and run the generated protocol. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=session.session_id)
+        run = getattr(getattr(session, "run_result", None), "run", None)
+        if run is not None:
+            applied_protocol = getattr(getattr(session, "applied_protocol", None), "protocol", None)
+            protocol_label = str(
+                getattr(applied_protocol, "display_name", "")
+                or getattr(session.plan, "protocol_name", "")
+                or "Generated protocol"
+            )
+            telegram_protocols.persist_protocol_run_watch(
+                runtime,
+                chat_id=event.chat_id,
+                run_id=run.protocol_run_id,
+                protocol_id=run.protocol_id,
+                protocol_slug="",
+                version=int(run.version or 0),
+                status=str(run.status or ""),
+                stage_key=str(run.current_stage_key or ""),
+                registry_url=registry_url,
+                last_notified_at=datetime.now(timezone.utc).isoformat(),
+            )
+            rendered = telegram_presenters.protocol_run_started_message(
+                run_id=run.protocol_run_id,
+                protocol_label=protocol_label,
+                current_stage=run.current_stage_key,
+                deep_link=telegram_protocols.protocol_run_url(runtime, run.protocol_run_id, registry_url=registry_url),
+                watching=True,
+            )
+            await message.reply_text(rendered.text, **rendered.kwargs())
+            return
+        await _send_auto_protocol_session(message, session, runtime, registry_url)
+        return
     if action == "status":
         await _send_protocol_status(runtime, event, message, protocol_service, registry_url, run_ref)
         return

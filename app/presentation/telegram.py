@@ -115,6 +115,13 @@ _PENDING_CALLBACK_ACTIONS = frozenset({
 })
 
 _PROTOCOL_CALLBACK_ACTIONS = frozenset({
+    "auto_summary",
+    "auto_stages",
+    "auto_artifacts",
+    "auto_warnings",
+    "auto_apply",
+    "auto_publish",
+    "auto_run",
     "status",
     "artifacts",
     "preview",
@@ -1449,6 +1456,10 @@ def protocol_usage_message() -> TelegramRenderedMessage:
             "Usage:\n"
             "/protocol list\n"
             "/protocol recent\n"
+            "/protocol auto <requirement>\n"
+            "/protocol auto modify latest|<session_id> <change request>\n"
+            "/protocol auto status latest|<session_id>\n"
+            "/protocol improve <slug> <change request>\n"
             "/protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--workspace <ref>]\n"
             "/protocol status latest|<number|short_id>\n"
             "/protocol artifacts latest|<number|short_id>\n"
@@ -1476,6 +1487,101 @@ def protocol_list_message(protocols: list[Any]) -> TelegramRenderedMessage:
         token = html.escape(str(item.get("slug") or item.get("protocol_id") or ""))
         lines.append(f"- {label} (<code>{token}</code>)")
     return _html_message("\n".join(lines))
+
+
+def protocol_auto_session_message(
+    session: Any,
+    *,
+    registry_link: str = "",
+    view: str = "summary",
+) -> TelegramRenderedMessage:
+    data = session.model_dump(mode="json") if hasattr(session, "model_dump") else dict(session or {})
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
+    analysis = data.get("analysis") if isinstance(data.get("analysis"), dict) else {}
+    validation = data.get("validation") if isinstance(data.get("validation"), dict) else {}
+    session_id = str(data.get("session_id") or "")
+    title = html.escape(str(plan.get("protocol_name") or "Generated protocol"))
+    domain = html.escape(str(analysis.get("domain") or "general"))
+    status = html.escape(str(data.get("status") or "draft"))
+    stages = plan.get("stages") if isinstance(plan.get("stages"), list) else []
+    artifacts = plan.get("artifacts") if isinstance(plan.get("artifacts"), list) else []
+    unresolved = list(data.get("unresolved_decisions") if isinstance(data.get("unresolved_decisions"), list) else [])
+    warnings = [
+        *unresolved,
+        *list(data.get("warnings") if isinstance(data.get("warnings"), list) else []),
+    ]
+    ready = bool(validation.get("ok")) and not unresolved
+    normalized_view = str(view or "summary").strip().lower()
+    lines = [
+        "<b>Auto Protocol</b>",
+        f"Protocol: <code>{title}</code>",
+        f"Domain: <code>{domain}</code>",
+        f"Status: <code>{status}</code>",
+        f"Stages: <code>{len(stages)}</code> · Artifacts: <code>{len(artifacts)}</code>",
+        f"Validation: <code>{'ready' if validation.get('ok') else 'needs attention'}</code>",
+    ]
+    if normalized_view == "artifacts":
+        lines.append("\n<b>Artifacts</b>")
+        for index, artifact in enumerate(artifacts[:12], start=1):
+            label = html.escape(str(artifact.get("display_name") or artifact.get("artifact_key") or "Artifact"))
+            path = html.escape(str(artifact.get("path") or ""))
+            lines.append(f"{index}. {label}" + (f" <code>{path}</code>" if path else ""))
+        if not artifacts:
+            lines.append("No artifacts were declared.")
+    elif normalized_view == "warnings":
+        lines.append("\n<b>Warnings</b>")
+        if warnings:
+            for warning in warnings[:8]:
+                item = warning if isinstance(warning, dict) else {}
+                message = html.escape(str(item.get("message") or item.get("code") or "Review before publishing."))
+                lines.append(f"- {message}")
+        else:
+            lines.append("No blocking warnings.")
+    else:
+        lines.append("\n<b>Stages</b>")
+        limit = 12 if normalized_view == "stages" else 8
+        for index, stage in enumerate(stages[:limit], start=1):
+            label = html.escape(str(stage.get("display_name") or stage.get("stage_key") or "Stage"))
+            kind = html.escape(str(stage.get("stage_kind") or "work"))
+            role = html.escape(str(stage.get("role_key") or ""))
+            role_text = f" · <code>{role}</code>" if role else ""
+            lines.append(f"{index}. {label} <code>{kind}</code>{role_text}")
+        if len(stages) > limit:
+            lines.append(f"...and {len(stages) - limit} more stages.")
+        if warnings:
+            first = warnings[0] if isinstance(warnings[0], dict) else {}
+            message = html.escape(str(first.get("message") or first.get("code") or "Review warnings before publishing."))
+            lines.append(f"Note: {message}")
+    if session_id:
+        lines.append(f"Modify: <code>/protocol auto modify latest &lt;change&gt;</code>")
+    if registry_link:
+        lines.append(f"<a href=\"{html.escape(registry_link)}\">Open in Registry</a>")
+    keyboard: list[list[InlineKeyboardButton]] = []
+    if session_id:
+        keyboard.append([
+            InlineKeyboardButton("Summary", callback_data=protocol_callback_data("auto_summary", session_id)),
+            InlineKeyboardButton("Stages", callback_data=protocol_callback_data("auto_stages", session_id)),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("Artifacts", callback_data=protocol_callback_data("auto_artifacts", session_id)),
+            InlineKeyboardButton("Warnings", callback_data=protocol_callback_data("auto_warnings", session_id)),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("Apply draft", callback_data=protocol_callback_data("auto_apply", session_id)),
+        ])
+        if ready:
+            keyboard.append([
+                InlineKeyboardButton("Publish", callback_data=protocol_callback_data("auto_publish", session_id)),
+                InlineKeyboardButton("Publish & Run", callback_data=protocol_callback_data("auto_run", session_id)),
+            ])
+        if registry_link:
+            keyboard.append([InlineKeyboardButton("Open in Registry", url=registry_link)])
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+        disable_web_page_preview=True,
+    )
 
 
 def protocol_run_started_message(

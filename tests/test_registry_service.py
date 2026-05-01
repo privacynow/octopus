@@ -38,12 +38,14 @@ from app.storage import default_session, ensure_data_dirs, load_session, save_se
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
+    ProtocolAutoDesignRequestRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
     ProtocolRunDetailRecord,
     ProtocolRunMutationRecord,
     ProtocolRunRecord,
+    generate_auto_protocol_session,
 )
 from octopus_sdk.registry.management import (
     ALL_MANAGEMENT_OPERATIONS,
@@ -1472,6 +1474,203 @@ def test_protocol_package_export_composes_required_skill_document(monkeypatch, t
     assert payload["file_name"] == "handoff.octopus-protocol.yaml"
     assert payload["package"]["kind"] == "octopus.protocol_package"
     assert payload["package"]["skills"][0]["skill"]["name"] == "handoff-skill"
+
+
+def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __init__(self):
+            self.session = None
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    display_name="Builder",
+                    slug="builder",
+                    provider="codex",
+                    role="worker",
+                    routing_skills=["game", "testing"],
+                    connectivity_state="connected",
+                )
+            ]
+
+        def list_routing_skills(self):
+            return []
+
+        def create_protocol_auto_design_session(self, payload, *, access):
+            self.session = generate_auto_protocol_session(
+                payload,
+                session_id="auto-1",
+                created_at="2026-04-16T00:00:00+00:00",
+                updated_at="2026-04-16T00:00:00+00:00",
+            )
+            return self.session
+
+        def get_protocol_auto_design_session(self, session_id: str, *, access):
+            assert session_id == "auto-1"
+            if self.session is None:
+                raise KeyError(session_id)
+            return self.session
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind in {"applied", "published", "run_started"}
+            self.session = session
+            return session
+
+        def save_protocol_draft(
+            self,
+            *,
+            access,
+            protocol_id,
+            slug,
+            display_name,
+            description,
+            definition_json,
+            authoring_surface="standard",
+            expected_revision=None,
+        ):
+            assert authoring_surface == "standard"
+            assert slug
+            return ProtocolMutationRecord(
+                ok=True,
+                status="saved",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="protocol-auto",
+                    slug=slug,
+                    display_name=display_name,
+                    draft_revision=2,
+                ),
+                draft_definition_json=definition_json,
+                validation={"ok": True, "errors": [], "issues": [], "next_required_actions": []},
+            )
+
+        def publish_protocol(self, protocol_id: str, *, access):
+            assert protocol_id == "protocol-auto"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="published",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="protocol-auto",
+                    slug="auto-game",
+                    display_name="Auto Game",
+                    current_version_id="version-1",
+                    draft_revision=2,
+                ),
+            )
+
+        def get_protocol(self, protocol_id: str, *, access):
+            assert protocol_id == "protocol-auto"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="loaded",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="protocol-auto",
+                    slug="auto-game",
+                    display_name="Auto Game",
+                    current_version_id="version-1",
+                    draft_revision=2,
+                ),
+                draft_definition_json=self.session.draft_definition_json,
+            )
+
+        def create_protocol_run(self, payload, *, access, idempotency_key=""):
+            assert payload.protocol_id == "protocol-auto"
+            assert payload.entry_agent_id == "agent-1"
+            assert payload.origin_channel == "registry"
+            return ProtocolRunMutationRecord.model_validate(
+                {
+                    "ok": True,
+                    "status": "created",
+                    "run": {
+                        "protocol_run_id": "run-auto",
+                        "protocol_id": "protocol-auto",
+                        "protocol_definition_version_id": "version-1",
+                        "entry_agent_id": "agent-1",
+                        "root_conversation_id": "",
+                        "origin_channel": "registry",
+                        "workspace_ref": "",
+                        "run_org_id": "local",
+                        "status": "running",
+                        "problem_statement": "Build a browser game.",
+                        "constraints_json": {},
+                        "created_at": "2026-04-16T00:00:00+00:00",
+                        "updated_at": "2026-04-16T00:00:00+00:00",
+                        "current_stage_key": "plan_concept",
+                        "version": 1,
+                    },
+                }
+            )
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        create_response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build a 2D browser fighting game with historical figures, playtesting, and release evidence.",
+            },
+        )
+        apply_response = client.post("/v1/protocol-auto/sessions/auto-1/apply")
+        publish_response = client.post("/v1/protocol-auto/sessions/auto-1/publish")
+        run_response = client.post("/v1/protocol-auto/sessions/auto-1/run", json={"origin_channel": "registry"})
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert create_response.status_code == 200
+    assert create_response.json()["analysis"]["domain"] == "game-development"
+    assert apply_response.status_code == 200
+    assert apply_response.json()["target_protocol_id"] == "protocol-auto"
+    assert publish_response.status_code == 200
+    assert publish_response.json()["status"] == "published"
+    assert run_response.status_code == 200
+    assert run_response.json()["run_result"]["run"]["protocol_run_id"] == "run-auto"
+
+
+def test_protocol_auto_publish_blocks_unresolved_assignments(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    blocked_session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="registry",
+            requirement_text="Build a useful analytics dashboard.",
+            available_agents=[],
+        ),
+        session_id="auto-blocked",
+        created_at="2026-04-16T00:00:00+00:00",
+        updated_at="2026-04-16T00:00:00+00:00",
+    )
+
+    class _Store:
+        def get_protocol_auto_design_session(self, session_id: str, *, access):
+            assert session_id == "auto-blocked"
+            return blocked_session
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.post("/v1/protocol-auto/sessions/auto-blocked/publish")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_PUBLISH_BLOCKED"
+    assert response.json()["detail"]["details"]["unresolved_decisions"]
 
 
 def test_protocol_parse_route_accepts_draft_mode_for_incomplete_protocols(monkeypatch, tmp_path: Path):

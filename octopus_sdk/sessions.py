@@ -257,6 +257,7 @@ class SessionState:
     awaiting_skill_setup: AwaitingSkillSetup | None = None
     pending_delegation: PendingDelegation | None = None
     protocol_run_watches: list[ProtocolRunWatch] = field(default_factory=list)
+    last_auto_protocol_session_id: str = ""
     compact_mode: bool | None = None  # None = use config default
     project_id: str = ""
     file_policy: str = ""  # "inspect", "edit", or "" (use config default)
@@ -360,6 +361,7 @@ def session_from_dict(d: Mapping[str, object]) -> SessionState:
         awaiting_skill_setup=_make_optional(AwaitingSkillSetup, d.get("awaiting_skill_setup")),
         pending_delegation=_make_pending_delegation(pending_delegation_raw),
         protocol_run_watches=coerce_protocol_run_watches(d.get("protocol_run_watches")),
+        last_auto_protocol_session_id=str(d.get("last_auto_protocol_session_id", "") or ""),
         compact_mode=d.get("compact_mode"),
         project_id=d.get("project_id", ""),
         file_policy=d.get("file_policy") or "",
@@ -432,6 +434,7 @@ def default_session(
         "awaiting_skill_setup": None,
         "pending_delegation": None,
         "protocol_run_watches": [],
+        "last_auto_protocol_session_id": "",
         "created_at": now,
         "updated_at": now,
         "last_skill_subject": None,

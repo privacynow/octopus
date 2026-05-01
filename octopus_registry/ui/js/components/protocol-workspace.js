@@ -2009,6 +2009,273 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    function _autoProtocolSummaryEl(session) {
+        const panel = document.createElement('div');
+        panel.className = 'protocol-auto-summary';
+        const plan = session?.plan || {};
+        const analysis = session?.analysis || {};
+        const validation = session?.validation || {};
+        const title = document.createElement('h4');
+        title.textContent = String(plan.protocol_name || 'Generated protocol');
+        panel.appendChild(title);
+        const facts = document.createElement('div');
+        facts.className = 'kit-catalog-card-meta';
+        [
+            `Domain: ${String(analysis.domain || 'general')}`,
+            `${Array.isArray(plan.stages) ? plan.stages.length : 0} stages`,
+            `${Array.isArray(plan.artifacts) ? plan.artifacts.length : 0} artifacts`,
+            validation.ok ? 'Validation: ready' : 'Validation: needs attention',
+        ].forEach((label) => {
+            const item = document.createElement('span');
+            item.className = 'kit-catalog-card-meta-item';
+            item.textContent = label;
+            facts.appendChild(item);
+        });
+        panel.appendChild(facts);
+        const stages = document.createElement('ol');
+        stages.className = 'protocol-auto-stage-list';
+        (Array.isArray(plan.stages) ? plan.stages : []).slice(0, 12).forEach((stage) => {
+            const item = document.createElement('li');
+            item.textContent = `${String(stage.display_name || stage.stage_key || 'Stage')} — ${String(stage.stage_kind || 'work')}`;
+            stages.appendChild(item);
+        });
+        panel.appendChild(stages);
+        const warnings = [
+            ...(Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : []),
+            ...(Array.isArray(session?.warnings) ? session.warnings : []),
+        ];
+        if (warnings.length) {
+            const warningList = document.createElement('div');
+            warningList.className = 'validation-list';
+            warnings.slice(0, 5).forEach((warning) => {
+                const row = document.createElement('div');
+                row.className = 'validation-item';
+                row.textContent = String(warning.message || warning.code || '');
+                warningList.appendChild(row);
+            });
+            panel.appendChild(warningList);
+        }
+        return panel;
+    }
+
+    function _autoProtocolReady(session) {
+        const validation = session?.validation || {};
+        const unresolved = Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : [];
+        return Boolean(session?.session_id && validation.ok && !unresolved.length);
+    }
+
+    function _autoProtocolRunId(session) {
+        return String(session?.run_result?.run?.protocol_run_id || '').trim();
+    }
+
+    async function _adoptAutoProtocolSession(session, { push = true } = {}) {
+        const protocolId = String(
+            session?.target_protocol_id
+            || session?.applied_protocol?.protocol?.protocol_id
+            || '',
+        ).trim();
+        if (!protocolId) return false;
+        currentProtocolId = protocolId;
+        templateChooserMode = '';
+        currentProtocol = null;
+        protocolDetailLoading = true;
+        _writeState({ push });
+        await loadProtocols({ quiet: true });
+        await loadProtocolDetail();
+        return true;
+    }
+
+    function _openAutoProtocolDialog({ mode = 'create' } = {}) {
+        const isRevision = mode === 'revise' && currentProtocolId;
+        const form = document.createElement('div');
+        form.className = 'protocol-package-dialog';
+        const requirement = document.createElement('textarea');
+        requirement.className = 'input';
+        requirement.rows = 7;
+        requirement.placeholder = isRevision
+            ? 'Describe how this protocol should change.'
+            : 'Describe the outcome you want. Auto Protocol will infer stages, roles, artifacts, review loops, and run inputs.';
+        form.appendChild(requirement);
+        const constraints = document.createElement('textarea');
+        constraints.className = 'input';
+        constraints.rows = 3;
+        constraints.placeholder = 'Optional constraints, data sources, delivery expectations, or acceptance notes.';
+        form.appendChild(constraints);
+        const status = document.createElement('p');
+        status.className = 'quiet-note';
+        status.textContent = 'Generated output becomes a normal editable protocol draft.';
+        form.appendChild(status);
+        const preview = document.createElement('div');
+        preview.className = 'protocol-auto-preview';
+        form.appendChild(preview);
+        const revise = document.createElement('textarea');
+        revise.className = 'input';
+        revise.rows = 3;
+        revise.placeholder = 'Optional: ask for a modification after generation.';
+        revise.hidden = true;
+        form.appendChild(revise);
+
+        let session = null;
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const generateBtn = document.createElement('button');
+        generateBtn.type = 'button';
+        generateBtn.className = 'btn btn-primary';
+        generateBtn.textContent = isRevision ? 'Preview changes' : 'Generate protocol';
+        const reviseBtn = document.createElement('button');
+        reviseBtn.type = 'button';
+        reviseBtn.className = 'btn';
+        reviseBtn.textContent = 'Modify';
+        reviseBtn.hidden = true;
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'btn btn-primary';
+        applyBtn.textContent = 'Apply draft';
+        applyBtn.hidden = true;
+        const publishBtn = document.createElement('button');
+        publishBtn.type = 'button';
+        publishBtn.className = 'btn';
+        publishBtn.textContent = 'Publish';
+        publishBtn.hidden = true;
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'btn btn-primary';
+        runBtn.textContent = 'Publish & Run';
+        runBtn.hidden = true;
+        const view = UI.showDialog(isRevision ? 'Improve with Auto Protocol' : 'Auto protocol', form, {
+            actions: [cancelBtn, generateBtn, reviseBtn, applyBtn, publishBtn, runBtn],
+            maxWidth: '760px',
+            initialFocus: requirement,
+        });
+        const syncActions = () => {
+            const hasSession = Boolean(session?.session_id);
+            const ready = _autoProtocolReady(session);
+            reviseBtn.hidden = !hasSession;
+            applyBtn.hidden = !hasSession;
+            publishBtn.hidden = !hasSession;
+            runBtn.hidden = !hasSession;
+            publishBtn.disabled = !ready;
+            runBtn.disabled = !ready;
+            const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
+            publishBtn.title = gateTitle;
+            runBtn.title = gateTitle;
+        };
+        cancelBtn.addEventListener('click', () => view.close());
+        generateBtn.addEventListener('click', async () => {
+            const text = requirement.value.trim();
+            if (!text) {
+                status.textContent = 'Describe what the protocol should accomplish.';
+                return;
+            }
+            generateBtn.disabled = true;
+            status.textContent = 'Designing protocol…';
+            try {
+                session = await API.createProtocolAutoSession({
+                    mode: isRevision ? 'revise' : 'create',
+                    surface: 'registry',
+                    target_protocol_id: isRevision ? currentProtocolId : '',
+                    requirement_text: text,
+                    constraints_text: constraints.value.trim(),
+                    workspace_ref: '',
+                });
+                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                status.textContent = 'Review the generated structure. Apply it to continue in the normal editor.';
+                revise.hidden = false;
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to generate protocol', err, { context: 'Auto Protocol generate failed' });
+                status.textContent = 'Generation failed.';
+            }
+            generateBtn.disabled = false;
+        });
+        reviseBtn.addEventListener('click', async () => {
+            if (!session?.session_id || !revise.value.trim()) return;
+            reviseBtn.disabled = true;
+            status.textContent = 'Updating generated protocol…';
+            try {
+                session = await API.reviseProtocolAutoSession(session.session_id, {
+                    mode: 'revise',
+                    surface: 'registry',
+                    target_protocol_id: isRevision ? currentProtocolId : '',
+                    requirement_text: revise.value.trim(),
+                    constraints_text: constraints.value.trim(),
+                });
+                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                revise.value = '';
+                status.textContent = 'Updated. Review the changes, then apply the draft.';
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to modify generated protocol', err, { context: 'Auto Protocol revise failed' });
+                status.textContent = 'Modification failed.';
+            }
+            reviseBtn.disabled = false;
+        });
+        applyBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            applyBtn.disabled = true;
+            status.textContent = 'Applying generated draft…';
+            try {
+                const applied = await API.applyProtocolAutoSession(session.session_id);
+                session = applied;
+                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                if (await _adoptAutoProtocolSession(applied)) {
+                    view.close();
+                    UI.notify('Auto Protocol draft applied.', 'success');
+                    return;
+                }
+                status.textContent = 'Draft applied, but the protocol id was not returned.';
+            } catch (err) {
+                UI.reportError('Failed to apply generated protocol', err, { context: 'Auto Protocol apply failed' });
+                status.textContent = 'Apply failed.';
+            }
+            applyBtn.disabled = false;
+        });
+        publishBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            publishBtn.disabled = true;
+            status.textContent = 'Publishing generated protocol…';
+            try {
+                session = await API.publishProtocolAutoSession(session.session_id);
+                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                await _adoptAutoProtocolSession(session);
+                status.textContent = 'Published. You can run it now or continue editing a draft revision later.';
+                UI.notify('Auto Protocol published.', 'success');
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to publish generated protocol', err, { context: 'Auto Protocol publish failed' });
+                status.textContent = 'Publish failed.';
+            }
+            publishBtn.disabled = false;
+            syncActions();
+        });
+        runBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            runBtn.disabled = true;
+            status.textContent = 'Publishing and starting the run…';
+            try {
+                session = await API.runProtocolAutoSession(session.session_id, { origin_channel: 'registry' });
+                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                await _adoptAutoProtocolSession(session);
+                const runId = _autoProtocolRunId(session);
+                view.close();
+                if (runId) {
+                    UI.notify('Protocol run started.', 'success');
+                    Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
+                    return;
+                }
+                UI.notify('Protocol run started, but no run id was returned.', 'success');
+            } catch (err) {
+                UI.reportError('Failed to run generated protocol', err, { context: 'Auto Protocol run failed' });
+                status.textContent = 'Run failed.';
+            }
+            runBtn.disabled = false;
+            syncActions();
+        });
+        syncActions();
+    }
+
     async function _createTemplateDraft(template) {
         const templateSlug = String(template?.slug || '').trim();
         if (!templateSlug) return;
@@ -4572,6 +4839,9 @@ function renderProtocolWorkspace(container) {
             canDiscard: Boolean(currentProtocolId) && !hasPublishedVersion && saveState.state !== 'conflict',
         };
         const utilityActions = [{
+            label: 'Improve with Auto Protocol',
+            onClick: () => _openAutoProtocolDialog({ mode: 'revise' }),
+        }, {
             label: 'Protocol settings',
             onClick: () => _openProtocolSettings(),
         }, {
@@ -6537,6 +6807,12 @@ function renderProtocolWorkspace(container) {
         blank.textContent = 'Start blank';
         blank.dataset.protocolTemplateChooserAction = 'blank';
         actions.appendChild(blank);
+        const auto = document.createElement('button');
+        auto.type = 'button';
+        auto.className = 'btn';
+        auto.textContent = 'Auto protocol';
+        auto.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create' }));
+        actions.appendChild(auto);
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'btn';
@@ -6636,6 +6912,12 @@ function renderProtocolWorkspace(container) {
         });
         const controls = catalog.querySelector('.kit-catalog-controls');
         if (controls) {
+            const autoBtn = document.createElement('button');
+            autoBtn.type = 'button';
+            autoBtn.className = 'btn';
+            autoBtn.textContent = 'Auto protocol';
+            autoBtn.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create' }));
+            controls.appendChild(autoBtn);
             const toggle = document.createElement('a');
             UI.updateQueryToggleLink(toggle, includeGeneratedCatalog, {
                 label: 'Generated drafts',

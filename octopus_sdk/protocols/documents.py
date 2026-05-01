@@ -853,16 +853,12 @@ def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) ->
         else "do not create or update protocol artifacts for this stage"
     )
     if stage.stage_kind == "work":
-        if stage.strict_completion:
-            return (
-                f"Complete the work for this stage, {artifact_instruction}, "
-                "and end your final response with explicit protocol control lines:\n"
-                "PROTOCOL_DECISION: completed\n"
-                "PROTOCOL_SUMMARY: one short sentence describing the completed work"
-            )
         return (
             f"Complete the work for this stage, {artifact_instruction}, "
-            "and end your final response with a short `PROTOCOL_SUMMARY:` line."
+            "and end your final response with explicit protocol control lines. "
+            "This is a work stage, so do not use review decisions such as accept, revise, or fail.\n"
+            "PROTOCOL_DECISION: completed\n"
+            "PROTOCOL_SUMMARY: one short sentence describing the completed work"
         )
     allowed = ", ".join(stage.allowed_decisions())
     review_artifact_instruction = (
@@ -958,7 +954,9 @@ def render_protocol_stage_prompt(
         "Launch context parameterizes this run; it does not modify the published protocol contract. "
         "For this stage, create or update only the output artifacts listed above. "
         "Do not create, overwrite, or pre-fill artifacts assigned to later stages. "
-        "If launch context conflicts with declared artifacts or stage instructions, follow the protocol contract and call out the conflict."
+        "If launch context conflicts with declared artifacts or stage instructions, follow the protocol contract and call out the conflict. "
+        "Do not leave long-running commands, servers, watchers, or development processes running; "
+        "if a temporary server is needed for checks, run it in a bounded way and stop it before the final response."
     )
     if participant.instructions:
         lines.append("Participant guidance:\n" + participant.instructions.strip())

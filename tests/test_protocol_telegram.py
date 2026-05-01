@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from app.presentation import telegram as telegram_presenters
 from app.runtime import telegram_protocols
 from octopus_sdk.identity import telegram_conversation_key
+from octopus_sdk.protocols import ProtocolAutoDesignRequestRecord, generate_auto_protocol_session
 from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord, ProtocolRunRecord
 from tests.support.handler_support import (
     FakeChat,
@@ -75,6 +76,21 @@ def _run_detail(*, run_id="run-1", status="running", version=2, stage_key="plann
     )
 
 
+def _auto_session(*, session_id="auto-1", requirement="Build a 2D browser game.", target_protocol_id=""):
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="telegram",
+            requirement_text=requirement,
+            target_protocol_id=target_protocol_id,
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder", "routing_skills": ["game", "testing"]}],
+        ),
+        session_id=session_id,
+        created_at="2026-04-16T00:00:00+00:00",
+        updated_at="2026-04-16T00:00:00+00:00",
+    )
+    return session
+
+
 def test_protocol_run_url_targets_protocol_runs_route():
     runtime = SimpleNamespace(config=SimpleNamespace(agent_registries=[]))
     url = telegram_protocols.protocol_run_url(runtime, "run-1", registry_url="http://registry.local")
@@ -105,6 +121,120 @@ def test_protocol_urls_prefer_configured_public_registry_url(monkeypatch):
     url = telegram_protocols.protocol_run_url(runtime, "run-1", registry_url="http://registry:8787")
 
     assert url == "http://mybox.local:9000/ui/runs?run_id=run-1"
+
+
+async def test_protocol_auto_command_generates_actionable_summary(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        class _Client:
+            async def create_protocol_auto_design_session(self, payload):
+                assert payload["surface"] == "telegram"
+                assert payload["entry_agent_id"] == "agent-1"
+                assert "browser game" in payload["requirement_text"]
+                return _auto_session(requirement=payload["requirement_text"])
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol auto Build a 2D browser game with historical figures and playtesting",
+            args=["auto", "Build", "a", "2D", "browser", "game", "with", "historical", "figures", "and", "playtesting"],
+        )
+
+        reply = last_reply(msg)
+        assert "Auto Protocol" in reply
+        assert "game-development" in reply
+        callbacks = get_callback_data_values(msg.replies[-1])
+        assert "protocol:auto_stages:auto-1" in callbacks
+        assert "protocol:auto_apply:auto-1" in callbacks
+        assert "protocol:auto_run:auto-1" in callbacks
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
+        assert session["last_auto_protocol_session_id"] == "auto-1"
+
+
+async def test_protocol_auto_modify_latest_revises_existing_session(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+        telegram_protocols.persist_auto_protocol_session_ref(current_runtime(), chat_id=1001, session_id="auto-1")
+
+        class _Client:
+            async def revise_protocol_auto_design_session(self, session_id, payload):
+                assert session_id == "auto-1"
+                assert payload["mode"] == "revise"
+                assert "UX reviewer" in payload["requirement_text"]
+                return _auto_session(session_id=session_id, requirement="Build a browser analytics dashboard. Add a UX reviewer.")
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol auto modify latest Add a UX reviewer before release",
+            args=["auto", "modify", "latest", "Add", "a", "UX", "reviewer", "before", "release"],
+        )
+
+        reply = last_reply(msg)
+        assert "Auto Protocol" in reply
+        assert "Modify:" in reply
+
+
+async def test_protocol_auto_stages_callback_renders_generated_stage_view(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        class _Client:
+            async def get_protocol_auto_design_session(self, session_id):
+                assert session_id == "auto-1"
+                return _auto_session(session_id=session_id)
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        query, msg = await send_callback(
+            th.handle_protocol_callback,
+            chat,
+            user,
+            "protocol:auto_stages:auto-1",
+        )
+
+        assert query.answered
+        reply = last_reply(msg)
+        assert "Auto Protocol" in reply
+        assert "Stages" in reply
+        assert "Plan concept" in reply
 
 
 def test_protocol_start_args_parse_rich_launch_fields():

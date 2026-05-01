@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
+    ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignSessionRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
@@ -89,6 +91,10 @@ ProtocolRegistryErrorCode = Literal[
     "CONCURRENT_MODIFICATION",
     "IDEMPOTENCY_REPLAY",
     "PROTOCOL_REQUEST_FAILED",
+    "PROTOCOL_AUTO_INVALID",
+    "PROTOCOL_AUTO_SESSION_NOT_FOUND",
+    "PROTOCOL_AUTO_PUBLISH_BLOCKED",
+    "PROTOCOL_AUTO_RUN_BLOCKED",
 ]
 PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
     "PROTOCOL_NOT_FOUND",
@@ -110,6 +116,10 @@ PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
     "CONCURRENT_MODIFICATION",
     "IDEMPOTENCY_REPLAY",
     "PROTOCOL_REQUEST_FAILED",
+    "PROTOCOL_AUTO_INVALID",
+    "PROTOCOL_AUTO_SESSION_NOT_FOUND",
+    "PROTOCOL_AUTO_PUBLISH_BLOCKED",
+    "PROTOCOL_AUTO_RUN_BLOCKED",
 })
 
 
@@ -588,6 +598,47 @@ class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObse
             params={"format": format},
         )
         return ProtocolDefinitionDiffRecord.model_validate(result)
+
+    async def create_protocol_auto_design_session(
+        self,
+        payload: ProtocolAutoDesignRequestRecord | Mapping[str, object],
+    ) -> ProtocolAutoDesignSessionRecord:
+        body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload)
+        result = await self._request("POST", "/v1/protocol-auto/sessions", json=body)
+        return ProtocolAutoDesignSessionRecord.model_validate(result)
+
+    async def get_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:
+        result = await self._request("GET", f"/v1/protocol-auto/sessions/{session_id}")
+        return ProtocolAutoDesignSessionRecord.model_validate(result)
+
+    async def revise_protocol_auto_design_session(
+        self,
+        session_id: str,
+        payload: ProtocolAutoDesignRequestRecord | Mapping[str, object],
+    ) -> ProtocolAutoDesignSessionRecord:
+        body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload)
+        result = await self._request("POST", f"/v1/protocol-auto/sessions/{session_id}/revise", json=body)
+        return ProtocolAutoDesignSessionRecord.model_validate(result)
+
+    async def apply_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:
+        result = await self._request("POST", f"/v1/protocol-auto/sessions/{session_id}/apply", json={})
+        return ProtocolAutoDesignSessionRecord.model_validate(result)
+
+    async def publish_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:
+        result = await self._request("POST", f"/v1/protocol-auto/sessions/{session_id}/publish", json={})
+        return ProtocolAutoDesignSessionRecord.model_validate(result)
+
+    async def run_protocol_auto_design_session(
+        self,
+        session_id: str,
+        payload: Mapping[str, object] | None = None,
+    ) -> ProtocolAutoDesignSessionRecord:
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-auto/sessions/{session_id}/run",
+            json=dict(payload or {}),
+        )
+        return ProtocolAutoDesignSessionRecord.model_validate(result)
 
     async def list_runs(
         self,

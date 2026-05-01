@@ -173,11 +173,11 @@ Key files:
 | File | Responsibility |
 | --- | --- |
 | `octopus_registry/server.py` | FastAPI app, non-protocol HTTP routes, auth dependencies, WebSocket route, lifecycle maintenance loop. |
-| `octopus_registry/protocol_http.py` | Protocol definitions, templates, runs, artifacts, rehearsal, scenarios, and run actions HTTP routes. |
+| `octopus_registry/protocol_http.py` | Protocol definitions, Auto Protocol sessions, templates, runs, artifacts, rehearsal, scenarios, and run actions HTTP routes. |
 | `octopus_registry/store_base.py` | Store protocol, validation helpers, registry scope helpers, runtime health projection. |
 | `octopus_registry/store_postgres.py` | Postgres registry store implementation. |
 | `octopus_registry/store_shared/` | Domain-sliced SQL helpers for agents, conversations, deliveries, tasks, usage, content, summary. |
-| `octopus_registry/protocol_store.py` | Protocol-specific Postgres adapter and canonical protocol mutation applier. |
+| `octopus_registry/protocol_store.py` | Protocol-specific Postgres adapter, Auto Protocol session persistence, and canonical protocol mutation applier. |
 | `octopus_registry/protocol_runtime.py` | Protocol run event payloads, participant resolution, dispatch evaluation. |
 | `octopus_registry/rehearsal.py` | Rehearsal session manager for dry protocol response flows. |
 | `octopus_registry/ingress.py` | Operator-facing management bridge for skills, guidance, conversation settings, reset. |
@@ -196,7 +196,7 @@ Registry API families:
 | Routed work | `POST /v1/agents/routed-tasks`, status/result endpoints, `GET /v1/tasks`, `GET /v1/tasks/{id}` | Bot runtimes, Registry UI. |
 | Conversations | `GET/POST /v1/conversations`, messages, actions, events, progress, export | Registry UI and bot runtimes. |
 | Management bridge | `/v1/agents/{agent_id}/catalog/skills...`, `/guidance/{provider}...`, conversation skill/settings/reset routes | Registry UI, future peer channels. |
-| Protocol authoring | `GET /v1/protocols`, `POST /v1/protocols`, `POST /v1/protocol-drafts`, parse/draft export/package export/package import/diff/validate/publish/archive | Registry UI. |
+| Protocol authoring | `GET /v1/protocols`, `POST /v1/protocols`, `POST /v1/protocol-drafts`, `/v1/protocol-auto/sessions...`, parse/draft export/package export/package import/diff/validate/publish/archive | Registry UI, Telegram Auto Protocol commands. |
 | Protocol templates | `GET/POST /v1/protocol-templates` | Protocols UI. |
 | Protocol runs | `GET/POST /v1/protocol-runs`, issues, participants, artifacts, timeline, export, actions, rehearsal | Registry UI, Telegram protocol commands, SDK client. |
 | Usage/summary/approvals | `GET /v1/summary`, `GET /v1/usage`, `GET /v1/approvals` | Operations surfaces. |
@@ -282,7 +282,7 @@ Key files:
 | `octopus_sdk/registry/management.py` | Management request/result types for skills, guidance, settings, reset. |
 | `octopus_sdk/registry_participant.py` | Participant interfaces for enrollment, health, discovery, mirroring, coordination. |
 | `octopus_sdk/workflows/` | Conversation, delegation, pending, recovery, skills, guidance, lifecycle use cases. |
-| `octopus_sdk/protocols/` | Protocol models, documents, validation, prompt rendering, engine, service, launch helpers. |
+| `octopus_sdk/protocols/` | Protocol models, Auto Protocol design/revision helpers, documents, validation, prompt rendering, engine, service, launch helpers. |
 | `octopus_sdk/events.py` | Typed event taxonomy and metadata validation. |
 | `octopus_sdk/testing/` | Non-production test fakes. |
 

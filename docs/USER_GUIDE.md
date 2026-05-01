@@ -179,6 +179,12 @@ This section is for running an existing published protocol. For creating,
 editing, publishing, importing, exporting, or designing review loops, use
 [PROTOCOLS.md](PROTOCOLS.md).
 
+If you need a new workflow and do not want to build every stage manually, open
+`Build -> Protocols` and choose `Auto protocol`. Describe the outcome in plain
+language. Octopus creates a normal editable draft with stages, reviewers,
+artifacts, and launch inputs. Review it, apply it, validate it, then publish
+and run through the same controls as any other protocol.
+
 Short path:
 
 1. Open `Build -> Protocols`.

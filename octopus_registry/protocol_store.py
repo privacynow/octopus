@@ -24,6 +24,8 @@ from octopus_sdk.protocols import (
     REHEARSAL_AUTHORITY_REF,
     ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
+    ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignSessionRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
     ProtocolDefinitionDiffRecord,
@@ -58,6 +60,8 @@ from octopus_sdk.protocols import (
     protocol_participant_session_key,
     protocol_retention_until,
     protocol_review_edge_counts,
+    generate_auto_protocol_session,
+    revise_auto_protocol_session,
     validate_protocol_document,
 )
 from octopus_sdk.protocols.documents import draft_protocol_document_data
@@ -1701,6 +1705,237 @@ class ProtocolPostgresAdapter:
                 left_label="draft",
                 right_label=f"published:v{int(version_row.get('version', 0) or 0)}",
             )
+
+    @staticmethod
+    def _auto_design_session_from_row(row: Mapping[str, object]) -> ProtocolAutoDesignSessionRecord:
+        return record(
+            ProtocolAutoDesignSessionRecord,
+            {
+                "session_id": row.get("session_id", ""),
+                "status": row.get("status", "draft"),
+                "mode": row.get("mode", "create"),
+                "surface": row.get("surface", "api"),
+                "actor_ref": row.get("actor_ref", ""),
+                "chat_ref": row.get("chat_ref", ""),
+                "source_protocol_id": row.get("source_protocol_id", ""),
+                "source_version_id": row.get("source_version_id", ""),
+                "source_draft_revision": int(row.get("source_draft_revision", 0) or 0),
+                "target_protocol_id": row.get("target_protocol_id", ""),
+                "target_draft_revision": int(row.get("target_draft_revision", 0) or 0),
+                "requirement_text": row.get("requirement_text", ""),
+                "constraints_text": row.get("constraints_text", ""),
+                "analysis": row.get("analysis_json") or {},
+                "plan": row.get("plan_json") or {},
+                "draft_definition_json": row.get("draft_definition_json") or {},
+                "run_profile": row.get("run_profile_json") or {},
+                "validation": row.get("validation_json") or {},
+                "warnings": row.get("warnings_json") or [],
+                "unresolved_decisions": row.get("unresolved_decisions_json") or [],
+                "change_summary": row.get("change_summary_json") or [],
+                "applied_protocol": row.get("applied_protocol_json") or None,
+                "run_result": row.get("run_result_json") or None,
+                "created_at": row.get("created_at", ""),
+                "updated_at": row.get("updated_at", ""),
+            },
+        )
+
+    @classmethod
+    def _auto_design_payload(cls, session: ProtocolAutoDesignSessionRecord) -> dict[str, object]:
+        return {
+            "session_id": session.session_id,
+            "status": session.status,
+            "mode": session.mode,
+            "surface": session.surface,
+            "actor_ref": session.actor_ref,
+            "chat_ref": session.chat_ref,
+            "source_protocol_id": session.source_protocol_id,
+            "source_version_id": session.source_version_id,
+            "source_draft_revision": int(session.source_draft_revision or 0),
+            "target_protocol_id": session.target_protocol_id,
+            "target_draft_revision": int(session.target_draft_revision or 0),
+            "requirement_text": session.requirement_text,
+            "constraints_text": session.constraints_text,
+            "analysis_json": session.analysis.model_dump(mode="json"),
+            "plan_json": session.plan.model_dump(mode="json"),
+            "draft_definition_json": session.draft_definition_json.as_dict(),
+            "run_profile_json": session.run_profile.model_dump(mode="json"),
+            "validation_json": session.validation.model_dump(mode="json"),
+            "warnings_json": [item.model_dump(mode="json") for item in session.warnings],
+            "unresolved_decisions_json": [item.model_dump(mode="json") for item in session.unresolved_decisions],
+            "change_summary_json": list(session.change_summary or []),
+            "applied_protocol_json": session.applied_protocol.model_dump(mode="json") if session.applied_protocol is not None else {},
+            "run_result_json": session.run_result.model_dump(mode="json") if session.run_result is not None else {},
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+        }
+
+    def _append_auto_design_event_in_tx(
+        self,
+        conn,
+        *,
+        session_id: str,
+        event_kind: str,
+        actor_ref: str,
+        payload: Mapping[str, object],
+        now: str,
+    ) -> None:
+        sequence_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"""
+            SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+            FROM {SCHEMA}.protocol_auto_session_events
+            WHERE session_id = %s
+            """,
+            (session_id,),
+        ) or {"next_sequence": 1}
+        with cur(conn) as db_cur:
+            db_cur.execute(
+                f"""
+                INSERT INTO {SCHEMA}.protocol_auto_session_events (
+                    event_id, session_id, sequence, event_kind, actor_ref, payload_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    session_id,
+                    int(sequence_row.get("next_sequence", 1) or 1),
+                    event_kind,
+                    actor_ref,
+                    jsonb(dict(payload)),
+                    now,
+                ),
+            )
+
+    def update_protocol_auto_design_session(
+        self,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        event_kind: str = "updated",
+    ) -> ProtocolAutoDesignSessionRecord:
+        if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
+            raise PermissionError("Auto Protocol requires agent or author access.")
+        now = utcnow_iso()
+        payload = self._auto_design_payload(session.model_copy(update={"updated_at": now}))
+        if not str(payload.get("created_at", "") or "").strip():
+            payload["created_at"] = now
+        with self._connect() as conn, write_tx(conn):
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_auto_sessions (
+                        session_id, status, mode, surface, actor_ref, chat_ref,
+                        source_protocol_id, source_version_id, source_draft_revision,
+                        target_protocol_id, target_draft_revision, requirement_text, constraints_text,
+                        analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
+                        warnings_json, unresolved_decisions_json, change_summary_json,
+                        applied_protocol_json, run_result_json, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        mode = EXCLUDED.mode,
+                        surface = EXCLUDED.surface,
+                        actor_ref = EXCLUDED.actor_ref,
+                        chat_ref = EXCLUDED.chat_ref,
+                        source_protocol_id = EXCLUDED.source_protocol_id,
+                        source_version_id = EXCLUDED.source_version_id,
+                        source_draft_revision = EXCLUDED.source_draft_revision,
+                        target_protocol_id = EXCLUDED.target_protocol_id,
+                        target_draft_revision = EXCLUDED.target_draft_revision,
+                        requirement_text = EXCLUDED.requirement_text,
+                        constraints_text = EXCLUDED.constraints_text,
+                        analysis_json = EXCLUDED.analysis_json,
+                        plan_json = EXCLUDED.plan_json,
+                        draft_definition_json = EXCLUDED.draft_definition_json,
+                        run_profile_json = EXCLUDED.run_profile_json,
+                        validation_json = EXCLUDED.validation_json,
+                        warnings_json = EXCLUDED.warnings_json,
+                        unresolved_decisions_json = EXCLUDED.unresolved_decisions_json,
+                        change_summary_json = EXCLUDED.change_summary_json,
+                        applied_protocol_json = EXCLUDED.applied_protocol_json,
+                        run_result_json = EXCLUDED.run_result_json,
+                        updated_at = EXCLUDED.updated_at
+                    RETURNING *
+                    """,
+                    (
+                        payload["session_id"],
+                        payload["status"],
+                        payload["mode"],
+                        payload["surface"],
+                        payload["actor_ref"],
+                        payload["chat_ref"],
+                        payload["source_protocol_id"],
+                        payload["source_version_id"],
+                        payload["source_draft_revision"],
+                        payload["target_protocol_id"],
+                        payload["target_draft_revision"],
+                        payload["requirement_text"],
+                        payload["constraints_text"],
+                        jsonb(payload["analysis_json"]),
+                        jsonb(payload["plan_json"]),
+                        jsonb(payload["draft_definition_json"]),
+                        jsonb(payload["run_profile_json"]),
+                        jsonb(payload["validation_json"]),
+                        jsonb(payload["warnings_json"]),
+                        jsonb(payload["unresolved_decisions_json"]),
+                        jsonb(payload["change_summary_json"]),
+                        jsonb(payload["applied_protocol_json"]),
+                        jsonb(payload["run_result_json"]),
+                        payload["created_at"],
+                        payload["updated_at"],
+                    ),
+                )
+                row = db_cur.fetchone()
+            self._append_auto_design_event_in_tx(
+                conn,
+                session_id=str(payload["session_id"]),
+                event_kind=str(event_kind or "updated"),
+                actor_ref=self._access_actor_ref(access),
+                payload=payload,
+                now=now,
+            )
+        if row is None:
+            raise RuntimeError("Failed to save Auto Protocol session")
+        return self._auto_design_session_from_row(row)
+
+    def get_protocol_auto_design_session(
+        self,
+        session_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
+            raise PermissionError("Auto Protocol requires agent or author access.")
+        with self._connect() as conn:
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {SCHEMA}.protocol_auto_sessions WHERE session_id = %s",
+                (str(session_id or "").strip(),),
+            )
+        if row is None:
+            raise KeyError(session_id)
+        return self._auto_design_session_from_row(row)
+
+    def create_protocol_auto_design_session(
+        self,
+        payload: ProtocolAutoDesignRequestRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
+            raise PermissionError("Auto Protocol requires agent or author access.")
+        session_id = uuid.uuid4().hex
+        now = utcnow_iso()
+        request = payload.model_copy(update={
+            "actor_ref": payload.actor_ref or self._access_actor_ref(access),
+        })
+        if request.mode == "revise":
+            session = revise_auto_protocol_session(request, session_id=session_id, created_at=now, updated_at=now)
+        else:
+            session = generate_auto_protocol_session(request, session_id=session_id, created_at=now, updated_at=now)
+        return self.update_protocol_auto_design_session(session, access=access, event_kind="created")
 
     def save_protocol_draft(
         self,

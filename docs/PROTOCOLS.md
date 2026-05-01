@@ -46,7 +46,7 @@ Build -> Protocols
 Recommended flow:
 
 1. Click `New protocol`.
-2. Choose `Start blank`, or copy a user-authored template.
+2. Choose `Auto protocol`, `Start blank`, or copy a user-authored template.
 3. Name the protocol with a clear human title and stable slug.
 4. Add stages in execution order.
 5. Write stage instructions as the real work contract.
@@ -67,6 +67,42 @@ Standard authoring should expose title, instructions, assignment, artifacts,
 routing, validation, and run feedback. It should not expose raw runtime
 selectors, raw stage keys, timeout fields, max-round internals, or custom
 operator controls to normal authors.
+
+## Auto Protocol
+
+Auto Protocol is the fastest authoring path when the user knows the outcome but
+does not want to manually design every stage.
+
+From `Build -> Protocols`, choose `Auto protocol`, describe the desired outcome,
+and add optional constraints. Octopus generates a normal editable protocol
+draft with inferred roles, stages, artifacts, review loops, run inputs, and
+final evidence. Review the generated structure, ask for changes if needed, then
+apply it as a normal draft. When validation and assignments are already ready,
+the Auto Protocol panel can also publish or publish and run directly; otherwise
+use the normal editor to resolve the warnings first.
+
+Auto Protocol validates its generated draft before it shows it as ready. The
+generator repairs structural issues such as missing slugs, missing artifact
+declarations, missing participants, invalid transitions, and missing assignment
+rules before the user sees the result. If the system still cannot produce a
+valid protocol, the session is marked failed or blocked with the specific issue
+instead of being presented as a runnable draft.
+
+Auto Protocol can also revise an existing protocol. Open a draft or published
+protocol and choose `Improve with Auto Protocol`. Drafts are changed only after
+confirmation. Published versions are immutable; Auto Protocol prepares a draft
+revision that affects only future runs after publish.
+
+The generated result is not a separate format. It is the same canonical
+protocol document used by manual authoring, export/import, publish, and run
+execution.
+
+Auto Protocol is useful for serious workflows because it starts from the
+requirement and infers the workflow shape. It should not blindly create one
+generic sequence for every request. A game workflow may need creative,
+historical, art, sound, implementation, playtest, UX, and release reviewers. An
+analytics workflow may need data modeling, visualization, validation, and
+readiness evidence. A simple workflow may need fewer stages.
 
 ## Review Loop Pattern
 

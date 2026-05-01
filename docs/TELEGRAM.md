@@ -111,14 +111,20 @@ as the Registry UI.
 ## Protocols
 
 Telegram can list, start, inspect, watch, and control protocols that already
-exist in the Registry. Protocol creation, editing, publishing, package export,
-and package import remain Registry workflows.
+exist in the Registry. It can also use Auto Protocol to generate, review,
+apply, publish, and run a generated protocol from chat. The browser Registry
+remains the richer editor for detailed manual changes, package import/export,
+and visual review.
 
 Current command shape:
 
 ```text
 /protocol list
 /protocol recent
+/protocol auto <requirement>
+/protocol auto modify latest|<session_id> <change request>
+/protocol auto status latest|<session_id>
+/protocol improve <slug> <change request>
 /protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--workspace <ref>]
 /protocol status latest|<number|short_id>
 /protocol artifacts latest|<number|short_id>
@@ -137,6 +143,14 @@ Behavior:
 
 - `recent` lists visible runs with numbers, status, current stage, and short
   ids.
+- `auto` generates a protocol from a high-level requirement and returns a
+  compact review card with Summary, Stages, Artifacts, Warnings, Apply Draft,
+  Publish, and Publish & Run buttons. Publish and run buttons appear only when
+  validation and assignments are ready.
+- `auto modify latest` revises the most recent generated protocol in this chat.
+- `auto status latest` shows the latest generated protocol again.
+- `improve` creates a draft revision proposal for an existing published
+  protocol.
 - Follow-up commands can use `latest`, the shown number, or the short id.
 - `latest` is local to the current chat. Use `/protocol recent` if another
   chat or bot started the run.
@@ -154,8 +168,9 @@ Behavior:
 - Destructive or high-impact actions may require confirmation.
 
 Telegram messages may include action buttons for Status, Artifacts, Preview,
-Open, Send, Export, Watch, and Stop updates. These buttons call the same
-registry-backed protocol service as the slash commands.
+Open, Send, Export, Watch, Stop updates, Apply Draft, Publish, and Publish &
+Run. These buttons call the same registry-backed protocol service as the slash
+commands.
 
 ## Artifacts
 

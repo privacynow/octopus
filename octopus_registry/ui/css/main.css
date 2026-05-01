@@ -2266,6 +2266,8 @@ select {
     background: color-mix(in srgb, var(--bg-secondary) 88%, white);
     box-shadow: var(--shadow-card);
     min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .protocol-lineage-card.is-previous-attempt {
@@ -2285,6 +2287,7 @@ select {
     display: grid;
     gap: 0.22rem;
     min-width: 0;
+    max-width: 100%;
 }
 
 .protocol-lineage-title {
@@ -2296,10 +2299,12 @@ select {
     color: var(--text-secondary);
     font-size: var(--text-sm);
     line-height: 1.45;
+    overflow-wrap: anywhere;
 }
 
 .run-evidence-panel {
     gap: var(--space-4);
+    min-width: 0;
 }
 
 .run-stage-evidence-nav.segmented-control {
@@ -3006,6 +3011,75 @@ select {
         line-height: 1.2;
         text-align: center;
     }
+
+    #content > .content-inner.protocol-runs-route-shell .segmented-control[aria-label="Run triage focus"] {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: var(--space-1);
+        padding: var(--space-1);
+        border-radius: var(--radius-md);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .segmented-control[aria-label="Run triage focus"] .segmented-control-btn,
+    #content > .content-inner.protocol-runs-route-shell .filter-toggle-link {
+        border-radius: var(--radius-sm);
+        min-height: 40px;
+        padding: 0.5rem 0.62rem;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .filter-toggle-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        white-space: normal;
+        text-align: center;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card {
+        padding: var(--space-3);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .metadata-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--space-2);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .metadata-item {
+        padding: var(--space-2) var(--space-2-5);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .list-row,
+    #content > .content-inner.protocol-runs-route-shell .run-evidence-issue-list .list-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--space-2);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .list-row-label,
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .list-row-sublabel {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .badge {
+        justify-self: start;
+        max-width: 100%;
+        white-space: normal;
+        line-height: 1.15;
+        text-align: center;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .task-action-row,
+    #content > .content-inner.protocol-runs-route-shell .artifact-action-row {
+        align-items: stretch;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .task-action-row .btn,
+    #content > .content-inner.protocol-runs-route-shell .artifact-action-row .btn {
+        flex: 1 1 auto;
+        min-width: min(9rem, 100%);
+    }
 }
 
 @media (max-width: 560px) {
@@ -3044,6 +3118,28 @@ select {
     .metadata-grid,
     .approval-facts {
         grid-template-columns: 1fr;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .metadata-grid {
+        grid-template-columns: 1fr;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .segmented-control[aria-label="Run triage focus"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .run-stage-timeline-button {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .run-stage-timeline-button > .badge {
+        grid-column: 2 / 3;
+        justify-self: start;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .task-action-row .btn,
+    #content > .content-inner.protocol-runs-route-shell .artifact-action-row .btn {
+        min-width: min(8rem, 100%);
     }
 }
 
@@ -5326,6 +5422,8 @@ select {
     background: var(--bg-primary);
     box-shadow: none;
     overflow: visible;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .kit-runs-list-row-head {

@@ -28,8 +28,12 @@ from app.presentation.telegram import (
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
+    protocol_action_confirmation_message,
     protocol_artifact_preview_message,
+    protocol_run_notification_message,
     protocol_run_artifacts_message,
+    protocol_run_updated_message,
+    protocol_watch_changed_message,
     recovery_notice_markup,
     pending_html_outcome_message,
     raw_missing_message,
@@ -201,6 +205,43 @@ def test_protocol_artifact_preview_message_uses_named_local_links():
     assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content">Open</a>' in rendered.text
     assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?download=true">Download</a>' in rendered.text
     assert rendered.reply_markup is None
+
+
+def test_protocol_control_messages_use_short_run_ids():
+    run_id = "abcdef1234567890abcdef1234567890"
+
+    watched = protocol_watch_changed_message(run_id=run_id, watching=True)
+    assert "Run: <code>abcdef12</code>" in watched.text
+    assert run_id not in watched.text
+
+    updated = protocol_run_updated_message(run_id=run_id, status="running", current_stage="build")
+    assert "Run: <code>abcdef12</code>" in updated.text
+    assert run_id not in updated.text
+
+    confirmation = protocol_action_confirmation_message(action="cancel", run_id=run_id, reason="wrong output")
+    assert "Run: <code>abcdef12</code>" in confirmation.text
+    assert "/protocol cancel abcdef12 confirm wrong output" in confirmation.text
+    assert run_id not in confirmation.text
+
+
+def test_protocol_watch_notification_uses_short_run_id():
+    detail = SimpleNamespace(
+        run=SimpleNamespace(
+            protocol_run_id="abcdef1234567890abcdef1234567890",
+            status="running",
+            current_stage_key="build",
+            blocked_detail="",
+            termination_summary="",
+        ),
+        stage_executions=[
+            SimpleNamespace(stage_key="build", status="running", decision_summary="", failure_detail="")
+        ],
+    )
+
+    rendered = protocol_run_notification_message(detail)
+
+    assert "Run: <code>abcdef12</code>" in rendered.text
+    assert "abcdef1234567890abcdef1234567890" not in rendered.text
 
 
 def test_recovery_notice_markup_renders_expected_buttons():

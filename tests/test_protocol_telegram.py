@@ -533,17 +533,18 @@ async def test_protocol_export_sends_json_document(monkeypatch):
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
+        run_id = "abcdef1234567890abcdef1234567890"
 
         class _Export:
             def model_dump(self, **kwargs):
                 return {
-                    "run": {"protocol_run_id": "run-1", "status": "completed"},
+                    "run": {"protocol_run_id": run_id, "status": "completed"},
                     "artifacts": [{"artifact_key": "plan", "workspace_path": "plan.md"}],
                 }
 
         class _Client:
             async def export_run(self, run_id):
-                assert run_id == "run-1"
+                assert run_id == "abcdef1234567890abcdef1234567890"
                 return _Export()
 
         monkeypatch.setattr(
@@ -560,13 +561,13 @@ async def test_protocol_export_sends_json_document(monkeypatch):
             th.cmd_protocol,
             chat,
             user,
-            "/protocol export run-1",
-            args=["export", "run-1"],
+            f"/protocol export {run_id}",
+            args=["export", run_id],
         )
 
         assert msg.replies[-1]["document_sent"] is True
-        assert msg.replies[-1]["caption"] == "Protocol run export: run-1"
-        assert msg.replies[-1]["document"].name == "protocol_run_run-1.json"
+        assert msg.replies[-1]["caption"] == "Protocol run export: abcdef12"
+        assert msg.replies[-1]["document"].name == f"protocol_run_{run_id}.json"
 
 
 async def test_protocol_watch_and_unwatch_commands_toggle_persisted_watch(monkeypatch):

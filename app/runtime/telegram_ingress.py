@@ -1109,7 +1109,7 @@ async def cmd_protocol(
         doc.name = f"protocol_run_{run_id}.json"
         await update.effective_message.reply_document(
             document=doc,
-            caption=f"Protocol run export: {run_id}",
+            caption=f"Protocol run export: {telegram_protocols.protocol_run_short_id(run_id)}",
         )
         return
     if sub in {"watch", "unwatch"}:

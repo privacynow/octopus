@@ -73,6 +73,11 @@ def _telegram_named_link(url: str, label: str) -> str:
     return f'<a href="{html.escape(str(url), quote=True)}">{html.escape(label)}</a>'
 
 
+def _short_run_id(run_id: str) -> str:
+    value = str(run_id or "").strip()
+    return value[:8] if len(value) > 8 else value
+
+
 def extract_summary(text: str, max_lines: int = 4) -> tuple[str, str]:
     lines = [line for line in (text or "").splitlines() if line.strip()]
     if not lines:
@@ -1419,9 +1424,10 @@ def protocol_run_started_message(
     deep_link: str = "",
     watching: bool,
 ) -> TelegramRenderedMessage:
+    run_short = _short_run_id(run_id)
     lines = [
         "<b>Protocol run started</b>",
-        f"Run: <code>{html.escape(run_id[:8] if len(run_id) > 8 else run_id)}</code> (also available as <code>latest</code>)",
+        f"Run: <code>{html.escape(run_short)}</code> (also available as <code>latest</code>)",
         f"Protocol: <code>{html.escape(protocol_label)}</code>",
         f"Current stage: <code>{html.escape(current_stage or 'queued')}</code>",
         f"Notifications: <code>{'watching' if watching else 'not watching'}</code>",
@@ -1550,7 +1556,7 @@ def protocol_run_artifacts_message(
     run = detail.run
     links = artifact_links or {}
     if not detail.artifacts:
-        run_short = run.protocol_run_id[:8] if len(run.protocol_run_id) > 8 else run.protocol_run_id
+        run_short = _short_run_id(run.protocol_run_id)
         lines = [
             "<b>Protocol artifacts</b>",
             f"Run: <code>{html.escape(run_short)}</code>",
@@ -1573,7 +1579,7 @@ def protocol_run_artifacts_message(
             disable_web_page_preview=True,
         )
 
-    run_short = run.protocol_run_id[:8] if len(run.protocol_run_id) > 8 else run.protocol_run_id
+    run_short = _short_run_id(run.protocol_run_id)
     lines = [
         "<b>Protocol artifacts</b>",
         f"Run: <code>{html.escape(run_short)}</code>",
@@ -1697,7 +1703,7 @@ def protocol_artifact_preview_message(
     open_link: str = "",
     download_link: str = "",
 ) -> TelegramRenderedMessage:
-    short_id = run_id[:8] if len(run_id) > 8 else run_id
+    short_id = _short_run_id(run_id)
     lines = [
         "<b>Artifact preview</b>",
         f"Run: <code>{html.escape(short_id)}</code>",
@@ -1746,15 +1752,16 @@ def protocol_action_confirmation_message(
     reason: str,
     deep_link: str = "",
 ) -> TelegramRenderedMessage:
+    run_short = _short_run_id(run_id)
     reason_text = html.escape(reason or "No reason provided.")
     lines = [
         f"<b>Confirm protocol action</b>",
         f"Action: <code>{html.escape(action)}</code>",
-        f"Run id: <code>{html.escape(run_id)}</code>",
+        f"Run: <code>{html.escape(run_short)}</code>",
         f"Reason: {reason_text}",
         "",
         "Repeat the command with <code>confirm</code> before the reason to apply it.",
-        f"<code>/protocol {html.escape(action)} {html.escape(run_id)} confirm {reason_text}</code>",
+        f"<code>/protocol {html.escape(action)} {html.escape(run_short)} confirm {reason_text}</code>",
     ]
     if deep_link:
         lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
@@ -1772,9 +1779,10 @@ def protocol_run_updated_message(
     current_stage: str,
     deep_link: str = "",
 ) -> TelegramRenderedMessage:
+    run_short = _short_run_id(run_id)
     lines = [
         "<b>Protocol run updated</b>",
-        f"Run id: <code>{html.escape(run_id)}</code>",
+        f"Run: <code>{html.escape(run_short)}</code>",
         f"Status: <code>{html.escape(status)}</code>",
         f"Current stage: <code>{html.escape(current_stage or 'n/a')}</code>",
     ]
@@ -1793,9 +1801,10 @@ def protocol_watch_changed_message(
     watching: bool,
     deep_link: str = "",
 ) -> TelegramRenderedMessage:
+    run_short = _short_run_id(run_id)
     lines = [
         f"Protocol notifications <b>{'enabled' if watching else 'disabled'}</b>.",
-        f"Run id: <code>{html.escape(run_id)}</code>",
+        f"Run: <code>{html.escape(run_short)}</code>",
     ]
     if deep_link:
         lines.append(f"<a href=\"{html.escape(deep_link)}\">Open in registry</a>")
@@ -1809,9 +1818,10 @@ def protocol_watch_changed_message(
 def protocol_run_notification_message(detail, *, deep_link: str = "") -> TelegramRenderedMessage:
     run = detail.run
     latest = detail.stage_executions[0] if detail.stage_executions else None
+    run_short = _short_run_id(run.protocol_run_id)
     lines = [
         "<b>Protocol run update</b>",
-        f"Run id: <code>{html.escape(run.protocol_run_id)}</code>",
+        f"Run: <code>{html.escape(run_short)}</code>",
         f"Status: <code>{html.escape(run.status)}</code>",
         f"Current stage: <code>{html.escape(run.current_stage_key or 'n/a')}</code>",
     ]

@@ -2489,11 +2489,23 @@ function renderProtocolWorkspace(container) {
         );
         const advancedKind = readValue('select[aria-label="Custom selector type"]', pendingStage.selector_kind);
         const selector = _selectorFromEditorFields({
-            requiredSkill: readValue('[aria-label="Required skill"]', ''),
+            requiredSkill: readValue(
+                '[aria-label="Required skill"]',
+                pendingStage.selector_kind === 'skill' ? pendingStage.selector_value : '',
+            ),
             pinnedAgent: readValue('[aria-label="Pin matching agent (optional)"]')
                 || readValue('[aria-label="Pinned agent"]')
-                || readValue('[aria-label="Agent"]', pendingStage.selector_kind === 'agent' ? pendingStage.selector_value : pendingStage.selector_preferred_agent_id),
-            neededSkill: readValue('[aria-label="Needed skill"]', ''),
+                || readValue('[aria-label="Agent"]', _selectorAgentControlValue(
+                    pendingStage.selector_kind === 'agent'
+                        ? pendingStage.selector_value
+                        : pendingStage.selector_preferred_agent_id,
+                )),
+            neededSkill: readValue(
+                '[aria-label="Needed skill"]',
+                pendingStage.selector_mode === 'new_skill' && pendingStage.selector_kind === 'skill'
+                    ? pendingStage.selector_value
+                    : '',
+            ),
             advancedKind,
             advancedValue: advancedKind === 'role'
                 ? (readValue('[aria-label="Choose runtime role tag"]', pendingStage.selector_value) || readValue('[aria-label="Custom value"]', pendingStage.selector_value))

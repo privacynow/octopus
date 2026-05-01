@@ -342,10 +342,20 @@ async function createStep(page, {
     if (selectorKind === 'skill' && selectorPreferredAgent) {
       const pinGroup = assignmentSection.locator('.kit-selector-pill-group[aria-label="Pin matching agent (optional)"]').first();
       if (await pinGroup.count() && await pinGroup.isVisible().catch(() => false)) {
-        const pinButtons = pinGroup.getByRole('button');
-        const targetPin = selectorPreferredAgent === '__last__'
-          ? pinButtons.last()
-          : pinGroup.getByRole('button', { name: selectorPreferredAgent, exact: true }).first();
+        let pinLabels = [];
+        const targetPinLabel = selectorPreferredAgent === '__last__'
+          ? await expect.poll(async () => {
+            pinLabels = await pinGroup.getByRole('button').evaluateAll((buttons) =>
+              buttons.map((button) => String(button.textContent || '').trim()).filter(Boolean),
+            );
+            return pinLabels.filter((label) => !/^dynamic$/i.test(label)).length;
+          }, { timeout: 15000 }).toBeGreaterThan(0)
+            .then(() => pinLabels.filter((label) => !/^dynamic$/i.test(label)).pop() || '')
+          : selectorPreferredAgent;
+        if (!targetPinLabel) {
+          throw new Error(`No matching agent pill is available for ${key || name}`);
+        }
+        const targetPin = pinGroup.getByRole('button', { name: targetPinLabel, exact: true }).first();
         await targetPin.click();
         await expect(targetPin).toHaveAttribute('aria-pressed', 'true');
       } else {
@@ -353,9 +363,14 @@ async function createStep(page, {
         await expect(pinSelect).toBeVisible();
         let targetPinValue = selectorPreferredAgent;
         if (selectorPreferredAgent === '__last__') {
-          targetPinValue = await pinSelect.locator('option').evaluateAll((options) =>
-            options.map((option) => String(option.value || '')).filter(Boolean).pop() || '',
-          );
+          let pinValues = [];
+          targetPinValue = await expect.poll(async () => {
+            pinValues = await pinSelect.locator('option').evaluateAll((options) =>
+              options.map((option) => String(option.value || '')).filter(Boolean),
+            );
+            return pinValues.length;
+          }, { timeout: 15000 }).toBeGreaterThan(0)
+            .then(() => pinValues.pop() || '');
         }
         if (!targetPinValue) {
           throw new Error(`No matching agent option is available for ${key || name}`);

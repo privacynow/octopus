@@ -8,18 +8,25 @@ function _initSidebar() {
     const hamburger = document.getElementById('hamburger');
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebar-overlay');
+    const closeButton = document.getElementById('sidebar-close');
     if (!hamburger || !sidebar) return;
 
     function openDrawer() {
         sidebar.classList.add('open');
-        overlay.classList.add('active');
+        if (overlay) overlay.classList.add('active');
         hamburger.classList.add('active');
+        hamburger.setAttribute('aria-expanded', 'true');
+        hamburger.setAttribute('aria-label', 'Navigation open');
+        document.body.classList.add('mobile-nav-open');
     }
 
     function closeDrawer() {
         sidebar.classList.remove('open');
-        overlay.classList.remove('active');
+        if (overlay) overlay.classList.remove('active');
         hamburger.classList.remove('active');
+        hamburger.setAttribute('aria-expanded', 'false');
+        hamburger.setAttribute('aria-label', 'Open navigation');
+        document.body.classList.remove('mobile-nav-open');
     }
 
     hamburger.addEventListener('click', () => {
@@ -30,7 +37,9 @@ function _initSidebar() {
         }
     });
 
-    overlay.addEventListener('click', closeDrawer);
+    if (overlay) overlay.addEventListener('click', closeDrawer);
+    if (closeButton) closeButton.addEventListener('click', closeDrawer);
+    document.addEventListener('octopus:close-mobile-nav', closeDrawer);
 
     sidebar.addEventListener('click', (e) => {
         if (e.target.closest('a[href]')) {
@@ -39,7 +48,7 @@ function _initSidebar() {
     });
 
     function syncDrawerForViewport() {
-        if (window.innerWidth <= 900) {
+        if (window.innerWidth <= 900 || sidebar.classList.contains('open')) {
             closeDrawer();
         }
     }
@@ -77,14 +86,7 @@ function _initKeyboard() {
             }
         }
         if (e.key === 'Escape') {
-            const sidebar = document.getElementById('sidebar');
-            if (sidebar && sidebar.classList.contains('open')) {
-                sidebar.classList.remove('open');
-                const overlay = document.getElementById('sidebar-overlay');
-                if (overlay) overlay.classList.remove('active');
-                const hamburger = document.getElementById('hamburger');
-                if (hamburger) hamburger.classList.remove('active');
-            }
+            document.dispatchEvent(new CustomEvent('octopus:close-mobile-nav'));
         }
     });
 }

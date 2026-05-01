@@ -5,8 +5,10 @@ function renderLoginForm(container) {
     // Hide sidebar on login page
     const sidebar = document.getElementById('sidebar');
     const hamburger = document.getElementById('hamburger');
+    const mobileAppBar = document.getElementById('mobile-app-bar');
     if (sidebar) sidebar.style.display = 'none';
     if (hamburger) hamburger.style.display = 'none';
+    if (mobileAppBar) mobileAppBar.style.display = 'none';
     container.style.marginLeft = '0';
 
     const loginDiv = document.createElement('div');
@@ -86,6 +88,7 @@ function renderLoginForm(container) {
                 // Restore sidebar
                 if (sidebar) sidebar.style.display = '';
                 if (hamburger) hamburger.style.display = '';
+                if (mobileAppBar) mobileAppBar.style.display = '';
                 container.style.marginLeft = '';
                 // Fetch CSRF token after login
                 await API.fetchCsrf();
@@ -106,6 +109,7 @@ function renderLoginForm(container) {
         // Restore sidebar visibility if navigating away
         if (sidebar) sidebar.style.display = '';
         if (hamburger) hamburger.style.display = '';
+        if (mobileAppBar) mobileAppBar.style.display = '';
         container.style.marginLeft = '';
     };
 }

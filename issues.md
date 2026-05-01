@@ -195,10 +195,31 @@ Narrow-width Registry follow-up:
 - `33487a93` and `17d50fe6` moved the active hamburger/close control into the
   drawer's upper-right corner with Safari-safe positioning. After hard refresh,
   the expanded drawer no longer overlaps the `Octopus` title.
+- `66b4a772` replaced the page-specific hamburger behavior with a shared narrow
+  mobile app bar, drawer close button, overlay/body lock state, and login-page
+  shell hiding. The drawer now has one reusable open/close path instead of a
+  selective per-page edit.
+- `b5d98c83` fixed the shared narrow list-row shrink/wrap behavior so
+  Dashboard, conversation, agent, skills, routing, and usage rows can collapse
+  without visible horizontal overflow.
+- `d9e81768`, `b26899d6`, and `101e5d59` tightened narrow Registry control
+  density: metric rails stay compact, linked-work/task summaries avoid tall
+  one-column stacks, segmented controls use rectangular grid cells, and kit
+  status/filter chips no longer regress to pill styling after later kit CSS.
 - Real Safari was hard-refreshed after pull/redeploy/status. On the narrow
   run page for `25e2f70f`, scrolling worked, the expanded stage evidence was
   readable, status chips and command buttons did not clip, and the drawer
   opened/closed without covering its own header.
+- The broader narrow audit now passes against the redeployed Registry: 13 routes
+  (`Dashboard`, `Runs`, selected run detail, conversation list, conversation
+  linked work, task detail, agents list/detail, protocols, skills, guidance,
+  routing, and usage) were checked at 768, 430, and 390 px with zero visible
+  overflow, zero pill-control findings, zero drawer failures, and zero console
+  errors.
+- Real Safari was hard-refreshed again after the final pull/redeploy/status and
+  spot-checked on Usage, Agents, the expanded drawer, conversation linked work,
+  and the selected run detail. Those live narrow surfaces are readable and
+  usable, with rectangular controls and no hamburger/header overlap.
 
 Residual verification limits:
 
@@ -215,8 +236,9 @@ Residual verification limits:
 - Artifact parity and conversation lineage passed the latest real Safari
   reference-surface audit. Keep them as regression scenarios when artifact
   routes, linked work, task detail, run detail, or bot presentation changes.
-- Narrow-width Safari now has a verified run-detail reference surface, but the
-  broader narrow audit across the rest of Registry remains open.
+- Narrow-width Safari now has verified reference coverage across current core
+  Registry surfaces. Keep the automated 13-route narrow audit and the real
+  Safari run/detail/drawer checks as regression scenarios.
 
 Acceptance sequencing is non-negotiable:
 
@@ -1271,7 +1293,8 @@ Remaining issues after the latest scenario pass:
   and M2, but Telegram is still a run/inspect/control surface for published
   protocols rather than a protocol authoring surface.
 - Desktop Safari paths passed for the latest registry/artifact/lineage flow.
-  Narrow-width Safari scrolling and layout remain open for broad product polish.
+  Narrow-width Safari and automated narrow viewport coverage now pass for the
+  current core Registry surfaces.
 
 ## Open Blockers
 
@@ -1285,24 +1308,22 @@ Remaining issues after the latest scenario pass:
 | P1-4 | High | Verified | Telegram protocol parity must stay on shared protocol behavior. | Real Safari M2 started a fresh `telegram-parity-smoke` run (`3636e6f7`), M1 and M2 executed stages through the shared Registry protocol path, M2 inspected status/artifacts/preview, M1 used `/protocol recent` plus numbered references to inspect/control the same run, and Registry showed the same completed run and artifacts. Export, watch, unwatch, package download, rendered preview, package contents, and package open all worked. | Keep this as a regression scenario whenever protocol SDK, registry run service, artifact routes, or bot presentation changes. |
 | P1-5 | High | Verified | Telegram protocol UX must stay human-readable. | The product now supports `latest`/numbered references, compact artifact lists, rendered previews, short run labels, and named action buttons such as `Preview brief.md`, `Open app package`, and `Send package`. Real Safari verified `/protocol recent` -> `/protocol artifacts 1`, `/protocol preview latest 1`, `/protocol export 1`, `/protocol artifacts 1 download 2`, watch, unwatch, and post-deploy named buttons without copying a long GUID. Browser URLs still contain canonical ids, but the normal Telegram flow no longer requires them. | Keep command-output density under review; future guided bot affordances must continue through shared presentation/service abstractions. |
 | P1-6 | High | Verified | Run progress needs bounded, human-readable scale behavior. | Real Safari verified live two-stage progress during Telegram parity work and verified a six-stage completed run after deploy. The six-stage rail compressed earlier stages as `4 earlier` and kept the final two stages readable with status text and stage evidence. Runs, blocked/stuck/contract-error tabs, and activity compaction remain regression surfaces. | Re-test active long-running progress whenever the run rail, websocket updates, run filters, or activity compaction change. |
-| P1-7 | High | Partially verified | Full desktop/narrow Safari audit is not complete. | Desktop Safari paths now passed for Dashboard, Runs, run stage expansion, conversation linked work, task detail, package contents, rendered artifact preview, Telegram M1/M2 protocol controls, and the generated package app. Real narrow Safari now verifies the Runs route shell scrolls, expanded run evidence wraps long artifact/decision content, action controls are readable, and the opened drawer no longer overlaps its own `Octopus` header. The broader narrow audit across remaining Registry surfaces is still open. | Continue the narrow/mobile-like audit across the remaining Registry surfaces with a controllable Safari viewport or device session; keep the verified run-detail page as a regression scenario. |
+| P1-7 | High | Verified | Full desktop/narrow Safari audit must cover current core Registry surfaces. | Desktop Safari paths passed for Dashboard, Runs, run stage expansion, conversation linked work, task detail, package contents, rendered artifact preview, Telegram M1/M2 protocol controls, and the generated package app. The narrow pass now covers 13 Registry routes at 768, 430, and 390 px with zero visible overflow, zero pill-control findings, zero drawer failures, and zero console errors. Real Safari was hard-refreshed after pull/redeploy/status and spot-checked on Usage, Agents, drawer open/close, conversation linked work, and selected run detail; the surfaces are readable and usable. | Keep the automated 13-route narrow audit and real Safari run/detail/drawer checks as regression scenarios when shared shell, list, action, artifact, run, or kit control styles change. |
 | P2-1 | Medium | Open | Clean-clone/customer-self-service pass remains unproven. | README/docs are current enough for the active architecture, but a full fresh setup from docs has not been executed in an isolated environment during this pass. | Run setup from docs in a clean environment or equivalent dry run and fix product/docs gaps. |
 | P2-2 | Medium | Blocked by confirmation policy | Workspace cleanup UI needs post-deploy Safari verification. | Dashboard shows the cleanup control and clearly labels it as password-gated and destructive. Actually executing cleanup deletes local workspace records, which requires action-time confirmation under the agent safety rules; the current instruction was to avoid actions requiring permission. | With explicit action-time confirmation, use Dashboard cleanup in Safari and confirm agents/skills/guidance remain while workspace records are removed. |
 | P2-3 | Medium | Open | Stale/interrupted run recovery needs UI confirmation after redeploy. | Stuck lease/timeout/blocked/contract-error filters are visible and currently show no active issues. A controlled interrupted disposable run was not created during this pass. | Interrupt a disposable run safely, verify issue filters, then retry/cancel/send back from UI and inspect timeline. |
 
 ## Implementation Order
 
-1. Finish the narrow/mobile-like Safari audit across the remaining Registry
-   surfaces with a controllable viewport/device session.
-2. Run clean-clone/docs pass in an isolated environment.
-3. With action-time confirmation, verify Dashboard cleanup preservation/removal
+1. Run clean-clone/docs pass in an isolated environment.
+2. With action-time confirmation, verify Dashboard cleanup preservation/removal
    matrix from Safari.
-4. Verify stale/interrupted run recovery using a disposable run, including
+3. Verify stale/interrupted run recovery using a disposable run, including
    issue filters and retry/cancel/send-back timeline evidence.
 
-Do not start the broad 500+ screenshot audit until the narrow viewport and
-recovery scenarios are ready to run. Broad screenshots are breadth; the golden
-scenarios above are depth.
+Do not start the broad 500+ screenshot audit until the recovery scenarios are
+ready to run. Broad screenshots are breadth; the golden scenarios above are
+depth.
 
 ## Decision Log
 

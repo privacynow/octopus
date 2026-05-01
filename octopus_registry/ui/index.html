@@ -9,13 +9,19 @@
 <body>
     <a class="skip-link" href="#content">Skip to content</a>
     <div id="app">
-        <button id="hamburger" class="hamburger" aria-label="Toggle navigation">
-            <span></span><span></span><span></span>
-        </button>
+        <header id="mobile-app-bar" class="mobile-app-bar" aria-label="Mobile navigation">
+            <button id="hamburger" class="hamburger" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <span class="mobile-app-title">Octopus</span>
+        </header>
         <div id="sidebar-overlay" class="sidebar-overlay"></div>
         <nav id="sidebar" aria-label="Main navigation">
             <div class="sidebar-header">
                 <h1>Octopus</h1>
+                <button id="sidebar-close" class="sidebar-close" type="button" aria-label="Close navigation">
+                    <span></span><span></span>
+                </button>
             </div>
             <ul class="nav-links">
                 <li class="nav-group">Work</li>

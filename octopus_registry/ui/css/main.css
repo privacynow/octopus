@@ -2797,13 +2797,19 @@ select {
         overflow: hidden;
     }
 
-    #content > .content-inner.conversation-list-route-shell,
-    #content > .content-inner.protocol-runs-route-shell {
+    #content > .content-inner.conversation-list-route-shell {
         height: calc(100dvh - 4.4rem - var(--space-5));
         min-height: calc(100dvh - 4.4rem - var(--space-5));
         display: flex;
         flex-direction: column;
         overflow: hidden;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell {
+        height: auto;
+        min-height: calc(100dvh - 4.4rem - var(--space-5));
+        display: block;
+        overflow: visible;
     }
 
     .workspace-header-main,

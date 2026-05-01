@@ -57,6 +57,27 @@ Recently verified product state:
 - Run progress feedback is improved, but still needs broad verification on
   larger non-analytics workflows.
 
+Current manufacturing execution pass:
+
+- Protocol:
+  `Adaptive Manufacturing Intelligence Command Center`
+- Protocol id:
+  `b0974e104404409481426d31842b56d4`
+- Latest successful Registry UI run:
+  `25e2f70f8b9545ffa4e477582628bb97`
+- Final package artifact:
+  `artifact_4`, `sha256 79ea0bff24db`,
+  `artifacts/manufacturing-intelligence/package`
+- Real Safari verified:
+  default synthetic data, explicit relationship confirmation, joined analytics,
+  heat-map output, manager dashboards, multiple CSV upload, adapted synthetic
+  single-table mode, adapted synthetic relationship-preserving mode, and local
+  management report export.
+- Artifact-level follow-up:
+  reset/data replacement should clear stale detail-panel relationship evidence
+  in the generated `index.html` package. This belongs in scenario refinement,
+  not product-hardcoded manufacturing behavior.
+
 Relevant code and docs:
 
 - Protocol editor and runs UI:
@@ -171,362 +192,31 @@ Translate those themes into generic artifact requirements:
 - explainable recommendations with source data and confidence, not black-box
   claims
 
-## Open Issues To Close
-
-### P0-1: Workflow Builder Skill Continuity
-
-Problem:
-
-- In the protocol builder, skill selection can send the user to a generic Skills
-  page with no stage context.
-- The user cannot reliably select or create a skill and return to the same
-  stage with the assignment preserved.
-
-Implementation:
-
-1. Inspect the stage assignment UI in `protocol-workspace.js`.
-2. Inspect the skill catalog surface in `skill-catalog.js`.
-3. Implement one coherent stage-scoped skill flow:
-   - search existing skills from the stage assignment context
-   - select an existing skill for the current stage
-   - mark or create a needed new skill for the current stage
-   - return to the same stage with draft data preserved
-4. If full-page Skills navigation remains available, pass explicit return
-   context and render a contextual `Use for current stage` action.
-5. Do not create a second skill model.
-6. Do not use "capability" as the user-facing noun.
-
-Tests:
-
-- Unit/contract:
-  `./.venv/bin/python -m pytest tests/test_registry_ui_contract.py tests/test_protocols.py -q`
-- Browser:
-  targeted Playwright coverage for stage-scoped skill select/create/return.
-- Real Safari:
-  create a blank protocol and verify:
-  - stage with no assignment
-  - stage with skill only
-  - stage with agent only
-  - stage with skill plus agent
-  - stage with needed new skill
-  - no stage data is lost after skill selection
-
-### P0-2: Runtime/Product Customer-Handoff Language Audit
-
-Problem:
-
-- Runtime prompts or generated protocol instructions must not mention internal
-  delivery concepts such as "customer handoff" unless the user explicitly typed
-  those words.
-
-Implementation:
-
-1. Search:
-   ```bash
-   rg -n "customer handoff|handoff guide|handoff" README.md docs issues.md octopus_registry octopus_sdk app tests
-   ```
-2. Separate repository planning docs from runtime/product paths.
-3. Remove the phrase from:
-   - run launch UI copy
-   - protocol prompt builders
-   - default protocol instructions
-   - negative prompt text
-   - generated artifact expectations
-   - tests that assert runtime wording
-4. Keep delivery-process wording only in planning/docs when it is not fed to
-   agents or surfaced in product UI.
-
-Tests:
-
-- `./.venv/bin/python -m pytest tests/test_protocols.py tests/test_protocol_service.py tests/test_registry_ui_contract.py -q`
-- Real Safari:
-  create and run a small generic protocol. Inspect run inputs, stage
-  instructions, generated artifact names, and generated artifact content.
-  Confirm the phrase is absent unless typed by the user.
-
-### P1-1: Protocol Authoring Matrix
-
-Problem:
-
-- Protocol authoring has improved, but the full assignment and artifact matrix
-  has not been reverified after recent changes.
-
-Implementation:
-
-- Fix any discovered product defects in `protocol-workspace.js` in the existing
-  protocol authoring pipeline.
-- Do not add new routes or alternate editors for the same behavior.
-
-Real Safari matrix:
-
-1. Clean data if the existing UI state is noisy.
-2. Create a blank protocol named `Protocol Authoring Matrix Verification`.
-3. Add stages covering:
-   - no assignment
-   - skill only
-   - agent only
-   - skill plus preferred agent
-   - needed new skill
-   - add stage below current stage
-   - remove stage
-   - reorder or navigate stages
-   - edit artifacts inside stage context
-   - open workflow map on demand
-4. Validate and publish.
-5. Confirm all draft data is preserved.
-
-### P1-2: Artifact Action Consistency
-
-Problem:
-
-- Package artifact actions are verified from the run artifact page, but not
-  across every surface.
-
-Implementation:
-
-1. Reuse `UI.createArtifactActionRow` and `_protocolArtifactActionRow`.
-2. Do not create surface-specific artifact action implementations.
-3. Ensure artifact states and actions are consistent for:
-   - run overview
-   - run artifacts tab
-   - stage detail
-   - conversation linked work
-   - delegation/task detail
-   - dashboard references
-   - Telegram artifact commands
-4. For package/directory artifacts, actions should be:
-   - `Open` loads an appropriate default file, usually `index.html` when
-     present
-   - `Contents` lists package contents
-   - `Download` downloads the package as a zip
-   - `Copy path` copies the workspace path
-
-Tests:
-
-- `./.venv/bin/python -m pytest tests/test_registry_ui_contract.py tests/test_registry_sdk_contract.py tests/test_protocol_telegram.py -q`
-- Real Safari:
-  use one completed run and inspect the same package artifact from every
-  available UI surface.
-- Live Telegram:
-  use `/protocol artifacts <run_id>` and
-  `/protocol artifacts <run_id> download <artifact_key>`.
-
-### P1-3: Conversations, Runs, And Delegations Need One Lineage
-
-Problem:
-
-- Conversations, runs, stage work, delegations, and artifacts can still feel
-  like separate apps instead of one lineage.
-
-Implementation:
-
-1. Inspect `conversation-detail.js`, `conversation-list.js`, and
-   `protocol-workspace.js`.
-2. Ensure conversation linked work subscribes to run updates and shows useful
-   state without requiring the user to click away and back.
-3. Ensure run stage detail points to the routed task/delegation where relevant.
-4. Ensure task/delegation detail points back to the run/stage/conversation.
-5. Keep routed tasks as runtime internals; present them as linked work where
-   possible.
-
-Tests:
-
-- Start work from a conversation in real Safari.
-- Route work to M2 using `@m2`.
-- Start a protocol from the UI where supported.
-- Navigate:
-  conversation -> linked run/delegation -> artifact -> run -> conversation.
-- Confirm no blank full-activity view.
-
-### P1-4: Telegram Protocol Parity
-
-Problem:
-
-- Telegram protocol behavior needs live verification.
-- Telegram currently supports `/protocol start <slug> <problem statement>`, but
-  the shared launch model supports richer generic fields. If Telegram cannot
-  express context, constraints, expected outputs, or protocol-authored
-  `metadata.run_inputs`, that is a parity gap to fix through the shared SDK
-  launch helpers, not a parallel Telegram implementation.
-
-Implementation:
-
-1. Inspect `app/runtime/telegram_ingress.py`,
-   `app/runtime/telegram_protocols.py`, `app/presentation/telegram.py`, and
-   `octopus_sdk/protocols/launch.py`.
-2. Preserve the simple one-line start command.
-3. Add a coherent Telegram path for richer launch inputs if missing. Acceptable
-   approaches:
-   - guided multi-message launch session based on `protocol_run_launch_form`
-   - a structured command that maps to the same SDK launch request
-   - a documented fallback where only `problem_statement` is supported, if the
-     product decision is to keep Telegram lightweight
-4. The chosen path must call the shared SDK protocol service and must not
-   duplicate protocol execution logic.
-5. Ensure artifact listing and download use the canonical artifact routes.
-
-Live Telegram acceptance:
-
-1. Use the Telegram browser tab already opened by the operator.
-2. Use M1/M2 only.
-3. Send:
-   ```text
-   /protocol list
-   ```
-4. Start a small verification protocol:
-   ```text
-   /protocol start telegram-parity-smoke Build a tiny verification report and produce the declared artifact.
-   ```
-5. Record the returned run id.
-6. Send:
-   ```text
-   /protocol watch <run_id>
-   /protocol status <run_id>
-   /protocol artifacts <run_id>
-   /protocol export <run_id>
-   ```
-7. After completion, download at least one artifact:
-   ```text
-   /protocol artifacts <run_id> download <artifact_key>
-   ```
-8. Open the same run in Registry Safari and confirm status/artifacts match.
-9. Send:
-   ```text
-   /protocol unwatch <run_id>
-   ```
-
-### P1-5: Run Progress At Scale
-
-Problem:
-
-- The latest small run was understandable, but larger protocols need proof that
-  progress stays visual, bounded, and human-readable.
-
-Implementation:
-
-1. Reuse one stage-progress component or one shared rendering function.
-2. Do not create separate run-list, run-detail, and conversation progress
-   implementations.
-3. For more than five stages, show a bounded rail:
-   - previous
-   - current
-   - next
-   - compressed before/after groups
-4. Show completed, running, waiting, failed, skipped, and stale states with
-   accessible text labels.
-5. Use restrained animation only for real active progress.
-
-Tests:
-
-- Create and run the manufacturing protocol in this plan. It has enough stages
-  to prove scale.
-- Observe active progress in real Safari without relying on sleeps. Use logs
-  when needed to know whether work is moving.
-- Verify current stage remains visible and understandable.
-- Verify a human can tell whether the run is healthy, blocked, failed, or done.
-
-### P1-6: Desktop And Narrow Safari Audit
-
-Problem:
-
-- Recent work has not had a complete desktop and narrow Safari audit.
-
-Acceptance:
-
-1. Desktop Safari, normal window:
-   - Dashboard
-   - Protocols
-   - Protocol editor
-   - Run list
-   - Run detail
-   - Stage detail
-   - Artifact package open/contents/download
-   - Conversation linked work
-   - Skills stage-scoped flow
-2. Narrow Safari:
-   - repeat the same high-risk surfaces
-   - no overlapping text
-   - no unreachable panels
-   - no unusable side-by-side panes
-   - progressive UI remains readable
-
-### P2-1: Clean Clone And Self-Service Docs
-
-Problem:
-
-- Clean clone setup remains unproven.
-
-Implementation:
-
-1. Audit README and docs for current architecture, setup, and protocol use.
-2. Ensure docs distinguish:
-   - product-neutral protocol authoring
-   - scenario-specific manufacturing demo
-   - cleanup/admin steps
-   - Telegram protocol commands
-3. Do not tilt README or architecture docs toward this manufacturing scenario.
-4. Scenario-specific instructions belong in a scenario guide or this plan.
-
-Verification:
-
-- Use the documented start flow in a clean environment when practical.
-- At minimum, run docs consistency checks and verify setup commands are current.
-
-### P2-2: Dashboard Cleanup Verification
-
-Problem:
-
-- Cleanup UI needs post-deploy Safari verification.
-
-Current UI behavior:
-
-- Dashboard -> Workspace maintenance -> Clean workspace data
-- Dialog asks for Registry UI password and `CLEAN`.
-- It removes conversations, tasks, protocols, runs, artifacts, events, and
-  deliveries.
-- It preserves agents, runtime skills, routing policy, guidance, tokens, and
-  catalog content.
-
-Acceptance:
-
-1. In real Safari, open Dashboard.
-2. Click `Clean workspace data`.
-3. Enter the current Registry UI password.
-4. Type:
-   ```text
-   CLEAN
-   ```
-5. Confirm cleanup.
-6. Verify agents M1 and M2 remain registered and healthy.
-7. Verify skills and guidance are still present.
-8. Verify old conversations, protocol definitions, runs, artifacts, and events
-   are gone from the default UI.
-
-### P2-3: Stale/Interrupted Run Recovery
-
-Problem:
-
-- Stale leases and interrupted runs need visible recovery behavior.
-
-Implementation:
-
-1. Use the existing run issue filter options:
-   - blocked runs
-   - contract errors
-   - stuck leases
-   - expired timeouts
-2. Do not create a separate recovery model.
-3. Make terminal/retryable states visible in the run UI.
-4. Ensure retry/send-back/cancel actions carry expected version and show clear
-   results.
-
-Acceptance:
-
-- Start a disposable protocol run.
-- Interrupt or stop the execution path in a controlled way only if safe.
-- Verify the run issue appears in the correct filter.
-- Use UI action to retry/cancel/send back.
-- Confirm the run state and timeline explain what happened.
+## Product Readiness Prerequisites
+
+`issues.md` is the canonical product backlog and acceptance tracker. The
+manufacturing plan is a scenario runbook and should not duplicate the product
+issue list. Before running this scenario for customer-facing acceptance, close
+or explicitly waive the relevant blockers in `issues.md`, especially:
+
+- P0-1 stage-scoped skill select/create/return continuity.
+- P0-2 runtime/product customer-handoff language audit.
+- P1-1 generic protocol authoring matrix.
+- P1-2 artifact actions across all surfaces, including package default
+  `index.html` surfacing and rendered text/Markdown preview.
+- P1-3 conversation, run, delegation, and artifact lineage.
+- P1-6 live run progress at scale.
+- P1-7 desktop and narrow Safari audit.
+
+Recently closed and kept as regression scenarios in `issues.md`:
+
+- P1-4 true Telegram protocol parity with a fresh Telegram-started run.
+- P1-5 Telegram human UX: avoid GUID-first flows, dense artifact walls, and raw
+  URL overload.
+
+Keep scenario-specific manufacturing instructions below. If a scenario run
+reveals a generic product problem, add or update it in `issues.md` instead of
+creating a second backlog in this file.
 
 ## Development, Test, Deploy Loop
 

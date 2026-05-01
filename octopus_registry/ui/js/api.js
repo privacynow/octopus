@@ -289,6 +289,9 @@ const API = (() => {
             if (opts.browse) {
                 url.searchParams.set('browse', '1');
             }
+            if (opts.preview) {
+                url.searchParams.set('preview', '1');
+            }
             if (opts.path) {
                 url.searchParams.set('path', String(opts.path || ''));
             }
@@ -361,6 +364,9 @@ const API = (() => {
             }
             if (opts.browse) {
                 url.searchParams.set('browse', '1');
+            }
+            if (opts.preview) {
+                url.searchParams.set('preview', '1');
             }
             if (opts.path) {
                 url.searchParams.set('path', String(opts.path || ''));

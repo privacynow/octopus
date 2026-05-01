@@ -25,6 +25,7 @@ from .artifact_paths import (
     resolve_protocol_artifact_rehearsal_text,
 )
 from .artifact_responses import workspace_artifact_content_response
+from .artifact_responses import rendered_artifact_text_preview_response
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .rehearsal import RehearsalSessionManager
@@ -534,6 +535,7 @@ def build_protocol_router(
         artifact_key: str,
         download: bool = Query(default=False),
         browse: bool = Query(default=False),
+        preview: bool = Query(default=False),
         member_path: str = Query(default="", alias="path"),
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
@@ -559,6 +561,12 @@ def build_protocol_router(
         if resolved_path is None:
             content_text = resolve_protocol_artifact_rehearsal_text(detail, artifact)
             if content_text:
+                if preview and not download:
+                    return rendered_artifact_text_preview_response(
+                        content_text,
+                        artifact_key=str(artifact.artifact_key or artifact_key or ""),
+                        preferred_name=preferred_name,
+                    )
                 disposition = "attachment" if download else "inline"
                 return Response(
                     content=content_text.encode("utf-8"),
@@ -582,6 +590,7 @@ def build_protocol_router(
             preferred_name=preferred_name,
             download=download,
             browse=browse,
+            preview=preview,
             member_path=member_path,
             request=request,
         )
@@ -603,7 +612,7 @@ def build_protocol_router(
     @router.get("/v1/protocol-runs/{run_id}/export")
     def resource_export_protocol_run(
         run_id: str,
-        auth: AuthContext = Depends(require_operator_session),
+        auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         try:

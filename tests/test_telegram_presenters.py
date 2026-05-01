@@ -25,10 +25,17 @@ from app.presentation.telegram import (
     ingress_setup_prompt_message,
     main_help_message,
     pending_plain_outcome_message,
+    parse_protocol_callback_data,
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
+    protocol_action_confirmation_message,
+    protocol_artifact_preview_message,
+    protocol_callback_data,
+    protocol_run_notification_message,
     protocol_run_artifacts_message,
+    protocol_run_updated_message,
+    protocol_watch_changed_message,
     recovery_notice_markup,
     pending_html_outcome_message,
     raw_missing_message,
@@ -146,14 +153,141 @@ def test_protocol_artifacts_message_distinguishes_available_and_missing_artifact
     rendered = protocol_run_artifacts_message(
         detail,
         deep_link="http://registry.local/ui/runs?run_id=run-1",
-        artifact_links={"plan": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content"},
+        artifact_links={
+            "plan": {
+                "preview": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content?preview=true",
+                "open": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content",
+                "download": "http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content?download=true",
+            }
+        },
     )
 
     assert rendered.parse_mode == ParseMode.HTML
-    assert "<code>plan</code>: verified" in rendered.text
-    assert "Download" in rendered.text
-    assert "<code>report</code>: declared" in rendered.text
+    assert "1. plan.md: <code>verified</code>" in rendered.text
+    assert '<a href="http://registry.local/v1/protocol-runs/run-1/artifacts/plan/content?download=true">Download</a>' in rendered.text
+    assert "2. report.md: <code>declared</code>" in rendered.text
     assert "not produced yet" in rendered.text
+    assert rendered.reply_markup is not None
+    callback_values = [
+        button.callback_data
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert "protocol:download:run-1:1" in callback_values
+    button_labels = [
+        button.text
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+    ]
+    assert "Preview plan.md" in button_labels
+    assert "Open plan.md" in button_labels
+    assert "Send plan.md" in button_labels
+
+
+def test_protocol_artifacts_message_omits_localhost_url_buttons():
+    detail = SimpleNamespace(
+        run=SimpleNamespace(protocol_run_id="run-1"),
+        artifacts=[
+            SimpleNamespace(
+                artifact_key="plan",
+                verification_state="verified",
+                state="available",
+                exists=True,
+                workspace_path="plan.md",
+                size_bytes=42,
+            ),
+        ],
+    )
+
+    rendered = protocol_run_artifacts_message(
+        detail,
+        deep_link="http://127.0.0.1:8787/ui/runs?run_id=run-1",
+        artifact_links={"plan": "http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content"},
+    )
+
+    assert ">http://127.0.0.1:8787" not in rendered.text
+    assert '<a href="http://127.0.0.1:8787/ui/runs?run_id=run-1">Registry run</a>' in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content">Download</a>' in rendered.text
+    assert rendered.reply_markup is not None
+    callback_values = [
+        button.callback_data
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert "protocol:download:run-1:1" in callback_values
+
+
+def test_protocol_artifact_preview_message_uses_named_local_links():
+    rendered = protocol_artifact_preview_message(
+        run_id="run-1",
+        artifact_label="plan.md",
+        preview_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?preview=true",
+        open_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content",
+        download_link="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?download=true",
+        artifact_ref="1",
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert ">http://127.0.0.1:8787" not in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?preview=true">Rendered preview</a>' in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content">Open</a>' in rendered.text
+    assert '<a href="http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content?download=true">Download</a>' in rendered.text
+    assert rendered.reply_markup is not None
+    callback_values = [
+        button.callback_data
+        for row in rendered.reply_markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
+    assert "protocol:download:run-1:1" in callback_values
+    assert "protocol:artifacts:run-1" in callback_values
+
+
+def test_protocol_callback_data_round_trips():
+    data = protocol_callback_data("preview", "abcdef1234567890", "2")
+
+    assert data == "protocol:preview:abcdef1234567890:2"
+    assert parse_protocol_callback_data(data) == ("preview", "abcdef1234567890", "2")
+    assert parse_protocol_callback_data("protocol:missing:run") is None
+
+
+def test_protocol_control_messages_use_short_run_ids():
+    run_id = "abcdef1234567890abcdef1234567890"
+
+    watched = protocol_watch_changed_message(run_id=run_id, watching=True)
+    assert "Run: <code>abcdef12</code>" in watched.text
+    assert run_id not in watched.text
+
+    updated = protocol_run_updated_message(run_id=run_id, status="running", current_stage="build")
+    assert "Run: <code>abcdef12</code>" in updated.text
+    assert run_id not in updated.text
+
+    confirmation = protocol_action_confirmation_message(action="cancel", run_id=run_id, reason="wrong output")
+    assert "Run: <code>abcdef12</code>" in confirmation.text
+    assert "/protocol cancel abcdef12 confirm wrong output" in confirmation.text
+    assert run_id not in confirmation.text
+
+
+def test_protocol_watch_notification_uses_short_run_id():
+    detail = SimpleNamespace(
+        run=SimpleNamespace(
+            protocol_run_id="abcdef1234567890abcdef1234567890",
+            status="running",
+            current_stage_key="build",
+            blocked_detail="",
+            termination_summary="",
+        ),
+        stage_executions=[
+            SimpleNamespace(stage_key="build", status="running", decision_summary="", failure_detail="")
+        ],
+    )
+
+    rendered = protocol_run_notification_message(detail)
+
+    assert "Run: <code>abcdef12</code>" in rendered.text
+    assert "abcdef1234567890abcdef1234567890" not in rendered.text
 
 
 def test_recovery_notice_markup_renders_expected_buttons():

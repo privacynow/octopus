@@ -64,6 +64,9 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
     const browsable = available && UI.isLikelyDirectoryArtifactPath(displayPath);
     return UI.createArtifactActionRow({
         previewable: available && _protocolArtifactPreviewable(artifact),
+        previewHref: available && _protocolArtifactPreviewable(artifact)
+            ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { preview: true })
+            : '',
         previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
         openHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
         browseHref: browsable ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { browse: true }) : '',
@@ -2451,15 +2454,24 @@ function renderProtocolWorkspace(container) {
     }
 
     function _syncPendingStageFromMountedEditor() {
-        const editor = contentEl.querySelector('.kit-stage-editor-grid');
+        const editor = contentEl.querySelector('.kit-stage-editor-grid[data-pending-stage-editor="true"]')
+            || contentEl.querySelector('.kit-stage-editor-grid');
         if (!(editor instanceof Element)) return;
         const readValue = (selector, fallback = '') => {
             const control = editor.querySelector(selector);
-            return control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement
-                ? String(control.value || '')
-                : control instanceof Element && Object.prototype.hasOwnProperty.call(control.dataset || {}, 'value')
-                    ? String(control.dataset.value || '')
-                : String(fallback || '');
+            if (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement) {
+                return String(control.value || '');
+            }
+            if (control instanceof Element && control.dataset?.selectorPillGroup === 'true') {
+                const pressed = control.querySelector('.quickstart-chip[aria-pressed="true"]');
+                return pressed instanceof HTMLElement
+                    ? String(pressed.dataset.value || '')
+                    : String(control.dataset.value || '');
+            }
+            if (control instanceof Element && control.dataset?.value !== undefined) {
+                return String(control.dataset.value || '');
+            }
+            return String(fallback || '');
         };
         pendingStage.display_name = readValue('#kit-details-display_name', pendingStage.display_name);
         pendingStage.participant_key = readValue('#kit-details-participant_key', pendingStage.participant_key);
@@ -2477,11 +2489,23 @@ function renderProtocolWorkspace(container) {
         );
         const advancedKind = readValue('select[aria-label="Custom selector type"]', pendingStage.selector_kind);
         const selector = _selectorFromEditorFields({
-            requiredSkill: readValue('[aria-label="Required skill"]', ''),
+            requiredSkill: readValue(
+                '[aria-label="Required skill"]',
+                pendingStage.selector_kind === 'skill' ? pendingStage.selector_value : '',
+            ),
             pinnedAgent: readValue('[aria-label="Pin matching agent (optional)"]')
                 || readValue('[aria-label="Pinned agent"]')
-                || readValue('[aria-label="Agent"]', pendingStage.selector_kind === 'agent' ? pendingStage.selector_value : pendingStage.selector_preferred_agent_id),
-            neededSkill: readValue('[aria-label="Needed skill"]', ''),
+                || readValue('[aria-label="Agent"]', _selectorAgentControlValue(
+                    pendingStage.selector_kind === 'agent'
+                        ? pendingStage.selector_value
+                        : pendingStage.selector_preferred_agent_id,
+                )),
+            neededSkill: readValue(
+                '[aria-label="Needed skill"]',
+                pendingStage.selector_mode === 'new_skill' && pendingStage.selector_kind === 'skill'
+                    ? pendingStage.selector_value
+                    : '',
+            ),
             advancedKind,
             advancedValue: advancedKind === 'role'
                 ? (readValue('[aria-label="Choose runtime role tag"]', pendingStage.selector_value) || readValue('[aria-label="Custom value"]', pendingStage.selector_value))
@@ -2494,10 +2518,6 @@ function renderProtocolWorkspace(container) {
 
     function _bindPendingStageEditorControls(root) {
         if (!(root instanceof Element)) return;
-        const syncAssignment = () => {
-            _syncPendingStageFromMountedEditor();
-            queueMicrotask(() => render());
-        };
         const bindText = (selector, key) => {
             const control = root.querySelector(selector);
             if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLTextAreaElement)) return;
@@ -2514,17 +2534,6 @@ function renderProtocolWorkspace(container) {
             control.__pendingStageBound = true;
             control.addEventListener('change', () => _commitPendingStageField(null, key, control.value));
         };
-        const bindAssignmentControl = (selector, eventName = 'change') => {
-            const control = root.querySelector(selector);
-            if (!(control instanceof HTMLInputElement)
-                && !(control instanceof HTMLSelectElement)
-                && !(control instanceof HTMLTextAreaElement)
-                && !(control instanceof Element && control.dataset.selectorPillGroup === 'true')) return;
-            const bindingKey = `__pendingAssignmentBound_${eventName}`;
-            if (control[bindingKey] === true) return;
-            control[bindingKey] = true;
-            control.addEventListener(control instanceof Element && control.dataset.selectorPillGroup === 'true' ? 'click' : eventName, syncAssignment);
-        };
         bindText('#kit-details-display_name', 'display_name');
         bindSelect('#kit-details-participant_key', 'participant_key');
         bindSelect('#kit-details-stage_kind', 'stage_kind');
@@ -2539,16 +2548,6 @@ function renderProtocolWorkspace(container) {
             button.__pendingStageBound = true;
             button.addEventListener('click', () => _commitPendingStageField(null, 'selector_mode', button.dataset.value || ''));
         });
-        bindAssignmentControl('[aria-label="Required skill"]');
-        bindAssignmentControl('[aria-label="Needed skill"]', 'input');
-        bindAssignmentControl('[aria-label="Needed skill"]', 'change');
-        bindAssignmentControl('[aria-label="Pin matching agent (optional)"]');
-        bindAssignmentControl('[aria-label="Agent"]');
-        bindAssignmentControl('[aria-label="Limit to one of this agent\'s skills (optional)"]');
-        bindAssignmentControl('[aria-label="Custom selector type"]');
-        bindAssignmentControl('[aria-label="Choose runtime role tag"]');
-        bindAssignmentControl('[aria-label="Custom value"]', 'input');
-        bindAssignmentControl('[aria-label="Custom value"]', 'change');
     }
 
     function _bindStageWorkspacePanelControls(root) {
@@ -2687,7 +2686,20 @@ function renderProtocolWorkspace(container) {
     }
 
     function _confirmStageInsert() {
+        const committedSelectorBeforeSync = {
+            kind: String(pendingStage.selector_kind || ''),
+            value: String(pendingStage.selector_value || ''),
+            preferredAgentId: String(pendingStage.selector_preferred_agent_id || ''),
+        };
         _syncPendingStageFromMountedEditor();
+        if (
+            committedSelectorBeforeSync.preferredAgentId
+            && String(pendingStage.selector_kind || '') === committedSelectorBeforeSync.kind
+            && String(pendingStage.selector_value || '') === committedSelectorBeforeSync.value
+            && !String(pendingStage.selector_preferred_agent_id || '').trim()
+        ) {
+            pendingStage.selector_preferred_agent_id = committedSelectorBeforeSync.preferredAgentId;
+        }
         const displayName = String(pendingStage.display_name || '').trim();
         if (!displayName) {
             UI.notify('Give this step a name before adding it to the workflow.', 'warning');
@@ -4490,11 +4502,10 @@ function renderProtocolWorkspace(container) {
                         text: 'Open the workflow map only when you want route context or a spatial review of the whole flow.',
                     },
                 ],
-                note: 'For assistant-building flows, open the skills catalog to publish or install a skill first, then come back here and assign steps by skill.',
+                note: 'Use the Assignment panel on each step to choose an existing skill, pin a specific agent, or mark a new skill needed without leaving the workflow.',
                 actions: [
                     { label: Kit.dict.label('protocol.stages.add'), onClick: () => _startStageInsert() },
                     { label: 'Define shared files', tone: '', onClick: () => _openArtifactCatalog() },
-                    { label: 'Open skills catalog', tone: '', onClick: () => Router.navigate('/ui/skills') },
                     ...(protocolTemplates.length
                         ? [{ label: Kit.dict.label('protocol.catalog.template'), tone: '', onClick: _openTemplateChooser }]
                         : []),
@@ -6185,6 +6196,9 @@ function renderProtocolWorkspace(container) {
         const workspace = document.createElement('div');
         workspace.className = 'kit-stage-editor-grid kit-stage-workspace-panel';
         workspace.dataset.panel = String(activePanelKey || 'basics');
+        if (createAction) {
+            workspace.dataset.pendingStageEditor = 'true';
+        }
         if (stageWorkspaceAnchorKey) {
             workspace.dataset.stageWorkspaceAnchor = stageWorkspaceAnchorKey;
         }
@@ -6672,12 +6686,18 @@ function renderProtocolRuns(container) {
     let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let activeRunDetailSection = '';
     let activeRunStageExecutionId = '';
+    let activeRunStageFollowsCurrent = true;
     let activeRunArtifactStageExecutionId = '';
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
     let runPaginator = null;
     let runRefreshTimer = 0;
     let runsRouteDisposed = false;
+
+    function _resetRunStageEvidenceSelection() {
+        activeRunStageExecutionId = '';
+        activeRunStageFollowsCurrent = true;
+    }
 
     const runPaginationEl = document.createElement('div');
     runPaginationEl.className = 'pagination-shell';
@@ -6716,7 +6736,7 @@ function renderProtocolRuns(container) {
             currentIssues = [];
             lastRunEvent = null;
             activeRunDetailSection = '';
-            activeRunStageExecutionId = '';
+            _resetRunStageEvidenceSelection();
             activeRunArtifactStageExecutionId = '';
             runDetailLoading = false;
             runDetailRequestToken += 1;
@@ -6778,7 +6798,7 @@ function renderProtocolRuns(container) {
         currentIssues = [];
         lastRunEvent = null;
         activeRunDetailSection = '';
-        activeRunStageExecutionId = '';
+        _resetRunStageEvidenceSelection();
         activeRunArtifactStageExecutionId = '';
         if (normalizedRunId && normalizedRunId !== String(currentRunId || '')) {
             currentRunId = normalizedRunId;
@@ -7331,7 +7351,7 @@ function renderProtocolRuns(container) {
                 currentIssues = [];
                 lastRunEvent = null;
                 activeRunDetailSection = '';
-                activeRunStageExecutionId = '';
+                _resetRunStageEvidenceSelection();
                 activeRunArtifactStageExecutionId = '';
                 runDetailLoading = false;
                 runDetailRequestToken += 1;
@@ -7366,7 +7386,7 @@ function renderProtocolRuns(container) {
         const detailPanel = document.createElement('div');
         detailPanel.className = 'run-expansion-panel';
 
-        if (runDetailLoading && currentRunId) {
+        if ((runDetailLoading || !currentRun) && currentRunId) {
             detailPanel.appendChild(UI.renderEmptyState('Loading run detail…', true));
             return detailPanel;
         }
@@ -7407,16 +7427,26 @@ function renderProtocolRuns(container) {
         const stageValueForStageKey = (stageKey) => {
             const normalizedStageKey = String(stageKey || '').trim();
             if (!normalizedStageKey) return '';
-            const index = stageRows.findIndex((item) => String(item.stage_key || '') === normalizedStageKey);
+            let index = -1;
+            stageRows.forEach((item, itemIndex) => {
+                if (String(item.stage_key || '') === normalizedStageKey) {
+                    index = itemIndex;
+                }
+            });
             return index >= 0 ? stageValueFor(stageRows[index], index) : normalizedStageKey;
         };
         const selectRunStageEvidence = (stageInfo = {}) => {
             activeRunDetailSection = 'stages';
-            activeRunStageExecutionId = String(
+            const nextStageValue = String(
                 stageInfo.executionId
                 || stageValueForStageKey(stageInfo.stageKey)
                 || '',
             );
+            activeRunStageExecutionId = nextStageValue;
+            const currentStage = currentRunStageExecution();
+            const currentStageIndex = currentStage ? Math.max(stageRows.indexOf(currentStage), 0) : -1;
+            const currentStageValue = currentStage ? stageValueFor(currentStage, currentStageIndex) : '';
+            activeRunStageFollowsCurrent = Boolean(nextStageValue && currentStageValue && nextStageValue === currentStageValue);
             UI.clearMemoizedRender(contentEl);
             renderRunsRoute();
         };
@@ -8027,6 +8057,7 @@ function renderProtocolRuns(container) {
                     badgeText: currentStage.decision || currentStage.status || '',
                     onClick: () => {
                         activeRunDetailSection = 'stages';
+                        activeRunStageFollowsCurrent = true;
                         activeRunStageExecutionId = String(
                             currentStage.protocol_stage_execution_id
                             || currentStage.stage_key
@@ -8064,8 +8095,12 @@ function renderProtocolRuns(container) {
             const preferredStage = currentRunStageExecution();
             const currentStageIndex = Math.max(stageRows.indexOf(preferredStage), 0);
             const currentStage = stageRows[currentStageIndex] || stageRows[0];
-            if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
-                activeRunStageExecutionId = stageValueFor(currentStage, currentStageIndex);
+            const currentStageValue = currentStage ? stageValueFor(currentStage, currentStageIndex) : '';
+            if (activeRunStageFollowsCurrent && currentStageValue) {
+                activeRunStageExecutionId = currentStageValue;
+            } else if (!stageValues.has(String(activeRunStageExecutionId || ''))) {
+                activeRunStageExecutionId = currentStageValue || stageValueFor(stageRows[0], 0);
+                activeRunStageFollowsCurrent = true;
             }
             const stageList = document.createElement('div');
             stageList.className = 'run-stage-timeline-list';
@@ -8084,6 +8119,7 @@ function renderProtocolRuns(container) {
                 button.addEventListener('click', () => {
                     activeRunDetailSection = 'stages';
                     activeRunStageExecutionId = value;
+                    activeRunStageFollowsCurrent = value === currentStageValue;
                     UI.clearMemoizedRender(contentEl);
                     renderRunsRoute();
                 });
@@ -8201,6 +8237,7 @@ function renderProtocolRuns(container) {
             includeGenerated,
             activeRunDetailSection,
             activeRunStageExecutionId,
+            activeRunStageFollowsCurrent,
             activeRunArtifactStageExecutionId,
         }, () => {
             const workbench = document.createElement('div');
@@ -8289,6 +8326,9 @@ function renderProtocolRuns(container) {
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocol runs…', true)]);
         try {
+            if (currentRunId) {
+                runDetailLoading = true;
+            }
             await Promise.all([loadRuns(), loadIssues({ rerender: false })]);
             if (currentRunId) {
                 await loadRunDetail();

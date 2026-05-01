@@ -21,6 +21,7 @@ from .models import (
     ProtocolDefinitionRecord,
     ProtocolRunInputFieldRecord,
     ProtocolRunLaunchFormRecord,
+    ProtocolRunRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
     ProtocolRunMutationRecord,
@@ -115,6 +116,27 @@ class ProtocolService:
 
     async def get_run_status(self, run_id: str) -> ProtocolRunDetailRecord:
         return await self._observer.get_run(run_id)
+
+    async def list_runs(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+        protocol_id: str = "",
+        entry_agent_id: str = "",
+        root_conversation_id: str = "",
+        origin_channel: str = "",
+    ) -> list[ProtocolRunRecord]:
+        return await self._observer.list_runs(
+            cursor=cursor,
+            limit=limit,
+            status=status,
+            protocol_id=protocol_id,
+            entry_agent_id=entry_agent_id,
+            root_conversation_id=root_conversation_id,
+            origin_channel=origin_channel,
+        )
 
     async def list_run_artifacts(self, run_id: str) -> list[ProtocolArtifactRecord]:
         try:

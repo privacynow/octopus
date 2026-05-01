@@ -296,6 +296,8 @@ def test_protocol_stage_prompt_limits_artifact_work_to_stage_outputs():
 
     assert "do not create or update protocol artifacts for this stage" in prompt
     assert "update the required artifacts" not in prompt
+    assert "Run-level context may describe the desired outcome of the full workflow" in prompt
+    assert "Do not create, overwrite, or pre-fill artifacts assigned to later stages." in prompt
 
 
 def test_protocol_review_prompt_mentions_assigned_output_artifacts():
@@ -329,9 +331,9 @@ def test_protocol_review_prompt_mentions_assigned_output_artifacts():
         artifacts=[],
     )
 
-    assert "Artifacts for this stage:" in prompt
+    assert "Output artifacts for this stage (write scope):" in prompt
     assert "- review_report: protocol/review.md" in prompt
-    assert "Complete the review, update the assigned output artifacts in the workspace" in prompt
+    assert "Complete the review, update only the assigned output artifacts in the workspace" in prompt
 
 
 @pytest.mark.asyncio
@@ -1730,11 +1732,11 @@ def test_registry_store_archive_protocol_marks_definition_archived(postgres_regi
     assert archived.protocol.lifecycle_state == "archived"
 
 
-def test_registry_store_protocol_export_requires_operator_or_auditor_role(postgres_registry_truncated: str) -> None:
+def test_registry_store_protocol_export_requires_operator_auditor_or_agent_role(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     _enroll, _published, created, _detail = running_protocol_run(store)
 
-    with pytest.raises(PermissionError, match="operator or auditor access"):
+    with pytest.raises(PermissionError, match="operator, auditor, or agent access"):
         store.export_protocol_run(
             created.run.protocol_run_id,
             access=ProtocolAccessContextRecord(
@@ -1756,6 +1758,16 @@ def test_registry_store_protocol_export_requires_operator_or_auditor_role(postgr
     assert exported.definition_document.slug == "mini-protocol"
     assert [artifact.artifact_key for artifact in exported.artifacts] == ["plan"]
     assert exported.artifacts[0].verification_state == "declared"
+
+    agent_exported = store.export_protocol_run(
+        created.run.protocol_run_id,
+        access=ProtocolAccessContextRecord(
+            actor_ref="agent:planner",
+            org_id="local",
+            roles=["agent"],
+        ),
+    )
+    assert agent_exported.run.protocol_run_id == created.run.protocol_run_id
 
 
 def test_registry_store_protocol_text_routes_round_trip_json_yaml_and_diff(postgres_registry_truncated: str) -> None:

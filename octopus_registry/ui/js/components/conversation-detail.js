@@ -2253,8 +2253,8 @@ function renderConversationDetail(container, params) {
         return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');
     }
 
-    function visibleTimelineEvents(events) {
-        if (activeView === 'activity') return events;
+    function visibleTimelineEvents(events, options = {}) {
+        if (activeView === 'activity') return compactActivityEvents(events, options);
         if (activeView === 'conversation') {
             return events.filter(shouldRenderConversationEvent);
         }
@@ -2271,10 +2271,67 @@ function renderConversationDetail(container, params) {
         return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
     }
 
+    function isCompactTaskStatusEvent(event) {
+        if (String(event?.kind || '') !== 'task.status') return false;
+        const metadata = event?.metadata || {};
+        const status = String(metadata.status || '').trim().toLowerCase();
+        return ['queued', 'submitted', 'leased', 'running'].includes(status);
+    }
+
+    function taskStatusEventTaskId(event) {
+        return String(event?.metadata?.routed_task_id || event?.metadata?.task_id || '').trim();
+    }
+
+    function taskStatusCompactKey(event) {
+        const taskId = taskStatusEventTaskId(event);
+        if (taskId) return taskId;
+        return `status:${String(event?.metadata?.status || '')}`;
+    }
+
+    function compactActivityEvents(events = [], options = {}) {
+        const rows = Array.isArray(events) ? events : [];
+        const terminalTaskIds = new Set(
+            rows
+                .filter(isTerminalTaskEvent)
+                .map(taskStatusEventTaskId)
+                .filter(Boolean),
+        );
+        if (options.suppressTaskIds && typeof options.suppressTaskIds.forEach === 'function') {
+            options.suppressTaskIds.forEach((taskId) => {
+                if (taskId) terminalTaskIds.add(String(taskId));
+            });
+        }
+        const latestStatusByTask = new Map();
+        const compacted = [];
+        rows.forEach((event) => {
+            if (isCompactTaskStatusEvent(event)) {
+                const taskId = taskStatusEventTaskId(event);
+                if (!taskId || !terminalTaskIds.has(taskId)) {
+                    latestStatusByTask.set(taskStatusCompactKey(event), event);
+                }
+                return;
+            }
+            if (isTerminalTaskEvent(event)) {
+                const taskId = taskStatusEventTaskId(event);
+                if (taskId) {
+                    latestStatusByTask.delete(taskId);
+                }
+            }
+            compacted.push(event);
+        });
+        latestStatusByTask.forEach((event) => compacted.push(event));
+        compacted.sort((left, right) => {
+            const leftSeq = Number(left?.seq || 0);
+            const rightSeq = Number(right?.seq || 0);
+            if (leftSeq !== rightSeq) return leftSeq - rightSeq;
+            return String(left?.created_at || '').localeCompare(String(right?.created_at || ''));
+        });
+        return compacted;
+    }
+
     function eventShouldOpenByDefault(event) {
         const kind = String(event?.kind || '');
         if (kind === 'approval.requested' || kind === 'error') return true;
-        if (isTerminalTaskEvent(event)) return Boolean(String(event?.content || '').trim());
         return false;
     }
 
@@ -2290,7 +2347,7 @@ function renderConversationDetail(container, params) {
                 expandedEventIds.add(key);
             }
             if (isTerminalTaskEvent(event) && String(event?.content || '').trim()) {
-                const taskId = String(event?.metadata?.routed_task_id || '').trim();
+                const taskId = taskStatusEventTaskId(event);
                 if (taskId) latestTerminalByTask.set(taskId, key);
             }
         });
@@ -2309,9 +2366,48 @@ function renderConversationDetail(container, params) {
     }
 
     function renderEventElement(event, options = {}) {
-        return _createConversationEventElement(event, convoId, relatedTasks, {
+        const element = _createConversationEventElement(event, convoId, relatedTasks, {
             view: activeView,
             ...options,
+        });
+        if (activeView === 'activity' && isCompactTaskStatusEvent(event)) {
+            element.dataset.compactTaskStatusKey = taskStatusCompactKey(event);
+        }
+        if (activeView === 'activity' && isTerminalTaskEvent(event)) {
+            const taskId = taskStatusEventTaskId(event);
+            if (taskId) element.dataset.terminalTaskStatusKey = taskId;
+        }
+        return element;
+    }
+
+    function removeRenderedCompactTaskStatus(event) {
+        if (activeView !== 'activity') return;
+        const key = taskStatusCompactKey(event);
+        Array.from(eventList.children).forEach((child) => {
+            if (child?.dataset?.compactTaskStatusKey === key) {
+                child.remove();
+            }
+        });
+    }
+
+    function renderedTerminalTaskIds() {
+        const ids = new Set();
+        Array.from(eventList.children).forEach((child) => {
+            const taskId = child?.dataset?.terminalTaskStatusKey;
+            if (taskId) ids.add(taskId);
+        });
+        return ids;
+    }
+
+    function pruneRenderedCompactTaskStatusForTerminalTasks() {
+        if (activeView !== 'activity') return;
+        const terminalIds = renderedTerminalTaskIds();
+        if (!terminalIds.size) return;
+        Array.from(eventList.children).forEach((child) => {
+            const taskId = child?.dataset?.compactTaskStatusKey;
+            if (taskId && terminalIds.has(taskId)) {
+                child.remove();
+            }
         });
     }
 
@@ -2631,6 +2727,10 @@ function renderConversationDetail(container, params) {
     }
 
     async function loadRelatedTasks({ soft = false, silent = false } = {}) {
+        if (activeView === 'tasks' && !silent && !soft && !tasksLoaded) {
+            UI.clearMemoizedRender(taskBoard);
+            UI.reconcileChildren(taskBoard, [UI.renderEmptyState('Loading linked work…', true)]);
+        }
         try {
             const conversationData = meta || await API.getConversation(convoId);
             const taskId = API.routedTaskIdFromConversation(conversationData);
@@ -2761,6 +2861,7 @@ function renderConversationDetail(container, params) {
             } else {
                 const expansionState = activityExpansionState(visibleEvents);
                 UI.reconcileChildren(eventList, visibleEvents.map((event) => renderEventElement(event, expansionState)));
+                pruneRenderedCompactTaskStatusForTerminalTasks();
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
@@ -2792,7 +2893,9 @@ function renderConversationDetail(container, params) {
                 return;
             }
             const events = result.events || [];
-            const visibleEvents = visibleTimelineEvents(events);
+            const visibleEvents = visibleTimelineEvents(events, {
+                suppressTaskIds: renderedTerminalTaskIds(),
+            });
             if (!events.length) {
                 hasMoreBefore = false;
                 updateHistoryStatus();
@@ -2806,6 +2909,7 @@ function renderConversationDetail(container, params) {
                     fragment.appendChild(renderEventElement(event));
                 });
                 eventList.prepend(fragment);
+                pruneRenderedCompactTaskStatusForTerminalTasks();
             }
             hasMoreBefore = !!result.has_more_before;
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || beforeSeq);
@@ -2891,9 +2995,15 @@ function renderConversationDetail(container, params) {
         const shouldStick = isNearBottom();
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
+        if (activeView === 'activity') {
+            if (isCompactTaskStatusEvent(event) || isTerminalTaskEvent(event)) {
+                removeRenderedCompactTaskStatus(event);
+            }
+        }
         eventList.appendChild(renderEventElement(event, {
             defaultExpanded: activeView === 'activity' && eventShouldOpenByDefault(event),
         }));
+        pruneRenderedCompactTaskStatusForTerminalTasks();
         syncConversationDensityForCurrentView();
         if (seq) latestSeq = Math.max(latestSeq, seq);
         if (

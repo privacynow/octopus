@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 from app.agents.state import load_runtime_registry_connection_state
 from app.channels.telegram.state import TelegramRuntime
@@ -21,6 +23,19 @@ log = logging.getLogger(__name__)
 
 PROTOCOL_NOTIFICATION_INTERVAL_SECONDS = 20.0
 PROTOCOL_NOTIFICATION_DEBOUNCE_SECONDS = 60.0
+_START_OPTION_ALIASES = {
+    "goal": "problem_statement",
+    "problem": "problem_statement",
+    "workspace": "workspace_ref",
+    "workspace-ref": "workspace_ref",
+    "context": "context",
+    "constraints": "constraints",
+    "constraint": "constraints",
+    "expected": "expected_outputs",
+    "expected-output": "expected_outputs",
+    "expected-outputs": "expected_outputs",
+    "outputs": "expected_outputs",
+}
 
 
 def registry_client_for_runtime(runtime: TelegramRuntime) -> tuple[RegistryClient, str, str] | None:
@@ -39,11 +54,34 @@ def registry_client_for_runtime(runtime: TelegramRuntime) -> tuple[RegistryClien
     return None
 
 
-def protocol_run_url(runtime: TelegramRuntime, run_id: str, *, registry_url: str = "") -> str:
+def _human_registry_base_url(raw_base: str) -> str:
+    explicit = (
+        os.environ.get("BOT_REGISTRY_PUBLIC_URL")
+        or os.environ.get("OCTOPUS_REGISTRY_PUBLIC_URL")
+        or os.environ.get("REGISTRY_PUBLIC_URL")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit.rstrip("/")
+    base = str(raw_base or "").strip()
+    parsed = urlparse(base)
+    if (parsed.hostname or "").strip().lower() != "registry":
+        return base.rstrip("/")
+    port = parsed.port or 8787
+    netloc = f"127.0.0.1:{port}"
+    return urlunparse((parsed.scheme or "http", netloc, "", "", "", "")).rstrip("/")
+
+
+def _configured_registry_url(runtime: TelegramRuntime, registry_url: str = "") -> str:
     base = str(registry_url or "").strip()
     if not base:
         registry = next(iter(runtime.config.agent_registries), None)
         base = str(getattr(registry, "url", "") or "").strip() if registry is not None else ""
+    return _human_registry_base_url(base) if base else ""
+
+
+def protocol_run_url(runtime: TelegramRuntime, run_id: str, *, registry_url: str = "") -> str:
+    base = _configured_registry_url(runtime, registry_url)
     if not base:
         return ""
     return f"{base.rstrip('/')}/ui/runs?run_id={quote(str(run_id or '').strip())}"
@@ -55,18 +93,213 @@ def protocol_artifact_url(
     artifact_key: str,
     *,
     registry_url: str = "",
+    download: bool = False,
+    browse: bool = False,
+    preview: bool = False,
+    member_path: str = "",
 ) -> str:
-    base = str(registry_url or "").strip()
-    if not base:
-        registry = next(iter(runtime.config.agent_registries), None)
-        base = str(getattr(registry, "url", "") or "").strip() if registry is not None else ""
+    base = _configured_registry_url(runtime, registry_url)
     if not base:
         return ""
     run_token = quote(str(run_id or "").strip())
     artifact_token = quote(str(artifact_key or "").strip())
     if not run_token or not artifact_token:
         return ""
-    return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content"
+    query_items = {
+        key: value
+        for key, value in (
+            ("download", "1" if download else ""),
+            ("browse", "1" if browse else ""),
+            ("preview", "1" if preview else ""),
+            ("path", str(member_path or "").strip()),
+        )
+        if value
+    }
+    query = urlencode(query_items)
+    suffix = f"?{query}" if query else ""
+    return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content{suffix}"
+
+
+def protocol_run_short_id(run_id: str) -> str:
+    token = str(run_id or "").strip()
+    return token[:8] if len(token) > 8 else token
+
+
+def protocol_run_human_label(run) -> str:
+    protocol = str(
+        getattr(run, "protocol_display_name", "")
+        or getattr(run, "protocol_slug", "")
+        or getattr(run, "protocol_id", "")
+        or "Protocol"
+    ).strip()
+    short_id = protocol_run_short_id(str(getattr(run, "protocol_run_id", "") or ""))
+    return f"{protocol} ({short_id})" if short_id else protocol
+
+
+def protocol_artifact_human_label(artifact) -> str:
+    key = str(getattr(artifact, "artifact_key", "") or "").strip()
+    path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
+    name = Path(path).name.strip() if path else ""
+    return name or key or "Artifact"
+
+
+def protocol_artifact_is_package(artifact) -> bool:
+    path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
+    key = str(getattr(artifact, "artifact_key", "") or "").strip().lower()
+    basename = Path(path.rstrip("/")).name if path else ""
+    lower_hint = " ".join([path, key, basename]).lower()
+    if any(token in lower_hint for token in ("package", "bundle", "folder", "directory")):
+        return True
+    return bool(path) and "." not in basename
+
+
+def protocol_artifact_previewable(artifact) -> bool:
+    path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
+    return Path(path).suffix.lower() in {
+        ".md",
+        ".markdown",
+        ".txt",
+        ".log",
+        ".json",
+        ".jsonl",
+        ".yaml",
+        ".yml",
+        ".csv",
+        ".tsv",
+        ".py",
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".sh",
+        ".sql",
+        ".rb",
+        ".go",
+        ".java",
+        ".rs",
+        ".php",
+    }
+
+
+async def recent_protocol_runs(protocol_service, *, limit: int = 10):
+    runs = await protocol_service.list_runs(limit=limit)
+    return list(runs or [])
+
+
+async def resolve_protocol_run_ref(protocol_service, run_ref: str, *, limit: int = 10):
+    token = str(run_ref or "").strip()
+    if not token:
+        raise KeyError("run_ref_required")
+    lowered = token.lower()
+    if lowered not in {"latest", "last", "recent"} and not token.isdigit():
+        try:
+            return await protocol_service.get_run_status(token)
+        except RegistryClientError as exc:
+            if exc.error_code not in {"PROTOCOL_RUN_NOT_FOUND", "PROTOCOL_NOT_VISIBLE"}:
+                raise
+    runs = await recent_protocol_runs(protocol_service, limit=limit)
+    if lowered in {"latest", "last", "recent"}:
+        if not runs:
+            raise KeyError("no_recent_runs")
+        return await protocol_service.get_run_status(runs[0].protocol_run_id)
+    if token.isdigit():
+        index = int(token) - 1
+        if index < 0 or index >= len(runs):
+            raise KeyError("run_index_out_of_range")
+        return await protocol_service.get_run_status(runs[index].protocol_run_id)
+    matches = [
+        item
+        for item in runs
+        if str(item.protocol_run_id or "").startswith(token)
+        or token.lower() in {
+            str(getattr(item, "protocol_id", "") or "").strip().lower(),
+            str(getattr(item, "protocol_slug", "") or "").strip().lower(),
+        }
+    ]
+    if len(matches) == 1:
+        return await protocol_service.get_run_status(matches[0].protocol_run_id)
+    if not matches:
+        return await protocol_service.get_run_status(token)
+    raise KeyError("ambiguous_run_ref")
+
+
+def resolve_protocol_artifact_ref(detail, artifact_ref: str):
+    token = str(artifact_ref or "").strip()
+    if not token:
+        raise KeyError("artifact_ref_required")
+    artifacts = list(getattr(detail, "artifacts", None) or [])
+    if token.isdigit():
+        index = int(token) - 1
+        if index < 0 or index >= len(artifacts):
+            raise KeyError("artifact_index_out_of_range")
+        return artifacts[index]
+    lowered = token.lower()
+    matches = [
+        item for item in artifacts
+        if str(getattr(item, "artifact_key", "") or "").strip() == token
+        or str(getattr(item, "artifact_key", "") or "").strip().lower().startswith(lowered)
+        or protocol_artifact_human_label(item).lower().startswith(lowered)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise KeyError("artifact_not_found")
+    raise KeyError("ambiguous_artifact_ref")
+
+
+def parse_protocol_start_args(args: Iterable[str]) -> tuple[str, dict[str, object]]:
+    """Parse `/protocol start` arguments into the shared launch input shape.
+
+    Supported form:
+
+    `/protocol start <slug> <goal> --context <text> --constraints <text>
+    --expected-outputs <text> --workspace <ref>`
+
+    Text for each option consumes words until the next `--option` marker. The
+    simple historical form still works because all tokens after the slug become
+    the problem statement when no markers are present.
+    """
+
+    parts = [str(item or "").strip() for item in args if str(item or "").strip()]
+    if not parts:
+        return "", {}
+    slug = parts[0]
+    values: dict[str, list[str]] = {"problem_statement": []}
+    active_key = "problem_statement"
+    for token in parts[1:]:
+        if token.startswith("--") and len(token) > 2:
+            raw_name, sep, inline_value = token[2:].partition("=")
+            next_key = _START_OPTION_ALIASES.get(raw_name.strip().lower())
+            if next_key:
+                active_key = next_key
+                values.setdefault(active_key, [])
+                if sep and inline_value.strip():
+                    values[active_key].append(inline_value.strip())
+                continue
+        values.setdefault(active_key, []).append(token)
+    inputs = {
+        key: " ".join(value_parts).strip()
+        for key, value_parts in values.items()
+        if " ".join(value_parts).strip()
+    }
+    return slug, inputs
+
+
+def protocol_artifact_download_filename(artifact) -> str:
+    path = str(
+        getattr(artifact, "workspace_path", "")
+        or getattr(artifact, "location", "")
+        or ""
+    ).strip()
+    key = str(getattr(artifact, "artifact_key", "") or "artifact").strip()
+    name = Path(path).name.strip() if path else ""
+    filename = name or key or "artifact"
+    lower_hint = " ".join([key, path, filename]).lower()
+    if "." not in Path(filename).name and any(token in lower_hint for token in ("package", "bundle", "directory", "folder")):
+        return f"{filename}.zip"
+    return filename
 
 
 def protocol_action_requires_confirmation(action: str) -> bool:

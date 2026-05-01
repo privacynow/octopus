@@ -14,8 +14,10 @@ def test_protocol_docs_link_operator_author_and_openapi_artifacts() -> None:
     assert "[docs/author-protocol-guide.md](docs/author-protocol-guide.md)" in readme
     assert "[docs/registry-openapi.json](docs/registry-openapi.json)" in readme
 
-    assert "/protocol watch <run_id>" in telegram_guide
-    assert "/protocol unwatch <run_id>" in telegram_guide
+    assert "/protocol recent" in telegram_guide
+    assert "/protocol watch latest|<number|short_id>" in telegram_guide
+    assert "/protocol unwatch latest|<number|short_id>" in telegram_guide
+    assert "/protocol preview <run> <artifact_number|artifact_key>" in telegram_guide
     assert "[operator-protocol-guide.md](operator-protocol-guide.md)" in telegram_guide
 
     assert "[operator-protocol-guide.md](operator-protocol-guide.md)" in registry_guide

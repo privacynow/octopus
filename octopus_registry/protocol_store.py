@@ -130,7 +130,7 @@ class ProtocolPostgresAdapter:
 
     @staticmethod
     def _access_primary_role(access: ProtocolAccessContextRecord | None) -> str:
-        for role in ("admin", "publisher", "author", "auditor", "operator"):
+        for role in ("admin", "publisher", "author", "auditor", "operator", "agent"):
             if access is not None and access.has_role(role):
                 return role
         return "service"
@@ -2818,8 +2818,8 @@ class ProtocolPostgresAdapter:
             return detail.transitions
 
     def export_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunExportRecord:
-        if not any(self._access_has_role(access, role) for role in ("operator", "auditor", "admin")):
-            raise PermissionError("Protocol export requires operator or auditor access.")
+        if not any(self._access_has_role(access, role) for role in ("operator", "auditor", "admin", "agent")):
+            raise PermissionError("Protocol export requires operator, auditor, or agent access.")
         with self._connect() as conn:
             detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
             if detail is None:

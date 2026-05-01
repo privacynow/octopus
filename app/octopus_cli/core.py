@@ -24,6 +24,7 @@ from app.provider_health import health_detail
 from app.octopus_cli.envfiles import (
     list_registry_connection_records,
     parse_env_file,
+    remove_env_value,
     upsert_env_value,
     write_env_file,
     write_registry_connection_records,
@@ -1307,6 +1308,10 @@ class OctopusManager:
         env_file = self.bot_env_file(slug)
         upsert_env_value(env_file, "BOT_AGENT_MODE", mode)
         write_registry_connection_records(env_file, records)
+        if any(record.url.rstrip("/") == LOCAL_REGISTRY_INTERNAL_URL for record in records):
+            upsert_env_value(env_file, "BOT_REGISTRY_PUBLIC_URL", self.local_registry_public_base_url())
+        else:
+            remove_env_value(env_file, "BOT_REGISTRY_PUBLIC_URL")
 
     def _unique_registry_id(self, records: list[RegistryConnection], base: str) -> str:
         candidate = normalize_slug(base, fallback="registry") or "registry"

@@ -532,6 +532,24 @@ window.UI = (() => {
         closeBtn.addEventListener('click', () => view.close());
     }
 
+    function showHtmlDialog(title, html, { maxWidth = '980px' } = {}) {
+        const frame = document.createElement('iframe');
+        frame.className = 'artifact-preview-frame';
+        frame.setAttribute('title', title);
+        frame.srcdoc = String(html || '');
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'btn';
+        closeBtn.textContent = 'Close';
+
+        const view = showDialog(title, frame, {
+            actions: [closeBtn],
+            maxWidth,
+        });
+        closeBtn.addEventListener('click', () => view.close());
+    }
+
     function _artifactPreviewErrorMessage(response, text) {
         let message = text || `HTTP ${response.status}`;
         try {
@@ -566,11 +584,13 @@ window.UI = (() => {
                 if (!response.ok) {
                     throw new Error(_artifactPreviewErrorMessage(response, text));
                 }
-                showTextDialog(
-                    target.dataset.artifactPreviewTitle || 'Artifact preview',
-                    text,
-                    { maxWidth: '920px' },
-                );
+                const title = target.dataset.artifactPreviewTitle || 'Artifact preview';
+                const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+                if (contentType.includes('text/html')) {
+                    showHtmlDialog(title, text, { maxWidth: '980px' });
+                } else {
+                    showTextDialog(title, text, { maxWidth: '920px' });
+                }
             } catch (err) {
                 reportError('Failed to preview the artifact', err, {
                     context: 'Artifact preview failed',
@@ -991,6 +1011,9 @@ window.UI = (() => {
         const browsable = available && isLikelyDirectoryArtifactPath(artifactPath || resolvedPath);
         const actionRow = createArtifactActionRow({
             previewable: available && taskArtifactPreviewable(artifact, expectedOutput),
+            previewHref: available && taskArtifactPreviewable(artifact, expectedOutput)
+                ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey, { preview: true })
+                : '',
             previewTitle: `${artifactKey || 'artifact'} preview`,
             openHref: available ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey) : '',
             browseHref: browsable ? API.taskArtifactContentUrl(task.routed_task_id, artifactKey, { browse: true }) : '',

@@ -676,7 +676,7 @@ def protocol_participant_session_key(run_id: str, participant_key: str) -> str:
 
 def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) -> str:
     artifact_instruction = (
-        "update the assigned output artifacts in the workspace"
+        "update only the assigned output artifacts in the workspace"
         if stage.outputs
         else "do not create or update protocol artifacts for this stage"
     )
@@ -742,9 +742,11 @@ def render_protocol_stage_prompt(
     previous_feedback: str = "",
 ) -> str:
     participant = document.participant(stage.participant_key)
-    artifact_lines: list[str] = []
     artifact_by_key = {item.artifact_key: item for item in artifacts}
-    for artifact_key in dict.fromkeys([*stage.inputs, *stage.outputs]):
+    input_artifact_lines: list[str] = []
+    output_artifact_lines: list[str] = []
+
+    def artifact_prompt_line(artifact_key: str) -> str:
         definition = document.artifact(artifact_key)
         artifact = artifact_by_key.get(artifact_key)
         location = str(
@@ -758,7 +760,13 @@ def render_protocol_stage_prompt(
             or ""
         ).strip()
         detail = f"{artifact_key}: {location}" if location else artifact_key
-        artifact_lines.append(f"- {detail}")
+        return f"- {detail}"
+
+    for artifact_key in dict.fromkeys(stage.inputs):
+        input_artifact_lines.append(artifact_prompt_line(artifact_key))
+    for artifact_key in dict.fromkeys(stage.outputs):
+        output_artifact_lines.append(artifact_prompt_line(artifact_key))
+
     lines = [
         f"Protocol: {document.display_name or document.slug}",
         f"Run id: {run.protocol_run_id}",
@@ -771,8 +779,16 @@ def render_protocol_stage_prompt(
     rendered_constraints = _render_run_constraints(run.constraints_json)
     if rendered_constraints:
         lines.append("Run context and constraints:\n" + rendered_constraints)
-    if artifact_lines:
-        lines.append("Artifacts for this stage:\n" + "\n".join(artifact_lines))
+    if input_artifact_lines:
+        lines.append("Input artifacts for this stage (read-only context):\n" + "\n".join(input_artifact_lines))
+    if output_artifact_lines:
+        lines.append("Output artifacts for this stage (write scope):\n" + "\n".join(output_artifact_lines))
+    lines.append(
+        "Stage output scope:\n"
+        "Run-level context may describe the desired outcome of the full workflow. "
+        "For this stage, create or update only the output artifacts listed above. "
+        "Do not create, overwrite, or pre-fill artifacts assigned to later stages."
+    )
     if participant.instructions:
         lines.append("Participant guidance:\n" + participant.instructions.strip())
     if stage.instructions:

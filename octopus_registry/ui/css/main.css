@@ -1315,6 +1315,14 @@ select {
     font-size: 0.82rem;
 }
 
+.artifact-preview-frame {
+    width: min(100%, 58rem);
+    height: min(68dvh, 44rem);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+}
+
 .detail-label {
     margin: 0.9rem 0 0.35rem;
     color: var(--text-muted);
@@ -2258,6 +2266,8 @@ select {
     background: color-mix(in srgb, var(--bg-secondary) 88%, white);
     box-shadow: var(--shadow-card);
     min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .protocol-lineage-card.is-previous-attempt {
@@ -2277,6 +2287,7 @@ select {
     display: grid;
     gap: 0.22rem;
     min-width: 0;
+    max-width: 100%;
 }
 
 .protocol-lineage-title {
@@ -2288,10 +2299,12 @@ select {
     color: var(--text-secondary);
     font-size: var(--text-sm);
     line-height: 1.45;
+    overflow-wrap: anywhere;
 }
 
 .run-evidence-panel {
     gap: var(--space-4);
+    min-width: 0;
 }
 
 .run-stage-evidence-nav.segmented-control {
@@ -2776,6 +2789,13 @@ select {
         display: inline-flex;
     }
 
+    .hamburger.active {
+        left: calc(var(--sidebar-width) - 56px);
+        top: var(--space-4);
+        background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+        box-shadow: var(--shadow-card);
+    }
+
     #content {
         margin-left: 0;
         padding: 4.4rem var(--space-4) var(--space-5);
@@ -2789,13 +2809,19 @@ select {
         overflow: hidden;
     }
 
-    #content > .content-inner.conversation-list-route-shell,
-    #content > .content-inner.protocol-runs-route-shell {
+    #content > .content-inner.conversation-list-route-shell {
         height: calc(100dvh - 4.4rem - var(--space-5));
         min-height: calc(100dvh - 4.4rem - var(--space-5));
         display: flex;
         flex-direction: column;
         overflow: hidden;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell {
+        height: auto;
+        min-height: calc(100dvh - 4.4rem - var(--space-5));
+        display: block;
+        overflow: visible;
     }
 
     .workspace-header-main,
@@ -2968,6 +2994,103 @@ select {
     }
 }
 
+@media (max-width: 820px) {
+    .route-controls,
+    .filter-bar,
+    .conversation-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .segmented-control {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+        width: 100%;
+        justify-content: stretch;
+        overflow: visible;
+        white-space: normal;
+    }
+
+    .segmented-control-btn {
+        min-width: 0;
+        width: 100%;
+        white-space: normal;
+        line-height: 1.2;
+        text-align: center;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .segmented-control[aria-label="Run triage focus"] {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: var(--space-1);
+        padding: var(--space-1);
+        border-radius: var(--radius-md);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .segmented-control[aria-label="Run triage focus"] .segmented-control-btn,
+    #content > .content-inner.protocol-runs-route-shell .filter-toggle-link {
+        border-radius: var(--radius-sm);
+        min-height: 40px;
+        padding: 0.5rem 0.62rem;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .filter-toggle-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        white-space: normal;
+        text-align: center;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card {
+        padding: var(--space-3);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .metadata-grid,
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .task-item-facts {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--space-2);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .metadata-item {
+        padding: var(--space-2) var(--space-2-5);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .list-row,
+    #content > .content-inner.protocol-runs-route-shell .run-evidence-issue-list .list-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--space-2);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .list-row-label,
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .list-row-sublabel {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .badge {
+        justify-self: start;
+        max-width: 100%;
+        white-space: normal;
+        line-height: 1.15;
+        text-align: center;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .task-action-row,
+    #content > .content-inner.protocol-runs-route-shell .artifact-action-row {
+        align-items: stretch;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .task-action-row .btn,
+    #content > .content-inner.protocol-runs-route-shell .artifact-action-row .btn {
+        border-radius: var(--radius-sm);
+        flex: 1 1 auto;
+        min-width: min(9rem, 100%);
+    }
+}
+
 @media (max-width: 560px) {
     .page-header h2,
     .workspace-header h2 {
@@ -3004,6 +3127,29 @@ select {
     .metadata-grid,
     .approval-facts {
         grid-template-columns: 1fr;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .metadata-grid,
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card .task-item-facts {
+        grid-template-columns: 1fr;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .segmented-control[aria-label="Run triage focus"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .run-stage-timeline-button {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .run-stage-timeline-button > .badge {
+        grid-column: 2 / 3;
+        justify-self: start;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .task-action-row .btn,
+    #content > .content-inner.protocol-runs-route-shell .artifact-action-row .btn {
+        min-width: min(8rem, 100%);
     }
 }
 
@@ -5286,6 +5432,8 @@ select {
     background: var(--bg-primary);
     box-shadow: none;
     overflow: visible;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .kit-runs-list-row-head {
@@ -5912,6 +6060,46 @@ select {
 @keyframes kit-run-stage-current-glow {
     0%, 100% { box-shadow: var(--focus-ring); }
     50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+}
+
+@media (max-width: 820px) {
+    .kit-runs-list-row-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-1);
+    }
+
+    .kit-runs-list-row-title,
+    .kit-runs-list-row-badge,
+    .kit-runs-list-row-subtitle {
+        width: 100%;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .kit-runs-list-row-meta-chip {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .kit-run-stage-progress,
+    .kit-run-stage-progress.is-compact {
+        grid-auto-flow: row;
+        grid-auto-columns: auto;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .kit-run-stage-progress-node,
+    .kit-run-stage-progress-group {
+        width: 100%;
+    }
+
+    .kit-run-stage-progress-label,
+    .kit-run-stage-progress-state {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
 }
 
 /* --- Kit agents widgets (Step 8) ------------------------------------- */

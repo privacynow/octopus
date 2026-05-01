@@ -497,6 +497,11 @@ dispatch.
 Lifecycle decisions are evaluated by `octopus_sdk/protocols/engine.py` and then
 applied by `octopus_registry/protocol_store.py`.
 
+Protocol stage prompts are SDK behavior. Stage instructions, run context, input
+artifacts, and output write scope are rendered by `octopus_sdk/protocols/` so
+Registry UI, Telegram, and future channels inherit the same execution contract.
+Registry routes and UI components must not create a second prompt contract.
+
 Protocol document model:
 
 | Object | Fields |
@@ -790,6 +795,11 @@ Telegram should call the same SDK workflow and registry participant interfaces
 that Registry UI-backed operations use. If a skill or guidance operation exists
 only in browser code and cannot be reached through SDK/management interfaces,
 that is an architecture gap.
+
+Protocol Telegram buttons are presentation affordances only. Button callbacks
+resolve runs and artifacts through `octopus_sdk.protocols.ProtocolService` and
+the same registry-backed ports used by slash commands; they must not introduce a
+Telegram-only protocol execution, artifact, or run-control path.
 
 ## Control Plane
 

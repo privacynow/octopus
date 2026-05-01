@@ -9308,6 +9308,16 @@
           },
           {
             "in": "query",
+            "name": "preview",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Preview",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "path",
             "required": false,
             "schema": {
@@ -11757,6 +11767,16 @@
             "schema": {
               "default": false,
               "title": "Browse",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "preview",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Preview",
               "type": "boolean"
             }
           },

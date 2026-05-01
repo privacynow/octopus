@@ -205,11 +205,14 @@ or explicitly waive the relevant blockers in `issues.md`, especially:
 - P1-2 artifact actions across all surfaces, including package default
   `index.html` surfacing and rendered text/Markdown preview.
 - P1-3 conversation, run, delegation, and artifact lineage.
+- P1-6 live run progress at scale.
+- P1-7 desktop and narrow Safari audit.
+
+Recently closed and kept as regression scenarios in `issues.md`:
+
 - P1-4 true Telegram protocol parity with a fresh Telegram-started run.
 - P1-5 Telegram human UX: avoid GUID-first flows, dense artifact walls, and raw
   URL overload.
-- P1-6 live run progress at scale.
-- P1-7 desktop and narrow Safari audit.
 
 Keep scenario-specific manufacturing instructions below. If a scenario run
 reveals a generic product problem, add or update it in `issues.md` instead of

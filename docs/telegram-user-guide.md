@@ -96,6 +96,9 @@ as the registry UI.
 ## Protocols In Telegram
 
 Telegram exposes protocol operations backed by the registry protocol service.
+Telegram runs and inspects protocols that have already been authored and
+published in the Registry UI; protocol creation, editing, and publishing remain
+Registry workflows.
 
 Current command shape:
 
@@ -121,6 +124,8 @@ Behavior:
 - `recent` lists visible protocol runs with numbers, status, current stage, and
   short ids. Follow-up commands can use `latest`, the shown number, or the
   short id instead of a full run id.
+- `latest` is local to the current chat. When another bot or chat started the
+  run, use `/protocol recent` and then the shown number or short id.
 - `start` creates a registry protocol run and starts watching it from the chat.
 - `start` uses the same shared SDK launch model as Registry UI. The simple
   historical form is still valid. Optional launch fields are parsed from
@@ -132,6 +137,8 @@ Behavior:
 - `preview` opens a rendered preview for text and Markdown artifacts when
   available, plus open/download fallbacks.
 - `export` returns a JSON run export.
+- Telegram messages show short run references for normal use. Export filenames
+  and browser URLs may still contain the full canonical run id for traceability.
 - destructive or high-impact actions may require confirmation.
 - stage and terminal notifications come from registry run state, not
   Telegram-only state.

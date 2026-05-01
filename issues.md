@@ -31,7 +31,7 @@ Verified in real Safari:
   `artifacts/manufacturing-intelligence/package`.
 - Run completed 6 / 6 stages. M2 handled package build stages and M1 handled
   charter/spec/validation/executive review stages, proving multi-agent protocol
-  handoff through the Registry path.
+  stage transfer through the Registry path.
 - Generated artifact opened in Safari from the Registry artifact route.
 - Artifact workflow verified:
   default synthetic generation, unconfirmed relationship candidates, evidence
@@ -72,7 +72,58 @@ build stage to M2, and opened the generated SPA from the run artifact action.
 Current git state at the time this section was added:
 
 - The latest deployed product code before this documentation update was commit
-  `311a57fb`.
+  `26434e4c`.
+
+## Latest Execution Update
+
+Date: 2026-04-30
+
+Product fixes now committed, pushed, pulled into `/Users/tinker/octopus`, and
+redeployed:
+
+- `e61de0b8` improved Telegram artifact links by using compact named links,
+  `latest`/numbered run references, rendered preview links for Markdown/text
+  artifacts, and package `Open app` / `Contents` / `Download` actions.
+- `b9010edb`, `0a791ec1`, `de74ae30`, `1ad8b691`, and `26434e4c` stabilized
+  the single protocol assignment editor path. Pending-stage authoring now
+  preserves no-assignment, skill-only, agent-only, skill-plus-preferred-agent,
+  and needed-new-skill states without falling back to a second implementation.
+
+Verification completed:
+
+- Targeted Playwright live authoring checks passed:
+  `blank draft uses step-first authoring`, `blank draft can capture a
+  name-only unassigned step`, and `blank draft preserves a pinned matching
+  agent on a new skill step`.
+- Registry UI contract tests passed after the assignment fixes:
+  `44 passed`.
+- Real Safari was hard-refreshed after deploy. Creating a new step from the
+  visible Protocols UI with `Existing skill -> Debugging -> M2` now persists
+  correctly: the saved row reads `Required skill · Debugging · prefer M2`, the
+  Assignment tab keeps M2 selected, and the summary says the step is pinned to
+  M2.
+- Real Safari stage navigation now behaves progressively: clicking a collapsed
+  stage focuses that stage, expands the inline work area, and scrolls the user
+  to the editable panel instead of hiding a disconnected side panel.
+- Real Safari Telegram M2 showed the improved artifact UX for the latest
+  manufacturing run: users can use `/protocol artifacts latest` and
+  `/protocol preview latest 1`, see numbered artifacts with display names, use
+  rendered preview links, and open the package through `Open app` without
+  copying a full run GUID.
+- Runtime/product customer-delivery language audit passed for product paths:
+  `rg -n "customer handoff|customer-handoff|handoff" app octopus_sdk
+  octopus_registry tests README.md docs issues.md plan_manufacturing_run.md -S`
+  found matches only in planning/docs/README/issue tracker text, not in
+  `app/`, `octopus_sdk/`, `octopus_registry/`, or tests used by the runtime.
+
+Residual verification limits:
+
+- The local Computer Use bridge lost its Safari window handle after the M2
+  Telegram check (`cgWindowNotFound`). M1 should still inherit the same
+  Telegram presenter code path, but a fresh M1 post-deploy Telegram click-test
+  remains recorded under the Telegram parity blocker.
+- A fresh Telegram-started protocol run is still not accepted until it is run
+  live from Telegram and cross-checked in Registry.
 
 Acceptance sequencing is non-negotiable:
 
@@ -127,7 +178,10 @@ Repository:
 - Working repo: `/Users/tinker/output/bots/telegram-agent-bot`
 - Deployment checkout: `/Users/tinker/octopus`
 - Current branch: `feature/protocol`
-- Latest deployed product commit before this documentation update: `311a57fb`
+- Latest deployed product commit for the manufacturing package pass:
+  `311a57fb`
+- Latest deployed product commit for the assignment/artifact UX pass:
+  `26434e4c`
 - M1 and M2 are the required working topology for customer/demo acceptance.
 - M3/Claude is optional unless Claude auth is configured. A stopped M3 with
   `claude not configured` is not a handoff blocker.
@@ -1057,7 +1111,7 @@ Confirmed behavior:
   `artifacts/offline-analytics-package` (`artifact_2`, directory/package,
   verified, 71,969 bytes, sha prefix `91fcece63558`).
 - Stage 3 completed on M1 and accepted the package: "Offline analytics package
-  validated successfully with no blocking handoff issues."
+  validated successfully with no blocking delivery issues."
 - The run page showed `completed`, `3 / 3` stages, two output artifacts, zero
   issues, and package actions `Open`, `Contents`, `Download`, and `Copy path`.
 - The package contents contained `index.html`, `README.md`,
@@ -1122,13 +1176,13 @@ Remaining issues after the latest scenario pass:
 
 | ID | Severity | Status | Issue | Evidence | Next acceptance step |
 | --- | --- | --- | --- | --- | --- |
-| P0-1 | Critical | Open | Workflow builder skill catalog breaks assignment continuity. | The builder can route authors to the generic Skills page without preserving stage assignment context. | In real Safari, create a blank protocol and verify stage-scoped skill search/select/create/return without losing draft data. |
-| P0-2 | Critical | Open | Customer-handoff language can leak into protocol/runtime/artifacts. | Planning docs intentionally use handoff language, but runtime/product paths still need a source audit. | Search runtime/UI/prompt/test paths, remove product leaks, then run a small UI-authored protocol and inspect prompts/artifacts. |
-| P1-1 | High | Open | Protocol authoring assignment matrix is not fully reverified after latest changes. | Manufacturing and analytics protocols were authored, but the generic no-skill/skill-only/agent-only/skill-plus-agent/new-skill matrix was not fully exercised. | Run the blank-protocol matrix in real Safari and fix any data-loss or navigation defects. |
-| P1-2 | High | Partially verified | Artifact actions are not consistent across every surface. | Registry run/stage artifact links and Telegram open/download now work, but broad surfaces remain unverified; Telegram did not directly expose `index.html` inside the package. | Verify preview/open/default-app/contents/download/copy path from run overview, run artifacts, stage detail, task/delegation, conversation linked work, dashboard references, and Telegram. |
+| P0-1 | Critical | Resolved | Workflow builder skill catalog breaks assignment continuity. | The Protocols editor now owns one stage-scoped assignment path. Existing-skill selection, needed-new-skill capture, agent-only, skill-only, and skill-plus-preferred-agent states are covered by targeted live browser tests; real Safari verified a new Debugging step pinned to M2 without losing draft data. | Keep the targeted authoring tests in CI and retest real Safari after future assignment editor changes. |
+| P0-2 | Critical | Resolved | Customer-handoff language can leak into protocol/runtime/artifacts. | Runtime/product path audit found no matches in `app/`, `octopus_sdk/`, `octopus_registry/`, or runtime tests. Remaining matches are limited to planning/docs/README/issue tracker language. | Re-run the audit when protocol prompt builders, launch defaults, demo prompts, or scenario docs change. |
+| P1-1 | High | Verified | Protocol authoring assignment matrix was not fully reverified after latest changes. | Targeted live authoring checks now pass for no assignment, skill-only, agent-only, skill-plus-preferred-agent, needed-new-skill, add-step, stage navigation, and draft persistence. Real Safari verified the pinned M2 creation case after deploy. | Broaden only if future protocol editor work touches routing, artifacts, or map interactions. |
+| P1-2 | High | Partially verified | Artifact actions are not consistent across every surface. | Registry run/stage artifact links and Telegram M2 now show compact preview/open/download/default-package actions. Package `Open app`, `Contents`, and `Download` are visible in Telegram for the latest run, but full cross-surface artifact parity still needs one pass across linked work, task/delegation detail, dashboard references, and M1. | Verify preview/open/default-app/contents/download/copy path from run overview, run artifacts, stage detail, task/delegation, conversation linked work, dashboard references, and M1/M2 Telegram. |
 | P1-3 | High | Partially verified | Conversations, runs, and delegations can still feel unrelated or stale. | Linked work blank/stale behavior was improved, but end-to-end conversation -> delegation/run -> artifact -> conversation freshness has not been rerun after the latest fixes. | Start conversation work, delegate to M2, launch or link a protocol, and verify bidirectional lineage in real Safari. |
-| P1-4 | High | Partially verified | Telegram protocol parity is incomplete. | M1/M2 can inspect existing run artifacts and export through shared registry paths; a fresh Telegram-started protocol run was not completed and cross-checked. | Use Telegram to list, start, watch, status, artifacts, export, download, unwatch, then open the same run in Registry. |
-| P1-5 | High | Open | Telegram protocol UX is too command-centric for humans. | Live Telegram required opaque run GUIDs and produced dense artifact walls with full URLs; package default file and rendered preview were not discoverable. | Add/gate a human flow for recent/latest runs, numbered choices, concise artifact summaries, rendered previews, and package default app links; verify in M1 and M2. |
+| P1-4 | High | Partially verified | Telegram protocol parity is incomplete. | Telegram artifact/status/export behavior uses shared registry-backed protocol paths and M2 live Safari verified existing-run artifact inspection after deploy. A fresh Telegram-started protocol run was not completed and cross-checked, and M1 post-deploy click-testing was interrupted by the local Computer Use bridge losing Safari. | Use Telegram to list, start, watch, status, artifacts, export, download, unwatch, then open the same run in Registry. Verify both M1 and M2 after the automation bridge is stable. |
+| P1-5 | High | Partially verified | Telegram protocol UX is too command-centric for humans. | The product now supports `latest`/numbered references, compact artifact lists, rendered previews, and package `Open app`/`Contents`/`Download` actions. M2 live Safari verified the improved flow. Full acceptance still requires M1 and a fresh Telegram-started run. | Complete M1/M2 live Telegram verification from `/protocol recent` or `/protocol list` through artifacts, preview, export, and Registry cross-check without copying a long GUID. |
 | P1-6 | High | Partially verified | Run progress is improved but needs broad non-analytics scale verification. | The manufacturing run was readable after completion; active progress at larger scale and non-analytics protocols still need live observation. | Run a larger generic protocol and verify bounded live stage progress, active state, failures/stale states, and reduced dense activity overload. |
 | P1-7 | High | Open | Full desktop/narrow Safari audit is not complete after current blockers. | Several targeted Safari paths passed, but not a full desktop plus narrow pass across dashboard, protocols, editor, runs, conversations, skills, and artifacts. | Run the audit after P0/P1 functional blockers close. |
 | P2-1 | Medium | Open | Clean-clone/customer-self-service pass remains unproven. | README/docs were updated, but a fresh setup from docs has not been executed. | Run setup from docs in a clean environment or equivalent dry run and fix product/docs gaps. |
@@ -1137,17 +1191,16 @@ Remaining issues after the latest scenario pass:
 
 ## Implementation Order
 
-1. Verify stage-scoped skill select/create/return from a blank protocol.
-2. Verify artifact actions across remaining reference surfaces, including
+1. Verify artifact actions across remaining reference surfaces, including
    package default `index.html` surfacing and rendered text/Markdown preview.
-3. Verify conversation/delegation/run lineage freshness from a new run.
-4. Verify Telegram protocol parity against the shared SDK behavior with a fresh
+2. Verify conversation/delegation/run lineage freshness from a new run.
+3. Verify Telegram protocol parity against the shared SDK behavior with a fresh
    Telegram-started run.
-5. Fix and verify Telegram human UX: avoid GUID-first flows, use recent/latest
-   run selection, compact artifact summaries, preview/open/download/details,
-   and package default app links.
-6. Run a larger generic protocol to audit progress visualization at scale.
-7. Run clean-clone/docs pass.
+4. Finish Telegram human UX acceptance on both M1 and M2: recent/latest run
+   selection, compact artifact summaries, preview/open/download/details, and
+   package default app links.
+5. Run a larger generic protocol to audit progress visualization at scale.
+6. Run clean-clone/docs pass.
 8. Verify workspace cleanup and stale/interrupted run recovery from the UI.
 9. Run full desktop/narrow Safari audit.
 

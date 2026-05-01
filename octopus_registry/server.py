@@ -38,7 +38,7 @@ from .artifact_paths import (
     resolve_task_artifact_path,
     resolve_task_artifact_rehearsal_text,
 )
-from .artifact_responses import workspace_artifact_content_response
+from .artifact_responses import rendered_artifact_text_preview_response, workspace_artifact_content_response
 from .ws import WebSocketManager
 from .rehearsal import RehearsalSessionManager
 from .routing_skill_service import RoutingSkillService
@@ -1269,6 +1269,7 @@ def resource_get_task_artifact_content(
     artifact_key: str,
     download: bool = Query(default=False),
     browse: bool = Query(default=False),
+    preview: bool = Query(default=False),
     member_path: str = Query(default="", alias="path"),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
@@ -1325,6 +1326,12 @@ def resource_get_task_artifact_content(
     if resolved_path is None:
         content_text = resolve_task_artifact_rehearsal_text(task, artifact_key, run_detail=detail)
         if content_text:
+            if preview and not download:
+                return rendered_artifact_text_preview_response(
+                    content_text,
+                    artifact_key=str(artifact_key or ""),
+                    preferred_name=preferred_name,
+                )
             disposition = "attachment" if download else "inline"
             return Response(
                 content=content_text.encode("utf-8"),
@@ -1339,6 +1346,7 @@ def resource_get_task_artifact_content(
         preferred_name=preferred_name,
         download=download,
         browse=browse,
+        preview=preview,
         member_path=member_path,
         request=request,
     )

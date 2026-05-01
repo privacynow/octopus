@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from app.presentation import telegram as telegram_presenters
 from app.runtime import telegram_protocols
 from octopus_sdk.identity import telegram_conversation_key
-from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
+from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord, ProtocolRunRecord
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -223,7 +223,7 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
 
         reply = last_reply(msg)
         assert "Protocol run started" in reply
-        assert "Open in registry" in reply
+        assert "Open the run in Registry" in reply
         session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         watches = session.get("protocol_run_watches") or []
         assert watches
@@ -338,7 +338,64 @@ async def test_protocol_status_reports_watch_state(monkeypatch):
 
         reply = last_reply(msg)
         assert "Notifications: <code>watching</code>" in reply
-        assert "Open in registry" in reply
+        assert "Open the run in Registry" in reply
+
+
+async def test_protocol_recent_and_latest_avoid_full_run_id_copying(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        class _Client:
+            async def list_runs(self, **kwargs):
+                assert kwargs["limit"] == 10
+                return [
+                    ProtocolRunRecord(
+                        protocol_run_id="abcdef1234567890",
+                        protocol_id="protocol-1",
+                        status="running",
+                        current_stage_key="build",
+                    )
+                ]
+
+            async def get_run(self, run_id):
+                assert run_id == "abcdef1234567890"
+                return _run_detail(run_id=run_id, version=3, stage_key="build")
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        recent = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol recent",
+            args=["recent"],
+        )
+        recent_reply = last_reply(recent)
+        assert "Recent protocol runs" in recent_reply
+        assert "Use the number" in recent_reply
+        assert "abcdef12" in recent_reply
+        assert "abcdef1234567890" not in recent_reply
+
+        status = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol status latest",
+            args=["status", "latest"],
+        )
+        status_reply = last_reply(status)
+        assert "Run: <code>abcdef12</code>" in status_reply
+        assert "abcdef1234567890" not in status_reply
 
 
 async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
@@ -371,11 +428,11 @@ async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
 
         reply = last_reply(msg)
         assert "Protocol artifacts" in reply
-        assert "<code>plan</code>: verified" in reply
-        assert "<code>plan.md</code>" in reply
-        assert "Download" in reply
-        assert "/v1/protocol-runs/run-1/artifacts/plan/content" in reply
-        assert "Open in registry" in reply
+        assert "1. plan.md: <code>verified</code>" in reply
+        assert "<code>/protocol preview run-1 1</code>" in reply
+        assert "<code>/protocol artifacts run-1 download 1</code>" in reply
+        assert "/v1/protocol-runs/run-1/artifacts/plan/content" not in reply
+        assert "Open the full run in Registry" in reply
         assert msg.replies[-1]["reply_markup"].inline_keyboard[0][0].text == "Open Run in Registry"
 
 
@@ -414,7 +471,7 @@ async def test_protocol_artifacts_download_sends_requested_document(monkeypatch)
         )
 
         assert msg.replies[-1]["document_sent"] is True
-        assert msg.replies[-1]["caption"] == "Protocol artifact: plan"
+        assert msg.replies[-1]["caption"] == "Protocol artifact: plan.md"
         assert msg.replies[-1]["document"].name == "plan.md"
         assert msg.replies[-1]["document"].getvalue() == b"# Plan\n"
 

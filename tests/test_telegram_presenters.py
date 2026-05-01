@@ -150,10 +150,9 @@ def test_protocol_artifacts_message_distinguishes_available_and_missing_artifact
     )
 
     assert rendered.parse_mode == ParseMode.HTML
-    assert "<code>plan</code>: verified" in rendered.text
-    assert "<code>plan.md</code>" in rendered.text
-    assert "Download" in rendered.text
-    assert "<code>report</code>: declared" in rendered.text
+    assert "1. plan.md: <code>verified</code>" in rendered.text
+    assert "<code>/protocol artifacts run-1 download 1</code>" in rendered.text
+    assert "2. report.md: <code>declared</code>" in rendered.text
     assert "not produced yet" in rendered.text
     assert rendered.reply_markup is not None
     assert rendered.reply_markup.inline_keyboard[0][0].text == "Open Run in Registry"
@@ -180,7 +179,8 @@ def test_protocol_artifacts_message_omits_localhost_url_buttons():
         artifact_links={"plan": "http://127.0.0.1:8787/v1/protocol-runs/run-1/artifacts/plan/content"},
     )
 
-    assert "http://127.0.0.1:8787/ui/runs?run_id=run-1" in rendered.text
+    assert "http://127.0.0.1:8787/ui/runs?run_id=run-1" not in rendered.text
+    assert "Open the full run in Registry" in rendered.text
     assert rendered.reply_markup is None
 
 

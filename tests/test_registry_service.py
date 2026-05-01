@@ -4031,6 +4031,55 @@ def test_protocol_artifact_content_route_falls_back_to_mounted_workspace(monkeyp
     assert response.text == "document body"
 
 
+def test_protocol_artifact_content_route_renders_markdown_preview(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    artifact_file = tmp_path / "workspace" / "protocol" / "document.md"
+    artifact_file.parent.mkdir(parents=True, exist_ok=True)
+    artifact_file.write_text("# Review\n\n- one\n- two", encoding="utf-8")
+    monkeypatch.setattr("octopus_registry.artifact_paths._mounted_workspace_roots", lambda: (str(tmp_path / "workspace"),))
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="document",
+                        artifact_kind="workspace_file",
+                        location="protocol/document.md",
+                        workspace_path="protocol/document.md",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                        verification_state="verified",
+                    )
+                ],
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1/artifacts/document/content?preview=1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "<h2>Review</h2>" in response.text
+    assert "<li>one</li>" in response.text
+
+
 def test_task_artifact_content_route_falls_back_to_mounted_workspace(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

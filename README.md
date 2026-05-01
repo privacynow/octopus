@@ -152,16 +152,19 @@ Common command families:
 Protocol commands currently include:
 
 - `/protocol list`
+- `/protocol recent`
 - `/protocol start <slug> <problem statement> [--context ...] [--constraints ...] [--expected-outputs ...] [--workspace ...]`
-- `/protocol status <run_id>`
-- `/protocol artifacts <run_id>`
-- `/protocol export <run_id>`
-- `/protocol watch <run_id>`
-- `/protocol unwatch <run_id>`
-- `/protocol cancel <run_id> [reason]`
-- `/protocol retry <run_id> [reason]`
-- `/protocol accept <run_id> [reason]`
-- `/protocol send-back <run_id> [reason]`
+- `/protocol status latest|<number|short_id>`
+- `/protocol artifacts latest|<number|short_id>`
+- `/protocol artifacts <run> download <artifact_number|artifact_key>`
+- `/protocol preview <run> <artifact_number|artifact_key>`
+- `/protocol export latest|<number|short_id>`
+- `/protocol watch latest|<number|short_id>`
+- `/protocol unwatch latest|<number|short_id>`
+- `/protocol cancel <run> [reason]`
+- `/protocol retry <run> [reason]`
+- `/protocol accept <run> [reason]`
+- `/protocol send-back <run> [reason]`
 
 For Telegram behavior, use
 [docs/telegram-user-guide.md](docs/telegram-user-guide.md).

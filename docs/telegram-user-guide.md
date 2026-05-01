@@ -101,28 +101,36 @@ Current command shape:
 
 ```text
 /protocol list
+/protocol recent
 /protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--expected-outputs <text>] [--workspace <ref>]
-/protocol status <run_id>
-/protocol artifacts <run_id>
-/protocol export <run_id>
-/protocol watch <run_id>
-/protocol unwatch <run_id>
-/protocol retry <run_id> [reason]
-/protocol accept <run_id> [reason]
-/protocol send-back <run_id> [reason]
-/protocol cancel <run_id> [reason]
+/protocol status latest|<number|short_id>
+/protocol artifacts latest|<number|short_id>
+/protocol artifacts <run> download <artifact_number|artifact_key>
+/protocol preview <run> <artifact_number|artifact_key>
+/protocol export latest|<number|short_id>
+/protocol watch latest|<number|short_id>
+/protocol unwatch latest|<number|short_id>
+/protocol retry <run> [reason]
+/protocol accept <run> [reason]
+/protocol send-back <run> [reason]
+/protocol cancel <run> [reason]
 ```
 
 Behavior:
 
+- `recent` lists visible protocol runs with numbers, status, current stage, and
+  short ids. Follow-up commands can use `latest`, the shown number, or the
+  short id instead of a full run id.
 - `start` creates a registry protocol run and starts watching it from the chat.
 - `start` uses the same shared SDK launch model as Registry UI. The simple
   historical form is still valid. Optional launch fields are parsed from
   `--context`, `--constraints`, `--expected-outputs`, and `--workspace`; each
   option consumes text until the next option marker.
 - `status` reports registry run state and deep links when available.
-- `artifacts` lists declared and produced artifacts and should expose download
-  links for artifacts the registry can serve.
+- `artifacts` lists declared and produced artifacts compactly, with numbered
+  preview/open/download actions for artifacts the registry can serve.
+- `preview` opens a rendered preview for text and Markdown artifacts when
+  available, plus open/download fallbacks.
 - `export` returns a JSON run export.
 - destructive or high-impact actions may require confirmation.
 - stage and terminal notifications come from registry run state, not
@@ -137,9 +145,12 @@ main result.
 
 ## Artifacts
 
-If a command reports produced artifacts, users should be able to download them
-through registry artifact routes when available. If a document is declared but
-not produced yet, Telegram should say that clearly.
+If a command reports produced artifacts, users should be able to preview, open,
+or download them through registry artifact routes when available. Package
+artifacts should expose the default app/open action when the package contains a
+browser entry such as `index.html`, and a separate contents action when a
+directory browser is useful. If a document is declared but not produced yet,
+Telegram should say that clearly.
 
 Any artifact that appears as available in Telegram but cannot be opened from
 the registry is a product gap to fix.

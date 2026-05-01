@@ -26,10 +26,20 @@ From Telegram:
 
 ```text
 /protocol list
+/protocol recent
 /protocol start <slug> <problem statement>
 ```
 
-Telegram automatically watches runs it starts.
+Telegram automatically watches runs it starts. Follow-up commands can use
+`latest`, a number from `/protocol recent`, or the short run id:
+
+```text
+/protocol status latest
+/protocol artifacts latest
+/protocol preview latest 1
+/protocol artifacts latest download 1
+/protocol export latest
+```
 
 ## Reading Runs
 
@@ -108,6 +118,15 @@ Artifact states:
 - available
 - unavailable on this host
 - expired/deleted
+
+Expected actions:
+
+- rendered preview for text and Markdown when raw browser text would be hard to
+  read
+- open default app/file, including package `index.html` when present
+- browse package contents
+- download
+- copy path where the browser UI exposes local path context
 
 The intended action model is consistent preview/open/download/copy behavior
 where the artifact is available. Missing action coverage is a product gap.

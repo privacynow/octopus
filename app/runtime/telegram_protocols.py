@@ -95,6 +95,8 @@ def protocol_artifact_url(
     registry_url: str = "",
     download: bool = False,
     browse: bool = False,
+    preview: bool = False,
+    member_path: str = "",
 ) -> str:
     base = _configured_registry_url(runtime, registry_url)
     if not base:
@@ -103,13 +105,148 @@ def protocol_artifact_url(
     artifact_token = quote(str(artifact_key or "").strip())
     if not run_token or not artifact_token:
         return ""
-    query = urlencode({
-        key: "true"
-        for key, enabled in (("download", download), ("browse", browse))
-        if enabled
-    })
+    query_items = {
+        key: value
+        for key, value in (
+            ("download", "true" if download else ""),
+            ("browse", "true" if browse else ""),
+            ("preview", "true" if preview else ""),
+            ("path", str(member_path or "").strip()),
+        )
+        if value
+    }
+    query = urlencode(query_items)
     suffix = f"?{query}" if query else ""
     return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content{suffix}"
+
+
+def protocol_run_short_id(run_id: str) -> str:
+    token = str(run_id or "").strip()
+    return token[:8] if len(token) > 8 else token
+
+
+def protocol_run_human_label(run) -> str:
+    protocol = str(
+        getattr(run, "protocol_display_name", "")
+        or getattr(run, "protocol_slug", "")
+        or getattr(run, "protocol_id", "")
+        or "Protocol"
+    ).strip()
+    short_id = protocol_run_short_id(str(getattr(run, "protocol_run_id", "") or ""))
+    return f"{protocol} ({short_id})" if short_id else protocol
+
+
+def protocol_artifact_human_label(artifact) -> str:
+    key = str(getattr(artifact, "artifact_key", "") or "").strip()
+    path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
+    name = Path(path).name.strip() if path else ""
+    return name or key or "Artifact"
+
+
+def protocol_artifact_is_package(artifact) -> bool:
+    path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
+    key = str(getattr(artifact, "artifact_key", "") or "").strip().lower()
+    basename = Path(path.rstrip("/")).name if path else ""
+    lower_hint = " ".join([path, key, basename]).lower()
+    if any(token in lower_hint for token in ("package", "bundle", "folder", "directory")):
+        return True
+    return bool(path) and "." not in basename
+
+
+def protocol_artifact_previewable(artifact) -> bool:
+    path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
+    return Path(path).suffix.lower() in {
+        ".md",
+        ".markdown",
+        ".txt",
+        ".log",
+        ".json",
+        ".jsonl",
+        ".yaml",
+        ".yml",
+        ".csv",
+        ".tsv",
+        ".py",
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".sh",
+        ".sql",
+        ".rb",
+        ".go",
+        ".java",
+        ".rs",
+        ".php",
+    }
+
+
+async def recent_protocol_runs(protocol_service, *, limit: int = 10):
+    runs = await protocol_service.list_runs(limit=limit)
+    return list(runs or [])
+
+
+async def resolve_protocol_run_ref(protocol_service, run_ref: str, *, limit: int = 10):
+    token = str(run_ref or "").strip()
+    if not token:
+        raise KeyError("run_ref_required")
+    lowered = token.lower()
+    if lowered not in {"latest", "last", "recent"} and not token.isdigit():
+        try:
+            return await protocol_service.get_run_status(token)
+        except RegistryClientError as exc:
+            if exc.error_code not in {"PROTOCOL_RUN_NOT_FOUND", "PROTOCOL_NOT_VISIBLE"}:
+                raise
+    runs = await recent_protocol_runs(protocol_service, limit=limit)
+    if lowered in {"latest", "last", "recent"}:
+        if not runs:
+            raise KeyError("no_recent_runs")
+        return await protocol_service.get_run_status(runs[0].protocol_run_id)
+    if token.isdigit():
+        index = int(token) - 1
+        if index < 0 or index >= len(runs):
+            raise KeyError("run_index_out_of_range")
+        return await protocol_service.get_run_status(runs[index].protocol_run_id)
+    matches = [
+        item
+        for item in runs
+        if str(item.protocol_run_id or "").startswith(token)
+        or token.lower() in {
+            str(getattr(item, "protocol_id", "") or "").strip().lower(),
+            str(getattr(item, "protocol_slug", "") or "").strip().lower(),
+        }
+    ]
+    if len(matches) == 1:
+        return await protocol_service.get_run_status(matches[0].protocol_run_id)
+    if not matches:
+        return await protocol_service.get_run_status(token)
+    raise KeyError("ambiguous_run_ref")
+
+
+def resolve_protocol_artifact_ref(detail, artifact_ref: str):
+    token = str(artifact_ref or "").strip()
+    if not token:
+        raise KeyError("artifact_ref_required")
+    artifacts = list(getattr(detail, "artifacts", None) or [])
+    if token.isdigit():
+        index = int(token) - 1
+        if index < 0 or index >= len(artifacts):
+            raise KeyError("artifact_index_out_of_range")
+        return artifacts[index]
+    lowered = token.lower()
+    matches = [
+        item for item in artifacts
+        if str(getattr(item, "artifact_key", "") or "").strip() == token
+        or str(getattr(item, "artifact_key", "") or "").strip().lower().startswith(lowered)
+        or protocol_artifact_human_label(item).lower().startswith(lowered)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise KeyError("artifact_not_found")
+    raise KeyError("ambiguous_artifact_ref")
 
 
 def parse_protocol_start_args(args: Iterable[str]) -> tuple[str, dict[str, object]]:

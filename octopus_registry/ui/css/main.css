@@ -1315,6 +1315,14 @@ select {
     font-size: 0.82rem;
 }
 
+.artifact-preview-frame {
+    width: min(100%, 58rem);
+    height: min(68dvh, 44rem);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+}
+
 .detail-label {
     margin: 0.9rem 0 0.35rem;
     color: var(--text-muted);

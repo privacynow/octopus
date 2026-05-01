@@ -165,10 +165,13 @@ Useful protocol commands:
 
 ```text
 /protocol list
+/protocol recent
 /protocol start <slug> <problem statement>
-/protocol status <run_id>
-/protocol artifacts <run_id>
-/protocol export <run_id>
+/protocol status latest
+/protocol artifacts latest
+/protocol preview latest 1
+/protocol artifacts latest download 1
+/protocol export latest
 ```
 
 Telegram and Registry should describe the same run state and artifact set. If

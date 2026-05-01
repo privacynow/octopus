@@ -64,6 +64,9 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
     const browsable = available && UI.isLikelyDirectoryArtifactPath(displayPath);
     return UI.createArtifactActionRow({
         previewable: available && _protocolArtifactPreviewable(artifact),
+        previewHref: available && _protocolArtifactPreviewable(artifact)
+            ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { preview: true })
+            : '',
         previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
         openHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
         browseHref: browsable ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { browse: true }) : '',

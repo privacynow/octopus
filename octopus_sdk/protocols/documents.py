@@ -10,8 +10,19 @@ from collections.abc import Sequence
 
 import yaml
 
+from octopus_sdk.registry.models import RegistryJsonRecord
+from octopus_sdk.skill_packages import (
+    SKILL_PACKAGE_KIND,
+    skill_package_from_document,
+    skill_package_hash,
+    skill_package_document,
+)
+
 from .models import *  # noqa: F401,F403
 from .models import _DECISION_RE, _SUMMARY_RE, _TERMINAL_STAGE_TARGETS
+
+PROTOCOL_PACKAGE_SCHEMA_VERSION = 1
+PROTOCOL_PACKAGE_KIND = "octopus.protocol_package"
 
 
 def _coerce_mapping(value: object) -> dict[str, object]:
@@ -649,6 +660,167 @@ def protocol_document_to_text(
     return json.dumps(payload, indent=2, sort_keys=False)
 
 
+def _canonical_json(value: object) -> str:
+    if hasattr(value, "model_dump"):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, RegistryJsonRecord):
+        payload = value.as_dict()
+    else:
+        payload = value
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _coerce_package_mapping(value: object) -> dict[str, object]:
+    if isinstance(value, RegistryJsonRecord):
+        return value.as_dict()
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        if isinstance(dumped, dict):
+            return dict(dumped)
+    return {}
+
+
+def protocol_package_required_skill_names(value: object) -> tuple[str, ...]:
+    document = canonical_protocol_document(value)
+    seen: set[str] = set()
+    names: list[str] = []
+    for stage in document.stages:
+        selector = stage.selector
+        if selector is None or str(selector.kind or "").strip().lower() != "skill":
+            continue
+        skill_name = str(selector.value or "").strip().lower()
+        if skill_name and skill_name not in seen:
+            seen.add(skill_name)
+            names.append(skill_name)
+    return tuple(names)
+
+
+def normalize_protocol_package_skill_documents(skills: Sequence[object]) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in skills or ():
+        raw = _coerce_package_mapping(item)
+        if not raw:
+            continue
+        package = skill_package_from_document(raw)
+        skill_name = package.skill_name
+        if skill_name in seen:
+            continue
+        seen.add(skill_name)
+        normalized.append(skill_package_document(package))
+    return sorted(
+        normalized,
+        key=lambda item: str((_coerce_package_mapping(item.get("skill"))).get("name", "")),
+    )
+
+
+def protocol_package_document(
+    *,
+    protocol: object,
+    skills: Sequence[object] = (),
+    bindings: object | None = None,
+    metadata: object | None = None,
+) -> ProtocolPackageDocumentRecord:
+    protocol_document = canonical_protocol_document(protocol)
+    normalized_skills = normalize_protocol_package_skill_documents(skills)
+    raw_bindings = _coerce_package_mapping(bindings or {})
+    raw_metadata = _coerce_package_mapping(metadata or {})
+    base = {
+        "schema_version": PROTOCOL_PACKAGE_SCHEMA_VERSION,
+        "kind": PROTOCOL_PACKAGE_KIND,
+        "protocol": protocol_document.model_dump(mode="json"),
+        "skills": normalized_skills,
+        "bindings": raw_bindings,
+        "metadata": {
+            **raw_metadata,
+            "protocol_hash": "sha256:" + protocol_definition_content_hash(protocol_document),
+        },
+    }
+    package_hash = protocol_package_hash_data(base)
+    base["metadata"]["package_hash"] = package_hash
+    return ProtocolPackageDocumentRecord.model_validate(base)
+
+
+def protocol_package_hash_data(value: object) -> str:
+    raw = _coerce_package_mapping(value)
+    protocol_payload = raw.get("protocol") or {}
+    skills_payload = raw.get("skills") or []
+    bindings_payload = raw.get("bindings") or {}
+    payload = {
+        "schema_version": PROTOCOL_PACKAGE_SCHEMA_VERSION,
+        "kind": PROTOCOL_PACKAGE_KIND,
+        "protocol": canonical_protocol_document(protocol_payload).model_dump(mode="json"),
+        "skills": normalize_protocol_package_skill_documents(_coerce_sequence(skills_payload)),
+        "bindings": _coerce_package_mapping(bindings_payload),
+    }
+    return "sha256:" + hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def protocol_package_hash(package: object) -> str:
+    return protocol_package_hash_data(package)
+
+
+def protocol_package_from_document(value: object) -> ProtocolPackageDocumentRecord:
+    raw = _coerce_package_mapping(value)
+    if not raw:
+        raise ValueError("Protocol package document must be a JSON/YAML object.")
+    schema_version = int(raw.get("schema_version") or 0)
+    if schema_version != PROTOCOL_PACKAGE_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported protocol package schema_version {schema_version}; expected {PROTOCOL_PACKAGE_SCHEMA_VERSION}."
+        )
+    if str(raw.get("kind", "") or "").strip() != PROTOCOL_PACKAGE_KIND:
+        raise ValueError(f"Protocol package kind must be {PROTOCOL_PACKAGE_KIND!r}.")
+    protocol = canonical_protocol_document(raw.get("protocol") or {})
+    skills = normalize_protocol_package_skill_documents(_coerce_sequence(raw.get("skills")))
+    required_skills = set(protocol_package_required_skill_names(protocol))
+    embedded_skills = {
+        skill_package_from_document(item).skill_name
+        for item in skills
+    }
+    missing = sorted(required_skills - embedded_skills)
+    if missing:
+        raise ValueError(f"Protocol package is missing required skill document(s): {', '.join(missing)}.")
+    package = protocol_package_document(
+        protocol=protocol,
+        skills=skills,
+        bindings=raw.get("bindings") or {},
+        metadata=raw.get("metadata") or {},
+    )
+    return package
+
+
+def protocol_package_from_text(
+    text: str,
+    *,
+    format: ProtocolDocumentTextFormat = "json",
+) -> ProtocolPackageDocumentRecord:
+    normalized = normalize_protocol_document_format(format)
+    source = str(text or "").strip()
+    if not source:
+        raise ValueError("Protocol package text must not be empty")
+    try:
+        loaded = json.loads(source) if normalized == "json" else yaml.safe_load(source)
+    except Exception as exc:
+        raise ValueError(f"Protocol package {normalized} parse failed: {exc}") from exc
+    return protocol_package_from_document(loaded)
+
+
+def protocol_package_to_text(
+    value: object,
+    *,
+    format: ProtocolDocumentTextFormat = "json",
+) -> str:
+    normalized = normalize_protocol_document_format(format)
+    package = protocol_package_from_document(value)
+    payload = package.model_dump(mode="json")
+    if normalized == "yaml":
+        return str(yaml.safe_dump(payload, sort_keys=False, allow_unicode=False))
+    return json.dumps(payload, indent=2, sort_keys=False)
+
+
 def protocol_document_unified_diff(
     left: object,
     right: object,
@@ -713,10 +885,8 @@ def _render_run_constraints(constraints: object) -> str:
     labels = {
         "context": "Context",
         "constraints": "Constraints",
-        "expected_outputs": "Expected outputs",
         "source_context": "Files or data context",
         "relationship_context": "Keys and relationships",
-        "desired_outputs": "Expected outputs",
         "privacy_constraints": "Privacy or execution constraints",
     }
     lines: list[str] = []
@@ -778,16 +948,17 @@ def render_protocol_stage_prompt(
         lines.append(f"Workspace/project: {run.workspace_ref}")
     rendered_constraints = _render_run_constraints(run.constraints_json)
     if rendered_constraints:
-        lines.append("Run context and constraints:\n" + rendered_constraints)
+        lines.append("Launch context and constraints:\n" + rendered_constraints)
     if input_artifact_lines:
         lines.append("Input artifacts for this stage (read-only context):\n" + "\n".join(input_artifact_lines))
     if output_artifact_lines:
         lines.append("Output artifacts for this stage (write scope):\n" + "\n".join(output_artifact_lines))
     lines.append(
         "Stage output scope:\n"
-        "Run-level context may describe the desired outcome of the full workflow. "
+        "Launch context parameterizes this run; it does not modify the published protocol contract. "
         "For this stage, create or update only the output artifacts listed above. "
-        "Do not create, overwrite, or pre-fill artifacts assigned to later stages."
+        "Do not create, overwrite, or pre-fill artifacts assigned to later stages. "
+        "If launch context conflicts with declared artifacts or stage instructions, follow the protocol contract and call out the conflict."
     )
     if participant.instructions:
         lines.append("Participant guidance:\n" + participant.instructions.strip())

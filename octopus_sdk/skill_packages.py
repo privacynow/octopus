@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-import io
+import hashlib
+import json
 from pathlib import Path, PurePosixPath
-import zipfile
 
 import frontmatter
 import yaml
@@ -27,7 +27,9 @@ SKILL_RESERVED_FILES = frozenset({SKILL_MARKDOWN_FILE, SKILL_REQUIRES_FILE, *SKI
 MAX_SKILL_FILE_COUNT = 16
 MAX_SKILL_FILE_BYTES = 64 * 1024
 MAX_SKILL_TOTAL_FILE_BYTES = 256 * 1024
-MAX_SKILL_PACKAGE_BYTES = 512 * 1024
+MAX_SKILL_DOCUMENT_BYTES = 512 * 1024
+SKILL_PACKAGE_SCHEMA_VERSION = 1
+SKILL_PACKAGE_KIND = "octopus.skill"
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,33 @@ class SkillPackageRecord:
     requirements: tuple[SkillRequirement, ...] = ()
     provider_config: ProviderConfigRecord = ProviderConfigRecord()
     files: tuple[SkillFileRecord, ...] = ()
+
+
+def normalize_skill_document_format(value: object, *, default: str = "json") -> str:
+    token = str(value or default or "json").strip().lower()
+    if token in {"yml", "yaml"}:
+        return "yaml"
+    if token == "json":
+        return "json"
+    raise ValueError("Skill package format must be json or yaml.")
+
+
+def _json_safe(value: object) -> object:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(_json_safe(value), sort_keys=True, separators=(",", ":"))
 
 
 def default_skill_display_name(skill_name: str) -> str:
@@ -347,33 +376,224 @@ def parse_skill_virtual_files(files: Mapping[str, str]) -> SkillPackageRecord:
     )
 
 
-def build_skill_package_archive(track: RuntimeSkillTrackRecord) -> bytes:
-    payload = build_skill_virtual_files(track)
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for relative_path, content in sorted(payload.items()):
-            archive.writestr(relative_path, content)
-    return buffer.getvalue()
+def skill_package_from_track(track: RuntimeSkillTrackRecord) -> SkillPackageRecord:
+    return SkillPackageRecord(
+        skill_name=str(track.slug or "").strip().lower(),
+        display_name=str(track.display_name or "").strip() or default_skill_display_name(track.slug),
+        description=str(track.description or ""),
+        body=str(track.revision.instruction_body or "").strip(),
+        skill_kind=normalize_skill_kind(track.revision.skill_kind),
+        requirements=coerce_skill_requirements(track.revision.requirements),
+        provider_config=coerce_provider_config(track.revision.provider_config),
+        files=coerce_skill_files(track.revision.files),
+    )
 
 
-def parse_skill_package_archive(content: bytes) -> SkillPackageRecord:
-    if not content:
-        raise ValueError("Skill package file is empty.")
-    if len(content) > MAX_SKILL_PACKAGE_BYTES:
-        raise ValueError(f"Skill package archive exceeds the {MAX_SKILL_PACKAGE_BYTES // 1024} KB limit.")
-    virtual_files: dict[str, str] = {}
+def normalize_skill_package(package: SkillPackageRecord) -> SkillPackageRecord:
+    skill_name = str(package.skill_name or "").strip().lower()
+    return SkillPackageRecord(
+        skill_name=skill_name,
+        display_name=str(package.display_name or "").strip() or default_skill_display_name(skill_name),
+        description=str(package.description or ""),
+        body=str(package.body or "").strip(),
+        skill_kind=normalize_skill_kind(package.skill_kind or "prompt"),
+        requirements=coerce_skill_requirements(package.requirements),
+        provider_config=coerce_provider_config(package.provider_config),
+        files=coerce_skill_files(package.files),
+    )
+
+
+def skill_package_data(package: SkillPackageRecord) -> dict[str, object]:
+    normalized = normalize_skill_package(package)
+    return {
+        "name": normalized.skill_name,
+        "display_name": normalized.display_name,
+        "description": normalized.description,
+        "skill_kind": normalized.skill_kind,
+        "body": normalized.body,
+        "requirements": [item.to_dict() for item in normalized.requirements],
+        "provider_config": normalized.provider_config.to_dict(),
+        "files": [
+            {
+                "path": item.relative_path,
+                "content_type": item.content_type,
+                "executable": item.executable,
+                "content": item.content_text,
+            }
+            for item in normalized.files
+        ],
+    }
+
+
+def skill_package_hash(package: SkillPackageRecord) -> str:
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(skill_package_data(package)).encode("utf-8")
+    ).hexdigest()
+
+
+def skill_package_document(
+    package: SkillPackageRecord,
+    *,
+    exported_at: str = "",
+    source: str = "registry",
+    revision_scope: str = "draft",
+    revision_id: str = "",
+) -> dict[str, object]:
+    normalized = normalize_skill_package(package)
+    return {
+        "schema_version": SKILL_PACKAGE_SCHEMA_VERSION,
+        "kind": SKILL_PACKAGE_KIND,
+        "skill": skill_package_data(normalized),
+        "metadata": {
+            "source": str(source or "registry"),
+            "revision_scope": str(revision_scope or "draft"),
+            "revision_id": str(revision_id or ""),
+            "exported_at": str(exported_at or ""),
+            "normalized_hash": skill_package_hash(normalized),
+        },
+    }
+
+
+def skill_document_from_track(
+    track: RuntimeSkillTrackRecord,
+    *,
+    exported_at: str = "",
+    source: str = "registry",
+    revision_scope: str = "draft",
+    revision_id: str = "",
+) -> dict[str, object]:
+    return skill_package_document(
+        skill_package_from_track(track),
+        exported_at=exported_at,
+        source=source,
+        revision_scope=revision_scope,
+        revision_id=revision_id,
+    )
+
+
+def _skill_package_from_skill_mapping(raw_skill: Mapping[str, object]) -> SkillPackageRecord:
+    files: list[Mapping[str, object]] = []
+    for item in raw_skill.get("files") or []:
+        if not isinstance(item, Mapping):
+            continue
+        files.append(
+            {
+                "relative_path": item.get("path", item.get("relative_path", "")),
+                "content_text": item.get("content", item.get("content_text", "")),
+                "content_type": item.get("content_type", ""),
+                "executable": item.get("executable", False),
+            }
+        )
+    return normalize_skill_package(
+        SkillPackageRecord(
+            skill_name=str(raw_skill.get("name", raw_skill.get("skill_name", "")) or "").strip().lower(),
+            display_name=str(raw_skill.get("display_name", "") or "").strip(),
+            description=str(raw_skill.get("description", "") or ""),
+            body=str(raw_skill.get("body", "") or ""),
+            skill_kind=str(raw_skill.get("skill_kind", raw_skill.get("kind", "prompt")) or "prompt"),
+            requirements=coerce_skill_requirements(raw_skill.get("requirements") or ()),
+            provider_config=coerce_provider_config(raw_skill.get("provider_config") or {}),
+            files=coerce_skill_files(files),
+        )
+    )
+
+
+def skill_package_from_document(value: object) -> SkillPackageRecord:
+    if not isinstance(value, Mapping):
+        raise ValueError("Skill package document must be a JSON/YAML object.")
+    schema_version = int(value.get("schema_version") or 0)
+    if schema_version != SKILL_PACKAGE_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported skill package schema_version {schema_version}; expected {SKILL_PACKAGE_SCHEMA_VERSION}."
+        )
+    kind = str(value.get("kind", "") or "").strip()
+    if kind != SKILL_PACKAGE_KIND:
+        raise ValueError(f"Skill package kind must be {SKILL_PACKAGE_KIND!r}.")
+    raw_skill = value.get("skill")
+    if not isinstance(raw_skill, Mapping):
+        raise ValueError("Skill package document must include a skill object.")
+    package = _skill_package_from_skill_mapping(raw_skill)
+    problems = validate_skill_package(
+        skill_name=package.skill_name,
+        display_name=package.display_name,
+        body=package.body,
+        requirements=list(package.requirements),
+        provider_config=package.provider_config,
+        files=package.files,
+    )
+    if problems:
+        raise ValueError(problems[0].message)
+    return package
+
+
+def skill_document_from_text(text: str | bytes, *, format: str = "json") -> dict[str, object]:
+    if isinstance(text, bytes):
+        raw_text = text.decode("utf-8")
+    else:
+        raw_text = str(text or "")
+    if not raw_text.strip():
+        raise ValueError("Skill package document is empty.")
+    if len(raw_text.encode("utf-8")) > MAX_SKILL_DOCUMENT_BYTES:
+        raise ValueError(f"Skill package document exceeds the {MAX_SKILL_DOCUMENT_BYTES // 1024} KB limit.")
+    normalized_format = normalize_skill_document_format(format)
     try:
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            for info in archive.infolist():
-                if info.is_dir():
-                    continue
-                relative_path = str(info.filename or "").strip().replace("\\", "/")
-                if not _safe_relative_path(relative_path):
-                    raise ValueError(f"Skill package file path '{relative_path or '<blank>'}' is invalid.")
-                virtual_files[relative_path] = archive.read(info).decode("utf-8")
-    except zipfile.BadZipFile as exc:
-        raise ValueError("Skill package archive is not a valid ZIP file.") from exc
-    return parse_skill_virtual_files(virtual_files)
+        if normalized_format == "json":
+            data = json.loads(raw_text)
+        else:
+            data = yaml.safe_load(raw_text)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"Skill package document is not valid {normalized_format}.") from exc
+    if not isinstance(data, Mapping):
+        raise ValueError("Skill package document must be a JSON/YAML object.")
+    package = skill_package_from_document(data)
+    return skill_package_document(
+        package,
+        exported_at=str((data.get("metadata") or {}).get("exported_at", "") if isinstance(data.get("metadata"), Mapping) else ""),
+        source=str((data.get("metadata") or {}).get("source", "registry") if isinstance(data.get("metadata"), Mapping) else "registry"),
+        revision_scope=str((data.get("metadata") or {}).get("revision_scope", "draft") if isinstance(data.get("metadata"), Mapping) else "draft"),
+        revision_id=str((data.get("metadata") or {}).get("revision_id", "") if isinstance(data.get("metadata"), Mapping) else ""),
+    )
+
+
+def parse_skill_package_document(text: str | bytes, *, format: str = "json") -> SkillPackageRecord:
+    return skill_package_from_document(skill_document_from_text(text, format=format))
+
+
+def skill_document_to_text(document: Mapping[str, object], *, format: str = "json") -> str:
+    package = skill_package_from_document(document)
+    metadata = document.get("metadata") if isinstance(document, Mapping) else {}
+    stable = skill_package_document(
+        package,
+        exported_at=str(metadata.get("exported_at", "") if isinstance(metadata, Mapping) else ""),
+        source=str(metadata.get("source", "registry") if isinstance(metadata, Mapping) else "registry"),
+        revision_scope=str(metadata.get("revision_scope", "draft") if isinstance(metadata, Mapping) else "draft"),
+        revision_id=str(metadata.get("revision_id", "") if isinstance(metadata, Mapping) else ""),
+    )
+    normalized_format = normalize_skill_document_format(format)
+    if normalized_format == "json":
+        return json.dumps(stable, indent=2, sort_keys=True) + "\n"
+    return yaml.safe_dump(stable, sort_keys=False, allow_unicode=False)
+
+
+def skill_package_document_to_text(
+    package: SkillPackageRecord,
+    *,
+    format: str = "json",
+    exported_at: str = "",
+    source: str = "registry",
+    revision_scope: str = "draft",
+    revision_id: str = "",
+) -> str:
+    return skill_document_to_text(
+        skill_package_document(
+            package,
+            exported_at=exported_at,
+            source=source,
+            revision_scope=revision_scope,
+            revision_id=revision_id,
+        ),
+        format=format,
+    )
 
 
 def _safe_relative_path(relative_path: str) -> bool:

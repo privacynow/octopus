@@ -32,17 +32,24 @@ Supporting protocol artifact:
 
 The generated app should be a self-contained browser SPA that can:
 
+- guide a non-technical user from demo data or uploaded CSVs to useful
+  dashboards without requiring schema expertise
 - upload multiple CSV files
 - profile schemas and row counts
 - infer candidate relationships from common fields and key-like values
 - allow manual relationship confirmation/removal
 - generate default synthetic manufacturing-like sample data
 - adapt synthetic generation to uploaded schemas and confirmed relationships
-- run aggregations, charts, heat maps, and table outputs
+- render immediate chart-first outcomes, drill-downs, heat maps, and table
+  outputs
 - export generated data, relationships, and aggregate outputs
 
 The app may use a solar-cell/panel style sample dataset. The app itself must
 remain generic and schema-driven.
+
+The app is not acceptable if the primary experience is a manual analytics
+builder, raw schema/table list, or export panel. Those can exist as advanced
+tools, but the default path must be progressive and outcome-oriented.
 
 ## Preconditions
 
@@ -114,6 +121,16 @@ Instructions:
 
 ```text
 Produce artifacts/requirements.md for a generic offline browser SPA for local multi-CSV analytics. Do not use real customer data, real names, or meeting transcript content. The app must let a user upload multiple CSV files, profile schemas, infer and allow editing relationships, generate default synthetic manufacturing-style sample data, adapt synthetic data to uploaded schemas and inferred relationships, render aggregations, charts, and heat maps, export aggregate outputs, and keep uploaded rows local in the browser. Keep requirements domain-neutral while allowing sample data to resemble sequential manufacturing process data.
+
+The requirements must make user experience a first-class contract. Define a single-page, progressive flow for non-technical users:
+1. start with demo data or upload CSVs
+2. review detected tables and relationship suggestions in plain language
+3. confirm relationships only when needed
+4. see useful dashboard charts immediately
+5. drill into the rows and dimensions behind each chart
+6. export a readable report or data extract
+
+The app must not open into a blank analytics builder, raw table browser, schema debugger, or export-only panel. Manual query building is allowed only as an advanced path.
 ```
 
 Transition:
@@ -146,6 +163,18 @@ Instructions:
 
 ```text
 Read artifacts/requirements.md and build the final offline user-facing package in artifacts/offline-analytics-package. Produce index.html, README.md, validation-report.md, and a samples/ directory with representative CSV files inside that package directory. The index.html must run in a browser with no backend, accept multiple uploaded CSV files, infer schema/profile/relationships from arbitrary uploaded CSVs, allow manual relationship edits, generate default manufacturing-like synthetic data before uploads, adapt synthetic data after uploads, provide dynamic aggregations, charts and heat maps, and export aggregate outputs. Keep the app generic and domain-neutral; sample CSVs may use a solar-cell/panel style manufacturing scenario.
+
+The first useful screen after generating demo data or uploading CSVs must be a polished single-page analytics experience with:
+- a visible "Start here" path and next-step state
+- plain-language dataset summary
+- KPI cards
+- automatic recommended charts
+- relationship review only when it matters
+- drill-down panels from charts/KPIs to contributing rows and dimensions
+- an advanced analytics builder that is secondary, not the main path
+- helpful empty states and responsive Safari layout
+
+Do not ship a UI where users must understand the data model before they see useful analytics.
 ```
 
 Transition:
@@ -178,7 +207,7 @@ Offline analytics package
 Instructions:
 
 ```text
-Inspect the generated package for completeness and update artifacts/offline-analytics-package/validation-report.md. Validate that the generated index.html is intended for Safari/browser use, works offline from local artifacts, includes a sample-data workflow, schema and relationship inference, manual relationship editing, synthetic data generation, aggregation, charts, heat maps, and exports. Record pass/fail notes and known limitations.
+Inspect the generated package for completeness and update artifacts/offline-analytics-package/validation-report.md. Validate that the generated index.html is intended for Safari/browser use, works offline from local artifacts, includes a sample-data workflow, schema and relationship inference, manual relationship editing, synthetic data generation, aggregation, charts, heat maps, and exports. Also validate customer usability: first load has a clear path, generated/uploaded data leads directly to charts, drill-downs explain the analytics, manual builder controls are secondary, empty states guide the user, and the layout remains readable in Safari. Repair the package before completion if it is primarily a raw table explorer, schema debugger, blank builder, or export panel. Record pass/fail notes and known limitations.
 ```
 
 Transition:
@@ -195,9 +224,8 @@ completed -> complete
 4. Confirm the protocol state changes to `PUBLISHED`.
 5. Confirm `Run protocol` is visible.
 
-If the UI warns that expected outputs are not declared artifacts during run
-launch, stop and fix the artifact declarations before using this with a
-customer.
+Before launch, confirm the dialog shows the expected declared artifacts. Those
+artifacts are the output verification contract for the run.
 
 ## Start The First Run
 
@@ -209,7 +237,7 @@ environment requires a different workspace.
 Goal:
 
 ```text
-Build a generic offline browser SPA package for local multi-CSV analytics. The target user has manufacturing process data exported as CSVs from multiple stages and wants a repeatable personal-computer tool. Do not use real customer data or raw meeting transcript details. Produce artifacts/offline-analytics-package/index.html as the final user-facing file, plus README, sample CSV files, and a validation report inside the same package directory. The app must infer schemas and relationships, allow manual relationship edits, generate default synthetic solar cell and panel style data, adapt synthetic generation from uploaded CSVs, create aggregations, charts, heat maps, and export aggregate outputs.
+Build a generic offline browser SPA package for local multi-CSV analytics. The target user has manufacturing process data exported as CSVs from multiple stages and wants a repeatable personal-computer tool. Do not use real customer data or raw meeting transcript details. Produce artifacts/offline-analytics-package/index.html as the final user-facing file, plus README, sample CSV files, and a validation report inside the same package directory. The app must infer schemas and relationships, allow manual relationship edits, generate default synthetic solar cell and panel style data, adapt synthetic generation from uploaded CSVs, create aggregations, charts, heat maps, drill-downs, and export aggregate outputs. The primary experience must be a beautiful single-page guided analytics flow, not a manual builder or raw schema browser.
 ```
 
 Context:
@@ -221,10 +249,10 @@ Use a generic manufacturing process scenario with multiple CSV exports from sequ
 Constraints:
 
 ```text
-Real customer data and raw meeting content must not be used. Keep CSV processing local in the browser. Do not require a backend for the final app. It is acceptable to use battle-tested JavaScript libraries only if the delivered app remains usable from the artifacts generated by this run.
+Real customer data and raw meeting content must not be used. Keep CSV processing local in the browser. Do not require a backend for the final app. It is acceptable to use battle-tested JavaScript libraries only if the delivered app remains usable from the artifacts generated by this run. A non-technical user must be able to go from demo data or uploaded CSVs to useful charts and a report without understanding the data model first.
 ```
 
-Expected outputs:
+Declared artifacts:
 
 ```text
 artifacts/offline-analytics-package containing index.html, README.md, samples/*.csv, and validation-report.md.
@@ -262,19 +290,22 @@ show README, samples, and validation report files inside the package.
 Expected first-load checks:
 
 1. The app renders without a backend.
-2. The upload area accepts multiple CSVs.
-3. Schema/profile, relationships, aggregation, charts, heat map, exports, and
-   notes/status sections are visible.
-4. No real customer data or meeting text appears in the app.
+2. The first screen explains how to start with demo data or uploaded CSVs.
+3. The upload area accepts multiple CSVs.
+4. Schema/profile, relationships, aggregation, charts, heat map, exports, and
+   notes/status sections are visible through a progressive path.
+5. No real customer data or meeting text appears in the app.
 
 Default synthetic-data path:
 
 1. Generate default synthetic data.
 2. Confirm the app creates multiple related tables.
-3. Confirm schema profiles and relationship candidates appear.
-4. Run the default aggregation.
-5. Confirm result rows, grouped output, bar/trend/heat-map visuals, and a data
-   table render.
+3. Confirm the app immediately shows useful KPI cards and recommended charts.
+4. Confirm schema profiles and relationship candidates are explained in plain
+   language.
+5. Run or inspect the default aggregation without using a blank manual builder.
+6. Confirm result rows, grouped output, bar/trend/heat-map visuals, drill-down
+   evidence, and a data table render.
 
 Verified Safari evidence from the latest package run
 (`afe7792a151c4e3ab74d4de7a7e2ec79`):

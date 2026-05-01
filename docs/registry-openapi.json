@@ -2707,7 +2707,7 @@
         "additionalProperties": false,
         "properties": {
           "content_type": {
-            "default": "application/zip",
+            "default": "application/json",
             "title": "Content Type",
             "type": "string"
           },
@@ -2716,19 +2716,24 @@
             "title": "Display Name",
             "type": "string"
           },
+          "document_text": {
+            "default": "",
+            "title": "Document Text",
+            "type": "string"
+          },
           "file_name": {
             "default": "",
             "title": "File Name",
             "type": "string"
           },
+          "format": {
+            "default": "json",
+            "title": "Format",
+            "type": "string"
+          },
           "name": {
             "default": "",
             "title": "Name",
-            "type": "string"
-          },
-          "package_base64": {
-            "default": "",
-            "title": "Package Base64",
             "type": "string"
           },
           "revision_id": {
@@ -2753,22 +2758,28 @@
             "title": "Actor Key",
             "type": "string"
           },
+          "document_text": {
+            "description": "Skill package JSON/YAML document text",
+            "minLength": 1,
+            "title": "Document Text",
+            "type": "string"
+          },
           "file_name": {
             "default": "",
             "description": "Original uploaded file name",
             "title": "File Name",
             "type": "string"
           },
+          "format": {
+            "default": "json",
+            "description": "Skill package document format: json or yaml",
+            "title": "Format",
+            "type": "string"
+          },
           "note": {
             "default": "",
             "description": "Optional lifecycle note",
             "title": "Note",
-            "type": "string"
-          },
-          "package_base64": {
-            "description": "Base64-encoded skill package archive",
-            "minLength": 1,
-            "title": "Package Base64",
             "type": "string"
           },
           "target_skill_name": {
@@ -2779,7 +2790,7 @@
           }
         },
         "required": [
-          "package_base64"
+          "document_text"
         ],
         "title": "RuntimeSkillPackageImportRequest",
         "type": "object"
@@ -5036,6 +5047,16 @@
             "schema": {
               "default": "draft",
               "title": "Revision",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "title": "Format",
               "type": "string"
             }
           },
@@ -10387,6 +10408,134 @@
         "summary": "Resource Create Protocol"
       }
     },
+    "/v1/protocols/package/import/apply": {
+      "post": {
+        "operationId": "resource_protocol_package_import_apply_v1_protocols_package_import_apply_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Protocol Package Import Apply V1 Protocols Package Import Apply Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Protocol Package Import Apply"
+      }
+    },
+    "/v1/protocols/package/import/plan": {
+      "post": {
+        "operationId": "resource_protocol_package_import_plan_v1_protocols_package_import_plan_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Protocol Package Import Plan V1 Protocols Package Import Plan Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Protocol Package Import Plan"
+      }
+    },
     "/v1/protocols/parse": {
       "post": {
         "operationId": "resource_parse_protocol_document_v1_protocols_parse_post",
@@ -10937,6 +11086,99 @@
           }
         },
         "summary": "Resource Export Protocol Draft"
+      }
+    },
+    "/v1/protocols/{protocol_id}/package/export": {
+      "get": {
+        "operationId": "resource_export_protocol_package_v1_protocols__protocol_id__package_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "protocol_id",
+            "required": true,
+            "schema": {
+              "title": "Protocol Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Revision",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Export Protocol Package V1 Protocols  Protocol Id  Package Export Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Export Protocol Package"
       }
     },
     "/v1/protocols/{protocol_id}/publish": {

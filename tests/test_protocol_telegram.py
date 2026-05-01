@@ -120,7 +120,7 @@ def test_protocol_start_args_parse_rich_launch_fields():
             "data",
             "--constraints=offline",
             "only",
-            "--expected-outputs",
+            "--acceptance-criteria",
             "package",
             "directory",
             "--workspace",
@@ -133,7 +133,7 @@ def test_protocol_start_args_parse_rich_launch_fields():
         "problem_statement": "Build the package",
         "context": "Use synthetic data",
         "constraints": "offline only",
-        "expected_outputs": "package directory",
+        "acceptance_criteria": "package directory",
         "workspace_ref": "demo",
     }
 
@@ -161,7 +161,7 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
                 assert payload["constraints_json"] == {
                     "context": "Use synthetic data",
                     "constraints": "offline only",
-                    "expected_outputs": "report",
+                    "acceptance_criteria": "report",
                 }
                 assert payload["workspace_ref"] == "demo"
                 return ProtocolRunMutationRecord.model_validate(
@@ -202,7 +202,7 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
             th.cmd_protocol,
             chat,
             user,
-            "/protocol start software-engineering Build the feature --context Use synthetic data --constraints offline only --expected-outputs report --workspace demo",
+            "/protocol start software-engineering Build the feature --context Use synthetic data --constraints offline only --acceptance-criteria report --workspace demo",
             args=[
                 "start",
                 "software-engineering",
@@ -216,7 +216,7 @@ async def test_protocol_start_persists_watch_and_includes_registry_link(monkeypa
                 "--constraints",
                 "offline",
                 "only",
-                "--expected-outputs",
+                "--acceptance-criteria",
                 "report",
                 "--workspace",
                 "demo",

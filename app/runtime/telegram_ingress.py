@@ -1134,7 +1134,7 @@ async def cmd_protocol(
         slug, launch_inputs = telegram_protocols.parse_protocol_start_args(args[1:])
         if not slug or not str(launch_inputs.get("problem_statement") or "").strip():
             await update.effective_message.reply_text(
-                "Usage: /protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--expected-outputs <text>] [--workspace <ref>]",
+                "Usage: /protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--workspace <ref>]",
             )
             return
         try:

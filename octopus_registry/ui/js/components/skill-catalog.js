@@ -1850,27 +1850,16 @@ function renderSkillCatalog(container) {
         });
     }
 
-    async function _readFileBase64(file) {
-        const buffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        bytes.forEach((value) => {
-            binary += String.fromCharCode(value);
-        });
-        return window.btoa(binary);
+    async function _readFileText(file) {
+        return file.text();
     }
 
     function _downloadPackageArtifact(artifact) {
-        const binary = window.atob(String(artifact.package_base64 || ''));
-        const bytes = new Uint8Array(binary.length);
-        for (let index = 0; index < binary.length; index += 1) {
-            bytes[index] = binary.charCodeAt(index);
-        }
-        const blob = new Blob([bytes], { type: artifact.content_type || 'application/zip' });
+        const blob = new Blob([String(artifact.document_text || '')], { type: artifact.content_type || 'application/json' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = artifact.file_name || `${UI.safeFilename(artifact.name || 'skill')}.skill.zip`;
+        link.download = artifact.file_name || `${UI.safeFilename(artifact.name || 'skill')}.skill.${artifact.format || 'json'}`;
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 500);
     }
@@ -1881,7 +1870,7 @@ function renderSkillCatalog(container) {
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
         fileInput.className = 'input';
-        fileInput.accept = '.zip,application/zip';
+        fileInput.accept = '.json,.yaml,.yml,application/json,application/x-yaml,text/yaml';
         form.appendChild(fileInput);
         const targetInput = document.createElement('input');
         targetInput.className = 'input';
@@ -1913,11 +1902,14 @@ function renderSkillCatalog(container) {
             }
             importBtn.disabled = true;
             try {
-                const packageBase64 = await _readFileBase64(file);
+                const documentText = await _readFileText(file);
+                const fileName = String(file.name || '');
+                const format = /\.ya?ml$/i.test(fileName) ? 'yaml' : 'json';
                 const result = await API.importSkillPackage(currentAgentId, {
                     file_name: file.name,
                     target_skill_name: String(targetInput.value || '').trim(),
-                    package_base64: packageBase64,
+                    format,
+                    document_text: documentText,
                 });
                 const nextSkillName = result.detail?.name || String(targetInput.value || '').trim() || selectedSkillName || '';
                 _invalidateSkillCaches(currentAgentId, nextSkillName);

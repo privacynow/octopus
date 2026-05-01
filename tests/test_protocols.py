@@ -174,7 +174,6 @@ def test_protocol_launch_form_and_input_request_are_transport_neutral():
         "workspace_ref",
         "context",
         "constraints",
-        "expected_outputs",
     ]
     default_text = " ".join(
         " ".join(
@@ -220,7 +219,6 @@ def test_protocol_launch_form_and_input_request_are_transport_neutral():
             "workspace_ref": "workspace-a",
             "context": "Review the repository changes and release notes.",
             "constraints": "Keep the review focused on release blockers.",
-            "expected_outputs": "Release readiness summary.",
         },
         entry_agent_id="agent-1",
         origin_channel="registry",
@@ -232,7 +230,6 @@ def test_protocol_launch_form_and_input_request_are_transport_neutral():
     assert request.problem_statement == "Prepare a release review."
     assert request.constraints_json["context"] == "Review the repository changes and release notes."
     assert request.constraints_json["constraints"] == "Keep the review focused on release blockers."
-    assert request.constraints_json["expected_outputs"] == "Release readiness summary."
 
 
 def test_protocol_stage_prompt_includes_typed_run_context_without_special_surface_logic():
@@ -249,7 +246,7 @@ def test_protocol_stage_prompt_includes_typed_run_context_without_special_surfac
             "constraints_json": {
                 "context": "Review the repository changes and release notes.",
                 "constraints": "Keep the review focused on release blockers.",
-                "expected_outputs": "Release readiness summary.",
+                "acceptance_criteria": "Summarize only release-blocking findings.",
             },
         }
     )
@@ -261,10 +258,10 @@ def test_protocol_stage_prompt_includes_typed_run_context_without_special_surfac
         artifacts=[],
     )
 
-    assert "Run context and constraints:" in prompt
+    assert "Launch context and constraints:" in prompt
     assert "Context:\nReview the repository changes and release notes." in prompt
     assert "Constraints:\nKeep the review focused on release blockers." in prompt
-    assert "Expected outputs:\nRelease readiness summary." in prompt
+    assert "Acceptance Criteria:\nSummarize only release-blocking findings." in prompt
 
 
 def test_protocol_stage_prompt_limits_artifact_work_to_stage_outputs():
@@ -296,7 +293,7 @@ def test_protocol_stage_prompt_limits_artifact_work_to_stage_outputs():
 
     assert "do not create or update protocol artifacts for this stage" in prompt
     assert "update the required artifacts" not in prompt
-    assert "Run-level context may describe the desired outcome of the full workflow" in prompt
+    assert "Launch context parameterizes this run" in prompt
     assert "Do not create, overwrite, or pre-fill artifacts assigned to later stages." in prompt
 
 

@@ -31,10 +31,6 @@ _START_OPTION_ALIASES = {
     "context": "context",
     "constraints": "constraints",
     "constraint": "constraints",
-    "expected": "expected_outputs",
-    "expected-output": "expected_outputs",
-    "expected-outputs": "expected_outputs",
-    "outputs": "expected_outputs",
 }
 
 
@@ -255,11 +251,12 @@ def parse_protocol_start_args(args: Iterable[str]) -> tuple[str, dict[str, objec
     Supported form:
 
     `/protocol start <slug> <goal> --context <text> --constraints <text>
-    --expected-outputs <text> --workspace <ref>`
+    --workspace <ref>`
 
     Text for each option consumes words until the next `--option` marker. The
     simple historical form still works because all tokens after the slug become
-    the problem statement when no markers are present.
+    the problem statement when no markers are present. Protocol-authored custom
+    run input keys may also be passed as `--custom-key <text>`.
     """
 
     parts = [str(item or "").strip() for item in args if str(item or "").strip()]
@@ -271,7 +268,13 @@ def parse_protocol_start_args(args: Iterable[str]) -> tuple[str, dict[str, objec
     for token in parts[1:]:
         if token.startswith("--") and len(token) > 2:
             raw_name, sep, inline_value = token[2:].partition("=")
-            next_key = _START_OPTION_ALIASES.get(raw_name.strip().lower())
+            raw_key = raw_name.strip().lower()
+            normalized_key = raw_key.replace("-", "_")
+            next_key = _START_OPTION_ALIASES.get(raw_key) or (
+                normalized_key
+                if normalized_key and all(char.isalnum() or char == "_" for char in normalized_key)
+                else ""
+            )
             if next_key:
                 active_key = next_key
                 values.setdefault(active_key, [])

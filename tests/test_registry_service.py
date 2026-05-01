@@ -21,6 +21,7 @@ os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
 from octopus_registry import auth as registry_auth
 from octopus_registry import server as registry_server
+from octopus_registry import protocol_http as registry_protocol_http
 from octopus_registry.server import app
 from octopus_registry import ingress
 from octopus_registry.backend import get_registry_store
@@ -51,12 +52,13 @@ from octopus_sdk.registry.management import (
     ManagementRequest,
     ManagementResult,
 )
-from octopus_sdk.registry.models import RegistryJsonRecord, TaskRecord
+from octopus_sdk.registry.models import AgentRecord, RegistryJsonRecord, TaskRecord
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
 )
 from octopus_sdk.providers import ProviderStateRecord
+from octopus_sdk.skill_packages import SkillPackageRecord, skill_document_to_text, skill_package_document
 
 _FULL_MANAGEMENT_OPERATIONS = list(ALL_MANAGEMENT_OPERATIONS)
 
@@ -1242,6 +1244,9 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
     assert "/v1/protocol-templates/{slug}" in paths
     assert "/v1/protocols/parse" in paths
     assert "/v1/protocols/{protocol_id}/draft/export" in paths
+    assert "/v1/protocols/{protocol_id}/package/export" in paths
+    assert "/v1/protocols/package/import/plan" in paths
+    assert "/v1/protocols/package/import/apply" in paths
     assert "/v1/protocols/{protocol_id}/diff" in paths
     assert "/v1/protocols/{protocol_id}/template" not in paths
     assert paths["/v1/protocol-drafts"]["post"]["requestBody"]
@@ -1361,6 +1366,112 @@ def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, 
     assert export_response.json()["text"].startswith("schema_version: 1")
     assert diff_response.status_code == 200
     assert diff_response.json()["left_label"] == "draft"
+
+
+def test_protocol_package_export_composes_required_skill_document(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    protocol_document = {
+        "schema_version": 1,
+        "metadata": {"slug": "handoff", "display_name": "Handoff", "description": "Customer package"},
+        "participants": [{"participant_key": "worker", "display_name": "Worker", "instructions": ""}],
+        "artifacts": [{"artifact_key": "handoff", "display_name": "Handoff", "kind": "workspace_file", "path": "handoff.md", "verify": True}],
+        "stages": [{
+            "stage_key": "prepare",
+            "display_name": "Prepare",
+            "participant_key": "worker",
+            "selector": {"kind": "skill", "value": "handoff-skill", "preferred_agent_id": "agent-1"},
+            "stage_kind": "work",
+            "instructions": "Prepare it.",
+            "inputs": [],
+            "outputs": ["handoff"],
+            "transitions": {"completed": "__complete__"},
+            "write_capable": True,
+        }],
+        "policies": {"single_active_writer": True, "max_review_rounds": 5},
+    }
+    skill_text = skill_document_to_text(
+        skill_package_document(
+            SkillPackageRecord(
+                skill_name="handoff-skill",
+                display_name="Handoff Skill",
+                description="Write handoffs.",
+                body="Write handoff material.",
+                skill_kind="prompt",
+            )
+        ),
+        format="json",
+    )
+
+    class _Store:
+        def get_protocol(self, protocol_id: str, *, access):
+            assert protocol_id == "protocol-1"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="loaded",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="protocol-1",
+                    slug="handoff",
+                    display_name="Handoff",
+                    current_version_id="version-1",
+                ),
+                draft_definition_json=RegistryJsonRecord.model_validate(protocol_document),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="version-1",
+                    protocol_id="protocol-1",
+                    version=1,
+                    definition_json=RegistryJsonRecord.model_validate(protocol_document),
+                    content_hash="hash",
+                ),
+            )
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    display_name="M1",
+                    slug="m1",
+                    provider="codex",
+                    role="worker",
+                    routing_skills=["handoff-skill"],
+                    connectivity_state="connected",
+                )
+            ]
+
+    async def _export_skill(store, agent_id, skill_name, *, revision_scope="draft", format="json"):
+        assert agent_id == "agent-1"
+        assert skill_name == "handoff-skill"
+        return {
+            "name": skill_name,
+            "display_name": "Handoff Skill",
+            "file_name": "handoff-skill-draft.skill.json",
+            "content_type": "application/json",
+            "document_text": skill_text,
+            "format": "json",
+            "revision_scope": revision_scope,
+            "revision_id": "rev-1",
+        }
+
+    monkeypatch.setattr(registry_protocol_http, "export_catalog_skill_package", _export_skill)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "publisher", "author"),
+    )
+    try:
+        response = client.get("/v1/protocols/protocol-1/package/export?format=yaml&revision=published")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["format"] == "yaml"
+    assert payload["file_name"] == "handoff.octopus-protocol.yaml"
+    assert payload["package"]["kind"] == "octopus.protocol_package"
+    assert payload["package"]["skills"][0]["skill"]["name"] == "handoff-skill"
 
 
 def test_protocol_parse_route_accepts_draft_mode_for_incomplete_protocols(monkeypatch, tmp_path: Path):

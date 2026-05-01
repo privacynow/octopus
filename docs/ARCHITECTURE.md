@@ -196,7 +196,7 @@ Registry API families:
 | Routed work | `POST /v1/agents/routed-tasks`, status/result endpoints, `GET /v1/tasks`, `GET /v1/tasks/{id}` | Bot runtimes, Registry UI. |
 | Conversations | `GET/POST /v1/conversations`, messages, actions, events, progress, export | Registry UI and bot runtimes. |
 | Management bridge | `/v1/agents/{agent_id}/catalog/skills...`, `/guidance/{provider}...`, conversation skill/settings/reset routes | Registry UI, future peer channels. |
-| Protocol authoring | `GET /v1/protocols`, `POST /v1/protocols`, `POST /v1/protocol-drafts`, parse/export/diff/validate/publish/archive | Registry UI. |
+| Protocol authoring | `GET /v1/protocols`, `POST /v1/protocols`, `POST /v1/protocol-drafts`, parse/draft export/package export/package import/diff/validate/publish/archive | Registry UI. |
 | Protocol templates | `GET/POST /v1/protocol-templates` | Protocols UI. |
 | Protocol runs | `GET/POST /v1/protocol-runs`, issues, participants, artifacts, timeline, export, actions, rehearsal | Registry UI, Telegram protocol commands, SDK client. |
 | Usage/summary/approvals | `GET /v1/summary`, `GET /v1/usage`, `GET /v1/approvals` | Operations surfaces. |
@@ -512,6 +512,23 @@ Protocol document model:
 | Stages | `stage_key`, participant, selector, stage kind, instructions, inputs, outputs, transitions, write access, strict completion, timeout. |
 | Policies | Single active writer, max review rounds. |
 
+Protocol package model:
+
+| Object | Owner | Notes |
+| --- | --- | --- |
+| Package envelope | SDK protocol documents | Single JSON/YAML document with `kind = "octopus.protocol_package"` and schema version. |
+| Protocol | SDK protocol documents | Canonical protocol document; JSON and YAML are text views over the same model. |
+| Skills | SDK skill package model | Embedded skill package documents required by skill-assigned stages. |
+| Bindings | Registry package export/import | Source agent metadata and per-stage binding hints used to map imported stages to local bots. |
+| Metadata | Registry package export/import | Source registry/protocol identifiers, revision scope, package hash, and non-authoritative provenance. |
+
+Protocol packages are not zip archives. They are text documents so users can
+review, diff, store, and share them through normal document workflows. Skill
+package documents are embedded by composition; the protocol package does not
+invent a parallel skill format. Workspace artifact directories can still be
+downloaded as zip files through artifact content routes, but that is artifact
+delivery, not protocol/package authoring.
+
 Run launch model:
 
 | Input | Owner | Notes |
@@ -519,16 +536,61 @@ Run launch model:
 | `entry_agent_id` | Launching surface | Required. Owns the root run conversation; stage selectors still decide which agent receives each step. |
 | `workspace_ref` | Launching surface/user | Optional workspace/project reference for generated artifacts. |
 | `problem_statement` | Launching surface/user | Required run goal visible to assigned agents. |
-| `constraints_json` | Launching surface/user | Holds generic fields such as context, constraints, expected outputs, plus any protocol-authored custom run inputs. |
+| `constraints_json` | Launching surface/user | Holds generic launch context such as background, constraints, acceptance criteria, plus any protocol-authored custom run inputs. |
 | `metadata.run_inputs` | Protocol author | Optional protocol document metadata that replaces the conservative default launch form across UI/Telegram/SDK surfaces. |
 
 The default launch form is intentionally generic: workspace, concrete goal,
-context, constraints, and expected outputs. Product surfaces must not invent
-scenario-specific launch fields. If a workflow needs specialized run fields,
-the protocol author defines them in `metadata.run_inputs` so every launch
-surface reads the same contract. The Registry UI may warn when expected outputs
-entered at launch do not match declared protocol artifacts; the run can still
-start, but only declared artifacts are contract-verified.
+additional context, and constraints. Product surfaces must not invent
+scenario-specific launch fields or ask users to restate artifact filenames that
+the protocol already declares. If a workflow needs specialized run fields, the
+protocol author defines them in `metadata.run_inputs` so every launch surface
+reads the same contract. Declared protocol artifacts remain the output
+verification contract; launch context parameterizes the run but does not rewrite
+stages, assignments, skills, or artifact paths.
+
+Protocol package export/import flow:
+
+```mermaid
+sequenceDiagram
+    participant UI as Protocols UI
+    participant Registry
+    participant SDK as octopus_sdk/protocols
+    participant Skill as Skill package service
+    participant Store as protocol_store.py
+
+    UI->>Registry: GET /v1/protocols/{id}/package/export?format=json|yaml
+    Registry->>Store: Load draft or published protocol
+    Registry->>SDK: Canonicalize protocol document
+    Registry->>Skill: Export required skill package documents
+    Registry->>SDK: Compose octopus.protocol_package
+    Registry-->>UI: Single JSON/YAML package document
+
+    UI->>Registry: POST /v1/protocols/package/import/plan
+    Registry->>SDK: Parse and validate package document
+    Registry->>Store: Detect existing protocol slug
+    Registry->>Skill: Compare embedded skills against local bot candidates
+    Registry-->>UI: Import plan, warnings, required stage mappings
+
+    UI->>Registry: POST /v1/protocols/package/import/apply
+    Registry->>Skill: Import embedded skills to selected target bots
+    Registry->>Store: Save mapped protocol draft by selected policy
+    Registry-->>UI: Imported protocol draft
+```
+
+Import policies are explicit:
+
+| Policy | Behavior |
+| --- | --- |
+| `create_new` | Create the protocol when no matching slug exists. |
+| `import_copy` | Create a duplicate protocol using suggested copy slug/name. Default when the imported slug already exists. |
+| `overwrite_existing` | Replace the existing protocol draft; publication still requires the normal publish path. |
+| `fail_if_exists` | Stop rather than mutating an existing protocol. |
+
+Skill import is target-bot scoped. The import plan compares embedded skill
+package hashes to local candidates and requires a target bot when mapping is
+ambiguous. Identical skill content is idempotent; different content is surfaced
+in the plan before apply. Stage selectors are rewritten only through the
+reviewed stage mapping plan, not by ad-hoc client-side string editing.
 
 Runtime lineage:
 
@@ -623,6 +685,9 @@ Artifact resolution rules:
 - Rehearsal text can be served even when no workspace file exists.
 - Protocol run export includes metadata and lineage. It should not silently
   expose file contents except through explicit content routes.
+- Protocol package export is a definition-sharing path. It includes the
+  protocol document and required skill package documents, not produced run
+  artifacts.
 
 ```mermaid
 sequenceDiagram
@@ -681,6 +746,11 @@ Skill package content:
 | Provider config | Provider-specific activation/config data. |
 | Files | Supporting package files, subject to path and size policy. |
 | Lifecycle | Draft, review, approval, publish, archive. |
+
+Protocol package import/export reuses this skill package model. A required
+stage skill is embedded as a normal skill package document; registry import
+then applies it to selected target bots through the same management bridge used
+by direct skill import. There is no protocol-only skill representation.
 
 Guidance is separate from skills. It is provider-scoped baseline policy for
 Claude/Codex behavior. It is managed through provider guidance tracks/revisions,
@@ -766,6 +836,9 @@ Standard authoring rules:
   standard path.
 - Delete is a normal destructive stage action, not hidden under an "Advanced"
   section.
+- Protocol package export/import controls belong in the Protocols surface.
+  Import must review the package, show existing-protocol warnings, collect
+  required stage-to-bot mappings, and apply one explicit protocol policy.
 
 Operator authoring:
 
@@ -800,6 +873,10 @@ Protocol Telegram buttons are presentation affordances only. Button callbacks
 resolve runs and artifacts through `octopus_sdk.protocols.ProtocolService` and
 the same registry-backed ports used by slash commands; they must not introduce a
 Telegram-only protocol execution, artifact, or run-control path.
+
+`/protocol export` is a run export command. Protocol package export/import are
+Registry authoring workflows because they need review UI, skill target mapping,
+and protocol copy/overwrite policy selection.
 
 ## Control Plane
 
@@ -866,6 +943,48 @@ Verification expectations for UI architecture work:
 - Verify in real Safari at desktop and narrow widths before calling UI work done.
 - When a live deployed UI looks wrong, hard-refresh Safari with macOS-specific
   refresh behavior before deciding whether code or cache is at fault.
+
+## Documentation Architecture
+
+User-facing documentation is intentionally progressive. The README is the entry
+point and navigation hub; it should not become a full product manual.
+
+Current public documentation map:
+
+| Document | Role |
+| --- | --- |
+| `README.md` | Product overview, quick start, and guide index. |
+| `docs/USER_GUIDE.md` | Primary browser Registry workflow for new users. |
+| `docs/PROTOCOLS.md` | Protocol authoring, run inspection, package export/import, and troubleshooting. |
+| `docs/OPERATIONS.md` | Local stack operation, demo readiness, health checks, logs, and runbook guidance. |
+| `docs/TELEGRAM.md` | Optional Telegram command/reference surface. |
+| `docs/examples/README.md` | Scenario index. Examples are not product defaults. |
+
+Developer and internal references stay separate from the public learning path:
+
+| Document | Role |
+| --- | --- |
+| `docs/ARCHITECTURE.md` | System architecture, ownership boundaries, and architecture rules. |
+| `docs/SDK_BOT_DEVELOPMENT.md` | SDK/runtime extension guide. |
+| `docs/SKILLS_MODEL.md` | Lower-level skill state and package model. |
+| `docs/PROTOCOL_ASSIGNMENT_AUDIT.md` | Assignment validation audit and product rules. |
+| `docs/registry-openapi.json` | Checked-in Registry API contract artifact. |
+
+Documentation rules:
+
+- Do not recreate deleted overlapping guides as compatibility shims.
+- Top-level Markdown documents in `docs/` use uppercase names. Scenario files
+  under `docs/examples/` use lowercase descriptive slugs. Generated artifacts
+  keep their generated names.
+- Put browser workflow guidance in `USER_GUIDE.md`, protocol behavior in
+  `PROTOCOLS.md`, operations in `OPERATIONS.md`, and Telegram command behavior
+  in `TELEGRAM.md`.
+- Keep customer or demo scenarios under `docs/examples/` so scenario-specific
+  prompts, artifacts, and vocabulary do not become product defaults.
+- Route/API changes update `docs/registry-openapi.json`, the relevant guide,
+  and contract tests in the same change.
+- Architecture-impacting changes update this file and the architecture
+  guardrails in `tests/test_protocol_docs.py`.
 
 ## Extension Model
 

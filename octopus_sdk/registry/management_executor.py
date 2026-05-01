@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -343,6 +342,7 @@ async def execute_management_request(
             artifact = context.workflows.runtime_skills.authoring.export_package(
                 payload.skill_name,
                 revision_scope=payload.revision_scope,
+                format=payload.format,
             )
             return ManagementResult(
                 request_id=request.request_id,
@@ -357,13 +357,10 @@ async def execute_management_request(
                 ),
             )
         if isinstance(payload, ImportCatalogSkillPackageRequest):
-            try:
-                package_bytes = base64.b64decode(payload.package_base64.encode("ascii"))
-            except Exception:
-                package_bytes = b""
             mutation = context.workflows.runtime_skills.authoring.import_package(
                 actor_key=payload.actor_key,
-                package_bytes=package_bytes,
+                document_text=payload.document_text,
+                format=payload.format,
                 file_name=payload.file_name,
                 target_skill_name=payload.target_skill_name,
             )

@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from octopus_sdk.content_store import ContentStorePort
 from octopus_sdk.providers import ProviderConfigRecord, coerce_provider_config
 from octopus_sdk.skill_packages import (
-    build_skill_package_archive,
     coerce_skill_requirements,
     coerce_skill_files,
     default_skill_display_name,
-    parse_skill_package_archive,
+    normalize_skill_document_format,
+    parse_skill_package_document,
     publish_ready,
+    skill_package_document_to_text,
+    skill_package_from_track,
+    skill_package_hash,
     skill_runtime_available,
     validate_skill_package,
 )
@@ -376,10 +380,15 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         skill_name: str,
         *,
         revision_scope: str = "draft",
+        format: str = "json",
     ) -> RuntimeSkillPackageArtifact | None:
         track = self._mutable_track(skill_name)
         if track is None:
             return None
+        try:
+            normalized_format = normalize_skill_document_format(format)
+        except ValueError:
+            normalized_format = "json"
         normalized_scope = "published" if str(revision_scope or "").strip().lower() == "published" else "draft"
         export_track = track
         revision_id = track.active_revision_id
@@ -412,13 +421,20 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
                 published_revision_id=published_revision_id,
             )
             revision_id = published_revision_id
-        archive_bytes = build_skill_package_archive(export_track)
+        document_text = skill_package_document_to_text(
+            skill_package_from_track(export_track),
+            format=normalized_format,
+            source="runtime-skill-authoring",
+            revision_scope=normalized_scope,
+            revision_id=revision_id,
+        )
         return RuntimeSkillPackageArtifact(
             name=export_track.slug,
             display_name=export_track.display_name,
-            file_name=f"{export_track.slug}-{normalized_scope}.skill.zip",
-            content_type="application/zip",
-            content_bytes=archive_bytes,
+            file_name=f"{export_track.slug}-{normalized_scope}.skill.{normalized_format}",
+            content_type="application/x-yaml" if normalized_format == "yaml" else "application/json",
+            content_text=document_text,
+            format=normalized_format,
             revision_scope=normalized_scope,
             revision_id=revision_id,
         )
@@ -427,12 +443,13 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         self,
         *,
         actor_key: str,
-        package_bytes: bytes,
+        document_text: str,
+        format: str = "json",
         file_name: str = "",
         target_skill_name: str = "",
     ) -> RuntimeSkillLifecycleMutation:
         try:
-            package = parse_skill_package_archive(package_bytes)
+            package = parse_skill_package_document(document_text, format=format)
         except ValueError as exc:
             return RuntimeSkillLifecycleMutation(
                 status="invalid",
@@ -446,7 +463,15 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
                 ok=False,
                 message="Skill package does not include a valid skill name.",
             )
+        package = replace(package, skill_name=skill_name)
         track = self._mutable_track(skill_name)
+        if track is not None and skill_package_hash(skill_package_from_track(track)) == skill_package_hash(package):
+            return RuntimeSkillLifecycleMutation(
+                status="unchanged",
+                ok=True,
+                message=f"Skill package for '{skill_name}' is already current.",
+                detail=self.detail(skill_name),
+            )
         if track is None:
             try:
                 self._catalog.create_custom_draft(skill_name, owner_actor=actor_key)

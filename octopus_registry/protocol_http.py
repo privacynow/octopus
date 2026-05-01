@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import copy
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -14,10 +15,30 @@ from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolArtifactRecord,
     ProtocolDraftCreateRecord,
+    ProtocolPackageImportApplyResultRecord,
+    ProtocolPackageImportPlanRecord,
+    ProtocolPackageIssueRecord,
+    ProtocolPackageProtocolPlanRecord,
+    ProtocolPackageSkillPlanRecord,
+    ProtocolPackageStageMappingPlanRecord,
     ProtocolRunCreateRecord,
     ProtocolTemplateCreateRecord,
+    TargetSelector,
+    canonical_protocol_document,
+    protocol_definition_content_hash,
+    protocol_package_document,
+    protocol_package_from_text,
+    protocol_package_hash,
+    protocol_package_required_skill_names,
+    protocol_package_to_text,
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
+from octopus_sdk.skill_packages import (
+    skill_document_from_text,
+    skill_document_to_text,
+    skill_package_from_document,
+    skill_package_hash,
+)
 
 from .artifact_paths import (
     artifact_download_name,
@@ -28,6 +49,11 @@ from .artifact_responses import workspace_artifact_content_response
 from .artifact_responses import rendered_artifact_text_preview_response
 from .auth import AuthContext
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
+from .ingress import (
+    RegistryIngressError,
+    export_catalog_skill_package,
+    import_catalog_skill_package,
+)
 from .rehearsal import RehearsalSessionManager
 from .store_base import AbstractRegistryStore
 
@@ -91,6 +117,113 @@ def build_protocol_router(
         if status == "invalid":
             return _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=message)
         return _protocol_http_error(400, error_code="PROTOCOL_REQUEST_FAILED", message=message)
+
+    def _package_format(value: object) -> str:
+        token = str(value or "").strip().lower()
+        if token in {"yaml", "yml"}:
+            return "yaml"
+        return "json"
+
+    def _agent_json(agent) -> dict[str, Any]:
+        row = agent.model_dump(mode="json") if hasattr(agent, "model_dump") else dict(agent)
+        return {
+            "agent_id": str(row.get("agent_id", "") or ""),
+            "slug": str(row.get("slug", "") or ""),
+            "display_name": str(row.get("display_name", "") or ""),
+            "provider": str(row.get("provider", "") or ""),
+            "role": str(row.get("role", "") or ""),
+            "routing_skills": [
+                str(item or "").strip().lower()
+                for item in row.get("routing_skills", []) or []
+                if str(item or "").strip()
+            ],
+        }
+
+    def _connected_agents(store: AbstractRegistryStore) -> list[dict[str, Any]]:
+        return [
+            _agent_json(agent)
+            for agent in store.list_agents(cursor=0, limit=200, connectivity_state="connected")
+        ]
+
+    def _agents_for_skill(agents: list[dict[str, Any]], skill_name: str) -> list[dict[str, Any]]:
+        name = str(skill_name or "").strip().lower()
+        return [
+            agent for agent in agents
+            if name in {str(item or "").strip().lower() for item in agent.get("routing_skills", [])}
+        ]
+
+    def _agent_by_id(agents: list[dict[str, Any]], agent_id: str) -> dict[str, Any] | None:
+        normalized = str(agent_id or "").strip()
+        if not normalized:
+            return None
+        return next((agent for agent in agents if str(agent.get("agent_id", "") or "") == normalized), None)
+
+    def _protocol_metadata(document) -> dict[str, str]:
+        metadata = document.metadata.as_dict() if hasattr(document.metadata, "as_dict") else dict(document.metadata or {})
+        return {
+            "slug": str(metadata.get("slug", "") or "").strip(),
+            "display_name": str(metadata.get("display_name", "") or "").strip(),
+            "description": str(metadata.get("description", "") or "").strip(),
+        }
+
+    def _protocol_package_filename(slug: str, fmt: str) -> str:
+        safe_slug = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(slug or "protocol").strip().lower()).strip("-") or "protocol"
+        return f"{safe_slug}.octopus-protocol.{fmt}"
+
+    def _suggest_copy_identity(store: AbstractRegistryStore, slug: str, display_name: str, access: ProtocolAccessContextRecord) -> tuple[str, str]:
+        base_slug = str(slug or "imported-protocol").strip().lower() or "imported-protocol"
+        base_name = str(display_name or base_slug.replace("-", " ").title()).strip()
+        existing = {
+            str(item.slug or "").strip().lower()
+            for item in store.list_protocols(access=access, limit=500, include_drafts=True)
+        }
+        index = 2
+        while True:
+            candidate = f"{base_slug}-copy-{index}"
+            if candidate not in existing:
+                return candidate, f"{base_name} (Imported {index})"
+            index += 1
+
+    def _stage_mapping_choices(payload: dict[str, Any]) -> dict[str, str]:
+        mappings: dict[str, str] = {}
+        for item in payload.get("stage_mappings") or []:
+            if not isinstance(item, dict):
+                continue
+            stage_key = str(item.get("stage_key", "") or "").strip()
+            agent_id = str(item.get("target_agent_id", "") or "").strip()
+            if stage_key and agent_id:
+                mappings[stage_key] = agent_id
+        return mappings
+
+    def _skill_target_choices(payload: dict[str, Any]) -> dict[str, str]:
+        mappings: dict[str, str] = {}
+        for item in payload.get("skill_targets") or []:
+            if not isinstance(item, dict):
+                continue
+            skill_name = str(item.get("skill_name", item.get("name", "")) or "").strip().lower()
+            agent_id = str(item.get("target_agent_id", "") or "").strip()
+            if skill_name and agent_id:
+                mappings[skill_name] = agent_id
+        return mappings
+
+    def _copy_protocol_document_with_mappings(package, stage_mappings: dict[str, str]) -> dict[str, Any]:
+        document = copy.deepcopy(package.protocol.model_dump(mode="json"))
+        stages = document.get("stages") if isinstance(document.get("stages"), list) else []
+        for stage in stages:
+            if not isinstance(stage, dict):
+                continue
+            stage_key = str(stage.get("stage_key", "") or "").strip()
+            target_agent_id = stage_mappings.get(stage_key, "")
+            selector = stage.get("selector")
+            if not isinstance(selector, dict) or not target_agent_id:
+                continue
+            kind = str(selector.get("kind", "") or "").strip().lower()
+            if kind == "skill":
+                selector["preferred_agent_id"] = target_agent_id
+            elif kind == "agent":
+                selector["value"] = target_agent_id
+                selector.pop("preferred_agent_id", None)
+        return document
 
     def _expected_protocol_version(if_match: str | None) -> int | None:
         value = str(if_match or "").strip()
@@ -247,6 +380,518 @@ def build_protocol_router(
         except ValidationError as exc:
             raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=str(exc)) from exc
         return _json_payload(parsed)
+
+    @router.get("/v1/protocols/{protocol_id}/package/export")
+    async def resource_export_protocol_package(
+        protocol_id: str,
+        format: str = Query(default="json"),
+        revision: str = Query(default=""),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        normalized_format = _package_format(format)
+        detail = store.get_protocol(protocol_id, access=access)
+        if not detail.ok or detail.protocol is None:
+            raise _protocol_result_http_error(detail)
+
+        requested_revision = str(revision or "").strip().lower()
+        version = detail.version
+        use_published = requested_revision == "published" or (not requested_revision and version is not None)
+        if use_published:
+            if version is None:
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_PACKAGE_NO_PUBLISHED_VERSION",
+                    message="This protocol has no published version to export.",
+                )
+            protocol_document = version.definition_json.as_dict()
+            revision_scope = "published"
+        else:
+            protocol_document = detail.draft_definition_json.as_dict()
+            revision_scope = "draft"
+
+        required_skills = protocol_package_required_skill_names(protocol_document)
+        agents = _connected_agents(store)
+        source_agents_by_id: dict[str, dict[str, Any]] = {}
+        skill_documents: list[dict[str, object]] = []
+        skill_agent_id: dict[str, str] = {}
+        warnings: list[dict[str, Any]] = []
+
+        protocol_record = detail.protocol
+        export_protocol_document = canonical_protocol_document(protocol_document)
+        for skill_name in required_skills:
+            preferred_ids = []
+            for stage in export_protocol_document.stages:
+                selector = stage.selector
+                if (
+                    selector is not None
+                    and str(selector.kind or "").strip().lower() == "skill"
+                    and str(selector.value or "").strip().lower() == skill_name
+                    and str(selector.preferred_agent_id or "").strip()
+                ):
+                    preferred_ids.append(str(selector.preferred_agent_id or "").strip())
+            candidates = []
+            for preferred_id in preferred_ids:
+                agent = _agent_by_id(agents, preferred_id)
+                if agent is not None:
+                    candidates.append(agent)
+            if not candidates:
+                candidates = _agents_for_skill(agents, skill_name)
+            exported: list[tuple[dict[str, Any], dict[str, object], str]] = []
+            for agent in candidates:
+                try:
+                    artifact = await export_catalog_skill_package(
+                        store,
+                        str(agent.get("agent_id", "") or ""),
+                        skill_name,
+                        revision_scope=revision_scope,
+                        format="json",
+                    )
+                    document = skill_document_from_text(
+                        str(artifact.get("document_text", "") or ""),
+                        format=str(artifact.get("format", "") or "json"),
+                    )
+                    package_hash = skill_package_hash(skill_package_from_document(document))
+                    exported.append((agent, document, package_hash))
+                except Exception as exc:
+                    warnings.append({
+                        "code": "skill_export_failed",
+                        "message": f"Could not export skill '{skill_name}' from {agent.get('display_name') or agent.get('slug') or agent.get('agent_id')}: {exc}",
+                        "severity": "warning",
+                        "blocking": False,
+                    })
+            if not exported:
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_PACKAGE_SKILL_MISSING",
+                    message=f"Required skill '{skill_name}' could not be exported from any connected bot.",
+                    details={"skill_name": skill_name, "candidates": candidates},
+                )
+            hashes = {item[2] for item in exported}
+            if len(hashes) > 1:
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_PACKAGE_SKILL_AMBIGUOUS",
+                    message=f"Required skill '{skill_name}' exists on multiple bots with different content. Choose a source bot before exporting.",
+                    details={
+                        "skill_name": skill_name,
+                        "candidates": [
+                            {**agent, "package_hash": package_hash}
+                            for agent, _, package_hash in exported
+                        ],
+                    },
+                )
+            chosen_agent, chosen_document, _ = exported[0]
+            skill_documents.append(chosen_document)
+            skill_agent_id[skill_name] = str(chosen_agent.get("agent_id", "") or "")
+            source_agents_by_id[str(chosen_agent.get("agent_id", "") or "")] = chosen_agent
+
+        source_agent_keys = {
+            agent_id: f"source-agent-{index + 1}"
+            for index, agent_id in enumerate(sorted(source_agents_by_id))
+        }
+        source_agents = [
+            {
+                "source_agent_key": source_agent_keys[agent_id],
+                "source_agent_id": agent_id,
+                "slug": source_agents_by_id[agent_id].get("slug", ""),
+                "display_name": source_agents_by_id[agent_id].get("display_name", ""),
+                "provider": source_agents_by_id[agent_id].get("provider", ""),
+                "role": source_agents_by_id[agent_id].get("role", ""),
+                "advertised_skills": source_agents_by_id[agent_id].get("routing_skills", []),
+            }
+            for agent_id in sorted(source_agents_by_id)
+        ]
+        package_protocol = protocol_package_document(protocol=protocol_document, skills=skill_documents).protocol
+        stage_bindings = []
+        for stage in package_protocol.stages:
+            selector = stage.selector
+            required = []
+            source_key = ""
+            if selector is not None and str(selector.kind or "").strip().lower() == "skill":
+                skill_name = str(selector.value or "").strip().lower()
+                required = [skill_name] if skill_name else []
+                agent_id = str(selector.preferred_agent_id or "").strip() or skill_agent_id.get(skill_name, "")
+                source_key = source_agent_keys.get(agent_id, "")
+            stage_bindings.append({
+                "stage_key": stage.stage_key,
+                "selector": selector.model_dump(mode="json") if selector is not None else None,
+                "source_agent_key": source_key,
+                "required_skills": required,
+            })
+
+        package = protocol_package_document(
+            protocol=protocol_document,
+            skills=skill_documents,
+            bindings={
+                "source_agents": source_agents,
+                "stage_bindings": stage_bindings,
+            },
+            metadata={
+                "source": "registry",
+                "revision_scope": revision_scope,
+                "protocol_id": protocol_record.protocol_id,
+                "protocol_slug": protocol_record.slug,
+            },
+        )
+        text = protocol_package_to_text(package, format=normalized_format)
+        return _json_payload({
+            "format": normalized_format,
+            "file_name": _protocol_package_filename(protocol_record.slug, normalized_format),
+            "content_type": "application/x-yaml" if normalized_format == "yaml" else "application/json",
+            "text": text,
+            "package": package,
+            "package_hash": protocol_package_hash(package),
+            "warnings": warnings,
+        })
+
+    async def _protocol_package_import_plan(
+        *,
+        store: AbstractRegistryStore,
+        access: ProtocolAccessContextRecord,
+        payload: dict[str, Any],
+    ) -> ProtocolPackageImportPlanRecord:
+        normalized_format = _package_format(payload.get("format", "json"))
+        issues: list[ProtocolPackageIssueRecord] = []
+        warnings: list[ProtocolPackageIssueRecord] = []
+        try:
+            package = protocol_package_from_text(str(payload.get("text", "") or ""), format=normalized_format)
+        except Exception as exc:
+            issue = ProtocolPackageIssueRecord(
+                code="package.invalid",
+                message=str(exc),
+                severity="error",
+                blocking=True,
+            )
+            return ProtocolPackageImportPlanRecord(
+                ok=False,
+                format=normalized_format,
+                blocking_issues=[issue],
+            )
+
+        metadata = _protocol_metadata(package.protocol)
+        slug = metadata["slug"]
+        display_name = metadata["display_name"]
+        existing_protocols = [
+            item for item in store.list_protocols(access=access, limit=500, include_drafts=True)
+            if str(item.slug or "").strip().lower() == slug.lower()
+        ]
+        existing = existing_protocols[0] if existing_protocols else None
+        imported_hash = "sha256:" + protocol_definition_content_hash(package.protocol)
+        identical = False
+        if existing is not None:
+            detail = store.get_protocol(existing.protocol_id, access=access)
+            existing_hash = str(detail.validation.content_hash if detail.validation is not None else "" or "")
+            identical = existing_hash in {imported_hash, imported_hash.replace("sha256:", "")}
+        copy_slug, copy_name = _suggest_copy_identity(store, slug, display_name, access)
+        protocol_plan = ProtocolPackageProtocolPlanRecord(
+            slug=slug,
+            display_name=display_name,
+            exists=existing is not None,
+            existing_protocol_id=str(existing.protocol_id if existing is not None else ""),
+            identical_to_existing=identical,
+            available_policies=["overwrite_existing", "import_copy", "fail_if_exists"] if existing is not None else ["create_new", "fail_if_exists"],
+            suggested_copy_slug=copy_slug,
+            suggested_copy_display_name=copy_name,
+        )
+
+        agents = _connected_agents(store)
+        stage_choices = _stage_mapping_choices(payload)
+        skill_choices = _skill_target_choices(payload)
+        skill_plans: list[ProtocolPackageSkillPlanRecord] = []
+        skill_docs_by_name: dict[str, dict[str, object]] = {}
+        for item in package.skills:
+            document = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+            skill_package = skill_package_from_document(document)
+            skill_name = skill_package.skill_name
+            skill_docs_by_name[skill_name] = document
+            package_hash = skill_package_hash(skill_package)
+            candidates = _agents_for_skill(agents, skill_name)
+            target_agent_id = skill_choices.get(skill_name, "")
+            candidate_rows: list[dict[str, Any]] = []
+            matching_hash = False
+            different_hash = False
+            compare_agents = [_agent_by_id(agents, target_agent_id)] if target_agent_id else candidates
+            for agent in [item for item in compare_agents if item is not None]:
+                existing_hash = ""
+                try:
+                    artifact = await export_catalog_skill_package(
+                        store,
+                        str(agent.get("agent_id", "") or ""),
+                        skill_name,
+                        revision_scope="draft",
+                        format="json",
+                    )
+                    existing_document = skill_document_from_text(
+                        str(artifact.get("document_text", "") or ""),
+                        format=str(artifact.get("format", "") or "json"),
+                    )
+                    existing_hash = skill_package_hash(skill_package_from_document(existing_document))
+                    if existing_hash == package_hash:
+                        matching_hash = True
+                    else:
+                        different_hash = True
+                except Exception:
+                    existing_hash = ""
+                candidate_rows.append({**agent, "package_hash": existing_hash})
+            if target_agent_id:
+                status = "identical" if matching_hash else ("different_content" if different_hash else "missing")
+            elif matching_hash:
+                status = "identical"
+                target_agent_id = str(candidate_rows[0].get("agent_id", "") or "") if len(candidate_rows) == 1 else ""
+            elif candidates:
+                status = "different_content" if different_hash else "available"
+            else:
+                status = "missing"
+            skill_plans.append(
+                ProtocolPackageSkillPlanRecord(
+                    name=skill_name,
+                    package_hash=package_hash,
+                    status=status,
+                    target_agent_id=target_agent_id,
+                    candidates=[RegistryJsonRecord.model_validate(row) for row in candidate_rows or candidates],
+                    message=(
+                        "Skill content matches the selected bot."
+                        if status == "identical"
+                        else "Skill will be imported to the selected bot."
+                    ),
+                )
+            )
+
+        stage_plans: list[ProtocolPackageStageMappingPlanRecord] = []
+        for stage in package.protocol.stages:
+            selector = stage.selector
+            if selector is None:
+                continue
+            kind = str(selector.kind or "").strip().lower()
+            value = str(selector.value or "").strip()
+            candidates: list[dict[str, Any]] = []
+            target_agent_id = stage_choices.get(stage.stage_key, "")
+            status = "unmapped"
+            message = ""
+            if kind == "skill":
+                candidates = _agents_for_skill(agents, value)
+                if target_agent_id:
+                    status = "mapped"
+                elif str(selector.preferred_agent_id or "").strip() and _agent_by_id(agents, selector.preferred_agent_id):
+                    target_agent_id = str(selector.preferred_agent_id or "").strip()
+                    status = "auto_resolved"
+                elif len(candidates) == 1:
+                    target_agent_id = str(candidates[0].get("agent_id", "") or "")
+                    status = "auto_resolved"
+                elif len(candidates) > 1:
+                    status = "requires_mapping"
+                    message = "Choose which bot should run this skill stage."
+                else:
+                    status = "requires_mapping"
+                    message = "Choose a bot to receive the required skill."
+            elif kind == "agent":
+                lowered = value.lower()
+                candidates = [
+                    agent for agent in agents
+                    if lowered in {
+                        str(agent.get("agent_id", "") or "").lower(),
+                        str(agent.get("slug", "") or "").lower(),
+                        str(agent.get("display_name", "") or "").lower(),
+                    }
+                ]
+                if target_agent_id:
+                    status = "mapped"
+                elif len(candidates) == 1:
+                    target_agent_id = str(candidates[0].get("agent_id", "") or "")
+                    status = "auto_resolved"
+                else:
+                    status = "requires_mapping"
+                    message = "Choose the local bot for this agent assignment."
+            elif kind == "role":
+                lowered = value.lower()
+                candidates = [
+                    agent for agent in agents
+                    if lowered and lowered in str(agent.get("role", "") or "").lower()
+                ]
+                if target_agent_id:
+                    status = "mapped"
+                elif len(candidates) == 1:
+                    target_agent_id = str(candidates[0].get("agent_id", "") or "")
+                    status = "auto_resolved"
+                elif len(candidates) > 1:
+                    status = "requires_mapping"
+                    message = "Choose one bot so this role assignment is deterministic."
+                else:
+                    status = "requires_mapping"
+                    message = "Choose the local bot for this role assignment."
+            if status == "requires_mapping":
+                issues.append(
+                    ProtocolPackageIssueRecord(
+                        code="stage.mapping_required",
+                        message=f"Stage '{stage.display_name or stage.stage_key}' needs a target bot mapping.",
+                        severity="error",
+                        field_path=f"stages.{stage.stage_key}.selector",
+                        blocking=True,
+                    )
+                )
+            stage_plans.append(
+                ProtocolPackageStageMappingPlanRecord(
+                    stage_key=stage.stage_key,
+                    selector=selector,
+                    status=status,
+                    target_agent_id=target_agent_id,
+                    candidates=[RegistryJsonRecord.model_validate(row) for row in candidates],
+                    message=message,
+                )
+            )
+
+        if existing is not None:
+            warnings.append(
+                ProtocolPackageIssueRecord(
+                    code="protocol.exists",
+                    message=f"Protocol slug '{slug}' already exists. Choose overwrite draft or import as copy.",
+                    severity="warning",
+                    blocking=False,
+                )
+            )
+        return ProtocolPackageImportPlanRecord(
+            ok=not issues,
+            format=normalized_format,
+            package_hash=protocol_package_hash(package),
+            protocol=protocol_plan,
+            skills=skill_plans,
+            stage_mappings=stage_plans,
+            blocking_issues=issues,
+            warnings=warnings,
+        )
+
+    @router.post("/v1/protocols/package/import/plan")
+    async def resource_protocol_package_import_plan(
+        request: Request,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise _protocol_http_error(400, error_code="PROTOCOL_PACKAGE_INVALID", message="Invalid protocol package payload.")
+        plan = await _protocol_package_import_plan(store=store, access=protocol_access(auth), payload=payload)
+        return _json_payload(plan)
+
+    @router.post("/v1/protocols/package/import/apply")
+    async def resource_protocol_package_import_apply(
+        request: Request,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise _protocol_http_error(400, error_code="PROTOCOL_PACKAGE_INVALID", message="Invalid protocol package payload.")
+        access = protocol_access(auth)
+        plan = await _protocol_package_import_plan(store=store, access=access, payload=payload)
+        if plan.blocking_issues:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_PACKAGE_MAPPING_REQUIRED",
+                message=plan.blocking_issues[0].message,
+                details=plan.model_dump(mode="json"),
+            )
+        normalized_format = _package_format(payload.get("format", "json"))
+        package = protocol_package_from_text(str(payload.get("text", "") or ""), format=normalized_format)
+        stage_choices = {
+            item.stage_key: item.target_agent_id
+            for item in plan.stage_mappings
+            if item.target_agent_id
+        }
+        stage_choices.update(_stage_mapping_choices(payload))
+        skill_targets = _skill_target_choices(payload)
+        skill_results: list[RegistryJsonRecord] = []
+        for item in package.skills:
+            document = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+            skill_package = skill_package_from_document(document)
+            skill_name = skill_package.skill_name
+            target_ids = {
+                target
+                for stage in package.protocol.stages
+                if stage.selector is not None
+                and str(stage.selector.kind or "").strip().lower() == "skill"
+                and str(stage.selector.value or "").strip().lower() == skill_name
+                for target in [stage_choices.get(stage.stage_key, "")]
+                if target
+            }
+            explicit_target = skill_targets.get(skill_name, "")
+            if explicit_target:
+                target_ids.add(explicit_target)
+            if not target_ids:
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_PACKAGE_SKILL_TARGET_REQUIRED",
+                    message=f"Skill '{skill_name}' needs a target bot before import.",
+                )
+            document_text = skill_document_to_text(document, format="json")
+            for agent_id in sorted(target_ids):
+                try:
+                    result = await import_catalog_skill_package(
+                        store,
+                        agent_id,
+                        actor_key=getattr(auth, "actor_key", "") or getattr(auth, "subject", "") or "reg:registry-ui",
+                        document_text=document_text,
+                        format="json",
+                        file_name=f"{skill_name}.skill.json",
+                        target_skill_name=skill_name,
+                    )
+                    skill_results.append(RegistryJsonRecord.model_validate({"agent_id": agent_id, "skill_name": skill_name, "result": result}))
+                except RegistryIngressError as exc:
+                    raise _protocol_http_error(exc.status_code, error_code="PROTOCOL_PACKAGE_SKILL_IMPORT_FAILED", message=exc.detail) from exc
+
+        rewritten_document = _copy_protocol_document_with_mappings(package, stage_choices)
+        metadata = _protocol_metadata(package.protocol)
+        policy = str(payload.get("protocol_policy", "") or "").strip().lower()
+        if not policy:
+            policy = "import_copy" if plan.protocol.exists else "create_new"
+        protocol_id = ""
+        slug = metadata["slug"]
+        display_name = metadata["display_name"]
+        if policy == "overwrite_existing":
+            if not plan.protocol.existing_protocol_id:
+                raise _protocol_http_error(409, error_code="PROTOCOL_PACKAGE_NO_EXISTING_PROTOCOL", message="No existing protocol was found to overwrite.")
+            protocol_id = plan.protocol.existing_protocol_id
+        elif policy == "import_copy":
+            slug = str(payload.get("copy_slug", "") or plan.protocol.suggested_copy_slug).strip()
+            display_name = str(payload.get("copy_display_name", "") or plan.protocol.suggested_copy_display_name).strip()
+        elif policy in {"create_new", "fail_if_exists"}:
+            if plan.protocol.exists:
+                raise _protocol_http_error(409, error_code="PROTOCOL_PACKAGE_PROTOCOL_EXISTS", message="Protocol already exists.")
+        else:
+            raise _protocol_http_error(400, error_code="PROTOCOL_PACKAGE_POLICY_INVALID", message="Unsupported protocol import policy.")
+
+        mutation = store.save_protocol_draft(
+            access=access,
+            protocol_id=protocol_id,
+            slug=slug,
+            display_name=display_name,
+            description=metadata["description"],
+            definition_json=RegistryJsonRecord.model_validate(rewritten_document),
+            authoring_surface="operator",
+        )
+        if not mutation.ok:
+            raise _protocol_result_http_error(mutation)
+        if bool(payload.get("publish", False)):
+            mutation = store.publish_protocol(mutation.protocol.protocol_id if mutation.protocol is not None else protocol_id, access=access)
+            if not mutation.ok:
+                raise _protocol_result_http_error(mutation)
+        await broadcast_invalidations(topics=("protocols",), reason="protocol.package.imported")
+        return _json_payload(
+            ProtocolPackageImportApplyResultRecord(
+                ok=True,
+                status="applied",
+                message="Protocol package imported.",
+                protocol=mutation.protocol,
+                mutation=mutation,
+                plan=plan,
+                skill_results=skill_results,
+                mapping_results=[
+                    RegistryJsonRecord.model_validate({"stage_key": key, "target_agent_id": value})
+                    for key, value in sorted(stage_choices.items())
+                ],
+            )
+        )
 
     @router.get("/v1/protocols/{protocol_id}/draft/export")
     def resource_export_protocol_draft(

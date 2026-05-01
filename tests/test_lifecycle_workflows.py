@@ -13,7 +13,7 @@ from octopus_sdk.content_models import SkillFileRecord
 from octopus_sdk.identity import telegram_actor_key
 from octopus_sdk.providers import ProviderConfigRecord, ProviderStateRecord
 from octopus_sdk.sessions import session_from_dict
-from octopus_sdk.skill_packages import parse_skill_package_archive
+from octopus_sdk.skill_packages import parse_skill_package_document
 from octopus_sdk.skill_types import SkillRequirement
 from app.runtime import composition
 from app.storage import close_db, default_session, ensure_data_dirs
@@ -185,15 +185,16 @@ def test_runtime_skill_draft_package_roundtrip_and_validation(tmp_path: Path):
 
         artifact = authoring.export_package("package-skill")
         assert artifact is not None
-        assert artifact.file_name == "package-skill-draft.skill.zip"
-        exported = parse_skill_package_archive(artifact.content_bytes)
+        assert artifact.file_name == "package-skill-draft.skill.json"
+        exported = parse_skill_package_document(artifact.content_text, format=artifact.format)
         assert exported.skill_name == "package-skill"
         assert exported.skill_kind == "executable"
         assert exported.provider_config["claude"]["allowed_tools"] == ["bash"]
 
         imported = authoring.import_package(
             actor_key=actor_key,
-            package_bytes=artifact.content_bytes,
+            document_text=artifact.content_text,
+            format=artifact.format,
             file_name=artifact.file_name,
             target_skill_name="package-copy",
         )

@@ -63,7 +63,8 @@ class RuntimeSkillDraftUpdateRequest(LifecycleActionRequest):
 class RuntimeSkillPackageImportRequest(LifecycleActionRequest):
     target_skill_name: str = Field(default="", description="Optional existing custom draft to replace")
     file_name: str = Field(default="", description="Original uploaded file name")
-    package_base64: str = Field(..., min_length=1, description="Base64-encoded skill package archive")
+    format: str = Field(default="json", description="Skill package document format: json or yaml")
+    document_text: str = Field(..., min_length=1, description="Skill package JSON/YAML document text")
 
 
 class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):

@@ -311,31 +311,24 @@ window.Kit = (() => {
     const PROTOCOL_RUN_LAUNCH_FIELDS = [
         {
             key: 'problem_statement',
-            label: 'What should this run accomplish?',
-            help: 'Concrete goal for the run. This is visible to assigned agents.',
-            placeholder: 'Describe the outcome this run should produce.',
+            label: 'Run objective',
+            help: 'The objective shared with assigned agents. It parameterizes the published workflow; it does not change stages, artifact paths, or assignments.',
+            placeholder: 'Describe the outcome this published workflow should accomplish.',
             rows: 4,
             required: true,
         },
         {
             key: 'context',
-            label: 'Context',
-            help: 'Optional background, source material, repository details, or other context for the run.',
-            placeholder: 'Relevant files, links, requirements, prior decisions, or source material.',
+            label: 'Additional context',
+            help: 'Optional source material, links, data notes, project background, or prior decisions for this run.',
+            placeholder: 'Relevant source material, links, data notes, requirements, or prior decisions.',
             rows: 3,
         },
         {
             key: 'constraints',
             label: 'Constraints',
-            help: 'Optional requirements, limits, preferences, or operational constraints.',
-            placeholder: 'Scope, deadlines, privacy boundaries, tools to use or avoid, or review requirements.',
-            rows: 3,
-        },
-        {
-            key: 'expected_outputs',
-            label: 'Expected outputs',
-            help: 'Optional deliverables or artifact names the run should produce.',
-            placeholder: 'Patch, report, spreadsheet, deck, app, script, exported file, or review notes.',
+            help: 'Optional requirements, privacy boundaries, acceptance criteria, limits, or operational constraints.',
+            placeholder: 'Scope, acceptance criteria, privacy boundaries, tools to use or avoid, or review requirements.',
             rows: 3,
         },
     ];
@@ -441,6 +434,65 @@ window.Kit = (() => {
                 return result;
             },
         };
+    }
+
+    function protocolArtifactContractPanel(protocolDocument, {
+        title = 'Declared output contract',
+        note = 'These artifacts come from the published protocol definition. Launch context can add run notes, but artifact verification follows this contract.',
+        maxItems = 8,
+    } = {}) {
+        const rawDocument = protocolDocument && typeof protocolDocument === 'object'
+            ? protocolDocument
+            : {};
+        const documentRoot = rawDocument.root && typeof rawDocument.root === 'object'
+            ? rawDocument.root
+            : rawDocument;
+        const artifacts = Array.isArray(documentRoot.artifacts)
+            ? documentRoot.artifacts.filter((item) => item && typeof item === 'object')
+            : [];
+        if (!artifacts.length) return null;
+
+        const panel = document.createElement('div');
+        panel.className = 'protocol-artifact-contract-panel';
+
+        const heading = document.createElement('div');
+        heading.className = 'detail-label';
+        heading.textContent = title;
+        panel.appendChild(heading);
+
+        if (note) {
+            const noteEl = document.createElement('p');
+            noteEl.className = 'quiet-note';
+            noteEl.textContent = String(note);
+            panel.appendChild(noteEl);
+        }
+
+        const list = document.createElement('div');
+        list.className = 'protocol-artifact-contract-list';
+        artifacts.slice(0, maxItems).forEach((artifact) => {
+            const label = String(
+                artifact.display_name
+                || artifact.name
+                || artifact.artifact_key
+                || 'Artifact',
+            ).trim();
+            const path = String(artifact.path || artifact.location || artifact.workspace_path || '').trim();
+            const kind = String(artifact.artifact_kind || artifact.kind || '').trim();
+            const verify = artifact.verify === true || artifact.verify_required === true ? 'verified' : '';
+            list.appendChild(UI.renderListRow({
+                label,
+                sublabel: [path, kind].filter(Boolean).join(' · '),
+                badgeText: verify,
+            }));
+        });
+        if (artifacts.length > maxItems) {
+            list.appendChild(UI.renderListRow({
+                label: `+${artifacts.length - maxItems} more declared artifact${artifacts.length - maxItems === 1 ? '' : 's'}`,
+                sublabel: 'Open the protocol definition to inspect the full artifact contract.',
+            }));
+        }
+        panel.appendChild(list);
+        return panel;
     }
 
     // -----------------------------------------------------------------------
@@ -3277,6 +3329,7 @@ window.Kit = (() => {
         lifecycleHeader,
         protocolRunLaunchFields,
         protocolRunLaunchForm,
+        protocolArtifactContractPanel,
         validationSurface,
         detailsPanel,
         authoredCatalog,

@@ -336,37 +336,37 @@ async def skills_edit(event, update: Update, name: str, body: str, *, runtime: T
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
-async def _read_skill_package_document(update: Update) -> tuple[bytes, str] | None:
+async def _read_skill_package_document(update: Update) -> tuple[str, str] | None:
     candidate = getattr(update.effective_message, "document", None)
     if candidate is None:
         candidate = getattr(getattr(update.effective_message, "reply_to_message", None), "document", None)
     if candidate is None:
         return None
     if isinstance(candidate, Path):
-        return candidate.read_bytes(), candidate.name
+        return candidate.read_text(encoding="utf-8"), candidate.name
     if isinstance(candidate, (bytes, bytearray)):
-        return bytes(candidate), "skill-package.zip"
+        return bytes(candidate).decode("utf-8"), "skill-package.json"
     if hasattr(candidate, "read"):
         current = candidate.tell() if hasattr(candidate, "tell") else None
         content = candidate.read()
         if current is not None and hasattr(candidate, "seek"):
             candidate.seek(current)
-        return content if isinstance(content, bytes) else str(content).encode("utf-8"), getattr(candidate, "name", "skill-package.zip")
+        return content.decode("utf-8") if isinstance(content, bytes) else str(content), getattr(candidate, "name", "skill-package.json")
     if hasattr(candidate, "get_file"):
         file_ref = await candidate.get_file()
         if hasattr(file_ref, "download_as_bytearray"):
             content = await file_ref.download_as_bytearray()
-            return bytes(content), getattr(candidate, "file_name", "skill-package.zip")
+            return bytes(content).decode("utf-8"), getattr(candidate, "file_name", "skill-package.json")
     return None
 
 
 async def skills_export(event, update: Update, name: str, revision_scope: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    artifact = _flows(runtime).runtime_skills.authoring.export_package(name, revision_scope=revision_scope)
+    artifact = _flows(runtime).runtime_skills.authoring.export_package(name, revision_scope=revision_scope, format="json")
     if artifact is None:
         rendered = telegram_presenters.runtime_skill_history_not_found_message(name)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    document = io.BytesIO(artifact.content_bytes)
+    document = io.BytesIO(artifact.content_text.encode("utf-8"))
     document.name = artifact.file_name
     rendered = telegram_presenters.runtime_skill_package_export_message(name, artifact.revision_scope)
     await update.effective_message.reply_document(
@@ -382,10 +382,12 @@ async def skills_import(event, update: Update, target_name: str, *, runtime: Tel
         rendered = telegram_presenters.runtime_skill_import_usage_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    package_bytes, file_name = package
+    document_text, file_name = package
+    document_format = "yaml" if str(file_name or "").lower().endswith((".yaml", ".yml")) else "json"
     result = _flows(runtime).runtime_skills.authoring.import_package(
         actor_key=str(event.user.id),
-        package_bytes=package_bytes,
+        document_text=document_text,
+        format=document_format,
         file_name=file_name,
         target_skill_name=str(target_name or "").strip(),
     )

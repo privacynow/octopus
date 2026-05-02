@@ -2015,6 +2015,10 @@ function renderProtocolWorkspace(container) {
         const plan = session?.plan || {};
         const analysis = session?.analysis || {};
         const validation = session?.validation || {};
+        const stagesForSummary = Array.isArray(plan.stages) ? plan.stages : [];
+        const artifactsForSummary = Array.isArray(plan.artifacts) ? plan.artifacts : [];
+        const workPackagesForSummary = Array.isArray(analysis.work_packages) ? analysis.work_packages : [];
+        const reviewCount = stagesForSummary.filter((stage) => String(stage?.stage_kind || '') === 'review').length;
         const title = document.createElement('h4');
         title.textContent = String(plan.protocol_name || 'Generated protocol');
         panel.appendChild(title);
@@ -2023,8 +2027,10 @@ function renderProtocolWorkspace(container) {
         [
             `Focus: ${String(analysis.focus || plan.protocol_name || 'Requirement-specific workflow')}`,
             `Design: ${String(analysis.domain || 'requirement-specific')}`,
-            `${Array.isArray(plan.stages) ? plan.stages.length : 0} stages`,
-            `${Array.isArray(plan.artifacts) ? plan.artifacts.length : 0} artifacts`,
+            `${workPackagesForSummary.length} work packages`,
+            `${reviewCount} reviews`,
+            `${stagesForSummary.length} stages`,
+            `${artifactsForSummary.length} artifacts`,
             validation.ok ? 'Validation: ready' : 'Validation: needs attention',
         ].forEach((label) => {
             const item = document.createElement('span');

@@ -58,7 +58,7 @@ The working litmus test is a game concept:
 
 This example is useful because a weak auto generator will collapse it into a
 generic "build the thing" stage. A useful generator will infer the required
-capabilities, staged deliverables, design reviews, domain-grounding constraints,
+skills, staged deliverables, design reviews, domain-grounding constraints,
 technical architecture, supporting asset or input planning, implementation,
 verification loops, and release evidence from the requirement itself.
 
@@ -78,7 +78,7 @@ lists in the product path.
 
 2. The model assists; product code owns the behavior.
 
-   The system may call a model to analyze requirements, infer capabilities,
+   The system may call a model to analyze requirements, infer skills,
    propose workflow structure, critique drafts, and revise protocols. The model
    output is structured input to product code. Product code compiles, validates,
    gates, and persists the result. This must not rely on a single `SKILL.md`
@@ -148,7 +148,7 @@ lists in the product path.
 
 10. Agent and skill mapping must be explicit enough to run.
 
-    Auto Protocol should infer roles and preferred capabilities, then map them
+    Auto Protocol should infer roles and preferred skills, then map them
     to available agents or routing skills when possible. If a stage cannot be
     assigned safely, the session should show an unresolved decision and block
     publish/run until the user resolves it.
@@ -158,6 +158,49 @@ lists in the product path.
     Users should not need to understand JSON, Docker, internal stage keys, raw
     model prompts, or the database. They should see the intended outcome, staged
     plan, assigned roles, expected artifacts, warnings, and clear buttons.
+
+12. Auto Protocol must create product value beyond prompt forwarding.
+
+    A generated protocol is not acceptable if it merely wraps the user's prompt
+    in a generic plan/build/review sequence. The product value is that Octopus
+    decomposes the requirement into focused work packages, assigns each package
+    an artifact contract, adds independent review gates, records revision
+    feedback, and produces evidence that a human can inspect later. The user
+    should not need to know that they must ask for planning, domain research,
+    UX review, playtesting, or release evidence; Auto Protocol should infer the
+    needed workflow structure from the requirement.
+
+13. Review gates are compiler-enforced quality controls.
+
+    Every generated work stage that produces or materially updates an artifact
+    must have a following review stage unless it is itself a final acceptance
+    stage. Auto Protocol should not create duplicate review gates for the same
+    work stage, but it must repair or block drafts that leave produced work
+    unreviewed. Reviewers must be instructed to inspect the owned artifacts,
+    compare them to the original requirement and the stage rubric, look for
+    stronger approaches, and choose `revise` whenever evidence or quality is
+    below the bar. "Looks good" reviews are not sufficient for serious
+    customer-facing work.
+
+14. Reviewer context must be independent enough to be critical.
+
+    The runtime already keys protocol model sessions by
+    `protocol:<run_id>:participant:<participant_key>`. Auto Protocol should use
+    distinct participant keys for distinct review domains, even when those
+    participants route to the same physical bot. That keeps planning review,
+    domain review, UX review, implementation review, verification review, and
+    final readiness review from collapsing into one overly sympathetic reviewer
+    conversation.
+
+15. Requirement decomposition is a first-class design artifact.
+
+    Auto Protocol analysis must surface the subproblems it inferred from the
+    user's request: planning, research/domain grounding, data/input modeling,
+    experience design, supporting assets/content, implementation, verification,
+    risk/safety, release evidence, and other requirement-specific work packages.
+    This decomposition is not a closed use-case template. Product code owns the
+    compiler invariants and validation, while a future provider-backed designer
+    can improve the structured analysis through the same SDK record shape.
 
 ## Current Architecture Context
 
@@ -201,6 +244,58 @@ Existing protocol SDK code gives us important building blocks:
   - current browser protocol authoring surface
 
 What is missing is the Auto Protocol authoring/revision interface itself.
+
+## Current Quality Gap
+
+The initial implementation proved the authoring, publish, run, Registry, and
+Telegram paths, but the generated workflows can still fall below the intended
+commercial quality bar:
+
+- generation relies too much on broad signal detection and generic stages
+- users can accidentally get weak protocols unless they explicitly prompt for
+  reviewers and feedback loops
+- the final output quality varies too much with the user's prompt wording
+- reviewers can be too sympathetic and accept low-detail work
+- one shared coverage reviewer can review several unrelated work domains in the
+  same participant session
+- not every work stage has a direct review stage
+
+This must be fixed in the Auto Protocol product path, not by hand-editing the
+artifact produced by one run and not by hard-coding any customer example.
+
+## Required Remediation
+
+1. Add a structured requirement decomposition model to the SDK analysis record.
+
+   The decomposition should list focused work packages with a stable key,
+   display name, role, required skills, owned artifact, review role, review
+   rubric, and dependencies. The compiler uses this structure to create stages
+   and artifacts. Surfaces can render it as "why this protocol was designed
+   this way."
+
+2. Compile work packages into stage/review pairs.
+
+   Each work package with an output artifact becomes a work stage followed by a
+   dedicated review stage. The review stage points back to the work stage with
+   a `revise` transition and uses a distinct participant key.
+
+3. Strengthen stage rubrics.
+
+   Work stages should have narrow responsibilities and clear quality bars.
+   Review stages should require artifact inspection, requirement comparison,
+   gap finding, and revision when the stage evidence does not meet the bar.
+
+4. Add semantic validation for unreviewed work.
+
+   Auto Protocol sessions should not be `ready` if any generated work stage
+   with outputs lacks a review/acceptance gate before final evidence. This is a
+   semantic gate on top of structural protocol validation.
+
+5. Preserve one coherent path.
+
+   The remediation extends `octopus_sdk/protocols/auto_design.py`,
+   Registry/Telegram renderers, and focused tests. It does not add a second
+   generator, alternate protocol schema, or use-case-specific template path.
 
 ## Target Capability
 
@@ -253,7 +348,7 @@ Auto Protocol should support these user flows.
    service.
 3. Telegram shows a compact generated protocol summary:
    - name
-   - inferred focus and required capabilities
+   - inferred focus and required skills
    - goal
    - stage count
    - reviewers and loops
@@ -493,7 +588,7 @@ Recommended call sequence:
    - product code trims, classifies mode, applies limits, attaches context
 2. Requirement analysis
    - model returns goal, deliverables, constraints, risks, required
-     capabilities, likely artifacts, open questions, and assumptions
+     skills, likely artifacts, open questions, and assumptions
 3. Plan generation
    - model returns structured roles, stages, review loops, transitions,
      artifacts, assignment intents, and run profile

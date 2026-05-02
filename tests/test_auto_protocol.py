@@ -53,7 +53,11 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "When this stage is a review" not in verify_stage["instructions"]
     assert "Do not leave foreground servers" in verify_stage["instructions"]
     review_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "review_outcome")
-    assert "Do not require release evidence in this review" in review_stage["instructions"]
+    assert "Critically review Produced Outcome" in review_stage["instructions"]
+    assert "choose revise" in review_stage["instructions"].lower()
+    assert "Do not accept merely because the stage produced something" in review_stage["instructions"]
+    assert session.analysis.work_packages
+    assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
 
 
 def test_auto_protocol_revision_updates_existing_canonical_document():
@@ -141,3 +145,75 @@ def test_auto_protocol_repairs_structural_validation_errors_before_surface():
     assert repaired["participants"]
     assert repaired["artifacts"]
     assert repaired["stages"][0]["selector"] == {"kind": "agent", "value": "agent-1"}
+
+
+def test_auto_protocol_adds_direct_review_after_every_generated_work_stage():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text=(
+                "Build a beautiful browser-runnable historical interactive training demo with "
+                "accurate content, polished UX, generated visuals, data loading, security notes, "
+                "verification, and release evidence."
+            ),
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+        )
+    )
+
+    assert session.status == "ready"
+    stages = session.draft_definition_json.as_dict()["stages"]
+    review_by_target = {
+        str(stage.get("transitions", {}).get("revise") or ""): stage
+        for stage in stages
+        if stage.get("stage_kind") == "review"
+    }
+    work_stages = [stage for stage in stages if stage.get("stage_kind") == "work" and stage.get("outputs")]
+
+    assert work_stages
+    assert all(stage["stage_key"] in review_by_target for stage in work_stages)
+    assert "review_verification" in {stage["stage_key"] for stage in stages}
+    assert all("choose revise" in review_by_target[stage["stage_key"]]["instructions"].lower() for stage in work_stages)
+
+
+def test_auto_protocol_uses_distinct_reviewer_participants_for_review_domains():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text=(
+                "Create a browser-based customer-facing analytics workflow with data modeling, "
+                "domain research, polished UX, supporting content, implementation, verification, "
+                "and final evidence."
+            ),
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+        )
+    )
+
+    review_roles = [
+        stage.role_key
+        for stage in session.plan.stages
+        if stage.stage_kind == "review"
+    ]
+
+    assert len(review_roles) >= 5
+    assert len(review_roles) == len(set(review_roles))
+    assert not any(item.code == "semantic.review_context_not_isolated" for item in session.unresolved_decisions)
+
+
+def test_auto_protocol_infers_reviews_without_user_prompting_review_stages():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text=(
+                "I want to make a beautiful 2D browser game about historical figures with "
+                "smooth controls, visuals, sound, accurate references, and a playable result."
+            ),
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+        )
+    )
+
+    stage_keys = [stage.stage_key for stage in session.plan.stages]
+    review_keys = [stage.stage_key for stage in session.plan.stages if stage.stage_kind == "review"]
+
+    assert "review_requirements" in stage_keys
+    assert "review_experience" in stage_keys
+    assert "review_outcome" in stage_keys
+    assert "review_verification" in stage_keys
+    assert len(review_keys) >= 4
+    assert "review" not in session.requirement_text.lower()

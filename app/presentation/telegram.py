@@ -1503,9 +1503,11 @@ def protocol_auto_session_message(
     title = html.escape(str(plan.get("protocol_name") or "Generated protocol"))
     focus = html.escape(str(analysis.get("focus") or analysis.get("domain") or "requirement-specific"))
     skills = analysis.get("skills") if isinstance(analysis.get("skills"), list) else []
+    work_packages = analysis.get("work_packages") if isinstance(analysis.get("work_packages"), list) else []
     status = html.escape(str(data.get("status") or "draft"))
     stages = plan.get("stages") if isinstance(plan.get("stages"), list) else []
     artifacts = plan.get("artifacts") if isinstance(plan.get("artifacts"), list) else []
+    review_count = sum(1 for stage in stages if isinstance(stage, dict) and str(stage.get("stage_kind") or "") == "review")
     unresolved = list(data.get("unresolved_decisions") if isinstance(data.get("unresolved_decisions"), list) else [])
     warnings = [
         *unresolved,
@@ -1519,6 +1521,7 @@ def protocol_auto_session_message(
         f"Focus: <code>{focus}</code>",
         f"Design: <code>{html.escape(str(analysis.get('domain') or 'requirement-specific'))}</code>",
         f"Status: <code>{status}</code>",
+        f"Work packages: <code>{len(work_packages)}</code> · Reviews: <code>{review_count}</code>",
         f"Stages: <code>{len(stages)}</code> · Artifacts: <code>{len(artifacts)}</code>",
         f"Validation: <code>{'ready' if validation.get('ok') else 'needs attention'}</code>",
     ]

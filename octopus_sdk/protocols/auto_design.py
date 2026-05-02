@@ -163,6 +163,29 @@ class ProtocolAutoDesignArtifactPlanRecord(RegistryRecordModel):
     path: str = ""
 
 
+class ProtocolAutoDesignWorkPackageRecord(RegistryRecordModel):
+    package_key: str = ""
+    display_name: str = ""
+    role_key: str = ""
+    role_display_name: str = ""
+    role_responsibility: str = ""
+    purpose: str = ""
+    quality_bar: str = ""
+    artifact_key: str = ""
+    artifact_display_name: str = ""
+    artifact_description: str = ""
+    artifact_path: str = ""
+    dependencies: list[str] = Field(default_factory=list)
+    review_role_key: str = ""
+    review_display_name: str = ""
+    review_responsibility: str = ""
+    review_artifact_key: str = ""
+    review_artifact_display_name: str = ""
+    review_artifact_description: str = ""
+    review_artifact_path: str = ""
+    review_rubric: str = ""
+
+
 class ProtocolAutoDesignStagePlanRecord(RegistryRecordModel):
     stage_key: str = ""
     display_name: str = ""
@@ -190,6 +213,7 @@ class ProtocolAutoDesignAnalysisRecord(RegistryRecordModel):
     focus: str = ""
     requirement_terms: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    work_packages: list[ProtocolAutoDesignWorkPackageRecord] = Field(default_factory=list)
     deliverables: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
@@ -368,8 +392,37 @@ def _analysis_skills(text: str) -> list[str]:
     skills = ["requirements planning", "implementation", "verification", "acceptance evidence"]
     signals = [
         (
+            "technical architecture",
+            (
+                "architecture",
+                "library",
+                "libraries",
+                "framework",
+                "runtime",
+                "integration",
+                "api",
+                "web",
+                "deploy",
+            ),
+        ),
+        (
             "domain grounding",
-            ("accurate", "factual", "research", "source", "sources", "evidence", "audit", "regulated", "compliance"),
+            (
+                "accurate",
+                "factual",
+                "research",
+                "source",
+                "sources",
+                "evidence",
+                "audit",
+                "regulated",
+                "compliance",
+                "history",
+                "historical",
+                "legal",
+                "medical",
+                "financial",
+            ),
         ),
         (
             "experience design",
@@ -394,6 +447,275 @@ def _analysis_skills(text: str) -> list[str]:
     return skills
 
 
+def _work_package(
+    package_key: str,
+    display_name: str,
+    role_key: str,
+    role_display_name: str,
+    role_responsibility: str,
+    purpose: str,
+    quality_bar: str,
+    artifact_key: str,
+    artifact_display_name: str,
+    artifact_description: str,
+    *,
+    dependencies: Sequence[str] = (),
+    review_role_key: str = "",
+    review_display_name: str = "",
+    review_responsibility: str = "",
+    review_rubric: str = "",
+    artifact_path: str = "",
+    review_artifact_key: str = "",
+    review_artifact_display_name: str = "",
+    review_artifact_description: str = "",
+    review_artifact_path: str = "",
+) -> ProtocolAutoDesignWorkPackageRecord:
+    review_key = review_role_key or f"{package_key}_reviewer"
+    review_label = review_display_name or f"{display_name} Reviewer"
+    review_artifact = review_artifact_key or f"{artifact_key}_review"
+    return ProtocolAutoDesignWorkPackageRecord(
+        package_key=package_key,
+        display_name=display_name,
+        role_key=role_key,
+        role_display_name=role_display_name,
+        role_responsibility=role_responsibility,
+        purpose=purpose,
+        quality_bar=quality_bar,
+        artifact_key=artifact_key,
+        artifact_display_name=artifact_display_name,
+        artifact_description=artifact_description,
+        artifact_path=artifact_path or f"protocol/auto/{_slugify(artifact_key)}.md",
+        dependencies=list(dependencies),
+        review_role_key=review_key,
+        review_display_name=review_label,
+        review_responsibility=(
+            review_responsibility
+            or f"Critically inspect {artifact_display_name}, compare it to the requirement and rubric, and send it back when quality or evidence is weak."
+        ),
+        review_artifact_key=review_artifact,
+        review_artifact_display_name=review_artifact_display_name or f"{artifact_display_name} Review",
+        review_artifact_description=(
+            review_artifact_description
+            or f"Critical review notes, decision rationale, gaps, and revision requests for {artifact_display_name}."
+        ),
+        review_artifact_path=review_artifact_path or f"protocol/auto/{_slugify(review_artifact)}.md",
+        review_rubric=(
+            review_rubric
+            or f"Inspect {artifact_display_name} against the original requirement, this stage rubric, and downstream usefulness. Choose revise when any material gap remains."
+        ),
+    )
+
+
+def _infer_work_packages(
+    requirement_text: str,
+    constraints_text: str,
+    skills: Sequence[str],
+    coverage_terms: Sequence[str],
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    """Create a requirement decomposition from workflow primitives, not use-case templates."""
+    request_scope = _sentence(requirement_text) or "Create the requested outcome."
+    terms = ", ".join(list(coverage_terms)[:14]) or "the explicit user requirement"
+    inferred = set(skills)
+    packages: list[ProtocolAutoDesignWorkPackageRecord] = [
+        _work_package(
+            "requirements",
+            "Requirement Coverage",
+            "planner",
+            "Workflow Planner",
+            "Turn the user request into explicit scope, assumptions, dependencies, acceptance criteria, and work-package coverage.",
+            (
+                f"Create a requirements coverage plan for: {request_scope} "
+                f"Explicitly map these requirement terms to artifacts, stages, and acceptance criteria: {terms}."
+            ),
+            "Every material request is either covered by a stage/artifact, recorded as an assumption, or called out as a gap.",
+            "requirements_plan",
+            "Requirements Coverage Plan",
+            "Goal, constraints, assumptions, work packages, deliverables, acceptance criteria, and coverage terms.",
+            review_role_key="requirements_reviewer",
+            review_display_name="Requirement Coverage Reviewer",
+            review_rubric=(
+                "Reject shallow planning. Verify that every material user request is mapped to a concrete work package, artifact, acceptance criterion, or explicit assumption. "
+                "Choose revise if scope is vague, quality bars are missing, or downstream stages cannot act on the plan."
+            ),
+        ),
+    ]
+    dependency_artifacts = ["requirements_plan"]
+
+    def add(package: ProtocolAutoDesignWorkPackageRecord) -> None:
+        packages.append(package)
+        dependency_artifacts.append(package.artifact_key)
+
+    if "technical architecture" in inferred:
+        add(_work_package(
+            "technical_approach",
+            "Technical Approach",
+            "technical_architect",
+            "Technical Architect",
+            "Choose the implementation approach, platform assumptions, libraries, test path, and delivery boundaries.",
+            (
+                f"Define the technical approach needed to satisfy: {terms}. "
+                "Name the implementation path, constraints, likely tools or libraries, test strategy, and delivery risks."
+            ),
+            "The approach is concrete enough for the implementer to build and for verification to test without guessing.",
+            "technical_approach",
+            "Technical Approach",
+            "Architecture, tool choices, runtime assumptions, implementation boundaries, and test strategy.",
+            dependencies=list(dependency_artifacts),
+            review_role_key="technical_approach_reviewer",
+            review_display_name="Technical Approach Reviewer",
+            review_rubric=(
+                "Review whether the approach is practical, testable, and aligned with the requested platform and constraints. "
+                "Choose revise if tool choices, runtime assumptions, or verification paths are missing or weak."
+            ),
+        ))
+    if "data and input modeling" in inferred:
+        add(_work_package(
+            "input_model",
+            "Input Model",
+            "input_modeler",
+            "Input Modeler",
+            "Define required inputs, data shape, loading path, validation rules, examples, and assumptions.",
+            f"Define the inputs needed to produce the requested outcome while preserving requirement coverage for: {terms}.",
+            "Inputs are understandable, sufficient, validated, and usable by downstream implementation and verification stages.",
+            "input_model",
+            "Input Model",
+            "Inputs, data shapes, loading path, validation rules, examples, and assumptions needed by the outcome.",
+            dependencies=list(dependency_artifacts),
+            review_role_key="input_model_reviewer",
+            review_display_name="Input Model Reviewer",
+            review_rubric=(
+                "Review whether inputs are complete, understandable, realistic, and testable. "
+                "Choose revise if downstream stages would need to infer data shape, source expectations, or validation rules."
+            ),
+        ))
+    if "domain grounding" in inferred:
+        add(_work_package(
+            "domain_grounding",
+            "Domain Grounding",
+            "domain_researcher",
+            "Domain Researcher",
+            "Ground factual, regulated, historical, scientific, or customer-domain assumptions before production work depends on them.",
+            f"Record factual, domain, source, and boundary assumptions required by the request. Explicitly address: {terms}.",
+            "Claims and assumptions are explicit, sourced where possible, bounded, and safe for later stages to use.",
+            "domain_grounding",
+            "Domain Grounding Notes",
+            "Factual grounding, sources, assumptions, uncertainty, and disputed or sensitive claims.",
+            dependencies=list(dependency_artifacts),
+            review_role_key="domain_grounding_reviewer",
+            review_display_name="Domain Grounding Reviewer",
+            review_rubric=(
+                "Critically review factual claims, source quality, uncertainty, and boundary conditions. "
+                "Choose revise if important claims are unsupported, overconfident, or unsafe for downstream use."
+            ),
+        ))
+    if "experience design" in inferred:
+        add(_work_package(
+            "experience_design",
+            "Experience Design",
+            "experience_designer",
+            "Experience Designer",
+            "Design the human-facing flow, interaction model, readability, responsive behavior, and polish criteria.",
+            f"Design the human-facing experience and quality bar for the requested outcome while preserving: {terms}.",
+            "The design is usable, readable, progressive, responsive where relevant, and specific enough to guide implementation.",
+            "experience_design",
+            "Experience Design",
+            "Human-facing flow, interaction model, responsiveness, polish criteria, and inspection notes.",
+            dependencies=list(dependency_artifacts),
+            review_role_key="experience_design_reviewer",
+            review_display_name="Experience Design Reviewer",
+            review_rubric=(
+                "Inspect usability, visual hierarchy, clarity, progressive flow, responsiveness, and fit to the intended user. "
+                "Choose revise if the design is generic, confusing, low-polish, or missing acceptance criteria."
+            ),
+        ))
+    if "supporting asset planning" in inferred:
+        add(_work_package(
+            "supporting_assets",
+            "Supporting Assets and Content",
+            "asset_planner",
+            "Supporting Asset Planner",
+            "Specify supporting media, content, generated assets, source material, or non-code inputs required by the outcome.",
+            f"Plan the supporting assets, content, media, or generated inputs needed by the final outcome. Preserve coverage for: {terms}.",
+            "Assets and content are concrete enough to produce or source, and their quality expectations are clear.",
+            "supporting_assets",
+            "Supporting Asset Plan",
+            "Required supporting media, content, generated assets, source files, or input material.",
+            dependencies=list(dependency_artifacts),
+            review_role_key="supporting_assets_reviewer",
+            review_display_name="Supporting Assets Reviewer",
+            review_rubric=(
+                "Review whether required assets, content, ownership, fidelity, and acceptance criteria are concrete. "
+                "Choose revise if final production would have to improvise important media or content decisions."
+            ),
+        ))
+    if "safety and risk review" in inferred:
+        add(_work_package(
+            "risk_assessment",
+            "Risk Assessment",
+            "risk_analyst",
+            "Risk Analyst",
+            "Identify safety, security, privacy, operational, abuse, or compliance risks before final production.",
+            f"Assess risks and mitigations implied by the requested outcome and constraints. Explicitly address: {terms}.",
+            "Material risks, mitigations, and residual risks are explicit enough for reviewers and final evidence.",
+            "risk_review",
+            "Risk Review",
+            "Safety, security, privacy, operational, compliance, or abuse-risk review evidence.",
+            dependencies=list(dependency_artifacts),
+            review_role_key="risk_assessment_reviewer",
+            review_display_name="Risk Assessment Reviewer",
+            review_rubric=(
+                "Review whether risks are concrete, mitigations are practical, and residual risks are explicit. "
+                "Choose revise if any material safety, security, privacy, operational, or abuse risk is hand-waved."
+            ),
+        ))
+
+    packages.extend([
+        _work_package(
+            "implementation",
+            "Implementation",
+            "implementer",
+            "Implementation Owner",
+            "Produce the requested outcome from accepted upstream artifacts and quality bars.",
+            (
+                f"Produce the requested outcome from the accepted plan and supporting artifacts. "
+                f"The result must visibly satisfy the requirement coverage terms: {terms}."
+            ),
+            "The deliverable is usable by the intended human, implements the accepted plan, and leaves clear inspection evidence.",
+            "produced_outcome",
+            "Produced Outcome",
+            "The primary deliverable requested by the user.",
+            artifact_path="protocol/auto/output",
+            dependencies=list(dependency_artifacts),
+            review_role_key="outcome_reviewer",
+            review_display_name="Outcome Reviewer",
+            review_rubric=(
+                "Inspect the produced outcome directly, compare it to the requirements plan and design artifacts, and look for better ways to meet the goal. "
+                "Choose revise if the outcome is low-detail, not usable, untested by inspection, or below the stated quality bar."
+            ),
+        ),
+        _work_package(
+            "verification",
+            "Verification",
+            "verifier",
+            "Verification Lead",
+            "Run focused checks against acceptance criteria, artifact contracts, usability, and requirement coverage.",
+            "Run focused checks against the accepted plan, produced outcome, declared artifacts, and quality bars. Record commands, manual checks, defects, gaps, and unresolved risks.",
+            "Verification proves the important claims a human would care about and documents any remaining gaps.",
+            "verification_report",
+            "Verification Report",
+            "Checks, results, defects, gaps, and requirement coverage evidence.",
+            dependencies=[*dependency_artifacts, "produced_outcome"],
+            review_role_key="verification_reviewer",
+            review_display_name="Verification Reviewer",
+            review_rubric=(
+                "Review whether verification actually exercised the important requirements rather than merely describing them. "
+                "Choose revise if checks are superficial, missing human inspection, or do not prove the deliverable is usable."
+            ),
+        ),
+    ])
+    return packages
+
+
 def _focus_label(requirement_text: str) -> str:
     title = _title_from_requirement(requirement_text)
     if title == "Auto Protocol":
@@ -405,14 +727,16 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
     text = _normalized_words(requirement_text, constraints_text)
     terms = _requirement_terms(requirement_text, constraints_text)
     skills = _analysis_skills(text)
+    work_packages = _infer_work_packages(requirement_text, constraints_text, skills, terms)
     deliverables = _requirement_phrases(requirement_text)
     complexity_signals = sum(1 for skill in skills if skill not in {"requirements planning", "implementation", "verification", "acceptance evidence"})
-    complexity = "high" if complexity_signals >= 2 or len(text) > 700 or len(deliverables) >= 4 else "standard"
+    complexity = "high" if complexity_signals >= 2 or len(text) > 700 or len(deliverables) >= 4 or len(work_packages) >= 6 else "standard"
     goal = _sentence(requirement_text) or "Create the requested outcome."
     assumptions = [
         "The generated protocol should be reviewed before publish.",
         "Stage instructions should carry the work contract so launch text can stay simple.",
-        "The workflow is composed from requirement coverage and reusable protocol primitives, not a closed use-case template.",
+        "The workflow is composed from requirement decomposition and reusable protocol primitives, not a closed use-case template.",
+        "Every generated work package with an output artifact should have its own critical review gate.",
     ]
     risks = [
         "Assignments may need local agent mapping before publish/run.",
@@ -425,29 +749,21 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
     if "safety and risk review" in skills:
         risks.append("Risk-sensitive outcomes need explicit safety or security review before acceptance.")
 
-    required_roles = ["workflow planner", "coverage reviewer", "implementation owner", "verification lead", "readiness reviewer"]
-    if "domain grounding" in skills:
-        required_roles.insert(2, "domain grounding reviewer")
-    if "experience design" in skills:
-        required_roles.insert(-2, "experience designer")
-    if "supporting asset planning" in skills:
-        required_roles.insert(-2, "supporting asset planner")
-    if "data and input modeling" in skills:
-        required_roles.insert(2, "input modeler")
-    if "safety and risk review" in skills:
-        required_roles.insert(-1, "risk reviewer")
+    required_roles: list[str] = []
+    for package in work_packages:
+        for label in (package.role_display_name, package.review_display_name):
+            normalized = label.lower().strip()
+            if normalized and normalized not in required_roles:
+                required_roles.append(normalized)
+    required_roles.append("readiness reviewer")
 
-    expected_artifacts = ["requirements coverage plan", "produced outcome", "verification report", "release evidence"]
-    if "domain grounding" in skills:
-        expected_artifacts.insert(1, "domain grounding notes")
-    if "experience design" in skills:
-        expected_artifacts.insert(-2, "experience design")
-    if "supporting asset planning" in skills:
-        expected_artifacts.insert(-2, "supporting asset plan")
-    if "data and input modeling" in skills:
-        expected_artifacts.insert(1, "input model")
-    if "safety and risk review" in skills:
-        expected_artifacts.insert(-1, "risk review")
+    expected_artifacts: list[str] = []
+    for package in work_packages:
+        for label in (package.artifact_display_name, package.review_artifact_display_name):
+            normalized = label.lower().strip()
+            if normalized and normalized not in expected_artifacts:
+                expected_artifacts.append(normalized)
+    expected_artifacts.append("release evidence")
 
     return ProtocolAutoDesignAnalysisRecord(
         domain="requirement-specific",
@@ -456,6 +772,7 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
         focus=_focus_label(requirement_text),
         requirement_terms=terms,
         skills=skills,
+        work_packages=work_packages,
         deliverables=deliverables,
         assumptions=assumptions,
         risks=risks,
@@ -518,7 +835,10 @@ def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) ->
         problem_statement=_sentence(requirement) or "Run the generated workflow.",
         context="Use the protocol stages as the work contract. Add only run-specific facts here.",
         constraints=_sentence(constraints),
-        acceptance_criteria="Complete every stage, produce declared artifacts, record review decisions, and finish with inspection-ready evidence.",
+        acceptance_criteria=(
+            "Complete every stage, produce declared artifacts, record critical review decisions, "
+            "revise work when reviewers identify material gaps, and finish with inspection-ready evidence."
+        ),
         workspace_ref=str(workspace_ref or "").strip(),
         run_inputs=[
             {
@@ -553,210 +873,157 @@ def _build_plan(
     agents = [item.as_dict() for item in request.available_agents]
     skills = [item.as_dict() for item in request.available_skills]
     run_profile = _base_run_profile(requirement, constraints, request.workspace_ref)
-    inferred_skills = set(analysis.skills)
-    coverage_terms = ", ".join(analysis.requirement_terms[:14]) or "the explicit user requirement"
-    request_scope = _sentence(requirement) or "Create the requested outcome."
+    work_packages = list(analysis.work_packages) or _infer_work_packages(
+        requirement,
+        constraints,
+        analysis.skills,
+        analysis.requirement_terms,
+    )
 
-    roles = [
-        _role("planner", "Workflow Planner", "Turn the user request into an explicit plan, coverage map, assumptions, and acceptance criteria.", agents, skills),
-        _role("coverage_reviewer", "Coverage Reviewer", "Verify that the generated workflow covers the user requirement before production starts.", agents, skills),
-    ]
-    if "data and input modeling" in inferred_skills:
-        roles.append(_role("input_modeler", "Input Modeler", "Define required inputs, data shape, loading path, validation rules, and assumptions.", agents, skills))
-    if "domain grounding" in inferred_skills:
-        roles.append(_role("domain_reviewer", "Domain Grounding Reviewer", "Check factual grounding, domain assumptions, sources, and boundary conditions.", agents, skills))
-    if "experience design" in inferred_skills:
-        roles.append(_role("experience_designer", "Experience Designer", "Design the human-facing flow, interaction model, readability, and polish criteria.", agents, skills))
-    if "supporting asset planning" in inferred_skills:
-        roles.append(_role("asset_planner", "Supporting Asset Planner", "Specify supporting media, content, assets, or other non-code inputs required by the outcome.", agents, skills))
-    roles.extend([
-        _role("implementer", "Implementation Owner", "Produce the requested outcome from the accepted plan and declared inputs.", agents, skills),
-        _role("verifier", "Verification Lead", "Run checks against acceptance criteria, artifacts, and requirement coverage.", agents, skills),
-    ])
-    if "safety and risk review" in inferred_skills:
-        roles.append(_role("risk_reviewer", "Risk Reviewer", "Review safety, security, operational, privacy, or abuse risks before final acceptance.", agents, skills))
-    roles.append(_role("readiness_reviewer", "Readiness Reviewer", "Accept final evidence or send work back with concrete fixes.", agents, skills))
+    roles_by_key: dict[str, ProtocolAutoDesignRolePlanRecord] = {}
 
-    artifacts = [
-        _artifact("requirements_plan", "Requirements Coverage Plan", "Goal, constraints, assumptions, deliverables, acceptance criteria, and coverage terms.", "protocol/auto/requirements-coverage-plan.md"),
-    ]
-    if "data and input modeling" in inferred_skills:
-        artifacts.append(_artifact("input_model", "Input Model", "Inputs, data shapes, loading path, validation rules, and assumptions needed by the outcome.", "protocol/auto/input-model.md"))
-    if "domain grounding" in inferred_skills:
-        artifacts.append(_artifact("domain_grounding", "Domain Grounding Notes", "Factual grounding, sources, assumptions, and disputed or uncertain claims.", "protocol/auto/domain-grounding.md"))
-    if "experience design" in inferred_skills:
-        artifacts.append(_artifact("experience_design", "Experience Design", "Human-facing flow, interaction model, responsiveness, polish criteria, and inspection notes.", "protocol/auto/experience-design.md"))
-    if "supporting asset planning" in inferred_skills:
-        artifacts.append(_artifact("supporting_assets", "Supporting Asset Plan", "Required supporting media, content, generated assets, source files, or input material.", "protocol/auto/supporting-assets.md"))
-    artifacts.extend([
-        _artifact("produced_outcome", "Produced Outcome", "The primary deliverable requested by the user.", "protocol/auto/output"),
-        _artifact("verification_report", "Verification Report", "Checks, results, defects, gaps, and requirement coverage evidence.", "protocol/auto/verification-report.md"),
-    ])
-    if "safety and risk review" in inferred_skills:
-        artifacts.append(_artifact("risk_review", "Risk Review", "Safety, security, privacy, operational, or abuse-risk review evidence.", "protocol/auto/risk-review.md"))
-    artifacts.append(_artifact("release_evidence", "Release Evidence", "Final summary of artifacts, reviews, remaining risks, and inspection steps.", "protocol/auto/release-evidence.md"))
+    def ensure_role(role_key: str, display_name: str, responsibility: str) -> None:
+        if role_key not in roles_by_key:
+            roles_by_key[role_key] = _role(role_key, display_name, responsibility, agents, skills)
 
-    stages = [
-        _stage(
-            "plan_requirements",
-            "Map requirement and acceptance criteria",
-            "work",
-            "planner",
-            f"Create a requirements coverage plan for: {request_scope} Explicitly cover these terms or phrases: {coverage_terms}. Capture assumptions, constraints, deliverables, required skills, and acceptance criteria.",
-            outputs=["requirements_plan"],
-        ),
-        _stage(
-            "review_requirements",
-            "Review requirement coverage",
-            "review",
-            "coverage_reviewer",
-            "Accept only if the plan maps every material part of the user request to a stage, artifact, acceptance criterion, or explicit assumption. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
-            inputs=["requirements_plan"],
-            review_of="plan_requirements",
-        ),
-    ]
+    for package in work_packages:
+        ensure_role(package.role_key, package.role_display_name, package.role_responsibility)
+        ensure_role(
+            package.review_role_key,
+            package.review_display_name,
+            (
+                package.review_responsibility
+                + " Be independent and critical; choose revise when evidence, usability, completeness, or quality is below the stated bar."
+            ),
+        )
+    ensure_role(
+        "readiness_reviewer",
+        "Readiness Reviewer",
+        "Accept final evidence only when the completed workflow, review decisions, artifacts, and inspection steps are coherent and commercially usable.",
+    )
+    roles = list(roles_by_key.values())
 
-    planning_outputs = ["requirements_plan"]
-    if "data and input modeling" in inferred_skills:
-        stages.extend([
-            _stage(
-                "model_inputs",
-                "Model required inputs",
-                "work",
-                "input_modeler",
-                f"Define the inputs needed to produce the requested outcome. Preserve requirement coverage for: {coverage_terms}. Include loading, validation, examples, and assumptions where applicable.",
-                inputs=list(planning_outputs),
-                outputs=["input_model"],
-            ),
-            _stage(
-                "review_inputs",
-                "Review input model",
-                "review",
-                "coverage_reviewer",
-                "Accept only if the input model is understandable, sufficient for the requested outcome, and testable. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
-                inputs=["requirements_plan", "input_model"],
-                review_of="model_inputs",
-            ),
-        ])
-        planning_outputs.append("input_model")
-    if "domain grounding" in inferred_skills:
-        stages.extend([
-            _stage(
-                "establish_domain_grounding",
-                "Establish domain grounding",
-                "work",
-                "domain_reviewer",
-                f"Record the factual, domain, source, and boundary assumptions required by the request. Explicitly address: {coverage_terms}.",
-                inputs=list(planning_outputs),
-                outputs=["domain_grounding"],
-            ),
-            _stage(
-                "review_domain_grounding",
-                "Review domain grounding",
-                "review",
-                "coverage_reviewer",
-                "Accept only if factual and domain-sensitive assumptions are explicit, grounded, and safe to use in later stages. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
-                inputs=["requirements_plan", "domain_grounding"],
-                review_of="establish_domain_grounding",
-            ),
-        ])
-        planning_outputs.append("domain_grounding")
-    if "experience design" in inferred_skills:
-        stages.extend([
-            _stage(
-                "design_experience",
-                "Design user-facing experience",
-                "work",
-                "experience_designer",
-                f"Design the human-facing flow and quality bar for the requested outcome. Make the path intuitive, readable, and inspectable while preserving: {coverage_terms}.",
-                inputs=list(planning_outputs),
-                outputs=["experience_design"],
-            ),
-            _stage(
-                "review_experience",
-                "Review experience design",
-                "review",
-                "coverage_reviewer",
-                "Accept only if the design is usable, clear, responsive where relevant, and tied to the acceptance criteria. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
-                inputs=["requirements_plan", "experience_design"],
-                review_of="design_experience",
-            ),
-        ])
-        planning_outputs.append("experience_design")
-    if "supporting asset planning" in inferred_skills:
-        stages.extend([
-            _stage(
-                "plan_supporting_assets",
-                "Plan supporting assets and content",
-                "work",
-                "asset_planner",
-                f"Specify the supporting assets, content, media, source material, or generated inputs needed by the final outcome. Preserve requirement coverage for: {coverage_terms}.",
-                inputs=list(planning_outputs),
-                outputs=["supporting_assets"],
-            ),
-            _stage(
-                "review_supporting_assets",
-                "Review supporting asset plan",
-                "review",
-                "coverage_reviewer",
-                "Accept only if the supporting asset plan is complete enough to produce and verify the final outcome. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
-                inputs=["requirements_plan", "supporting_assets"],
-                review_of="plan_supporting_assets",
-            ),
-        ])
-        planning_outputs.append("supporting_assets")
+    artifact_by_key: dict[str, ProtocolAutoDesignArtifactPlanRecord] = {}
 
-    stages.extend([
-        _stage(
-            "produce_outcome",
-            "Produce requested outcome",
-            "work",
-            "implementer",
-            f"Produce the requested outcome from the accepted plan and supporting artifacts. The output must visibly satisfy the requirement coverage terms: {coverage_terms}.",
-            inputs=list(planning_outputs),
-            outputs=["produced_outcome"],
-        ),
-        _stage(
-            "verify_outcome",
-            "Verify outcome against requirement",
-            "work",
-            "verifier",
-            "Run focused checks against the acceptance criteria, declared artifacts, and coverage plan. Record commands, manual checks, defects, gaps, and unresolved risks.",
-            inputs=[*planning_outputs, "produced_outcome"],
-            outputs=["verification_report"],
-        ),
-    ])
-    if "safety and risk review" in inferred_skills:
+    def ensure_artifact(key: str, name: str, description_text: str, path: str) -> None:
+        if key and key not in artifact_by_key:
+            artifact_by_key[key] = _artifact(key, name, description_text, path)
+
+    for package in work_packages:
+        ensure_artifact(package.artifact_key, package.artifact_display_name, package.artifact_description, package.artifact_path)
+        ensure_artifact(
+            package.review_artifact_key,
+            package.review_artifact_display_name,
+            package.review_artifact_description,
+            package.review_artifact_path,
+        )
+    ensure_artifact(
+        "release_evidence",
+        "Release Evidence",
+        "Final summary of artifacts, accepted reviews, revision loops, remaining risks, and exact inspection steps.",
+        "protocol/auto/release-evidence.md",
+    )
+    artifacts = list(artifact_by_key.values())
+
+    stage_key_by_package = {
+        "requirements": "plan_requirements",
+        "technical_approach": "define_technical_approach",
+        "input_model": "model_inputs",
+        "domain_grounding": "establish_domain_grounding",
+        "experience_design": "design_experience",
+        "supporting_assets": "plan_supporting_assets",
+        "risk_assessment": "assess_risk",
+        "implementation": "produce_outcome",
+        "verification": "verify_outcome",
+    }
+    review_key_by_package = {
+        "requirements": "review_requirements",
+        "technical_approach": "review_technical_approach",
+        "input_model": "review_inputs",
+        "domain_grounding": "review_domain_grounding",
+        "experience_design": "review_experience",
+        "supporting_assets": "review_supporting_assets",
+        "risk_assessment": "review_risk",
+        "implementation": "review_outcome",
+        "verification": "review_verification",
+    }
+    work_display_by_package = {
+        "requirements": "Map requirement and acceptance criteria",
+        "technical_approach": "Define technical approach",
+        "input_model": "Model required inputs",
+        "domain_grounding": "Establish domain grounding",
+        "experience_design": "Design user-facing experience",
+        "supporting_assets": "Plan supporting assets and content",
+        "risk_assessment": "Assess risk and safety",
+        "implementation": "Produce requested outcome",
+        "verification": "Verify outcome against requirement",
+    }
+    review_display_by_package = {
+        "requirements": "Review requirement coverage",
+        "technical_approach": "Review technical approach",
+        "input_model": "Review input model",
+        "domain_grounding": "Review domain grounding",
+        "experience_design": "Review experience design",
+        "supporting_assets": "Review supporting asset plan",
+        "risk_assessment": "Review risk assessment",
+        "implementation": "Review produced outcome",
+        "verification": "Review verification evidence",
+    }
+
+    stages: list[ProtocolAutoDesignStagePlanRecord] = []
+    available_artifacts: list[str] = []
+    for package in work_packages:
+        work_key = stage_key_by_package.get(package.package_key, _slugify(package.package_key, fallback="work_stage").replace("-", "_"))
+        review_key = review_key_by_package.get(package.package_key, f"review_{work_key}")
+        work_inputs = list(dict.fromkeys([*package.dependencies, *available_artifacts]))
+        work_purpose = "\n".join([
+            package.purpose.strip(),
+            f"Quality bar: {package.quality_bar.strip()}",
+            "Keep this stage focused on its owned artifact and avoid doing later-stage work early.",
+        ]).strip()
         stages.append(_stage(
-            "review_risk",
-            "Review risk and safety",
-            "review",
-            "risk_reviewer",
-            "Accept only if safety, security, privacy, abuse, and operational risks have been considered and any residual risks are explicit. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
-            inputs=["requirements_plan", "produced_outcome", "verification_report"],
-            outputs=["risk_review"],
-            review_of="produce_outcome",
+            work_key,
+            work_display_by_package.get(package.package_key, package.display_name),
+            "work",
+            package.role_key,
+            work_purpose,
+            inputs=work_inputs,
+            outputs=[package.artifact_key],
         ))
-    stages.extend([
-        _stage(
-            "review_outcome",
-            "Review produced outcome",
+        review_inputs = list(dict.fromkeys([*work_inputs, package.artifact_key]))
+        review_purpose = "\n".join([
+            f"Critically review {package.artifact_display_name}.",
+            package.review_rubric.strip(),
+            f"Quality bar under review: {package.quality_bar.strip()}",
+            "Inspect the artifact content, compare it to the original requirement and upstream artifacts, identify stronger approaches where useful, and choose revise for any material gap.",
+            "Do not accept merely because the stage produced something; accept only when the artifact is specific, usable, evidence-backed, and ready for downstream work.",
+            "End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+        ]).strip()
+        stages.append(_stage(
+            review_key,
+            review_display_by_package.get(package.package_key, f"Review {package.display_name}"),
             "review",
-            "readiness_reviewer",
-            "Accept only if the outcome satisfies the requirement coverage plan, verification is meaningful, and the result is usable by the intended human. Do not require release evidence in this review; the following final evidence stage owns that artifact after the outcome is accepted. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
-            inputs=["requirements_plan", "produced_outcome", "verification_report"],
-            review_of="produce_outcome",
+            package.review_role_key,
+            review_purpose,
+            inputs=review_inputs,
+            outputs=[package.review_artifact_key],
+            review_of=work_key,
+        ))
+        available_artifacts = list(dict.fromkeys([*available_artifacts, package.artifact_key, package.review_artifact_key]))
+
+    stages.append(_stage(
+        "final_evidence",
+        "Prepare release evidence",
+        "acceptance",
+        "readiness_reviewer",
+        (
+            "Summarize the produced artifacts, accepted reviews, revision loops, verification evidence, remaining risks, and exact inspection steps. "
+            "Accept only if the full workflow evidence is coherent and the outcome is ready for a human user to inspect. "
+            "End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY."
         ),
-        _stage(
-            "final_evidence",
-            "Prepare release evidence",
-            "acceptance",
-            "readiness_reviewer",
-            "Summarize the produced artifacts, accepted reviews, verification evidence, remaining risks, and exact inspection steps. End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY.",
-            inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
-            outputs=["release_evidence"],
-        ),
-    ])
+        inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
+        outputs=["release_evidence"],
+    ))
 
     return ProtocolAutoDesignPlanRecord(
         protocol_name=title,
@@ -1150,6 +1417,7 @@ def _semantic_warnings_for_session(
         ))
 
     skill_stage_requirements = {
+        "technical architecture": "technical",
         "domain grounding": "domain",
         "experience design": "experience",
         "supporting asset planning": "supporting",
@@ -1167,10 +1435,47 @@ def _semantic_warnings_for_session(
                 action="repair_generated_protocol",
             ))
 
+    reviewed_work_stage_keys = {
+        stage.review_of_stage_key
+        for stage in plan.stages
+        if stage.stage_kind == "review" and str(stage.review_of_stage_key or "").strip()
+    }
+    for stage in plan.stages:
+        if stage.stage_kind != "work" or not stage.outputs:
+            continue
+        if stage.stage_key not in reviewed_work_stage_keys:
+            unresolved.append(ProtocolAutoDesignWarningRecord(
+                code="semantic.work_review_missing",
+                message=(
+                    f"The generated work stage '{stage.display_name or stage.stage_key}' produces artifacts "
+                    "but has no direct critical review stage."
+                ),
+                severity="error",
+                section="semantic_coverage",
+                action="repair_generated_protocol",
+            ))
+
+    review_role_usage: dict[str, int] = {}
+    for stage in plan.stages:
+        if stage.stage_kind == "review":
+            review_role_usage[stage.role_key] = review_role_usage.get(stage.role_key, 0) + 1
+    reused_review_roles = sorted(role_key for role_key, count in review_role_usage.items() if count > 1)
+    if reused_review_roles:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.review_context_not_isolated",
+            message=(
+                "Generated review stages reuse participant keys, which can reduce independent review context: "
+                f"{', '.join(reused_review_roles[:6])}."
+            ),
+            severity="error",
+            section="semantic_coverage",
+            action="repair_generated_protocol",
+        ))
+
     if not unresolved:
         warnings.append(ProtocolAutoDesignWarningRecord(
             code="semantic.coverage_ready",
-            message="Requirement coverage passed: stages, artifacts, reviews, and final evidence reference the material request.",
+            message="Requirement coverage passed: work packages, artifacts, isolated reviews, and final evidence reference the material request.",
             severity="info",
             section="semantic_coverage",
             action="review_generated_protocol",
@@ -1360,6 +1665,7 @@ def revise_auto_protocol_session(
 def auto_protocol_render_cards(session: ProtocolAutoDesignSessionRecord) -> list[ProtocolAutoDesignRenderCardRecord]:
     plan = session.plan
     validation = session.validation
+    review_count = sum(1 for stage in plan.stages if stage.stage_kind == "review")
     cards = [
         ProtocolAutoDesignRenderCardRecord(
             title=plan.protocol_name or "Generated protocol",
@@ -1367,6 +1673,8 @@ def auto_protocol_render_cards(session: ProtocolAutoDesignSessionRecord) -> list
             facts=[
                 {"label": "Focus", "value": session.analysis.focus or session.analysis.domain},
                 {"label": "Skills", "value": ", ".join(session.analysis.skills[:4])},
+                {"label": "Work packages", "value": str(len(session.analysis.work_packages))},
+                {"label": "Reviews", "value": str(review_count)},
                 {"label": "Stages", "value": str(len(plan.stages))},
                 {"label": "Artifacts", "value": str(len(plan.artifacts))},
                 {"label": "Validation", "value": "ready" if validation.ok else "needs attention"},
@@ -1430,6 +1738,7 @@ __all__ = [
     "ProtocolAutoDesignWarningRecord",
     "ProtocolAutoDesignRolePlanRecord",
     "ProtocolAutoDesignArtifactPlanRecord",
+    "ProtocolAutoDesignWorkPackageRecord",
     "ProtocolAutoDesignStagePlanRecord",
     "ProtocolAutoDesignRunProfileRecord",
     "ProtocolAutoDesignAnalysisRecord",

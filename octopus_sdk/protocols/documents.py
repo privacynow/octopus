@@ -868,6 +868,8 @@ def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) ->
     )
     return (
         f"{review_artifact_instruction}\n"
+        "For review decisions, judge the assigned inputs, the reviewed stage output, and this stage's instructions only. "
+        "Do not revise or fail the stage because a later-stage artifact is not produced yet unless that artifact is explicitly listed as an input to this review.\n"
         f"PROTOCOL_DECISION: one of [{allowed}]\n"
         "PROTOCOL_SUMMARY: one short sentence explaining the decision\n"
         "Keep the rest of the response as the detailed review or acceptance rationale."
@@ -954,6 +956,8 @@ def render_protocol_stage_prompt(
         "Launch context parameterizes this run; it does not modify the published protocol contract. "
         "For this stage, create or update only the output artifacts listed above. "
         "Do not create, overwrite, or pre-fill artifacts assigned to later stages. "
+        "The artifact manifest can include declared outputs from later stages; treat this stage's input and output artifact lists as authoritative. "
+        "Do not block, reject, or send work back solely because an artifact owned by a later stage is still declared or missing. "
         "If launch context conflicts with declared artifacts or stage instructions, follow the protocol contract and call out the conflict. "
         "Do not leave long-running commands, servers, watchers, or development processes running; "
         "if a temporary server is needed for checks, run it in a bounded way and stop it before the final response."

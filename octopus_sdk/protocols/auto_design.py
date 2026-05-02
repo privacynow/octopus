@@ -743,7 +743,7 @@ def _build_plan(
             "Review produced outcome",
             "review",
             "readiness_reviewer",
-            "Accept only if the outcome satisfies the requirement coverage plan, verification is meaningful, and the result is usable by the intended human. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+            "Accept only if the outcome satisfies the requirement coverage plan, verification is meaningful, and the result is usable by the intended human. Do not require release evidence in this review; the following final evidence stage owns that artifact after the outcome is accepted. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
             inputs=["requirements_plan", "produced_outcome", "verification_report"],
             review_of="produce_outcome",
         ),

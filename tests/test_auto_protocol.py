@@ -52,6 +52,8 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "only valid protocol decision is completed" in verify_stage["instructions"]
     assert "When this stage is a review" not in verify_stage["instructions"]
     assert "Do not leave foreground servers" in verify_stage["instructions"]
+    review_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "review_outcome")
+    assert "Do not require release evidence in this review" in review_stage["instructions"]
 
 
 def test_auto_protocol_revision_updates_existing_canonical_document():

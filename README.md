@@ -8,7 +8,8 @@ Use Octopus when you want more than a single chat thread:
 
 - coordinate one or more AI agents
 - run staged workflows with reviews and handoffs
-- generate protocol drafts from plain-language requirements
+- draft protocols with **Auto Protocol** (plain-language goals) or manual
+  authoring—see [docs/PROTOCOLS.md](docs/PROTOCOLS.md)
 - reuse skills and provider guidance
 - inspect what happened after a run
 - export or import protocol packages
@@ -26,7 +27,7 @@ Choose the path that matches what you need today.
 | --- | --- |
 | Install Octopus and open it for the first time | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) |
 | Learn the browser Registry UI | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
-| Create, run, export, or import workflows | [docs/PROTOCOLS.md](docs/PROTOCOLS.md) |
+| Create, run, export, or import workflows (including Auto Protocol) | [docs/PROTOCOLS.md](docs/PROTOCOLS.md) |
 | Use Telegram as a chat surface | [docs/TELEGRAM.md](docs/TELEGRAM.md) |
 | Operate, demo, or troubleshoot a local stack | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | Walk through a complete example | [docs/examples/README.md](docs/examples/README.md) |
@@ -47,6 +48,7 @@ Telegram-backed bot setup flow before they appear in the Registry.
 | Skill | Reusable instructions or tooling an agent can use. |
 | Guidance | Baseline policy for a model provider, separate from skills. |
 | Protocol | A reusable staged workflow with assignments and decisions. |
+| Auto Protocol | An optional authoring path that proposes a normal protocol draft from a described outcome; same format as manual work. See the protocol guide. |
 | Run | One execution of a published protocol. |
 | Artifact | A declared or produced output from work. |
 

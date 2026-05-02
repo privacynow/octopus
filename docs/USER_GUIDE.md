@@ -13,13 +13,13 @@ setup in the `./octopus` CLI.
 
 ## How The Guides Split Responsibilities
 
-Use [USER_GUIDE.md](USER_GUIDE.md) for the everyday browser workflow: find
-agents, start conversations, run published protocols, read run progress, and
-open artifacts.
+Use **this guide** for the everyday browser workflow: find agents, start
+conversations, run published protocols, read run progress, and open artifacts.
 
 Use [PROTOCOLS.md](PROTOCOLS.md) when you are designing or changing a protocol:
 stages, reviewers, transitions, artifacts, run inputs, import, export, and
-publish behavior.
+publish behavior. That guide also covers **Auto Protocol** (plain-language
+drafting and revision) next to manual authoring.
 
 The overlap is intentional but shallow. This guide gives enough protocol
 context for a user to run and inspect work. The protocol guide is the canonical
@@ -31,7 +31,10 @@ Octopus is a shared control center for AI agent work.
 
 - Use `Conversations` for open-ended work.
 - Use `Agents` to see who is available and healthy.
-- Use `Protocols` for repeatable staged workflows.
+- Use `Protocols` for repeatable staged workflows. **Auto Protocol** (in the
+  same area) can propose a first draft or revisions from plain language; you
+  still validate and publish like any other protocol. Details live in
+  [PROTOCOLS.md](PROTOCOLS.md).
 - Use `Runs` to watch protocol execution and inspect what happened.
 - Use `Artifacts` to preview, open, or download outputs.
 - Use `Skills` to make reusable capabilities available to agents.
@@ -48,6 +51,7 @@ Octopus is a shared control center for AI agent work.
 | Skill | Reusable instructions or tooling an agent can use. |
 | Guidance | Provider-level policy; not a conversation skill. |
 | Protocol | A reusable staged workflow. |
+| Auto Protocol | Optional flow under `Build -> Protocols` that drafts or revises a normal protocol from a written goal; not a separate file format. |
 | Run | One execution of a published protocol. |
 | Artifact | A declared or produced file/output. |
 | Routing | How Octopus decides which agent receives delegated or staged work. |
@@ -76,7 +80,10 @@ to check [GETTING_STARTED.md](GETTING_STARTED.md) or
 After this basic path works, move to `Build -> Protocols` when you are ready to
 run a repeatable staged workflow. Do not make a new user create a blank protocol
 as their first proof that the product works; start from a published protocol or
-a guided scenario in [PROTOCOLS.md](PROTOCOLS.md).
+a guided scenario in [PROTOCOLS.md](PROTOCOLS.md). When you are ready to design
+your own workflow, **Auto Protocol** is one way to get a structured first draft
+without typing every stage by hand—still read the validation and publishing
+steps in the same protocol guide.
 
 ## Navigation
 
@@ -175,17 +182,13 @@ Most users should not need to change guidance during ordinary work.
 Use protocols when work needs repeatable stages, assigned responsibilities,
 review decisions, or declared artifacts.
 
-This section is for running an existing published protocol. For creating,
-editing, publishing, importing, exporting, or designing review loops, use
-[PROTOCOLS.md](PROTOCOLS.md).
+For creating, editing, publishing, importing, exporting, reviewer loops, and
+**Auto Protocol**, use [PROTOCOLS.md](PROTOCOLS.md).
 
-If you need a new workflow and do not want to build every stage manually, open
-`Build -> Protocols` and choose `Auto protocol`. Describe the outcome in plain
-language. Octopus creates a normal editable draft with stages, reviewers,
-artifacts, and launch inputs. Review it, apply it, validate it, then publish
-and run through the same controls as any other protocol.
+### Run a published protocol
 
-Short path:
+Use this path when a protocol is already published and you only need to start a
+run.
 
 1. Open `Build -> Protocols`.
 2. Choose a published protocol.
@@ -201,6 +204,17 @@ custom `metadata.run_inputs`, the shared fields are workspace, goal, additional
 context, and constraints. Those inputs help agents execute this run; they do
 not rewrite the published stages, assignments, skills, transitions, or artifact
 paths.
+
+### Start from a new workflow (Auto Protocol)
+
+If you need a new workflow and do not want to build every stage manually, open
+`Build -> Protocols` and choose `Auto protocol`. Describe the outcome in plain
+language (and optional constraints). Octopus creates a normal editable draft
+with inferred stages, reviewers, artifacts, and launch inputs. Review it, apply
+it, resolve any validation or assignment warnings, then publish and run through
+the same controls as any other protocol. For revision from chat or deeper
+authoring notes, stay with [PROTOCOLS.md](PROTOCOLS.md) and
+[TELEGRAM.md](TELEGRAM.md).
 
 If a workflow matters, expect to see explicit review stages in the run history.
 Good protocols do not rely on one agent producing the final output in one pass;
@@ -289,9 +303,15 @@ Useful distinctions:
 
 ## Where To Go Next
 
-- [GETTING_STARTED.md](GETTING_STARTED.md) if setup or provider login is the
-  problem
-- [PROTOCOLS.md](PROTOCOLS.md) for protocol authoring, reviewer loops, run
-  inspection, export, and import
-- [TELEGRAM.md](TELEGRAM.md) for Telegram usage
-- [OPERATIONS.md](OPERATIONS.md) for health checks, logs, and demo readiness
+**Continue with the product**
+
+- [PROTOCOLS.md](PROTOCOLS.md) for protocol authoring (including Auto Protocol),
+  reviewer loops, export, import, and publish behavior
+- [TELEGRAM.md](TELEGRAM.md) for Telegram chat, setup reminders, and protocol
+  commands when a bot is configured
+- [OPERATIONS.md](OPERATIONS.md) for health checks, logs, demo readiness, and
+  operator troubleshooting
+
+**If install or provider login is still the blocker**
+
+- [GETTING_STARTED.md](GETTING_STARTED.md)

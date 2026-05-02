@@ -343,6 +343,7 @@ must converge on the same model.
 | Import is blocked | Required stage mappings or skill target mappings need a local bot. |
 | Telegram and Registry disagree | Treat it as a product issue; both should use the same protocol service. |
 
-For first-time setup, use [GETTING_STARTED.md](GETTING_STARTED.md). For
-operating the stack, use [OPERATIONS.md](OPERATIONS.md). For Telegram commands,
-use [TELEGRAM.md](TELEGRAM.md).
+For first-time setup, use [GETTING_STARTED.md](GETTING_STARTED.md). For the
+browser Registry workflow, use [USER_GUIDE.md](USER_GUIDE.md). For Telegram
+commands, use [TELEGRAM.md](TELEGRAM.md). For operating the stack, use
+[OPERATIONS.md](OPERATIONS.md).

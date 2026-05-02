@@ -78,9 +78,12 @@ def test_auto_protocol_revision_updates_existing_canonical_document():
 
     assert revised.validation.ok is True
     stage_keys = [stage["stage_key"] for stage in revised.draft_definition_json.as_dict()["stages"]]
-    assert "ux_review" in stage_keys
-    assert "test_evidence" in stage_keys
+    assert "design_experience" in stage_keys
+    assert "review_experience" in stage_keys
+    assert "verify_outcome" in stage_keys
+    assert "final_evidence" in stage_keys
     assert revised.target_protocol_id == "protocol-1"
+    assert revised.draft_definition_json.as_dict()["metadata"]["auto_protocol"]["revision_requests"]
 
 
 def test_auto_protocol_repairs_structural_validation_errors_before_surface():

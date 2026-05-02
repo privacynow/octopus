@@ -373,7 +373,7 @@ def _analysis_capabilities(text: str) -> list[str]:
         ),
         (
             "experience design",
-            ("user", "human", "usable", "readable", "intuitive", "beautiful", "polished", "responsive", "controls"),
+            ("user", "human", "usable", "readable", "intuitive", "beautiful", "polished", "responsive", "controls", "ux", "ui"),
         ),
         (
             "supporting asset planning",
@@ -1285,201 +1285,76 @@ def revise_auto_protocol_session(
     draft = draft_protocol_document_data(source)
     metadata = dict(draft.get("metadata") or {})
     auto_meta = dict(metadata.get("auto_protocol") or {})
-    changes = list(auto_meta.get("revision_requests") or [])
     change_request = str(request.requirement_text or "").strip()
+    previous_requirement = str(auto_meta.get("requirement") or "").strip()
+    base_parts = [
+        str(metadata.get("display_name") or metadata.get("slug") or "").strip(),
+        str(metadata.get("description") or "").strip(),
+        previous_requirement,
+    ]
+    combined_requirement = "\n".join(part for part in base_parts if part)
     if change_request:
-        changes.append(change_request)
-    auto_meta["generated"] = bool(auto_meta.get("generated", False))
-    auto_meta["revision_requests"] = changes[-20:]
-    metadata["auto_protocol"] = auto_meta
-    draft["metadata"] = metadata
+        combined_requirement = "\n".join(part for part in [combined_requirement, f"Revision request: {change_request}"] if part)
+    if not combined_requirement:
+        combined_requirement = change_request or "Revise the selected protocol."
 
-    lower = change_request.lower()
-    inserted: list[str] = []
-    stages = [dict(item) for item in draft.get("stages", []) if isinstance(item, Mapping)]
-    participants = [dict(item) for item in draft.get("participants", []) if isinstance(item, Mapping)]
-    artifacts = [dict(item) for item in draft.get("artifacts", []) if isinstance(item, Mapping)]
-    participant_keys = {str(item.get("participant_key", "") or "").strip() for item in participants}
-    artifact_keys = {str(item.get("artifact_key", "") or "").strip() for item in artifacts}
-
-    def ensure_participant(key: str, name: str, instructions: str) -> None:
-        if key in participant_keys:
-            return
-        participants.append({"participant_key": key, "display_name": name, "instructions": instructions})
-        participant_keys.add(key)
-
-    def ensure_artifact(key: str, name: str, description: str, path: str) -> None:
-        if key in artifact_keys:
-            return
-        artifacts.append({
-            "artifact_key": key,
-            "display_name": name,
-            "description": description,
-            "kind": "workspace_file",
-            "path": path,
-            "verify": True,
-        })
-        artifact_keys.add(key)
-
-    def insert_review_stage(key: str, name: str, participant: str, artifact_key: str, focus: str) -> None:
-        if any(str(item.get("stage_key", "") or "") == key for item in stages):
-            return
-        selector = {"kind": "skill", "value": _slugify(participant)}
-        for item in request.available_agents:
-            agent = item.as_dict()
-            if str(agent.get("agent_id") or "").strip():
-                selector = {"kind": "agent", "value": str(agent.get("agent_id") or "").strip()}
-                break
-        stage = {
-            "stage_key": key,
-            "display_name": name,
-            "participant_key": participant,
-            "selector": selector,
-            "stage_kind": "review",
-            "instructions": (
-                f"Review the protocol output for {focus}. Accept only if the prior work is specific, usable, "
-                "and satisfies this concern. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
-            ),
-            "inputs": [artifact_key] if artifact_key else [],
-            "outputs": [],
-            "transitions": {"accept": "__complete__", "revise": stages[-1]["stage_key"] if stages else "__failed__", "fail": "__failed__"},
-            "write_capable": False,
-            "max_rounds": 0,
-            "strict_completion": True,
-            "require_output_verification": None,
-            "timeout_seconds": 0,
-        }
-        if stages:
-            previous = stages[-1]
-            previous_transitions = dict(previous.get("transitions") or {})
-            for decision, target in list(previous_transitions.items()):
-                if str(target or "") == "__complete__":
-                    previous_transitions[decision] = key
-            previous["transitions"] = previous_transitions or {"completed": key}
-        stages.append(stage)
-        inserted.append(name)
-
-    if any(token in lower for token in ("security", "safety", "threat", "vulnerability")):
-        ensure_participant("security_reviewer", "Security Reviewer", "Review safety, security, abuse, and operational risk.")
-        ensure_artifact("security_review", "Security Review", "Security and safety review evidence.", "protocol/auto/security-review.md")
-        insert_review_stage("security_review", "Review security and safety", "security_reviewer", "security_review", "security and safety risk")
-    if any(token in lower for token in ("ux", "ui", "usable", "readable", "responsive", "beautiful")):
-        ensure_participant("ux_reviewer", "UX Reviewer", "Review user experience, readability, visual quality, and responsiveness.")
-        ensure_artifact("ux_review", "UX Review", "UX review notes and acceptance evidence.", "protocol/auto/ux-review.md")
-        insert_review_stage("ux_review", "Review UX and usability", "ux_reviewer", "ux_review", "human usability, readability, and responsiveness")
-    if any(token in lower for token in ("histor", "accuracy", "factual")):
-        ensure_participant("domain_reviewer", "Domain Reviewer", "Review factual accuracy, domain fit, and assumptions.")
-        ensure_artifact("domain_review", "Domain Review", "Domain and factual review notes.", "protocol/auto/domain-review.md")
-        insert_review_stage("domain_review", "Review domain accuracy", "domain_reviewer", "domain_review", "domain accuracy and factual grounding")
-    if any(token in lower for token in ("test", "qa", "verify", "playtest")):
-        ensure_participant("test_engineer", "Test Engineer", "Verify behavior, evidence, and acceptance criteria.")
-        ensure_artifact("test_evidence", "Test Evidence", "Test results and verification evidence.", "protocol/auto/test-evidence.md")
-        if not any(str(item.get("stage_key", "") or "") == "test_evidence" for item in stages):
-            selector = {"kind": "skill", "value": "testing"}
-            for item in request.available_agents:
-                agent = item.as_dict()
-                if str(agent.get("agent_id") or "").strip():
-                    selector = {"kind": "agent", "value": str(agent.get("agent_id") or "").strip()}
-                    break
-            if stages:
-                previous = stages[-1]
-                transitions = dict(previous.get("transitions") or {})
-                for decision, target in list(transitions.items()):
-                    if str(target or "") == "__complete__":
-                        transitions[decision] = "test_evidence"
-                previous["transitions"] = transitions or {"completed": "test_evidence"}
-            stages.append({
-                "stage_key": "test_evidence",
-                "display_name": "Test and verify output",
-                "participant_key": "test_engineer",
-                "selector": selector,
-                "stage_kind": "work",
-                "instructions": "Run focused checks and write test evidence with commands, outcomes, defects, and gaps.",
-                "inputs": [],
-                "outputs": ["test_evidence"],
-                "transitions": {"completed": "__complete__"},
-                "write_capable": True,
-                "max_rounds": 0,
-                "strict_completion": False,
-                "require_output_verification": True,
-                "timeout_seconds": 0,
-            })
-            inserted.append("Test and verify output")
-
-    draft["participants"] = participants
-    draft["artifacts"] = artifacts
-    draft["stages"] = stages
-    draft = draft_protocol_document_data(draft)
-    draft, validation, repair_notes = _validate_and_repair_protocol_document(draft, request)
-    analysis = _analyze_requirement(
-        f"{metadata.get('description', '')} {change_request}",
-        request.constraints_text,
-    )
-    plan = ProtocolAutoDesignPlanRecord(
-        protocol_name=str(metadata.get("display_name") or metadata.get("slug") or "Revised Protocol"),
-        protocol_slug=str(metadata.get("slug") or "revised-protocol"),
-        description=str(metadata.get("description") or ""),
-        roles=[
-            ProtocolAutoDesignRolePlanRecord(
-                role_key=str(item.get("participant_key", "") or ""),
-                display_name=str(item.get("display_name", "") or ""),
-                responsibility=str(item.get("instructions", "") or ""),
-            )
-            for item in participants
-        ],
-        artifacts=[
-            ProtocolAutoDesignArtifactPlanRecord(
-                artifact_key=str(item.get("artifact_key", "") or ""),
-                display_name=str(item.get("display_name", "") or ""),
-                description=str(item.get("description", "") or ""),
-                path=str(item.get("path", "") or ""),
-            )
-            for item in artifacts
-        ],
-        stages=[
-            ProtocolAutoDesignStagePlanRecord(
-                stage_key=str(item.get("stage_key", "") or ""),
-                display_name=str(item.get("display_name", "") or ""),
-                stage_kind=str(item.get("stage_kind", "") or "work"),
-                role_key=str(item.get("participant_key", "") or ""),
-                purpose=str(item.get("instructions", "") or "").splitlines()[0] if str(item.get("instructions", "") or "").strip() else "",
-                inputs=[str(value or "") for value in _list(item.get("inputs"))],
-                outputs=[str(value or "") for value in _list(item.get("outputs"))],
-            )
-            for item in stages
-        ],
-        run_profile=_base_run_profile(request.requirement_text, request.constraints_text, request.workspace_ref),
-    )
-    warnings, unresolved = _warnings_for_session(request, validation)
-    semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(analysis, plan)
-    warnings.extend(semantic_warnings)
-    unresolved.extend(semantic_unresolved)
-    status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
-    return ProtocolAutoDesignSessionRecord(
+    revisions = [str(item or "").strip() for item in _list(auto_meta.get("revision_requests")) if str(item or "").strip()]
+    if change_request:
+        revisions.append(change_request)
+    regenerate_request = request.model_copy(update={
+        "mode": "revise",
+        "requirement_text": combined_requirement,
+        "source_document": RegistryJsonRecord.model_validate(draft),
+    })
+    session = generate_auto_protocol_session(
+        regenerate_request,
         session_id=session_id,
-        status=status,
-        mode="revise",
-        surface=request.surface,
-        actor_ref=request.actor_ref,
-        chat_ref=request.chat_ref,
-        source_protocol_id=request.target_protocol_id,
-        source_version_id=request.target_version_id,
-        source_draft_revision=request.target_draft_revision,
-        target_protocol_id=request.target_protocol_id,
-        target_draft_revision=request.target_draft_revision,
-        requirement_text=request.requirement_text,
-        constraints_text=request.constraints_text,
-        analysis=analysis,
-        plan=plan,
-        draft_definition_json=RegistryJsonRecord.model_validate(draft),
-        run_profile=plan.run_profile,
-        validation=validation,
-        warnings=warnings,
-        unresolved_decisions=unresolved,
-        change_summary=[*(inserted or ["Recorded the requested revision in protocol metadata."]), *repair_notes],
         created_at=created_at,
         updated_at=updated_at,
     )
+    regenerated_draft = session.draft_definition_json.as_dict()
+    regenerated_metadata = dict(regenerated_draft.get("metadata") or {})
+    if metadata.get("slug"):
+        regenerated_metadata["slug"] = str(metadata.get("slug") or "")
+    if metadata.get("display_name"):
+        regenerated_metadata["display_name"] = str(metadata.get("display_name") or "")
+    if metadata.get("description"):
+        regenerated_metadata["description"] = str(metadata.get("description") or "")
+    regenerated_auto_meta = dict(regenerated_metadata.get("auto_protocol") or {})
+    regenerated_auto_meta.update({
+        "generated": True,
+        "revision_of_protocol_id": str(request.target_protocol_id or ""),
+        "revision_of_version_id": str(request.target_version_id or ""),
+        "revision_requests": revisions[-20:],
+    })
+    regenerated_metadata["auto_protocol"] = regenerated_auto_meta
+    regenerated_draft["metadata"] = regenerated_metadata
+    regenerated_draft, validation, repair_notes = _validate_and_repair_protocol_document(regenerated_draft, regenerate_request)
+    warnings, unresolved = _warnings_for_session(regenerate_request, validation)
+    semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(session.analysis, session.plan)
+    warnings.extend(semantic_warnings)
+    unresolved.extend(semantic_unresolved)
+    status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
+    return session.model_copy(update={
+        "status": status,
+        "mode": "revise",
+        "source_protocol_id": request.target_protocol_id,
+        "source_version_id": request.target_version_id,
+        "source_draft_revision": request.target_draft_revision,
+        "target_protocol_id": request.target_protocol_id,
+        "target_draft_revision": request.target_draft_revision,
+        "requirement_text": request.requirement_text,
+        "constraints_text": request.constraints_text,
+        "draft_definition_json": RegistryJsonRecord.model_validate(regenerated_draft),
+        "validation": validation,
+        "warnings": warnings,
+        "unresolved_decisions": unresolved,
+        "change_summary": [
+            "Regenerated the selected protocol through the canonical requirement-specific compiler.",
+            "Preserved the target protocol identity for apply, publish, and run.",
+            *repair_notes,
+        ],
+    })
 
 
 def auto_protocol_render_cards(session: ProtocolAutoDesignSessionRecord) -> list[ProtocolAutoDesignRenderCardRecord]:

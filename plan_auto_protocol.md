@@ -118,6 +118,12 @@ lists in the product path.
    - publish
    - run
 
+   Revision must not use a second keyword patcher that appends canned stages
+   based on words like "UX", "security", "game", or any customer example. A
+   revision request is folded back into the same requirement-specific analysis,
+   compiler, validation, and readiness gate used for creation, while preserving
+   the selected protocol identity so apply/publish affect the intended draft.
+
 7. Review loops are inferred, not blindly templated.
 
    Planning, review, build, revise, accept, and final evidence are useful
@@ -942,9 +948,10 @@ Deliverable:
 - Implement bounded critique/repair loop against fake model output.
 - Add tests for:
   - simple workflow generation
-- requirement-specific workflow generation for rich creative/build work
-- requirement-specific workflow generation for data-heavy or evidence-heavy work
-- high-risk requirement requiring reviewer gates
+  - requirement-specific workflow generation for rich creative/build work
+  - requirement-specific workflow generation for data-heavy or evidence-heavy work
+  - high-risk requirement requiring reviewer gates
+  - revision through the same requirement-specific compiler path
   - unresolved assignment warnings
   - no hard-coded example strings
   - stable key preservation during revision

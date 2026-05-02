@@ -7655,6 +7655,13 @@ function renderProtocolRuns(container) {
         if (!currentRun) {
             return;
         }
+        const canonicalSpec = _runActionSpecs()
+            .find((item) => String(item?.action || '') === String(spec?.action || '')) || {};
+        spec = {
+            ...canonicalSpec,
+            ...spec,
+            title: spec.title || canonicalSpec.label || canonicalSpec.action || 'Run action',
+        };
         const form = document.createElement('div');
         form.className = 'studio-dialog-form';
 
@@ -7675,7 +7682,7 @@ function renderProtocolRuns(container) {
         cancelBtn.textContent = 'Cancel';
         const confirmBtn = document.createElement('button');
         confirmBtn.type = 'button';
-        confirmBtn.className = spec.action === 'cancel' ? 'btn' : 'btn btn-primary';
+        confirmBtn.className = spec.action === 'cancel' ? 'btn btn-danger' : 'btn btn-primary';
         confirmBtn.textContent = spec.confirmLabel;
         const view = UI.showDialog(spec.title, form, {
             actions: [cancelBtn, confirmBtn],
@@ -7728,17 +7735,23 @@ function renderProtocolRuns(container) {
         (specs || _runActionSpecs()).filter((spec) => spec.visible !== false).forEach((spec) => {
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = spec.action === 'cancel' ? 'btn' : 'btn btn-primary';
+            btn.className = spec.action === 'cancel' ? 'btn btn-danger' : 'btn btn-primary';
             btn.textContent = spec.label;
+            btn.dataset.runAction = spec.action;
+            btn.setAttribute('aria-label', `${spec.label} protocol run`);
             btn.disabled = !spec.enabled;
-            btn.addEventListener('click', () => _openRunActionDialog({
-                title: spec.label,
-                action: spec.action,
-                note: spec.note,
-                confirmLabel: spec.confirmLabel,
-                successMessage: spec.successMessage,
-                requireReason: spec.requireReason,
-            }));
+            btn.addEventListener('click', (event) => {
+                const action = String(event.currentTarget?.dataset?.runAction || spec.action || '').trim();
+                const latestSpec = _runActionSpecs().find((item) => String(item.action || '') === action) || spec;
+                _openRunActionDialog({
+                    title: latestSpec.label,
+                    action: latestSpec.action,
+                    note: latestSpec.note,
+                    confirmLabel: latestSpec.confirmLabel,
+                    successMessage: latestSpec.successMessage,
+                    requireReason: latestSpec.requireReason,
+                });
+            });
             runActionBar.appendChild(btn);
         });
 

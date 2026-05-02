@@ -903,6 +903,8 @@ def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) ->
         f"{review_artifact_instruction}\n"
         "For review decisions, judge the assigned inputs, the reviewed stage output, and this stage's instructions only. "
         "Do not revise or fail the stage because a later-stage artifact is not produced yet unless that artifact is explicitly listed as an input to this review.\n"
+        "Decision semantics: accept means the reviewed work has no material unresolved gap within this stage's scope. "
+        "If your review rationale identifies missing required evidence, weak fidelity, shallow coverage, unsupported claims, untested required behavior, or downstream-critical uncertainty, choose revise unless the issue cannot be corrected by another attempt, in which case choose fail.\n"
         f"PROTOCOL_DECISION: one of [{allowed}]\n"
         "PROTOCOL_SUMMARY: one short sentence explaining the decision\n"
         "Keep the rest of the response as the detailed review or acceptance rationale."

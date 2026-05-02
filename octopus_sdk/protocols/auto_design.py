@@ -1329,6 +1329,8 @@ def _build_plan(
             f"Quality bar under review: {package.quality_bar.strip()}",
             "Inspect the artifact content, compare it to the original requirement and upstream artifacts, identify stronger approaches where useful, and choose revise for any material gap.",
             "Do not accept merely because the stage produced something; accept only when the artifact is specific, usable, evidence-backed, and ready for downstream work.",
+            "Use a fail-first review posture: list the evidence you inspected, name any missing evidence, and choose revise when the current artifact has unresolved material gaps, weak fidelity, shallow coverage, unsupported claims, untested required behavior, or downstream-critical uncertainty.",
+            "If your rationale says something important is missing, risky, unproven, placeholder-like, or below the stated quality bar, PROTOCOL_DECISION must be revise unless the problem cannot be corrected by another attempt, in which case choose fail.",
             "End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
         ]).strip()
         stages.append(_stage(

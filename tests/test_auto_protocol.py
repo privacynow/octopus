@@ -60,6 +60,8 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "Critically review Produced Outcome" in review_stage["instructions"]
     assert "choose revise" in review_stage["instructions"].lower()
     assert "Do not accept merely because the stage produced something" in review_stage["instructions"]
+    assert "Use a fail-first review posture" in review_stage["instructions"]
+    assert "PROTOCOL_DECISION must be revise" in review_stage["instructions"]
     assert session.analysis.work_packages
     assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
 

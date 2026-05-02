@@ -336,6 +336,8 @@ def test_protocol_review_prompt_mentions_assigned_output_artifacts():
     assert "- review_report: protocol/review.md" in prompt
     assert "Complete the review, update only the assigned output artifacts in the workspace" in prompt
     assert "Do not revise or fail the stage because a later-stage artifact is not produced yet" in prompt
+    assert "Decision semantics: accept means the reviewed work has no material unresolved gap" in prompt
+    assert "choose revise unless the issue cannot be corrected by another attempt" in prompt
 
 
 @pytest.mark.asyncio

@@ -616,7 +616,7 @@ def _work_package(
         artifact_key=artifact_key,
         artifact_display_name=artifact_display_name,
         artifact_description=artifact_description,
-        artifact_path=artifact_path or f"protocol/auto/{_slugify(artifact_key)}.md",
+        artifact_path=artifact_path or _auto_artifact_path(artifact_key),
         dependencies=list(dependencies),
         review_role_key=review_key,
         review_display_name=review_label,
@@ -630,12 +630,19 @@ def _work_package(
             review_artifact_description
             or f"Critical review notes, decision rationale, gaps, and revision requests for {artifact_display_name}."
         ),
-        review_artifact_path=review_artifact_path or f"protocol/auto/{_slugify(review_artifact)}.md",
+        review_artifact_path=review_artifact_path or _auto_artifact_path(review_artifact),
         review_rubric=(
             review_rubric
             or f"Inspect {artifact_display_name} against the original requirement, this stage rubric, and downstream usefulness. Choose revise when any material gap remains."
         ),
     )
+
+
+_AUTO_RUN_ARTIFACT_ROOT = "protocol/auto/{protocol_run_id}"
+
+
+def _auto_artifact_path(name: str, *, extension: str = ".md") -> str:
+    return f"{_AUTO_RUN_ARTIFACT_ROOT}/{_slugify(name)}{extension}"
 
 
 def _infer_work_packages(
@@ -822,7 +829,7 @@ def _infer_work_packages(
                 "production_foundation",
                 "Production Foundation",
                 "Reusable foundation, scaffold, core model, runtime assumptions, and inspection harness for the final outcome.",
-                artifact_path="protocol/auto/production-foundation",
+                artifact_path=_auto_artifact_path("production-foundation", extension=""),
                 dependencies=production_dependencies,
                 review_role_key="production_foundation_reviewer",
                 review_display_name="Production Foundation Reviewer",
@@ -849,7 +856,7 @@ def _infer_work_packages(
                 "data_behavior_layer",
                 "Data and Behavior Layer",
                 "Implemented data/state/rules/calculation layer, representative examples, validation notes, and handoff evidence.",
-                artifact_path="protocol/auto/data-behavior-layer",
+                artifact_path=_auto_artifact_path("data-behavior-layer", extension=""),
                 dependencies=list(dependency_artifacts),
                 review_role_key="data_behavior_reviewer",
                 review_display_name="Data and Behavior Reviewer",
@@ -876,7 +883,7 @@ def _infer_work_packages(
                 "interaction_layer",
                 "Interaction Layer",
                 "Controls, flows, state transitions, responsive behavior, accessibility notes, and interaction evidence.",
-                artifact_path="protocol/auto/interaction-layer",
+                artifact_path=_auto_artifact_path("interaction-layer", extension=""),
                 dependencies=list(dependency_artifacts),
                 review_role_key="interaction_reviewer",
                 review_display_name="Interaction Reviewer",
@@ -903,7 +910,7 @@ def _infer_work_packages(
                 "visual_media_layer",
                 "Visual and Media Layer",
                 "Concrete visual/media assets, styling system, motion/audio notes, charting approach, and fidelity evidence.",
-                artifact_path="protocol/auto/visual-media-layer",
+                artifact_path=_auto_artifact_path("visual-media-layer", extension=""),
                 dependencies=list(dependency_artifacts),
                 review_role_key="visual_media_reviewer",
                 review_display_name="Visual and Media Reviewer",
@@ -930,7 +937,7 @@ def _infer_work_packages(
                 "content_variation_layer",
                 "Content and Variation Layer",
                 "Representative scenarios, examples, modes, states, variants, or content sets with integration notes.",
-                artifact_path="protocol/auto/content-variation-layer",
+                artifact_path=_auto_artifact_path("content-variation-layer", extension=""),
                 dependencies=list(dependency_artifacts),
                 review_role_key="content_variation_reviewer",
                 review_display_name="Content and Variation Reviewer",
@@ -956,7 +963,7 @@ def _infer_work_packages(
                 "domain_content_layer",
                 "Grounded Content Application",
                 "Concrete domain-informed content, labels, claims, examples, uncertainty notes, and integration guidance.",
-                artifact_path="protocol/auto/domain-content-layer",
+                artifact_path=_auto_artifact_path("domain-content-layer", extension=""),
                 dependencies=list(dependency_artifacts),
                 review_role_key="domain_content_reviewer",
                 review_display_name="Grounded Content Reviewer",
@@ -985,7 +992,7 @@ def _infer_work_packages(
             "produced_outcome",
             "Produced Outcome",
             "The primary deliverable requested by the user.",
-            artifact_path="protocol/auto/output",
+            artifact_path=_auto_artifact_path("output", extension=""),
             dependencies=list(dependency_artifacts),
             review_role_key="outcome_reviewer",
             review_display_name="Outcome Reviewer",
@@ -1222,7 +1229,7 @@ def _build_plan(
         "release_evidence",
         "Release Evidence",
         "Final summary of artifacts, accepted reviews, revision loops, remaining risks, and exact inspection steps.",
-        "protocol/auto/release-evidence.md",
+        _auto_artifact_path("release-evidence"),
     )
     artifacts = list(artifact_by_key.values())
 
@@ -1537,7 +1544,7 @@ def _repair_protocol_document(
                 "display_name": "Auto Protocol Output",
                 "description": "Primary generated work product.",
                 "kind": "workspace_file",
-                "path": "protocol/auto/output.md",
+                "path": _auto_artifact_path("output"),
                 "verify": True,
             })
             artifact_keys.add("auto_protocol_output")
@@ -1578,7 +1585,7 @@ def _repair_protocol_document(
         else:
             artifact_keys.add(raw_key)
         if str(artifact.get("kind", "") or "").strip() == "workspace_file" and not str(artifact.get("path", "") or "").strip():
-            artifact["path"] = f"protocol/auto/{_slugify(str(artifact.get('artifact_key') or f'artifact-{index + 1}'))}.md"
+            artifact["path"] = _auto_artifact_path(str(artifact.get("artifact_key") or f"artifact-{index + 1}"))
             note("Repaired missing artifact paths.")
 
     stage_keys = set()
@@ -1624,7 +1631,7 @@ def _repair_protocol_document(
                         "display_name": artifact_key.replace("_", " ").replace("-", " ").title(),
                         "description": "Auto-added artifact required by a generated stage.",
                         "kind": "workspace_file",
-                        "path": f"protocol/auto/{_slugify(artifact_key)}.md",
+                        "path": _auto_artifact_path(artifact_key),
                         "verify": True,
                     })
                     artifact_keys.add(artifact_key)

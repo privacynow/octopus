@@ -1,10 +1,14 @@
 from octopus_sdk.protocols import (
+    ProtocolDefinitionDocumentRecord,
     ProtocolAutoDesignPlanRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignRolePlanRecord,
     ProtocolAutoDesignStagePlanRecord,
+    ProtocolRunRecord,
     compile_auto_protocol_plan,
     generate_auto_protocol_session,
+    protocol_stage_runtime_contract,
+    render_protocol_stage_prompt,
     revise_auto_protocol_session,
 )
 from octopus_sdk.protocols.auto_design import _validate_and_repair_protocol_document
@@ -270,3 +274,45 @@ def test_auto_protocol_applies_same_production_slicing_to_analytics_requirements
     assert "visual_media_layer" in package_keys
     assert "content_variation_layer" in package_keys
     assert not any(item.code == "semantic.work_review_missing" for item in session.unresolved_decisions)
+
+
+def test_auto_protocol_uses_run_scoped_artifact_paths():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text="Build a browser-runnable analytics dashboard with charts and review evidence.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+        )
+    )
+
+    artifacts = session.draft_definition_json.as_dict()["artifacts"]
+
+    assert artifacts
+    assert all(str(artifact["path"]).startswith("protocol/auto/{protocol_run_id}/") for artifact in artifacts)
+
+
+def test_protocol_stage_prompts_materialize_run_scoped_artifact_paths():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text="Build a browser-runnable analytics dashboard with charts and review evidence.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+        )
+    )
+    document = ProtocolDefinitionDocumentRecord.model_validate(session.draft_definition_json.as_dict())
+    run = ProtocolRunRecord(
+        protocol_run_id="run-abc",
+        protocol_id="protocol-1",
+        protocol_definition_version_id="version-1",
+        problem_statement="Build a browser-runnable analytics dashboard.",
+    )
+    stage = document.stage("plan_requirements")
+
+    prompt = render_protocol_stage_prompt(document=document, run=run, stage=stage, artifacts=[])
+    contract = protocol_stage_runtime_contract(
+        document=document,
+        run=run,
+        stage_execution_id="stage-1",
+        stage=stage,
+    )
+
+    assert "protocol/auto/run-abc/requirements-plan.md" in prompt
+    assert contract.output_artifacts[0].path == "protocol/auto/run-abc/requirements-plan.md"

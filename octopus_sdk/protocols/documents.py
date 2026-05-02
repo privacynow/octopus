@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from collections.abc import Sequence
 
@@ -846,6 +847,38 @@ def protocol_participant_session_key(run_id: str, participant_key: str) -> str:
     return f"protocol:{str(run_id or '').strip()}:participant:{str(participant_key or '').strip()}"
 
 
+def _safe_path_token(value: object, *, fallback: str = "unknown") -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip(".-/")
+    return text or fallback
+
+
+def protocol_materialize_artifact_path(
+    path: str,
+    *,
+    document: ProtocolDefinitionDocumentRecord,
+    run: ProtocolRunRecord,
+    stage_execution_id: str = "",
+) -> str:
+    replacements = {
+        "protocol_run_id": _safe_path_token(run.protocol_run_id, fallback="run"),
+        "run_id": _safe_path_token(run.protocol_run_id, fallback="run"),
+        "protocol_id": _safe_path_token(run.protocol_id, fallback="protocol"),
+        "protocol_slug": _safe_path_token(default_protocol_document_slug(document), fallback="protocol"),
+        "protocol_definition_version_id": _safe_path_token(
+            run.protocol_definition_version_id,
+            fallback="version",
+        ),
+        "stage_execution_id": _safe_path_token(stage_execution_id, fallback="stage"),
+    }
+
+    def replace(match: re.Match[str]) -> str:
+        key = str(match.group(1) or "").strip()
+        return replacements.get(key, match.group(0))
+
+    return re.sub(r"\{([A-Za-z0-9_]+)\}", replace, str(path or "").strip())
+
+
 def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) -> str:
     artifact_instruction = (
         "update only the assigned output artifacts in the workspace"
@@ -927,6 +960,12 @@ def render_protocol_stage_prompt(
             )
             or ""
         ).strip()
+        if artifact is None:
+            location = protocol_materialize_artifact_path(
+                location,
+                document=document,
+                run=run,
+            )
         detail = f"{artifact_key}: {location}" if location else artifact_key
         return f"- {detail}"
 
@@ -1092,7 +1131,12 @@ def protocol_stage_runtime_contract(
         ProtocolStageArtifactContractRecord(
             artifact_key=artifact.artifact_key,
             artifact_kind=artifact.kind,
-            path=artifact.path,
+            path=protocol_materialize_artifact_path(
+                artifact.path,
+                document=document,
+                run=run,
+                stage_execution_id=stage_execution_id,
+            ),
             verify=artifact.verify if stage.require_output_verification is not False else False,
         )
         for artifact in (document.artifact(artifact_key) for artifact_key in stage.outputs)

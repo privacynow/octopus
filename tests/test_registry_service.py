@@ -1637,6 +1637,120 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
     assert run_response.json()["run_result"]["run"]["protocol_run_id"] == "run-auto"
 
 
+def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __init__(self):
+            self.session = None
+            self.saved_slugs: list[str] = []
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    display_name="Builder",
+                    slug="builder",
+                    provider="codex",
+                    role="worker",
+                    routing_skills=[],
+                    connectivity_state="connected",
+                )
+            ]
+
+        def list_routing_skills(self):
+            return []
+
+        def list_protocols(self, *, access, limit=100, offset=0, include_drafts=False, lifecycle_state="", q=""):
+            return [
+                ProtocolDefinitionRecord(
+                    protocol_id="existing",
+                    slug="build-a-compact-browser-runnable-2d-historical-platform-fighter",
+                    display_name="Existing Auto Protocol",
+                )
+            ]
+
+        def create_protocol_auto_design_session(self, payload, *, access):
+            self.session = generate_auto_protocol_session(
+                payload,
+                session_id="auto-duplicate",
+                created_at="2026-04-16T00:00:00+00:00",
+                updated_at="2026-04-16T00:00:00+00:00",
+            )
+            return self.session
+
+        def get_protocol_auto_design_session(self, session_id: str, *, access):
+            assert session_id == "auto-duplicate"
+            if self.session is None:
+                raise KeyError(session_id)
+            return self.session
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind == "applied"
+            self.session = session
+            return session
+
+        def save_protocol_draft(
+            self,
+            *,
+            access,
+            protocol_id,
+            slug,
+            display_name,
+            description,
+            definition_json,
+            authoring_surface="standard",
+            expected_revision=None,
+        ):
+            self.saved_slugs.append(slug)
+            if slug == "build-a-compact-browser-runnable-2d-historical-platform-fighter":
+                return ProtocolMutationRecord(ok=False, status="duplicate_slug", message=f"Protocol slug {slug!r} already exists.")
+            return ProtocolMutationRecord(
+                ok=True,
+                status="saved",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="protocol-generated-copy",
+                    slug=slug,
+                    display_name=display_name,
+                    draft_revision=1,
+                ),
+                draft_definition_json=definition_json,
+                validation={"ok": True, "errors": [], "issues": [], "next_required_actions": []},
+            )
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        create_response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build a compact browser-runnable 2D historical platform fighter prototype.",
+            },
+        )
+        apply_response = client.post("/v1/protocol-auto/sessions/auto-duplicate/apply")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert create_response.status_code == 200
+    assert apply_response.status_code == 200
+    assert store.saved_slugs == [
+        "build-a-compact-browser-runnable-2d-historical-platform-fighter",
+        "build-a-compact-browser-runnable-2d-historical-platform-fighter-generated-2",
+    ]
+    payload = apply_response.json()
+    assert payload["target_protocol_id"] == "protocol-generated-copy"
+    assert payload["draft_definition_json"]["metadata"]["slug"] == "build-a-compact-browser-runnable-2d-historical-platform-fighter-generated-2"
+    assert payload["draft_definition_json"]["metadata"]["display_name"].endswith("(Generated 2)")
+
+
 def test_protocol_auto_publish_blocks_unresolved_assignments(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

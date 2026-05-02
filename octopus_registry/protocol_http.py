@@ -230,16 +230,35 @@ def build_protocol_router(
         access: ProtocolAccessContextRecord,
     ) -> ProtocolAutoDesignSessionRecord:
         metadata = _metadata_from_auto_session(session)
+        definition_json = session.draft_definition_json
         result = store.save_protocol_draft(
             access=access,
             protocol_id=str(session.target_protocol_id or ""),
             slug=metadata["slug"],
             display_name=metadata["display_name"],
             description=metadata["description"],
-            definition_json=session.draft_definition_json,
+            definition_json=definition_json,
             authoring_surface="standard",
             expected_revision=int(session.target_draft_revision or 0) if session.target_protocol_id else None,
         )
+        if not result.ok and str(result.status or "") == "duplicate_slug" and not str(session.target_protocol_id or "").strip():
+            copy_slug, copy_name = _suggest_generated_identity(store, metadata["slug"], metadata["display_name"], access)
+            copied_document = session.draft_definition_json.as_dict()
+            copied_metadata = dict(copied_document.get("metadata") or {})
+            copied_metadata.update({"slug": copy_slug, "display_name": copy_name})
+            copied_document["metadata"] = copied_metadata
+            definition_json = RegistryJsonRecord.model_validate(copied_document)
+            metadata = {**metadata, "slug": copy_slug, "display_name": copy_name}
+            result = store.save_protocol_draft(
+                access=access,
+                protocol_id="",
+                slug=metadata["slug"],
+                display_name=metadata["display_name"],
+                description=metadata["description"],
+                definition_json=definition_json,
+                authoring_surface="standard",
+                expected_revision=None,
+            )
         if not result.ok:
             raise _protocol_result_http_error(result)
         protocol_id = str(result.protocol.protocol_id if result.protocol is not None else session.target_protocol_id or "")
@@ -247,6 +266,7 @@ def build_protocol_router(
             "status": "applied",
             "target_protocol_id": protocol_id,
             "target_draft_revision": int(result.protocol.draft_revision if result.protocol is not None else session.target_draft_revision or 0),
+            "draft_definition_json": definition_json,
             "applied_protocol": result,
         })
         return store.update_protocol_auto_design_session(updated, access=access, event_kind="applied")
@@ -311,6 +331,20 @@ def build_protocol_router(
             candidate = f"{base_slug}-copy-{index}"
             if candidate not in existing:
                 return candidate, f"{base_name} (Imported {index})"
+            index += 1
+
+    def _suggest_generated_identity(store: AbstractRegistryStore, slug: str, display_name: str, access: ProtocolAccessContextRecord) -> tuple[str, str]:
+        base_slug = str(slug or "auto-protocol").strip().lower() or "auto-protocol"
+        base_name = str(display_name or base_slug.replace("-", " ").title()).strip()
+        existing = {
+            str(item.slug or "").strip().lower()
+            for item in store.list_protocols(access=access, limit=500, include_drafts=True)
+        }
+        index = 2
+        while True:
+            candidate = f"{base_slug}-generated-{index}"
+            if candidate not in existing:
+                return candidate, f"{base_name} (Generated {index})"
             index += 1
 
     def _stage_mapping_choices(payload: dict[str, Any]) -> dict[str, str]:

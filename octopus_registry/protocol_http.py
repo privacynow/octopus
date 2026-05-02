@@ -1510,10 +1510,12 @@ def build_protocol_router(
         return _json_payload({"artifacts": artifacts})
 
     @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content")
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content/{member_path_tail:path}")
     def resource_get_protocol_run_artifact_content(
         request: Request,
         run_id: str,
         artifact_key: str,
+        member_path_tail: str = "",
         download: bool = Query(default=False),
         browse: bool = Query(default=False),
         preview: bool = Query(default=False),
@@ -1572,7 +1574,7 @@ def build_protocol_router(
             download=download,
             browse=browse,
             preview=preview,
-            member_path=member_path,
+            member_path=member_path or member_path_tail,
             request=request,
         )
 

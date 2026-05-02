@@ -4588,7 +4588,11 @@ def test_task_artifact_content_route_opens_directory_index_and_downloads_zip(mon
     client = TestClient(app)
     package_dir = tmp_path / "package"
     package_dir.mkdir()
-    (package_dir / "index.html").write_text("<!doctype html><title>Offline app</title>", encoding="utf-8")
+    (package_dir / "index.html").write_text(
+        '<!doctype html><title>Offline app</title><link rel="stylesheet" href="./styles.css">',
+        encoding="utf-8",
+    )
+    (package_dir / "styles.css").write_text("body{background:#10131a;color:#fff}", encoding="utf-8")
     samples = package_dir / "samples"
     samples.mkdir()
     (samples / "cells.csv").write_text("cell_id,value\nC-1,10\n", encoding="utf-8")
@@ -4624,6 +4628,7 @@ def test_task_artifact_content_route_opens_directory_index_and_downloads_zip(mon
     )
     try:
         open_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content")
+        asset_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content/styles.css")
         browse_response = client.get("/v1/tasks/protocol-stage:stage-1/artifacts/package/content?browse=1")
         member_response = client.get(
             "/v1/tasks/protocol-stage:stage-1/artifacts/package/content?path=samples%2Fcells.csv"
@@ -4636,6 +4641,10 @@ def test_task_artifact_content_route_opens_directory_index_and_downloads_zip(mon
     assert open_response.status_code == 200
     assert "<title>Offline app</title>" in open_response.text
     assert "text/html" in open_response.headers.get("content-type", "")
+    assert str(open_response.url).endswith("/v1/tasks/protocol-stage:stage-1/artifacts/package/content/")
+    assert asset_response.status_code == 200
+    assert asset_response.text == "body{background:#10131a;color:#fff}"
+    assert "text/css" in asset_response.headers.get("content-type", "")
     assert browse_response.status_code == 200
     assert "Directory artifact contents" in browse_response.text
     assert "samples/cells.csv" in browse_response.text
@@ -4645,7 +4654,7 @@ def test_task_artifact_content_route_opens_directory_index_and_downloads_zip(mon
     assert "application/zip" in download_response.headers.get("content-type", "")
     assert 'filename="package.zip"' in download_response.headers.get("content-disposition", "")
     with zipfile.ZipFile(io.BytesIO(download_response.content)) as archive:
-        assert sorted(archive.namelist()) == ["index.html", "samples/cells.csv"]
+        assert sorted(archive.namelist()) == ["index.html", "samples/cells.csv", "styles.css"]
 
 
 def test_protocol_artifact_content_route_uses_rehearsal_text_when_file_unavailable(monkeypatch, tmp_path: Path):
@@ -4772,7 +4781,11 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
     client = TestClient(app)
     package_dir = tmp_path / "offline-package"
     package_dir.mkdir()
-    (package_dir / "index.html").write_text("<!doctype html><title>Offline package</title>", encoding="utf-8")
+    (package_dir / "index.html").write_text(
+        '<!doctype html><title>Offline package</title><script src="./app.js"></script>',
+        encoding="utf-8",
+    )
+    (package_dir / "app.js").write_text("window.packageLoaded=true;", encoding="utf-8")
     samples = package_dir / "samples"
     samples.mkdir()
     (samples / "panels.csv").write_text("panel_id,value\nP-1,20\n", encoding="utf-8")
@@ -4808,6 +4821,7 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
     )
     try:
         open_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content")
+        asset_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content/app.js")
         browse_response = client.get("/v1/protocol-runs/run-1/artifacts/package/content?browse=1")
         member_response = client.get(
             "/v1/protocol-runs/run-1/artifacts/package/content?path=samples%2Fpanels.csv"
@@ -4820,6 +4834,10 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
     assert open_response.status_code == 200
     assert "<title>Offline package</title>" in open_response.text
     assert "text/html" in open_response.headers.get("content-type", "")
+    assert str(open_response.url).endswith("/v1/protocol-runs/run-1/artifacts/package/content/")
+    assert asset_response.status_code == 200
+    assert asset_response.text == "window.packageLoaded=true;"
+    assert "text/javascript" in asset_response.headers.get("content-type", "")
     assert browse_response.status_code == 200
     assert "Directory artifact contents" in browse_response.text
     assert "samples/panels.csv" in browse_response.text
@@ -4829,7 +4847,7 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
     assert "application/zip" in download_response.headers.get("content-type", "")
     assert 'filename="offline-package.zip"' in download_response.headers.get("content-disposition", "")
     with zipfile.ZipFile(io.BytesIO(download_response.content)) as archive:
-        assert sorted(archive.namelist()) == ["index.html", "samples/panels.csv"]
+        assert sorted(archive.namelist()) == ["app.js", "index.html", "samples/panels.csv"]
 
 
 def test_task_artifact_content_route_uses_rehearsal_text_when_file_unavailable(monkeypatch, tmp_path: Path):

@@ -1263,10 +1263,12 @@ def resource_get_task(
 
 
 @app.get("/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content")
+@app.get("/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content/{member_path_tail:path}")
 def resource_get_task_artifact_content(
     request: Request,
     routed_task_id: str,
     artifact_key: str,
+    member_path_tail: str = "",
     download: bool = Query(default=False),
     browse: bool = Query(default=False),
     preview: bool = Query(default=False),
@@ -1347,7 +1349,7 @@ def resource_get_task_artifact_content(
         download=download,
         browse=browse,
         preview=preview,
-        member_path=member_path,
+        member_path=member_path or member_path_tail,
         request=request,
     )
 

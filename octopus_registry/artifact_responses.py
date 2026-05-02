@@ -5,7 +5,7 @@ from html import escape
 from pathlib import Path
 
 from fastapi import HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from .artifact_paths import (
     artifact_directory_download_name,
@@ -108,6 +108,11 @@ def _directory_artifact_response(
     if not browse:
         index_path = resolved_path / "index.html"
         if index_path.is_file():
+            if request is not None and not str(request.url.path).endswith("/"):
+                target = f"{request.url.path}/"
+                if request.url.query:
+                    target = f"{target}?{request.url.query}"
+                return RedirectResponse(url=target, status_code=307)
             return FileResponse(
                 path=index_path,
                 media_type="text/html",

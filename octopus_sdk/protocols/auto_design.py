@@ -426,15 +426,55 @@ def _analysis_skills(text: str) -> list[str]:
         ),
         (
             "experience design",
-            ("user", "human", "usable", "readable", "intuitive", "beautiful", "polished", "responsive", "controls", "ux", "ui"),
+            (
+                "user",
+                "users",
+                "human",
+                "usable",
+                "readable",
+                "intuitive",
+                "beautiful",
+                "polished",
+                "responsive",
+                "controls",
+                "guide",
+                "guided",
+                "guidance",
+                "interaction",
+                "interactive",
+                "workflow",
+                "dashboard",
+                "dashboards",
+                "explanation",
+                "explanations",
+                "ux",
+                "ui",
+            ),
         ),
         (
             "supporting asset planning",
-            ("asset", "assets", "visual", "image", "images", "audio", "sound", "content", "background", "graphic"),
+            (
+                "asset",
+                "assets",
+                "visual",
+                "image",
+                "images",
+                "audio",
+                "sound",
+                "content",
+                "background",
+                "graphic",
+                "animation",
+                "animated",
+                "chart",
+                "charts",
+                "graph",
+                "graphs",
+            ),
         ),
         (
             "data and input modeling",
-            ("data", "dataset", "records", "metrics", "analysis", "reporting", "loading"),
+            ("data", "dataset", "records", "metrics", "analysis", "reporting", "loading", "dimensions", "drill"),
         ),
         (
             "safety and risk review",
@@ -445,6 +485,98 @@ def _analysis_skills(text: str) -> list[str]:
         if _has_any(text, tokens) and skill not in skills:
             skills.append(skill)
     return skills
+
+
+def _is_complex_requirement(text: str, skills: Sequence[str], coverage_terms: Sequence[str]) -> bool:
+    non_baseline = {
+        skill
+        for skill in skills
+        if skill not in {"requirements planning", "implementation", "verification", "acceptance evidence"}
+    }
+    return len(non_baseline) >= 2 or len(str(text or "")) > 420 or len(coverage_terms) >= 10
+
+
+def _production_dimensions(
+    text: str,
+    skills: Sequence[str],
+    coverage_terms: Sequence[str],
+) -> list[str]:
+    """Infer reusable production slices from required capabilities, not domains."""
+    normalized = _normalized_words(text, *coverage_terms)
+    inferred = set(skills)
+    dimensions: list[str] = []
+
+    def add(dimension: str) -> None:
+        if dimension not in dimensions:
+            dimensions.append(dimension)
+
+    if _is_complex_requirement(normalized, skills, coverage_terms) or "technical architecture" in inferred:
+        add("production_foundation")
+    if "data and input modeling" in inferred:
+        add("data_behavior_layer")
+    if "experience design" in inferred and _has_any(
+        normalized,
+        (
+            "interactive",
+            "interaction",
+            "controls",
+            "workflow",
+            "navigation",
+            "drill",
+            "explore",
+            "playable",
+            "simulate",
+            "motion",
+            "animation",
+            "animated",
+        ),
+    ):
+        add("interaction_layer")
+    if "supporting asset planning" in inferred and _has_any(
+        normalized,
+        (
+            "visual",
+            "visuals",
+            "graphic",
+            "graphics",
+            "image",
+            "images",
+            "background",
+            "backgrounds",
+            "animation",
+            "animated",
+            "chart",
+            "charts",
+            "graph",
+            "graphs",
+            "sound",
+            "audio",
+        ),
+    ):
+        add("visual_media_layer")
+    if _has_any(
+        normalized,
+        (
+            "multiple",
+            "varied",
+            "varying",
+            "variation",
+            "variations",
+            "scenario",
+            "scenarios",
+            "examples",
+            "segments",
+            "dimensions",
+            "levels",
+            "characters",
+            "modes",
+            "states",
+        ),
+    ):
+        add("content_variation_layer")
+    if "domain grounding" in inferred:
+        add("domain_content_layer")
+    return dimensions
 
 
 def _work_package(
@@ -515,6 +647,7 @@ def _infer_work_packages(
     """Create a requirement decomposition from workflow primitives, not use-case templates."""
     request_scope = _sentence(requirement_text) or "Create the requested outcome."
     terms = ", ".join(list(coverage_terms)[:14]) or "the explicit user requirement"
+    full_text = _normalized_words(requirement_text, constraints_text)
     inferred = set(skills)
     packages: list[ProtocolAutoDesignWorkPackageRecord] = [
         _work_package(
@@ -669,18 +802,186 @@ def _infer_work_packages(
             ),
         ))
 
+    production_dependencies = list(dependency_artifacts)
+    for dimension in _production_dimensions(full_text, skills, coverage_terms):
+        if dimension == "production_foundation":
+            add(_work_package(
+                "production_foundation",
+                "Production Foundation",
+                "production_foundation_builder",
+                "Production Foundation Builder",
+                "Build the reusable foundation, runtime skeleton, core model, and inspection harness needed before final assembly.",
+                (
+                    f"Create a working foundation for the requested outcome that downstream production stages can build on. "
+                    f"Preserve these requirement terms: {terms}."
+                ),
+                (
+                    "The foundation is concrete and executable or inspectable, with clear files, state model, extension points, and evidence. "
+                    "It must not be a placeholder description when the request calls for a working outcome."
+                ),
+                "production_foundation",
+                "Production Foundation",
+                "Reusable foundation, scaffold, core model, runtime assumptions, and inspection harness for the final outcome.",
+                artifact_path="protocol/auto/production-foundation",
+                dependencies=production_dependencies,
+                review_role_key="production_foundation_reviewer",
+                review_display_name="Production Foundation Reviewer",
+                review_rubric=(
+                    "Inspect whether the foundation is concrete enough to carry the full requested outcome. "
+                    "Choose revise if it is placeholder-only, cannot be executed or inspected, lacks an extension path, or ignores accepted upstream constraints."
+                ),
+            ))
+        elif dimension == "data_behavior_layer":
+            add(_work_package(
+                "data_behavior_layer",
+                "Data and Behavior Layer",
+                "data_behavior_builder",
+                "Data and Behavior Builder",
+                "Build the data, state, rules, calculations, transformations, or behavioral model required by the outcome.",
+                (
+                    f"Implement the data, state, rules, calculations, transformations, or behavior layer implied by the request. "
+                    f"Preserve these requirement terms: {terms}."
+                ),
+                (
+                    "The layer is realistic enough to support human inspection, includes representative examples or fixtures, "
+                    "and exposes clear behavior for the final integrated outcome."
+                ),
+                "data_behavior_layer",
+                "Data and Behavior Layer",
+                "Implemented data/state/rules/calculation layer, representative examples, validation notes, and handoff evidence.",
+                artifact_path="protocol/auto/data-behavior-layer",
+                dependencies=list(dependency_artifacts),
+                review_role_key="data_behavior_reviewer",
+                review_display_name="Data and Behavior Reviewer",
+                review_rubric=(
+                    "Inspect whether the data and behavior layer is realistic, internally coherent, and sufficient for downstream user-facing work. "
+                    "Choose revise if examples are toy-thin, calculations or rules are opaque, or important states and edge cases are missing."
+                ),
+            ))
+        elif dimension == "interaction_layer":
+            add(_work_package(
+                "interaction_layer",
+                "Interaction Layer",
+                "interaction_builder",
+                "Interaction Builder",
+                "Build the controls, flows, state transitions, feedback, accessibility behavior, and responsive interaction layer required by the outcome.",
+                (
+                    f"Implement the interaction layer implied by the accepted experience design. "
+                    f"Preserve these requirement terms: {terms}."
+                ),
+                (
+                    "The interaction layer is usable by a human without hidden knowledge, has meaningful feedback and state changes, "
+                    "and includes responsive or progressive behavior when relevant."
+                ),
+                "interaction_layer",
+                "Interaction Layer",
+                "Controls, flows, state transitions, responsive behavior, accessibility notes, and interaction evidence.",
+                artifact_path="protocol/auto/interaction-layer",
+                dependencies=list(dependency_artifacts),
+                review_role_key="interaction_reviewer",
+                review_display_name="Interaction Reviewer",
+                review_rubric=(
+                    "Inspect the controls, flows, state changes, feedback, accessibility, and responsive behavior. "
+                    "Choose revise if interaction is shallow, confusing, static where the request implies action, or dependent on undocumented user knowledge."
+                ),
+            ))
+        elif dimension == "visual_media_layer":
+            add(_work_package(
+                "visual_media_layer",
+                "Visual and Media Layer",
+                "visual_media_builder",
+                "Visual and Media Builder",
+                "Produce the visual, motion, audio, charting, or media layer required by the outcome.",
+                (
+                    f"Create concrete visual, motion, audio, charting, or media assets and integration notes for the requested outcome. "
+                    f"Preserve these requirement terms: {terms}."
+                ),
+                (
+                    "The media layer is specific, polished relative to the requested bar, varied when the request asks for variety, "
+                    "and avoids generic placeholders when visible quality matters."
+                ),
+                "visual_media_layer",
+                "Visual and Media Layer",
+                "Concrete visual/media assets, styling system, motion/audio notes, charting approach, and fidelity evidence.",
+                artifact_path="protocol/auto/visual-media-layer",
+                dependencies=list(dependency_artifacts),
+                review_role_key="visual_media_reviewer",
+                review_display_name="Visual and Media Reviewer",
+                review_rubric=(
+                    "Inspect fidelity, variety, visual hierarchy, motion/media behavior, and fit to the intended user. "
+                    "Choose revise if visible outputs are generic, placeholder-like, sparse, inconsistent, or below the stated quality bar."
+                ),
+            ))
+        elif dimension == "content_variation_layer":
+            add(_work_package(
+                "content_variation_layer",
+                "Content and Variation Layer",
+                "content_variation_builder",
+                "Content and Variation Builder",
+                "Produce representative scenarios, examples, states, modes, variants, or content sets needed to make the outcome feel complete.",
+                (
+                    f"Create representative content, scenarios, examples, states, modes, or variants for the requested outcome. "
+                    f"Preserve these requirement terms: {terms}."
+                ),
+                (
+                    "The content layer demonstrates meaningful breadth and depth instead of a single thin path, "
+                    "and downstream implementation can integrate it without inventing missing material."
+                ),
+                "content_variation_layer",
+                "Content and Variation Layer",
+                "Representative scenarios, examples, modes, states, variants, or content sets with integration notes.",
+                artifact_path="protocol/auto/content-variation-layer",
+                dependencies=list(dependency_artifacts),
+                review_role_key="content_variation_reviewer",
+                review_display_name="Content and Variation Reviewer",
+                review_rubric=(
+                    "Inspect breadth, depth, realism, consistency, and usefulness of the content or scenarios. "
+                    "Choose revise if there is only one shallow path, missing variation, unsupported claims, or weak downstream handoff."
+                ),
+            ))
+        elif dimension == "domain_content_layer":
+            add(_work_package(
+                "domain_content_layer",
+                "Grounded Content Application",
+                "grounded_content_builder",
+                "Grounded Content Builder",
+                "Apply accepted domain grounding to the concrete content, interactions, labels, claims, examples, or explanations in the outcome.",
+                (
+                    f"Turn accepted domain grounding into concrete content and usage boundaries for the final outcome. "
+                    f"Preserve these requirement terms: {terms}."
+                ),
+                (
+                    "The domain content is traceable to accepted grounding, avoids overclaiming, and is concrete enough to appear in the final deliverable."
+                ),
+                "domain_content_layer",
+                "Grounded Content Application",
+                "Concrete domain-informed content, labels, claims, examples, uncertainty notes, and integration guidance.",
+                artifact_path="protocol/auto/domain-content-layer",
+                dependencies=list(dependency_artifacts),
+                review_role_key="domain_content_reviewer",
+                review_display_name="Grounded Content Reviewer",
+                review_rubric=(
+                    "Inspect whether concrete content faithfully applies accepted domain grounding and uncertainty boundaries. "
+                    "Choose revise if claims are unsupported, too generic, overconfident, or disconnected from the final user experience."
+                ),
+            ))
+
     packages.extend([
         _work_package(
             "implementation",
-            "Implementation",
-            "implementer",
-            "Implementation Owner",
-            "Produce the requested outcome from accepted upstream artifacts and quality bars.",
+            "Integrated Outcome",
+            "integrator",
+            "Outcome Integrator",
+            "Integrate accepted upstream production layers into the requested final outcome.",
             (
-                f"Produce the requested outcome from the accepted plan and supporting artifacts. "
-                f"The result must visibly satisfy the requirement coverage terms: {terms}."
+                f"Produce the final integrated outcome from the accepted plan, reviews, and production-layer artifacts. "
+                f"The result must visibly satisfy the requirement coverage terms: {terms}. "
+                "Do not discard upstream production work; reconcile it into one usable deliverable."
             ),
-            "The deliverable is usable by the intended human, implements the accepted plan, and leaves clear inspection evidence.",
+            (
+                "The deliverable is usable by the intended human, implements the accepted plan, integrates accepted production layers, "
+                "and leaves clear inspection evidence. Placeholder-level outcomes are not acceptable when the request asks for polish, variety, or commercial quality."
+            ),
             "produced_outcome",
             "Produced Outcome",
             "The primary deliverable requested by the user.",
@@ -933,6 +1234,12 @@ def _build_plan(
         "experience_design": "design_experience",
         "supporting_assets": "plan_supporting_assets",
         "risk_assessment": "assess_risk",
+        "production_foundation": "build_production_foundation",
+        "data_behavior_layer": "build_data_behavior_layer",
+        "interaction_layer": "build_interaction_layer",
+        "visual_media_layer": "build_visual_media_layer",
+        "content_variation_layer": "build_content_variation_layer",
+        "domain_content_layer": "apply_grounded_content",
         "implementation": "produce_outcome",
         "verification": "verify_outcome",
     }
@@ -944,6 +1251,12 @@ def _build_plan(
         "experience_design": "review_experience",
         "supporting_assets": "review_supporting_assets",
         "risk_assessment": "review_risk",
+        "production_foundation": "review_production_foundation",
+        "data_behavior_layer": "review_data_behavior_layer",
+        "interaction_layer": "review_interaction_layer",
+        "visual_media_layer": "review_visual_media_layer",
+        "content_variation_layer": "review_content_variation_layer",
+        "domain_content_layer": "review_grounded_content",
         "implementation": "review_outcome",
         "verification": "review_verification",
     }
@@ -955,7 +1268,13 @@ def _build_plan(
         "experience_design": "Design user-facing experience",
         "supporting_assets": "Plan supporting assets and content",
         "risk_assessment": "Assess risk and safety",
-        "implementation": "Produce requested outcome",
+        "production_foundation": "Build production foundation",
+        "data_behavior_layer": "Build data and behavior layer",
+        "interaction_layer": "Build interaction layer",
+        "visual_media_layer": "Build visual and media layer",
+        "content_variation_layer": "Build content and variation layer",
+        "domain_content_layer": "Apply grounded content",
+        "implementation": "Integrate requested outcome",
         "verification": "Verify outcome against requirement",
     }
     review_display_by_package = {
@@ -966,6 +1285,12 @@ def _build_plan(
         "experience_design": "Review experience design",
         "supporting_assets": "Review supporting asset plan",
         "risk_assessment": "Review risk assessment",
+        "production_foundation": "Review production foundation",
+        "data_behavior_layer": "Review data and behavior layer",
+        "interaction_layer": "Review interaction layer",
+        "visual_media_layer": "Review visual and media layer",
+        "content_variation_layer": "Review content and variation layer",
+        "domain_content_layer": "Review grounded content application",
         "implementation": "Review produced outcome",
         "verification": "Review verification evidence",
     }

@@ -217,3 +217,56 @@ def test_auto_protocol_infers_reviews_without_user_prompting_review_stages():
     assert "review_verification" in stage_keys
     assert len(review_keys) >= 4
     assert "review" not in session.requirement_text.lower()
+
+
+def test_auto_protocol_splits_complex_human_facing_work_into_production_layers():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text=(
+                "Build a beautiful browser-runnable interactive product with accurate references, "
+                "smooth controls, polished visuals, animated backgrounds, character variety, "
+                "multiple levels, sound, playtesting, and release evidence."
+            ),
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+        )
+    )
+
+    package_keys = [package.package_key for package in session.analysis.work_packages]
+    stage_keys = [stage.stage_key for stage in session.plan.stages]
+
+    assert session.status == "ready"
+    assert "production_foundation" in package_keys
+    assert "interaction_layer" in package_keys
+    assert "visual_media_layer" in package_keys
+    assert "content_variation_layer" in package_keys
+    assert "domain_content_layer" in package_keys
+    assert stage_keys.index("build_production_foundation") < stage_keys.index("produce_outcome")
+    assert stage_keys.index("build_visual_media_layer") < stage_keys.index("produce_outcome")
+    assert "review_visual_media_layer" in stage_keys
+    assert "review_content_variation_layer" in stage_keys
+
+
+def test_auto_protocol_applies_same_production_slicing_to_analytics_requirements():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text=(
+                "Build a browser-runnable manufacturing analytics command center for plant leaders. "
+                "It should load or generate realistic operations data, guide users from data readiness "
+                "to executive insights, include dashboards, charts, drill-down dimensions, bottleneck "
+                "and quality analytics, what-if views, clear explanations, review evidence, and "
+                "release-ready artifacts."
+            ),
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+        )
+    )
+
+    package_keys = [package.package_key for package in session.analysis.work_packages]
+
+    assert session.status == "ready"
+    assert "input_model" in package_keys
+    assert "production_foundation" in package_keys
+    assert "data_behavior_layer" in package_keys
+    assert "interaction_layer" in package_keys
+    assert "visual_media_layer" in package_keys
+    assert "content_variation_layer" in package_keys
+    assert not any(item.code == "semantic.work_review_missing" for item in session.unresolved_decisions)

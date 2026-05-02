@@ -189,7 +189,7 @@ class ProtocolAutoDesignAnalysisRecord(RegistryRecordModel):
     goal: str = ""
     focus: str = ""
     requirement_terms: list[str] = Field(default_factory=list)
-    capabilities: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
     deliverables: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
@@ -363,9 +363,9 @@ def _has_any(text: str, tokens: Sequence[str]) -> bool:
     return any(re.search(rf"\b{re.escape(token)}\b", text) for token in tokens)
 
 
-def _analysis_capabilities(text: str) -> list[str]:
-    """Infer workflow capabilities without selecting a closed use-case template."""
-    capabilities = ["requirements planning", "implementation", "verification", "acceptance evidence"]
+def _analysis_skills(text: str) -> list[str]:
+    """Infer workflow skills without selecting a closed use-case template."""
+    skills = ["requirements planning", "implementation", "verification", "acceptance evidence"]
     signals = [
         (
             "domain grounding",
@@ -388,10 +388,10 @@ def _analysis_capabilities(text: str) -> list[str]:
             ("safe", "safety", "secure", "security", "risk", "threat", "abuse", "privacy"),
         ),
     ]
-    for capability, tokens in signals:
-        if _has_any(text, tokens) and capability not in capabilities:
-            capabilities.append(capability)
-    return capabilities
+    for skill, tokens in signals:
+        if _has_any(text, tokens) and skill not in skills:
+            skills.append(skill)
+    return skills
 
 
 def _focus_label(requirement_text: str) -> str:
@@ -404,9 +404,9 @@ def _focus_label(requirement_text: str) -> str:
 def _analyze_requirement(requirement_text: str, constraints_text: str) -> ProtocolAutoDesignAnalysisRecord:
     text = _normalized_words(requirement_text, constraints_text)
     terms = _requirement_terms(requirement_text, constraints_text)
-    capabilities = _analysis_capabilities(text)
+    skills = _analysis_skills(text)
     deliverables = _requirement_phrases(requirement_text)
-    complexity_signals = sum(1 for capability in capabilities if capability not in {"requirements planning", "implementation", "verification", "acceptance evidence"})
+    complexity_signals = sum(1 for skill in skills if skill not in {"requirements planning", "implementation", "verification", "acceptance evidence"})
     complexity = "high" if complexity_signals >= 2 or len(text) > 700 or len(deliverables) >= 4 else "standard"
     goal = _sentence(requirement_text) or "Create the requested outcome."
     assumptions = [
@@ -418,35 +418,35 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
         "Assignments may need local agent mapping before publish/run.",
         "A requirement-specific workflow can still miss intent if the user leaves critical constraints implicit.",
     ]
-    if "domain grounding" in capabilities:
+    if "domain grounding" in skills:
         risks.append("Factual or domain-sensitive claims need explicit grounding and review evidence.")
-    if "experience design" in capabilities:
+    if "experience design" in skills:
         risks.append("Human-facing outcomes need usability and polish review, not only functional completion.")
-    if "safety and risk review" in capabilities:
+    if "safety and risk review" in skills:
         risks.append("Risk-sensitive outcomes need explicit safety or security review before acceptance.")
 
     required_roles = ["workflow planner", "coverage reviewer", "implementation owner", "verification lead", "readiness reviewer"]
-    if "domain grounding" in capabilities:
+    if "domain grounding" in skills:
         required_roles.insert(2, "domain grounding reviewer")
-    if "experience design" in capabilities:
+    if "experience design" in skills:
         required_roles.insert(-2, "experience designer")
-    if "supporting asset planning" in capabilities:
+    if "supporting asset planning" in skills:
         required_roles.insert(-2, "supporting asset planner")
-    if "data and input modeling" in capabilities:
+    if "data and input modeling" in skills:
         required_roles.insert(2, "input modeler")
-    if "safety and risk review" in capabilities:
+    if "safety and risk review" in skills:
         required_roles.insert(-1, "risk reviewer")
 
     expected_artifacts = ["requirements coverage plan", "produced outcome", "verification report", "release evidence"]
-    if "domain grounding" in capabilities:
+    if "domain grounding" in skills:
         expected_artifacts.insert(1, "domain grounding notes")
-    if "experience design" in capabilities:
+    if "experience design" in skills:
         expected_artifacts.insert(-2, "experience design")
-    if "supporting asset planning" in capabilities:
+    if "supporting asset planning" in skills:
         expected_artifacts.insert(-2, "supporting asset plan")
-    if "data and input modeling" in capabilities:
+    if "data and input modeling" in skills:
         expected_artifacts.insert(1, "input model")
-    if "safety and risk review" in capabilities:
+    if "safety and risk review" in skills:
         expected_artifacts.insert(-1, "risk review")
 
     return ProtocolAutoDesignAnalysisRecord(
@@ -455,7 +455,7 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
         goal=goal,
         focus=_focus_label(requirement_text),
         requirement_terms=terms,
-        capabilities=capabilities,
+        skills=skills,
         deliverables=deliverables,
         assumptions=assumptions,
         risks=risks,
@@ -553,7 +553,7 @@ def _build_plan(
     agents = [item.as_dict() for item in request.available_agents]
     skills = [item.as_dict() for item in request.available_skills]
     run_profile = _base_run_profile(requirement, constraints, request.workspace_ref)
-    capabilities = set(analysis.capabilities)
+    inferred_skills = set(analysis.skills)
     coverage_terms = ", ".join(analysis.requirement_terms[:14]) or "the explicit user requirement"
     request_scope = _sentence(requirement) or "Create the requested outcome."
 
@@ -561,38 +561,38 @@ def _build_plan(
         _role("planner", "Workflow Planner", "Turn the user request into an explicit plan, coverage map, assumptions, and acceptance criteria.", agents, skills),
         _role("coverage_reviewer", "Coverage Reviewer", "Verify that the generated workflow covers the user requirement before production starts.", agents, skills),
     ]
-    if "data and input modeling" in capabilities:
+    if "data and input modeling" in inferred_skills:
         roles.append(_role("input_modeler", "Input Modeler", "Define required inputs, data shape, loading path, validation rules, and assumptions.", agents, skills))
-    if "domain grounding" in capabilities:
+    if "domain grounding" in inferred_skills:
         roles.append(_role("domain_reviewer", "Domain Grounding Reviewer", "Check factual grounding, domain assumptions, sources, and boundary conditions.", agents, skills))
-    if "experience design" in capabilities:
+    if "experience design" in inferred_skills:
         roles.append(_role("experience_designer", "Experience Designer", "Design the human-facing flow, interaction model, readability, and polish criteria.", agents, skills))
-    if "supporting asset planning" in capabilities:
+    if "supporting asset planning" in inferred_skills:
         roles.append(_role("asset_planner", "Supporting Asset Planner", "Specify supporting media, content, assets, or other non-code inputs required by the outcome.", agents, skills))
     roles.extend([
         _role("implementer", "Implementation Owner", "Produce the requested outcome from the accepted plan and declared inputs.", agents, skills),
         _role("verifier", "Verification Lead", "Run checks against acceptance criteria, artifacts, and requirement coverage.", agents, skills),
     ])
-    if "safety and risk review" in capabilities:
+    if "safety and risk review" in inferred_skills:
         roles.append(_role("risk_reviewer", "Risk Reviewer", "Review safety, security, operational, privacy, or abuse risks before final acceptance.", agents, skills))
     roles.append(_role("readiness_reviewer", "Readiness Reviewer", "Accept final evidence or send work back with concrete fixes.", agents, skills))
 
     artifacts = [
         _artifact("requirements_plan", "Requirements Coverage Plan", "Goal, constraints, assumptions, deliverables, acceptance criteria, and coverage terms.", "protocol/auto/requirements-coverage-plan.md"),
     ]
-    if "data and input modeling" in capabilities:
+    if "data and input modeling" in inferred_skills:
         artifacts.append(_artifact("input_model", "Input Model", "Inputs, data shapes, loading path, validation rules, and assumptions needed by the outcome.", "protocol/auto/input-model.md"))
-    if "domain grounding" in capabilities:
+    if "domain grounding" in inferred_skills:
         artifacts.append(_artifact("domain_grounding", "Domain Grounding Notes", "Factual grounding, sources, assumptions, and disputed or uncertain claims.", "protocol/auto/domain-grounding.md"))
-    if "experience design" in capabilities:
+    if "experience design" in inferred_skills:
         artifacts.append(_artifact("experience_design", "Experience Design", "Human-facing flow, interaction model, responsiveness, polish criteria, and inspection notes.", "protocol/auto/experience-design.md"))
-    if "supporting asset planning" in capabilities:
+    if "supporting asset planning" in inferred_skills:
         artifacts.append(_artifact("supporting_assets", "Supporting Asset Plan", "Required supporting media, content, generated assets, source files, or input material.", "protocol/auto/supporting-assets.md"))
     artifacts.extend([
         _artifact("produced_outcome", "Produced Outcome", "The primary deliverable requested by the user.", "protocol/auto/output"),
         _artifact("verification_report", "Verification Report", "Checks, results, defects, gaps, and requirement coverage evidence.", "protocol/auto/verification-report.md"),
     ])
-    if "safety and risk review" in capabilities:
+    if "safety and risk review" in inferred_skills:
         artifacts.append(_artifact("risk_review", "Risk Review", "Safety, security, privacy, operational, or abuse-risk review evidence.", "protocol/auto/risk-review.md"))
     artifacts.append(_artifact("release_evidence", "Release Evidence", "Final summary of artifacts, reviews, remaining risks, and inspection steps.", "protocol/auto/release-evidence.md"))
 
@@ -602,7 +602,7 @@ def _build_plan(
             "Map requirement and acceptance criteria",
             "work",
             "planner",
-            f"Create a requirements coverage plan for: {request_scope} Explicitly cover these terms or phrases: {coverage_terms}. Capture assumptions, constraints, deliverables, required capabilities, and acceptance criteria.",
+            f"Create a requirements coverage plan for: {request_scope} Explicitly cover these terms or phrases: {coverage_terms}. Capture assumptions, constraints, deliverables, required skills, and acceptance criteria.",
             outputs=["requirements_plan"],
         ),
         _stage(
@@ -617,7 +617,7 @@ def _build_plan(
     ]
 
     planning_outputs = ["requirements_plan"]
-    if "data and input modeling" in capabilities:
+    if "data and input modeling" in inferred_skills:
         stages.extend([
             _stage(
                 "model_inputs",
@@ -639,7 +639,7 @@ def _build_plan(
             ),
         ])
         planning_outputs.append("input_model")
-    if "domain grounding" in capabilities:
+    if "domain grounding" in inferred_skills:
         stages.extend([
             _stage(
                 "establish_domain_grounding",
@@ -661,7 +661,7 @@ def _build_plan(
             ),
         ])
         planning_outputs.append("domain_grounding")
-    if "experience design" in capabilities:
+    if "experience design" in inferred_skills:
         stages.extend([
             _stage(
                 "design_experience",
@@ -683,7 +683,7 @@ def _build_plan(
             ),
         ])
         planning_outputs.append("experience_design")
-    if "supporting asset planning" in capabilities:
+    if "supporting asset planning" in inferred_skills:
         stages.extend([
             _stage(
                 "plan_supporting_assets",
@@ -726,7 +726,7 @@ def _build_plan(
             outputs=["verification_report"],
         ),
     ])
-    if "safety and risk review" in capabilities:
+    if "safety and risk review" in inferred_skills:
         stages.append(_stage(
             "review_risk",
             "Review risk and safety",
@@ -1149,7 +1149,7 @@ def _semantic_warnings_for_session(
             action="repair_generated_protocol",
         ))
 
-    capability_stage_requirements = {
+    skill_stage_requirements = {
         "domain grounding": "domain",
         "experience design": "experience",
         "supporting asset planning": "supporting",
@@ -1157,11 +1157,11 @@ def _semantic_warnings_for_session(
         "safety and risk review": "risk",
     }
     stage_text = _normalized_words(*(stage.stage_key for stage in plan.stages), *(stage.display_name for stage in plan.stages))
-    for capability, required_text in capability_stage_requirements.items():
-        if capability in analysis.capabilities and required_text not in stage_text:
+    for skill, required_text in skill_stage_requirements.items():
+        if skill in analysis.skills and required_text not in stage_text:
             unresolved.append(ProtocolAutoDesignWarningRecord(
-                code="semantic.capability_missing",
-                message=f"The generated protocol inferred {capability} but did not create a visible stage for it.",
+                code="semantic.skill_missing",
+                message=f"The generated protocol inferred {skill} but did not create a visible stage for it.",
                 severity="error",
                 section="semantic_coverage",
                 action="repair_generated_protocol",
@@ -1366,7 +1366,7 @@ def auto_protocol_render_cards(session: ProtocolAutoDesignSessionRecord) -> list
             body=session.analysis.goal or plan.description,
             facts=[
                 {"label": "Focus", "value": session.analysis.focus or session.analysis.domain},
-                {"label": "Capabilities", "value": ", ".join(session.analysis.capabilities[:4])},
+                {"label": "Skills", "value": ", ".join(session.analysis.skills[:4])},
                 {"label": "Stages", "value": str(len(plan.stages))},
                 {"label": "Artifacts", "value": str(len(plan.artifacts))},
                 {"label": "Validation", "value": "ready" if validation.ok else "needs attention"},

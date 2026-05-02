@@ -32,7 +32,7 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
 
     assert session.status == "ready"
     assert session.analysis.domain == "requirement-specific"
-    assert "experience design" in session.analysis.capabilities
+    assert "experience design" in session.analysis.skills
     assert session.validation.ok is True
     stage_names = [stage.display_name.lower() for stage in session.plan.stages]
     assert any("coverage" in name for name in stage_names)

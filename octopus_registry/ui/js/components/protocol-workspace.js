@@ -2032,11 +2032,11 @@ function renderProtocolWorkspace(container) {
             item.textContent = label;
             facts.appendChild(item);
         });
-        if (Array.isArray(analysis.capabilities) && analysis.capabilities.length) {
-            const capability = document.createElement('span');
-            capability.className = 'kit-catalog-card-meta-item';
-            capability.textContent = `Capabilities: ${analysis.capabilities.slice(0, 5).join(', ')}`;
-            facts.appendChild(capability);
+        if (Array.isArray(analysis.skills) && analysis.skills.length) {
+            const skill = document.createElement('span');
+            skill.className = 'kit-catalog-card-meta-item';
+            skill.textContent = `Skills: ${analysis.skills.slice(0, 5).join(', ')}`;
+            facts.appendChild(skill);
         }
         panel.appendChild(facts);
         const stages = document.createElement('ol');

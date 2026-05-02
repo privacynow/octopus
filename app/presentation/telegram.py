@@ -1502,7 +1502,7 @@ def protocol_auto_session_message(
     session_id = str(data.get("session_id") or "")
     title = html.escape(str(plan.get("protocol_name") or "Generated protocol"))
     focus = html.escape(str(analysis.get("focus") or analysis.get("domain") or "requirement-specific"))
-    capabilities = analysis.get("capabilities") if isinstance(analysis.get("capabilities"), list) else []
+    skills = analysis.get("skills") if isinstance(analysis.get("skills"), list) else []
     status = html.escape(str(data.get("status") or "draft"))
     stages = plan.get("stages") if isinstance(plan.get("stages"), list) else []
     artifacts = plan.get("artifacts") if isinstance(plan.get("artifacts"), list) else []
@@ -1522,9 +1522,9 @@ def protocol_auto_session_message(
         f"Stages: <code>{len(stages)}</code> · Artifacts: <code>{len(artifacts)}</code>",
         f"Validation: <code>{'ready' if validation.get('ok') else 'needs attention'}</code>",
     ]
-    if capabilities:
-        capability_text = ", ".join(html.escape(str(item)) for item in capabilities[:5])
-        lines.append(f"Capabilities: {capability_text}")
+    if skills:
+        skill_text = ", ".join(html.escape(str(item)) for item in skills[:5])
+        lines.append(f"Skills: {skill_text}")
     if normalized_view == "artifacts":
         lines.append("\n<b>Artifacts</b>")
         for index, artifact in enumerate(artifacts[:12], start=1):

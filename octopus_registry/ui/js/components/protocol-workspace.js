@@ -2021,7 +2021,8 @@ function renderProtocolWorkspace(container) {
         const facts = document.createElement('div');
         facts.className = 'kit-catalog-card-meta';
         [
-            `Domain: ${String(analysis.domain || 'general')}`,
+            `Focus: ${String(analysis.focus || plan.protocol_name || 'Requirement-specific workflow')}`,
+            `Design: ${String(analysis.domain || 'requirement-specific')}`,
             `${Array.isArray(plan.stages) ? plan.stages.length : 0} stages`,
             `${Array.isArray(plan.artifacts) ? plan.artifacts.length : 0} artifacts`,
             validation.ok ? 'Validation: ready' : 'Validation: needs attention',
@@ -2031,12 +2032,32 @@ function renderProtocolWorkspace(container) {
             item.textContent = label;
             facts.appendChild(item);
         });
+        if (Array.isArray(analysis.capabilities) && analysis.capabilities.length) {
+            const capability = document.createElement('span');
+            capability.className = 'kit-catalog-card-meta-item';
+            capability.textContent = `Capabilities: ${analysis.capabilities.slice(0, 5).join(', ')}`;
+            facts.appendChild(capability);
+        }
         panel.appendChild(facts);
         const stages = document.createElement('ol');
         stages.className = 'protocol-auto-stage-list';
         (Array.isArray(plan.stages) ? plan.stages : []).slice(0, 12).forEach((stage) => {
             const item = document.createElement('li');
-            item.textContent = `${String(stage.display_name || stage.stage_key || 'Stage')} — ${String(stage.stage_kind || 'work')}`;
+            const label = document.createElement('strong');
+            label.textContent = `${String(stage.display_name || stage.stage_key || 'Stage')} - ${String(stage.stage_kind || 'work')}`;
+            item.appendChild(label);
+            const purpose = String(stage.purpose || '').replace(/\s+/g, ' ').trim();
+            if (purpose) {
+                const detail = document.createElement('span');
+                detail.textContent = purpose.length > 220 ? `${purpose.slice(0, 217).trim()}...` : purpose;
+                item.appendChild(detail);
+            }
+            const outputs = Array.isArray(stage.outputs)
+                ? stage.outputs.map((value) => String(value || '').trim()).filter(Boolean)
+                : [];
+            const output = document.createElement('small');
+            output.textContent = `Outputs: ${outputs.length ? outputs.join(', ') : 'none'}`;
+            item.appendChild(output);
             stages.appendChild(item);
         });
         panel.appendChild(stages);

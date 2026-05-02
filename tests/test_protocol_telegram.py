@@ -156,7 +156,8 @@ async def test_protocol_auto_command_generates_actionable_summary(monkeypatch):
 
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
-        assert "game-development" in reply
+        assert "Focus:" in reply
+        assert "requirement-specific" in reply
         callbacks = get_callback_data_values(msg.replies[-1])
         assert "protocol:auto_stages:auto-1" in callbacks
         assert "protocol:auto_apply:auto-1" in callbacks
@@ -234,7 +235,8 @@ async def test_protocol_auto_stages_callback_renders_generated_stage_view(monkey
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         assert "Stages" in reply
-        assert "Plan concept" in reply
+        assert "Map requirement" in reply
+        assert "Outputs:" in reply
 
 
 def test_protocol_start_args_parse_rich_launch_fields():

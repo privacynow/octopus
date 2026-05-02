@@ -10,39 +10,48 @@ from octopus_sdk.protocols import (
 from octopus_sdk.protocols.auto_design import _validate_and_repair_protocol_document
 
 
-def test_auto_protocol_generates_domain_specific_game_protocol():
+def test_auto_protocol_generates_requirement_specific_protocol_without_template_classifier():
     session = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(
             surface="registry",
             requirement_text=(
-                "Build a beautiful 2D browser platformer and fighting game with "
-                "historical figures, accurate character abilities, humor, sprites, "
-                "backgrounds, sound, playtesting, and browser delivery."
+                "Build a compact browser-runnable 2D historical platform fighter prototype "
+                "with planning, review, implementation, playtest, UX review, and release evidence. "
+                "Keep the scope small enough for a smoke run, but include Local Versus, visible "
+                "controls, and a final playable artifact."
             ),
             available_agents=[
                 {
                     "agent_id": "agent-1",
                     "display_name": "General Builder",
-                    "routing_skills": ["game", "testing"],
+                    "routing_skills": ["planning", "testing"],
                 }
             ],
         )
     )
 
     assert session.status == "ready"
-    assert session.analysis.domain == "game-development"
+    assert session.analysis.domain == "requirement-specific"
+    assert "experience design" in session.analysis.capabilities
     assert session.validation.ok is True
     stage_names = [stage.display_name.lower() for stage in session.plan.stages]
-    assert any("histor" in name for name in stage_names)
-    assert any("playtest" in name for name in stage_names)
-    assert any("implement playable" in name for name in stage_names)
+    assert any("coverage" in name for name in stage_names)
+    assert any("experience" in name for name in stage_names)
+    assert any("verify" in name for name in stage_names)
+    assert any("release evidence" in name for name in stage_names)
     assert len(session.plan.stages) >= 8
     assert session.draft_definition_json.as_dict()["metadata"]["run_inputs"]
+    plan_text = " ".join(stage.purpose.lower() for stage in session.plan.stages)
+    assert "platform" in plan_text
+    assert "fighter" in plan_text
+    assert "local" in plan_text
+    assert "versus" in plan_text
+    assert "playable" in plan_text
     document = session.draft_definition_json.as_dict()
-    playtest_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "playtest")
-    assert "only valid protocol decision is completed" in playtest_stage["instructions"]
-    assert "When this stage is a review" not in playtest_stage["instructions"]
-    assert "Do not leave foreground servers" in playtest_stage["instructions"]
+    verify_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "verify_outcome")
+    assert "only valid protocol decision is completed" in verify_stage["instructions"]
+    assert "When this stage is a review" not in verify_stage["instructions"]
+    assert "Do not leave foreground servers" in verify_stage["instructions"]
 
 
 def test_auto_protocol_revision_updates_existing_canonical_document():

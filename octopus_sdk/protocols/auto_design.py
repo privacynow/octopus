@@ -187,6 +187,10 @@ class ProtocolAutoDesignAnalysisRecord(RegistryRecordModel):
     domain: str = "general"
     complexity: str = "standard"
     goal: str = ""
+    focus: str = ""
+    requirement_terms: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    deliverables: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     required_roles: list[str] = Field(default_factory=list)
@@ -260,145 +264,203 @@ class ProtocolAutoDesignRenderCardRecord(RegistryRecordModel):
     actions: list[str] = Field(default_factory=list)
 
 
+_REQUIREMENT_STOPWORDS = {
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "also",
+    "another",
+    "around",
+    "because",
+    "before",
+    "being",
+    "between",
+    "build",
+    "create",
+    "could",
+    "deliver",
+    "design",
+    "does",
+    "done",
+    "each",
+    "from",
+    "give",
+    "have",
+    "into",
+    "make",
+    "more",
+    "most",
+    "need",
+    "needs",
+    "only",
+    "other",
+    "outcome",
+    "over",
+    "perhaps",
+    "proper",
+    "prototype",
+    "really",
+    "should",
+    "some",
+    "start",
+    "that",
+    "their",
+    "there",
+    "these",
+    "thing",
+    "this",
+    "through",
+    "using",
+    "want",
+    "where",
+    "which",
+    "while",
+    "with",
+    "work",
+    "works",
+    "would",
+}
+
+
+def _requirement_terms(*values: object, limit: int = 18) -> list[str]:
+    text = _normalized_words(*values)
+    seen: set[str] = set()
+    terms: list[str] = []
+    for token in re.findall(r"[a-z0-9][a-z0-9-]{2,}", text):
+        normalized = token.strip("-")
+        if len(normalized) < 4 or normalized in _REQUIREMENT_STOPWORDS or normalized in seen:
+            continue
+        seen.add(normalized)
+        terms.append(normalized)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _requirement_phrases(text: str, *, limit: int = 6) -> list[str]:
+    cleaned = re.sub(r"\s+", " ", str(text or "").strip())
+    if not cleaned:
+        return []
+    parts = [
+        part.strip(" .;:-")
+        for part in re.split(r"[\n.;]+|\s+-\s+", cleaned)
+        if part.strip(" .;:-")
+    ]
+    phrases: list[str] = []
+    for part in parts:
+        if len(part) > 140:
+            part = part[:140].rsplit(" ", 1)[0].strip()
+        if part and part not in phrases:
+            phrases.append(part)
+        if len(phrases) >= limit:
+            break
+    return phrases
+
+
+def _has_any(text: str, tokens: Sequence[str]) -> bool:
+    return any(re.search(rf"\b{re.escape(token)}\b", text) for token in tokens)
+
+
+def _analysis_capabilities(text: str) -> list[str]:
+    """Infer workflow capabilities without selecting a closed use-case template."""
+    capabilities = ["requirements planning", "implementation", "verification", "acceptance evidence"]
+    signals = [
+        (
+            "domain grounding",
+            ("accurate", "factual", "research", "source", "sources", "evidence", "audit", "regulated", "compliance"),
+        ),
+        (
+            "experience design",
+            ("user", "human", "usable", "readable", "intuitive", "beautiful", "polished", "responsive", "controls"),
+        ),
+        (
+            "supporting asset planning",
+            ("asset", "assets", "visual", "image", "images", "audio", "sound", "content", "background", "graphic"),
+        ),
+        (
+            "data and input modeling",
+            ("data", "dataset", "records", "metrics", "analysis", "reporting", "loading"),
+        ),
+        (
+            "safety and risk review",
+            ("safe", "safety", "secure", "security", "risk", "threat", "abuse", "privacy"),
+        ),
+    ]
+    for capability, tokens in signals:
+        if _has_any(text, tokens) and capability not in capabilities:
+            capabilities.append(capability)
+    return capabilities
+
+
+def _focus_label(requirement_text: str) -> str:
+    title = _title_from_requirement(requirement_text)
+    if title == "Auto Protocol":
+        return "Requirement-specific workflow"
+    return title
+
+
 def _analyze_requirement(requirement_text: str, constraints_text: str) -> ProtocolAutoDesignAnalysisRecord:
     text = _normalized_words(requirement_text, constraints_text)
-    if any(token in text for token in ("game", "platformer", "fighting", "sprite", "level", "combat")):
-        domain = "game-development"
-    elif any(token in text for token in ("analytics", "dashboard", "chart", "graph", "csv", "data model", "dataset")):
-        domain = "analytics"
-    elif any(token in text for token in ("code", "software", "web app", "browser", "api", "library", "test")):
-        domain = "software"
-    elif any(token in text for token in ("security", "threat", "vulnerability", "compliance", "audit")):
-        domain = "security-compliance"
-    elif any(token in text for token in ("document", "guide", "readme", "manual", "training")):
-        domain = "documentation"
-    else:
-        domain = "general"
-
-    complex_markers = sum(1 for token in (
-        "commercial", "customer", "review", "loop", "multiple", "browser", "deploy",
-        "accurate", "beautiful", "high quality", "billion", "compliance", "safety",
-    ) if token in text)
-    complexity = "high" if complex_markers >= 2 or len(text) > 700 else "standard"
+    terms = _requirement_terms(requirement_text, constraints_text)
+    capabilities = _analysis_capabilities(text)
+    deliverables = _requirement_phrases(requirement_text)
+    complexity_signals = sum(1 for capability in capabilities if capability not in {"requirements planning", "implementation", "verification", "acceptance evidence"})
+    complexity = "high" if complexity_signals >= 2 or len(text) > 700 or len(deliverables) >= 4 else "standard"
     goal = _sentence(requirement_text) or "Create the requested outcome."
     assumptions = [
         "The generated protocol should be reviewed before publish.",
         "Stage instructions should carry the work contract so launch text can stay simple.",
+        "The workflow is composed from requirement coverage and reusable protocol primitives, not a closed use-case template.",
     ]
-    risks = ["Assignments may need local agent mapping before publish/run."]
-    if domain == "game-development":
-        risks.extend([
-            "Historical and creative decisions need explicit review to avoid weak or incoherent gameplay.",
-            "Playable browser output needs implementation, testing, and polish evidence, not only a design document.",
-        ])
-    elif domain == "analytics":
-        risks.extend([
-            "Useful analytics require data understanding, a model, charts, and user-facing interpretation.",
-            "Synthetic data paths should not hide how real data will be loaded.",
-        ])
-    elif domain == "security-compliance":
-        risks.append("High-risk outputs need explicit safety, security, and audit evidence.")
+    risks = [
+        "Assignments may need local agent mapping before publish/run.",
+        "A requirement-specific workflow can still miss intent if the user leaves critical constraints implicit.",
+    ]
+    if "domain grounding" in capabilities:
+        risks.append("Factual or domain-sensitive claims need explicit grounding and review evidence.")
+    if "experience design" in capabilities:
+        risks.append("Human-facing outcomes need usability and polish review, not only functional completion.")
+    if "safety and risk review" in capabilities:
+        risks.append("Risk-sensitive outcomes need explicit safety or security review before acceptance.")
 
-    role_map = {
-        "game-development": [
-            "creative director",
-            "historical reviewer",
-            "game designer",
-            "2d artist",
-            "sound designer",
-            "game implementer",
-            "qa playtester",
-            "ux reviewer",
-            "release reviewer",
-        ],
-        "analytics": [
-            "workflow planner",
-            "data modeler",
-            "analytics implementer",
-            "visualization designer",
-            "analytics reviewer",
-            "readiness reviewer",
-        ],
-        "software": [
-            "technical planner",
-            "architecture reviewer",
-            "implementer",
-            "test engineer",
-            "code reviewer",
-            "release reviewer",
-        ],
-        "security-compliance": [
-            "scope planner",
-            "domain implementer",
-            "security reviewer",
-            "compliance reviewer",
-            "final approver",
-        ],
-        "documentation": [
-            "documentation planner",
-            "writer",
-            "reader advocate",
-            "editor",
-            "final reviewer",
-        ],
-        "general": [
-            "planner",
-            "implementer",
-            "reviewer",
-            "final approver",
-        ],
-    }
-    artifact_map = {
-        "game-development": [
-            "game concept brief",
-            "technical architecture",
-            "asset plan",
-            "playable browser prototype",
-            "playtest report",
-            "release evidence",
-        ],
-        "analytics": [
-            "data intake plan",
-            "data model",
-            "analytics application",
-            "validation report",
-            "readiness evidence",
-        ],
-        "software": [
-            "implementation plan",
-            "architecture notes",
-            "implemented change",
-            "test evidence",
-            "release evidence",
-        ],
-        "security-compliance": [
-            "scope plan",
-            "control implementation",
-            "security review",
-            "compliance evidence",
-            "final decision record",
-        ],
-        "documentation": [
-            "documentation plan",
-            "draft guide",
-            "review notes",
-            "published-ready docs",
-        ],
-        "general": [
-            "plan",
-            "work output",
-            "review notes",
-            "final evidence",
-        ],
-    }
+    required_roles = ["workflow planner", "coverage reviewer", "implementation owner", "verification lead", "readiness reviewer"]
+    if "domain grounding" in capabilities:
+        required_roles.insert(2, "domain grounding reviewer")
+    if "experience design" in capabilities:
+        required_roles.insert(-2, "experience designer")
+    if "supporting asset planning" in capabilities:
+        required_roles.insert(-2, "supporting asset planner")
+    if "data and input modeling" in capabilities:
+        required_roles.insert(2, "input modeler")
+    if "safety and risk review" in capabilities:
+        required_roles.insert(-1, "risk reviewer")
+
+    expected_artifacts = ["requirements coverage plan", "produced outcome", "verification report", "release evidence"]
+    if "domain grounding" in capabilities:
+        expected_artifacts.insert(1, "domain grounding notes")
+    if "experience design" in capabilities:
+        expected_artifacts.insert(-2, "experience design")
+    if "supporting asset planning" in capabilities:
+        expected_artifacts.insert(-2, "supporting asset plan")
+    if "data and input modeling" in capabilities:
+        expected_artifacts.insert(1, "input model")
+    if "safety and risk review" in capabilities:
+        expected_artifacts.insert(-1, "risk review")
+
     return ProtocolAutoDesignAnalysisRecord(
-        domain=domain,
+        domain="requirement-specific",
         complexity=complexity,
         goal=goal,
+        focus=_focus_label(requirement_text),
+        requirement_terms=terms,
+        capabilities=capabilities,
+        deliverables=deliverables,
         assumptions=assumptions,
         risks=risks,
-        required_roles=role_map[domain],
-        expected_artifacts=artifact_map[domain],
+        required_roles=required_roles,
+        expected_artifacts=expected_artifacts,
     )
 
 
@@ -487,110 +549,214 @@ def _build_plan(
     constraints = str(request.constraints_text or "").strip()
     title = _title_from_requirement(requirement)
     slug = _slugify(title)
-    description = _sentence(requirement) or f"Auto-generated {analysis.domain} protocol."
+    description = _sentence(requirement) or "Auto-generated requirement-specific protocol."
     agents = [item.as_dict() for item in request.available_agents]
     skills = [item.as_dict() for item in request.available_skills]
     run_profile = _base_run_profile(requirement, constraints, request.workspace_ref)
+    capabilities = set(analysis.capabilities)
+    coverage_terms = ", ".join(analysis.requirement_terms[:14]) or "the explicit user requirement"
+    request_scope = _sentence(requirement) or "Create the requested outcome."
 
-    if analysis.domain == "game-development":
-        roles = [
-            _role("creative_director", "Creative Director", "Own the game vision, humor boundary, and player experience.", agents, skills),
-            _role("historical_reviewer", "Historical Reviewer", "Check historical framing, character logic, and respectful treatment.", agents, skills),
-            _role("game_designer", "Game Designer", "Define mechanics, modes, levels, balance, and win conditions.", agents, skills),
-            _role("artist", "2D Artist", "Specify sprite, background, UI, and visual asset direction.", agents, skills),
-            _role("sound_designer", "Sound Designer", "Specify music, sound effects, and feedback cues.", agents, skills),
-            _role("implementer", "Game Implementer", "Build the browser-playable 2D game prototype.", agents, skills),
-            _role("tester", "QA Playtester", "Test gameplay, controls, browser behavior, and artifact completeness.", agents, skills),
-            _role("ux_reviewer", "UX Reviewer", "Review usability, readability, responsiveness, and player comprehension.", agents, skills),
-            _role("release_reviewer", "Release Reviewer", "Accept final evidence or send work back with concrete fixes.", agents, skills),
-        ]
-        artifacts = [
-            _artifact("concept_brief", "Game Concept Brief", "Vision, audience, humor boundaries, character roster, and historical treatment.", "protocol/game/concept-brief.md"),
-            _artifact("mechanics_plan", "Mechanics And Level Plan", "Game modes, controls, character abilities, levels, balance rules, and acceptance criteria.", "protocol/game/mechanics-plan.md"),
-            _artifact("asset_plan", "Art And Sound Plan", "Sprite, background, UI, animation, and sound direction for implementation.", "protocol/game/asset-plan.md"),
-            _artifact("playable_package", "Playable Browser Package", "Browser-runnable game package or implementation artifact.", "protocol/game/playable"),
-            _artifact("playtest_report", "Playtest Report", "Test results, defects, gameplay notes, and browser compatibility findings.", "protocol/game/playtest-report.md"),
-            _artifact("release_evidence", "Release Evidence", "Final summary of what was built, reviewed, fixed, and how to inspect it.", "protocol/game/release-evidence.md"),
-        ]
-        stages = [
-            _stage("plan_concept", "Plan concept and constraints", "work", "creative_director", "Create the concept brief with target player, tone, historical scope, humor boundaries, and success criteria.", outputs=["concept_brief"]),
-            _stage("review_concept", "Review concept for historical accuracy and tone", "review", "historical_reviewer", "Accept only if the concept is historically grounded, coherent, and respectful while still allowing appropriate humor. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY.", inputs=["concept_brief"], review_of="plan_concept"),
-            _stage("design_mechanics", "Design gameplay, modes, and levels", "work", "game_designer", "Design platforming, fighting, team/strategy modes, character abilities, controls, balance rules, and level progression.", inputs=["concept_brief"], outputs=["mechanics_plan"]),
-            _stage("review_mechanics", "Review mechanics and balance", "review", "creative_director", "Accept only if mechanics are implementable in a browser, fun, testable, and aligned with the concept. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["concept_brief", "mechanics_plan"], review_of="design_mechanics"),
-            _stage("plan_assets", "Plan art and sound", "work", "artist", "Define sprite style, animation needs, backgrounds, UI affordances, bitmap/vector asset strategy, and sound requirements.", inputs=["concept_brief", "mechanics_plan"], outputs=["asset_plan"]),
-            _stage("review_assets", "Review asset direction", "review", "ux_reviewer", "Accept only if the asset plan supports readable, beautiful, responsive gameplay and clear player feedback. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["asset_plan"], review_of="plan_assets"),
-            _stage("implement_game", "Implement playable browser prototype", "work", "implementer", "Build the playable browser prototype using suitable open-source 2D libraries, declared assets, responsive layout, and testable controls.", inputs=["concept_brief", "mechanics_plan", "asset_plan"], outputs=["playable_package"]),
-            _stage("playtest", "Playtest and verify implementation", "work", "tester", "Run gameplay and browser checks. Record defects, missing interactions, responsiveness issues, and artifact completeness.", inputs=["playable_package", "mechanics_plan"], outputs=["playtest_report"]),
-            _stage("review_playable", "Review playable experience", "review", "ux_reviewer", "Accept only if the playable artifact is understandable, responsive, visually coherent, and matches the design contract. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["playable_package", "playtest_report"], review_of="implement_game"),
-            _stage("final_evidence", "Prepare release evidence", "acceptance", "release_reviewer", "Summarize produced artifacts, accepted reviews, remaining risks, and exact inspection steps. End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY.", inputs=["concept_brief", "mechanics_plan", "asset_plan", "playable_package", "playtest_report"], outputs=["release_evidence"]),
-        ]
-    elif analysis.domain == "analytics":
-        roles = [
-            _role("planner", "Analytics Planner", "Define the business question, data path, users, and acceptance criteria.", agents, skills),
-            _role("data_modeler", "Data Modeler", "Create the data model and real/synthetic data loading strategy.", agents, skills),
-            _role("implementer", "Analytics Implementer", "Build the analytics experience and calculations.", agents, skills),
-            _role("visualization_designer", "Visualization Designer", "Improve charts, drilldowns, layout, and progressive user paths.", agents, skills),
-            _role("reviewer", "Analytics Reviewer", "Review correctness, usability, and artifact evidence.", agents, skills),
-        ]
-        artifacts = [
-            _artifact("requirements_plan", "Analytics Requirements Plan", "Business goal, users, data sources, dimensions, measures, and acceptance criteria.", "protocol/analytics/requirements-plan.md"),
-            _artifact("data_model", "Data Model", "Entities, measures, dimensions, loading path, validation rules, and assumptions.", "protocol/analytics/data-model.md"),
-            _artifact("analytics_app", "Analytics Application", "Interactive analytics output or package.", "protocol/analytics/app"),
-            _artifact("validation_report", "Validation Report", "Data, calculation, chart, and usability validation evidence.", "protocol/analytics/validation-report.md"),
-            _artifact("readiness_evidence", "Readiness Evidence", "Final inspection summary, artifacts, risks, and next steps.", "protocol/analytics/readiness-evidence.md"),
-        ]
-        stages = [
-            _stage("plan_requirements", "Plan analytics requirements", "work", "planner", "Define users, questions, real data path, synthetic fallback, dimensions, measures, charts, drilldowns, and acceptance criteria.", outputs=["requirements_plan"]),
-            _stage("review_requirements", "Review analytics plan", "review", "reviewer", "Accept only if the plan is understandable to a non-technical user and leads from data loading to useful outcomes. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["requirements_plan"], review_of="plan_requirements"),
-            _stage("create_data_model", "Create data model", "work", "data_modeler", "Create the data model, loading rules, validation checks, and example records.", inputs=["requirements_plan"], outputs=["data_model"]),
-            _stage("review_data_model", "Review data model", "review", "reviewer", "Accept only if the model supports the required measures, dimensions, drilldowns, and validation path. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["requirements_plan", "data_model"], review_of="create_data_model"),
-            _stage("build_analytics_app", "Build analytics experience", "work", "implementer", "Build a usable analytics experience with data loading, synthetic fallback, charts, filters, drilldowns, and clear outcomes.", inputs=["requirements_plan", "data_model"], outputs=["analytics_app"]),
-            _stage("review_ux", "Review analytics UX", "review", "visualization_designer", "Accept only if the experience is beautiful, progressive, responsive, and explains results without requiring data-model expertise. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["analytics_app"], review_of="build_analytics_app"),
-            _stage("validate_output", "Validate analytics output", "work", "reviewer", "Validate calculations, charts, data states, responsive behavior, and artifact completeness.", inputs=["analytics_app", "data_model"], outputs=["validation_report"]),
-            _stage("final_evidence", "Prepare readiness evidence", "acceptance", "reviewer", "Summarize artifacts, checks, remaining risks, and how to inspect the analytics result. End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY.", inputs=["requirements_plan", "data_model", "analytics_app", "validation_report"], outputs=["readiness_evidence"]),
-        ]
-    elif analysis.domain == "software":
-        roles = [
-            _role("planner", "Technical Planner", "Define scope, architecture, and acceptance criteria.", agents, skills),
-            _role("architecture_reviewer", "Architecture Reviewer", "Review design fit, maintainability, and product boundaries.", agents, skills),
-            _role("implementer", "Implementer", "Build the requested change.", agents, skills),
-            _role("test_engineer", "Test Engineer", "Verify behavior and regression coverage.", agents, skills),
-            _role("reviewer", "Code Reviewer", "Review correctness, usability, and release readiness.", agents, skills),
-        ]
-        artifacts = [
-            _artifact("implementation_plan", "Implementation Plan", "Scope, design, risks, files, and acceptance criteria.", "protocol/software/implementation-plan.md"),
-            _artifact("implementation_output", "Implementation Output", "The implemented product change or package.", "protocol/software/output"),
-            _artifact("test_evidence", "Test Evidence", "Executed tests, results, gaps, and manual checks.", "protocol/software/test-evidence.md"),
-            _artifact("release_evidence", "Release Evidence", "Final readiness summary and inspection path.", "protocol/software/release-evidence.md"),
-        ]
-        stages = [
-            _stage("plan", "Plan implementation", "work", "planner", "Plan the implementation with architecture, constraints, tests, artifacts, and acceptance criteria.", outputs=["implementation_plan"]),
-            _stage("review_plan", "Review implementation plan", "review", "architecture_reviewer", "Accept only if the plan is maintainable, scoped, testable, and consistent with product boundaries. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["implementation_plan"], review_of="plan"),
-            _stage("implement", "Implement change", "work", "implementer", "Implement the requested change according to the accepted plan and produce the declared output.", inputs=["implementation_plan"], outputs=["implementation_output"]),
-            _stage("test", "Test implementation", "work", "test_engineer", "Run focused automated and manual checks. Record commands, outcomes, gaps, and evidence.", inputs=["implementation_output", "implementation_plan"], outputs=["test_evidence"]),
-            _stage("review", "Review implementation", "review", "reviewer", "Accept only if the output meets the plan, tests are meaningful, and UX/product quality is acceptable. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["implementation_output", "test_evidence"], review_of="implement"),
-            _stage("final_evidence", "Prepare release evidence", "acceptance", "reviewer", "Summarize the change, tests, artifacts, risks, and how to inspect the result. End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY.", inputs=["implementation_plan", "implementation_output", "test_evidence"], outputs=["release_evidence"]),
-        ]
-    else:
-        roles = [
-            _role("planner", "Planner", "Clarify the goal, constraints, work plan, and acceptance criteria.", agents, skills),
-            _role("implementer", "Implementer", "Produce the requested output.", agents, skills),
-            _role("reviewer", "Reviewer", "Review the output and decide whether to revise or accept.", agents, skills),
-            _role("approver", "Final Approver", "Record final evidence and readiness.", agents, skills),
-        ]
-        artifacts = [
-            _artifact("plan", "Plan", "Goal, constraints, staged work plan, and acceptance criteria.", "protocol/auto/plan.md"),
-            _artifact("output", "Output", "Primary work product.", "protocol/auto/output"),
-            _artifact("review_notes", "Review Notes", "Review decision, defects, and revision requests.", "protocol/auto/review-notes.md"),
-            _artifact("final_evidence", "Final Evidence", "Accepted artifacts, checks, risks, and inspection path.", "protocol/auto/final-evidence.md"),
-        ]
-        stages = [
-            _stage("plan", "Plan work", "work", "planner", "Clarify the outcome, constraints, required artifacts, and acceptance criteria.", outputs=["plan"]),
-            _stage("review_plan", "Review plan", "review", "reviewer", "Accept only if the plan is specific, executable, and testable. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["plan"], review_of="plan"),
-            _stage("build", "Produce output", "work", "implementer", "Produce the requested output using the accepted plan and declared constraints.", inputs=["plan"], outputs=["output"]),
-            _stage("review_output", "Review output", "review", "reviewer", "Accept only if the output satisfies the plan and is usable by the target user. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.", inputs=["plan", "output"], outputs=["review_notes"], review_of="build"),
-            _stage("final_evidence", "Prepare final evidence", "acceptance", "approver", "Summarize what was produced, what was checked, accepted artifacts, remaining risks, and inspection steps. End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY.", inputs=["plan", "output", "review_notes"], outputs=["final_evidence"]),
-        ]
+    roles = [
+        _role("planner", "Workflow Planner", "Turn the user request into an explicit plan, coverage map, assumptions, and acceptance criteria.", agents, skills),
+        _role("coverage_reviewer", "Coverage Reviewer", "Verify that the generated workflow covers the user requirement before production starts.", agents, skills),
+    ]
+    if "data and input modeling" in capabilities:
+        roles.append(_role("input_modeler", "Input Modeler", "Define required inputs, data shape, loading path, validation rules, and assumptions.", agents, skills))
+    if "domain grounding" in capabilities:
+        roles.append(_role("domain_reviewer", "Domain Grounding Reviewer", "Check factual grounding, domain assumptions, sources, and boundary conditions.", agents, skills))
+    if "experience design" in capabilities:
+        roles.append(_role("experience_designer", "Experience Designer", "Design the human-facing flow, interaction model, readability, and polish criteria.", agents, skills))
+    if "supporting asset planning" in capabilities:
+        roles.append(_role("asset_planner", "Supporting Asset Planner", "Specify supporting media, content, assets, or other non-code inputs required by the outcome.", agents, skills))
+    roles.extend([
+        _role("implementer", "Implementation Owner", "Produce the requested outcome from the accepted plan and declared inputs.", agents, skills),
+        _role("verifier", "Verification Lead", "Run checks against acceptance criteria, artifacts, and requirement coverage.", agents, skills),
+    ])
+    if "safety and risk review" in capabilities:
+        roles.append(_role("risk_reviewer", "Risk Reviewer", "Review safety, security, operational, privacy, or abuse risks before final acceptance.", agents, skills))
+    roles.append(_role("readiness_reviewer", "Readiness Reviewer", "Accept final evidence or send work back with concrete fixes.", agents, skills))
+
+    artifacts = [
+        _artifact("requirements_plan", "Requirements Coverage Plan", "Goal, constraints, assumptions, deliverables, acceptance criteria, and coverage terms.", "protocol/auto/requirements-coverage-plan.md"),
+    ]
+    if "data and input modeling" in capabilities:
+        artifacts.append(_artifact("input_model", "Input Model", "Inputs, data shapes, loading path, validation rules, and assumptions needed by the outcome.", "protocol/auto/input-model.md"))
+    if "domain grounding" in capabilities:
+        artifacts.append(_artifact("domain_grounding", "Domain Grounding Notes", "Factual grounding, sources, assumptions, and disputed or uncertain claims.", "protocol/auto/domain-grounding.md"))
+    if "experience design" in capabilities:
+        artifacts.append(_artifact("experience_design", "Experience Design", "Human-facing flow, interaction model, responsiveness, polish criteria, and inspection notes.", "protocol/auto/experience-design.md"))
+    if "supporting asset planning" in capabilities:
+        artifacts.append(_artifact("supporting_assets", "Supporting Asset Plan", "Required supporting media, content, generated assets, source files, or input material.", "protocol/auto/supporting-assets.md"))
+    artifacts.extend([
+        _artifact("produced_outcome", "Produced Outcome", "The primary deliverable requested by the user.", "protocol/auto/output"),
+        _artifact("verification_report", "Verification Report", "Checks, results, defects, gaps, and requirement coverage evidence.", "protocol/auto/verification-report.md"),
+    ])
+    if "safety and risk review" in capabilities:
+        artifacts.append(_artifact("risk_review", "Risk Review", "Safety, security, privacy, operational, or abuse-risk review evidence.", "protocol/auto/risk-review.md"))
+    artifacts.append(_artifact("release_evidence", "Release Evidence", "Final summary of artifacts, reviews, remaining risks, and inspection steps.", "protocol/auto/release-evidence.md"))
+
+    stages = [
+        _stage(
+            "plan_requirements",
+            "Map requirement and acceptance criteria",
+            "work",
+            "planner",
+            f"Create a requirements coverage plan for: {request_scope} Explicitly cover these terms or phrases: {coverage_terms}. Capture assumptions, constraints, deliverables, required capabilities, and acceptance criteria.",
+            outputs=["requirements_plan"],
+        ),
+        _stage(
+            "review_requirements",
+            "Review requirement coverage",
+            "review",
+            "coverage_reviewer",
+            "Accept only if the plan maps every material part of the user request to a stage, artifact, acceptance criterion, or explicit assumption. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+            inputs=["requirements_plan"],
+            review_of="plan_requirements",
+        ),
+    ]
+
+    planning_outputs = ["requirements_plan"]
+    if "data and input modeling" in capabilities:
+        stages.extend([
+            _stage(
+                "model_inputs",
+                "Model required inputs",
+                "work",
+                "input_modeler",
+                f"Define the inputs needed to produce the requested outcome. Preserve requirement coverage for: {coverage_terms}. Include loading, validation, examples, and assumptions where applicable.",
+                inputs=list(planning_outputs),
+                outputs=["input_model"],
+            ),
+            _stage(
+                "review_inputs",
+                "Review input model",
+                "review",
+                "coverage_reviewer",
+                "Accept only if the input model is understandable, sufficient for the requested outcome, and testable. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+                inputs=["requirements_plan", "input_model"],
+                review_of="model_inputs",
+            ),
+        ])
+        planning_outputs.append("input_model")
+    if "domain grounding" in capabilities:
+        stages.extend([
+            _stage(
+                "establish_domain_grounding",
+                "Establish domain grounding",
+                "work",
+                "domain_reviewer",
+                f"Record the factual, domain, source, and boundary assumptions required by the request. Explicitly address: {coverage_terms}.",
+                inputs=list(planning_outputs),
+                outputs=["domain_grounding"],
+            ),
+            _stage(
+                "review_domain_grounding",
+                "Review domain grounding",
+                "review",
+                "coverage_reviewer",
+                "Accept only if factual and domain-sensitive assumptions are explicit, grounded, and safe to use in later stages. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+                inputs=["requirements_plan", "domain_grounding"],
+                review_of="establish_domain_grounding",
+            ),
+        ])
+        planning_outputs.append("domain_grounding")
+    if "experience design" in capabilities:
+        stages.extend([
+            _stage(
+                "design_experience",
+                "Design user-facing experience",
+                "work",
+                "experience_designer",
+                f"Design the human-facing flow and quality bar for the requested outcome. Make the path intuitive, readable, and inspectable while preserving: {coverage_terms}.",
+                inputs=list(planning_outputs),
+                outputs=["experience_design"],
+            ),
+            _stage(
+                "review_experience",
+                "Review experience design",
+                "review",
+                "coverage_reviewer",
+                "Accept only if the design is usable, clear, responsive where relevant, and tied to the acceptance criteria. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+                inputs=["requirements_plan", "experience_design"],
+                review_of="design_experience",
+            ),
+        ])
+        planning_outputs.append("experience_design")
+    if "supporting asset planning" in capabilities:
+        stages.extend([
+            _stage(
+                "plan_supporting_assets",
+                "Plan supporting assets and content",
+                "work",
+                "asset_planner",
+                f"Specify the supporting assets, content, media, source material, or generated inputs needed by the final outcome. Preserve requirement coverage for: {coverage_terms}.",
+                inputs=list(planning_outputs),
+                outputs=["supporting_assets"],
+            ),
+            _stage(
+                "review_supporting_assets",
+                "Review supporting asset plan",
+                "review",
+                "coverage_reviewer",
+                "Accept only if the supporting asset plan is complete enough to produce and verify the final outcome. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+                inputs=["requirements_plan", "supporting_assets"],
+                review_of="plan_supporting_assets",
+            ),
+        ])
+        planning_outputs.append("supporting_assets")
+
+    stages.extend([
+        _stage(
+            "produce_outcome",
+            "Produce requested outcome",
+            "work",
+            "implementer",
+            f"Produce the requested outcome from the accepted plan and supporting artifacts. The output must visibly satisfy the requirement coverage terms: {coverage_terms}.",
+            inputs=list(planning_outputs),
+            outputs=["produced_outcome"],
+        ),
+        _stage(
+            "verify_outcome",
+            "Verify outcome against requirement",
+            "work",
+            "verifier",
+            "Run focused checks against the acceptance criteria, declared artifacts, and coverage plan. Record commands, manual checks, defects, gaps, and unresolved risks.",
+            inputs=[*planning_outputs, "produced_outcome"],
+            outputs=["verification_report"],
+        ),
+    ])
+    if "safety and risk review" in capabilities:
+        stages.append(_stage(
+            "review_risk",
+            "Review risk and safety",
+            "review",
+            "risk_reviewer",
+            "Accept only if safety, security, privacy, abuse, and operational risks have been considered and any residual risks are explicit. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+            inputs=["requirements_plan", "produced_outcome", "verification_report"],
+            outputs=["risk_review"],
+            review_of="produce_outcome",
+        ))
+    stages.extend([
+        _stage(
+            "review_outcome",
+            "Review produced outcome",
+            "review",
+            "readiness_reviewer",
+            "Accept only if the outcome satisfies the requirement coverage plan, verification is meaningful, and the result is usable by the intended human. End with PROTOCOL_DECISION and PROTOCOL_SUMMARY.",
+            inputs=["requirements_plan", "produced_outcome", "verification_report"],
+            review_of="produce_outcome",
+        ),
+        _stage(
+            "final_evidence",
+            "Prepare release evidence",
+            "acceptance",
+            "readiness_reviewer",
+            "Summarize the produced artifacts, accepted reviews, verification evidence, remaining risks, and exact inspection steps. End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY.",
+            inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
+            outputs=["release_evidence"],
+        ),
+    ])
 
     return ProtocolAutoDesignPlanRecord(
         protocol_name=title,
@@ -918,6 +1084,100 @@ def _validate_and_repair_protocol_document(
     return current, validation, repair_notes
 
 
+def _plan_coverage_text(plan: ProtocolAutoDesignPlanRecord) -> str:
+    parts: list[str] = [
+        plan.protocol_name,
+        plan.description,
+        plan.run_profile.problem_statement,
+        plan.run_profile.context,
+        plan.run_profile.constraints,
+        plan.run_profile.acceptance_criteria,
+    ]
+    for role in plan.roles:
+        parts.extend([role.display_name, role.responsibility])
+    for artifact in plan.artifacts:
+        parts.extend([artifact.display_name, artifact.description, artifact.path])
+    for stage in plan.stages:
+        parts.extend([
+            stage.display_name,
+            stage.stage_kind,
+            stage.role_key,
+            stage.purpose,
+            *stage.inputs,
+            *stage.outputs,
+            stage.review_of_stage_key,
+        ])
+    return _normalized_words(*parts)
+
+
+def _semantic_warnings_for_session(
+    analysis: ProtocolAutoDesignAnalysisRecord,
+    plan: ProtocolAutoDesignPlanRecord,
+) -> tuple[list[ProtocolAutoDesignWarningRecord], list[ProtocolAutoDesignWarningRecord]]:
+    warnings: list[ProtocolAutoDesignWarningRecord] = []
+    unresolved: list[ProtocolAutoDesignWarningRecord] = []
+    coverage_text = _plan_coverage_text(plan)
+    terms = [term for term in analysis.requirement_terms if len(term) >= 4]
+    missing = [term for term in terms if term not in coverage_text]
+    if terms and len(missing) > max(1, len(terms) // 5):
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.coverage_incomplete",
+            message=(
+                "The generated protocol does not explicitly cover enough of the user's requirement. "
+                f"Missing coverage: {', '.join(missing[:8])}."
+            ),
+            severity="error",
+            section="semantic_coverage",
+            action="repair_generated_protocol",
+        ))
+
+    stage_kinds = {stage.stage_kind for stage in plan.stages}
+    if "review" not in stage_kinds:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.review_missing",
+            message="The generated protocol has no review stage. Add at least one review gate before publish or run.",
+            severity="error",
+            section="semantic_coverage",
+            action="repair_generated_protocol",
+        ))
+    if "acceptance" not in stage_kinds:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.acceptance_missing",
+            message="The generated protocol has no acceptance stage. Add final evidence before publish or run.",
+            severity="error",
+            section="semantic_coverage",
+            action="repair_generated_protocol",
+        ))
+
+    capability_stage_requirements = {
+        "domain grounding": "domain",
+        "experience design": "experience",
+        "supporting asset planning": "supporting",
+        "data and input modeling": "input",
+        "safety and risk review": "risk",
+    }
+    stage_text = _normalized_words(*(stage.stage_key for stage in plan.stages), *(stage.display_name for stage in plan.stages))
+    for capability, required_text in capability_stage_requirements.items():
+        if capability in analysis.capabilities and required_text not in stage_text:
+            unresolved.append(ProtocolAutoDesignWarningRecord(
+                code="semantic.capability_missing",
+                message=f"The generated protocol inferred {capability} but did not create a visible stage for it.",
+                severity="error",
+                section="semantic_coverage",
+                action="repair_generated_protocol",
+            ))
+
+    if not unresolved:
+        warnings.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.coverage_ready",
+            message="Requirement coverage passed: stages, artifacts, reviews, and final evidence reference the material request.",
+            severity="info",
+            section="semantic_coverage",
+            action="review_generated_protocol",
+        ))
+    return warnings, unresolved
+
+
 def _warnings_for_session(
     request: ProtocolAutoDesignRequestRecord,
     validation: ProtocolValidationResultRecord,
@@ -976,6 +1236,9 @@ def generate_auto_protocol_session(
     )
     draft, validation, repair_notes = _validate_and_repair_protocol_document(draft, request)
     warnings, unresolved = _warnings_for_session(request, validation)
+    semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(analysis, plan)
+    warnings.extend(semantic_warnings)
+    unresolved.extend(semantic_unresolved)
     status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
     return ProtocolAutoDesignSessionRecord(
         session_id=session_id,
@@ -999,7 +1262,7 @@ def generate_auto_protocol_session(
         warnings=warnings,
         unresolved_decisions=unresolved,
         change_summary=[
-            f"Generated a {analysis.domain} protocol with {len(plan.stages)} stages.",
+            f"Generated a requirement-specific protocol with {len(plan.stages)} stages.",
             f"Declared {len(plan.artifacts)} artifacts and {len(plan.roles)} participant roles.",
             "Included review/revision gates and final evidence.",
             *repair_notes,
@@ -1148,7 +1411,6 @@ def revise_auto_protocol_session(
     draft["stages"] = stages
     draft = draft_protocol_document_data(draft)
     draft, validation, repair_notes = _validate_and_repair_protocol_document(draft, request)
-    warnings, unresolved = _warnings_for_session(request, validation)
     analysis = _analyze_requirement(
         f"{metadata.get('description', '')} {change_request}",
         request.constraints_text,
@@ -1188,6 +1450,10 @@ def revise_auto_protocol_session(
         ],
         run_profile=_base_run_profile(request.requirement_text, request.constraints_text, request.workspace_ref),
     )
+    warnings, unresolved = _warnings_for_session(request, validation)
+    semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(analysis, plan)
+    warnings.extend(semantic_warnings)
+    unresolved.extend(semantic_unresolved)
     status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
     return ProtocolAutoDesignSessionRecord(
         session_id=session_id,
@@ -1224,7 +1490,8 @@ def auto_protocol_render_cards(session: ProtocolAutoDesignSessionRecord) -> list
             title=plan.protocol_name or "Generated protocol",
             body=session.analysis.goal or plan.description,
             facts=[
-                {"label": "Domain", "value": session.analysis.domain},
+                {"label": "Focus", "value": session.analysis.focus or session.analysis.domain},
+                {"label": "Capabilities", "value": ", ".join(session.analysis.capabilities[:4])},
                 {"label": "Stages", "value": str(len(plan.stages))},
                 {"label": "Artifacts", "value": str(len(plan.artifacts))},
                 {"label": "Validation", "value": "ready" if validation.ok else "needs attention"},

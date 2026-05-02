@@ -6619,6 +6619,19 @@ select {
     font-size: var(--text-xs);
     font-weight: 800;
 }
+.protocol-auto-stage-list li > strong,
+.protocol-auto-stage-list li > span,
+.protocol-auto-stage-list li > small {
+    grid-column: 2;
+    min-width: 0;
+}
+.protocol-auto-stage-list li > strong {
+    color: var(--text-primary);
+}
+.protocol-auto-stage-list li > small {
+    color: var(--text-tertiary);
+    overflow-wrap: anywhere;
+}
 .protocol-package-textarea {
     min-height: 180px;
     resize: vertical;

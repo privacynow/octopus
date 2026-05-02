@@ -57,16 +57,15 @@ The working litmus test is a game concept:
   evidence
 
 This example is useful because a weak auto generator will collapse it into a
-generic "build the game" stage. A useful generator will infer domain-specific
-roles, staged deliverables, design reviews, creative and historical constraints,
-technical architecture, asset planning, gameplay implementation, QA, playtest
-loops, and release evidence.
+generic "build the thing" stage. A useful generator will infer the required
+capabilities, staged deliverables, design reviews, domain-grounding constraints,
+technical architecture, supporting asset or input planning, implementation,
+verification loops, and release evidence from the requirement itself.
 
 This example must not be hard-coded. It is one acceptance scenario, similar to
-the manufacturing analytics example. The product must work for many domains:
-analytics, manufacturing, games, compliance workflows, operations, creative
-work, security review, fintech workflows, research, product design, and other
-high-value customer work.
+the manufacturing analytics example. The product must work for any serious
+customer goal without embedding customer examples or closed domain keyword
+lists in the product path.
 
 ## Product Decisions
 
@@ -79,11 +78,11 @@ high-value customer work.
 
 2. The model assists; product code owns the behavior.
 
-   The system may call a model to analyze requirements, infer the domain,
+   The system may call a model to analyze requirements, infer capabilities,
    propose workflow structure, critique drafts, and revise protocols. The model
    output is structured input to product code. Product code compiles, validates,
    gates, and persists the result. This must not rely on a single `SKILL.md`
-   incantation or opaque prompt blob.
+   incantation, opaque prompt blob, or hard-coded use-case keyword classifier.
 
 3. The output is always a canonical protocol document.
 
@@ -121,12 +120,12 @@ high-value customer work.
 
 7. Review loops are inferred, not blindly templated.
 
-   Planning, review, build, revise, accept, and final evidence are a useful
-   minimum pattern for serious work, but not a fixed template. The generator
-   must inspect the requirement and choose an appropriate workflow. A simple
-   task may need a short workflow. A commercial game, analytics application,
-   regulated workflow, or customer deliverable needs specialized stages,
-   reviewers, evidence, and feedback loops.
+   Planning, review, build, revise, accept, and final evidence are useful
+   primitives for serious work, but not a fixed template. The generator must
+   inspect the requirement and compose an appropriate workflow. A simple task
+   may need a short workflow. A complex, regulated, creative, analytical,
+   operational, or customer-facing deliverable needs the specific stages,
+   reviewers, evidence, and feedback loops implied by the requirement.
 
 8. Direct publish and run require explicit user action.
 
@@ -248,7 +247,7 @@ Auto Protocol should support these user flows.
    service.
 3. Telegram shows a compact generated protocol summary:
    - name
-   - inferred domain
+   - inferred focus and required capabilities
    - goal
    - stage count
    - reviewers and loops
@@ -458,14 +457,16 @@ Policy rules should include:
   vocabulary.
 - Work stages should produce or update declared artifacts.
 - Review stages should inspect declared artifacts, not vague completion claims.
-- High-risk domains should include domain, safety, compliance, or security
-  review where appropriate.
-- Creative workflows should separate creative direction, asset production,
-  implementation, and polish/review when those are materially different jobs.
-- Software workflows should include architecture/design, implementation,
-  testing, review, and final evidence where complexity justifies it.
-- Analytics workflows should include data understanding, data model, analysis,
-  visualization/UX, validation, and evidence stages where appropriate.
+- High-risk requirements should include safety, compliance, security, factual,
+  or domain-grounding review where appropriate.
+- Requirements involving human-facing output should include experience design,
+  usability review, and inspection evidence where appropriate.
+- Requirements involving produced artifacts should separate planning,
+  production, verification, review, and final evidence when those are materially
+  different jobs.
+- Requirements involving data, research, assets, content, operations, or other
+  specialized inputs should create explicit stages and artifacts for those
+  inputs when they are necessary to make the final output trustworthy.
 - If only one execution-healthy agent exists, the workflow may assign multiple
   roles to that agent, but review stages must remain distinct.
 - If no assignment can be resolved, keep the draft editable but block publish
@@ -485,8 +486,8 @@ Recommended call sequence:
 1. Requirement normalization
    - product code trims, classifies mode, applies limits, attaches context
 2. Requirement analysis
-   - model returns domain, goals, deliverables, constraints, risks, roles,
-     likely artifacts, open questions, and assumptions
+   - model returns goal, deliverables, constraints, risks, required
+     capabilities, likely artifacts, open questions, and assumptions
 3. Plan generation
    - model returns structured roles, stages, review loops, transitions,
      artifacts, assignment intents, and run profile
@@ -941,9 +942,9 @@ Deliverable:
 - Implement bounded critique/repair loop against fake model output.
 - Add tests for:
   - simple workflow generation
-  - game-development style workflow generation
-  - analytics workflow generation
-  - high-risk workflow requiring reviewer gates
+- requirement-specific workflow generation for rich creative/build work
+- requirement-specific workflow generation for data-heavy or evidence-heavy work
+- high-risk requirement requiring reviewer gates
   - unresolved assignment warnings
   - no hard-coded example strings
   - stable key preservation during revision
@@ -1020,8 +1021,8 @@ Acceptance scenarios:
 
 1. Generate a simple protocol from Registry.
 2. Generate a simple protocol from Telegram.
-3. Generate the game-development litmus protocol from Registry.
-4. Generate the game-development litmus protocol from Telegram.
+3. Generate the rich litmus protocol from Registry.
+4. Generate the rich litmus protocol from Telegram.
 5. Modify the generated game protocol once from each surface.
 6. Apply generated drafts.
 7. Validate and publish.
@@ -1169,9 +1170,10 @@ The feature is acceptable when all of the following are true:
 - Users can open and continue editing in Registry when they need richer control.
 - Generated protocols contain requirement-specific stages, artifacts, review
   loops, and final evidence.
-- The game-development litmus example produces a domain-specific workflow, not
-  a generic one-stage protocol.
-- The product does not contain hard-coded logic for that example.
+- The litmus example produces a requirement-specific workflow, not a generic
+  one-stage protocol or a template selected by hard-coded example terms.
+- The product does not contain hard-coded logic for that example or any customer
+  use case.
 - Narrow and wide Registry layouts are readable and usable.
 - Telegram messages are compact, progressive, and action-oriented.
 - Final acceptance is proven through real product surfaces, not database
@@ -1187,7 +1189,7 @@ Mitigation:
 
 - use coded design policy
 - critique generated drafts
-- test against multiple domains
+- test against multiple requirement shapes
 - require artifact and review specificity
 
 ### Risk: Prompt-Only Product Behavior
@@ -1310,7 +1312,7 @@ These should be resolved during implementation, not by adding parallel paths.
 - Do not bypass SDK protocol validation.
 - Do not bypass existing publish/run methods.
 - Do not mutate published protocol versions in place.
-- Do not hard-code customer examples.
+- Do not hard-code customer examples or closed domain keyword classifiers.
 - Do not require users to understand JSON to review generated protocols.
 - Do not rely on a skill text file as the main product behavior.
 

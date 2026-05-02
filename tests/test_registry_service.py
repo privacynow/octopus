@@ -1599,7 +1599,7 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
                         "constraints_json": {},
                         "created_at": "2026-04-16T00:00:00+00:00",
                         "updated_at": "2026-04-16T00:00:00+00:00",
-                        "current_stage_key": "plan_concept",
+                        "current_stage_key": "plan_requirements",
                         "version": 1,
                     },
                 }
@@ -1628,7 +1628,7 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
 
     assert create_response.status_code == 200
-    assert create_response.json()["analysis"]["domain"] == "game-development"
+    assert create_response.json()["analysis"]["domain"] == "requirement-specific"
     assert apply_response.status_code == 200
     assert apply_response.json()["target_protocol_id"] == "protocol-auto"
     assert publish_response.status_code == 200

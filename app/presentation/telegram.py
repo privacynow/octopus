@@ -1501,7 +1501,8 @@ def protocol_auto_session_message(
     validation = data.get("validation") if isinstance(data.get("validation"), dict) else {}
     session_id = str(data.get("session_id") or "")
     title = html.escape(str(plan.get("protocol_name") or "Generated protocol"))
-    domain = html.escape(str(analysis.get("domain") or "general"))
+    focus = html.escape(str(analysis.get("focus") or analysis.get("domain") or "requirement-specific"))
+    capabilities = analysis.get("capabilities") if isinstance(analysis.get("capabilities"), list) else []
     status = html.escape(str(data.get("status") or "draft"))
     stages = plan.get("stages") if isinstance(plan.get("stages"), list) else []
     artifacts = plan.get("artifacts") if isinstance(plan.get("artifacts"), list) else []
@@ -1515,11 +1516,15 @@ def protocol_auto_session_message(
     lines = [
         "<b>Auto Protocol</b>",
         f"Protocol: <code>{title}</code>",
-        f"Domain: <code>{domain}</code>",
+        f"Focus: <code>{focus}</code>",
+        f"Design: <code>{html.escape(str(analysis.get('domain') or 'requirement-specific'))}</code>",
         f"Status: <code>{status}</code>",
         f"Stages: <code>{len(stages)}</code> · Artifacts: <code>{len(artifacts)}</code>",
         f"Validation: <code>{'ready' if validation.get('ok') else 'needs attention'}</code>",
     ]
+    if capabilities:
+        capability_text = ", ".join(html.escape(str(item)) for item in capabilities[:5])
+        lines.append(f"Capabilities: {capability_text}")
     if normalized_view == "artifacts":
         lines.append("\n<b>Artifacts</b>")
         for index, artifact in enumerate(artifacts[:12], start=1):
@@ -1546,6 +1551,15 @@ def protocol_auto_session_message(
             role = html.escape(str(stage.get("role_key") or ""))
             role_text = f" · <code>{role}</code>" if role else ""
             lines.append(f"{index}. {label} <code>{kind}</code>{role_text}")
+            if normalized_view == "stages":
+                purpose = re.sub(r"\s+", " ", str(stage.get("purpose") or "").strip())
+                if len(purpose) > 180:
+                    purpose = purpose[:177].rstrip() + "..."
+                outputs = stage.get("outputs") if isinstance(stage.get("outputs"), list) else []
+                output_text = ", ".join(str(item) for item in outputs if str(item or "").strip()) or "none"
+                if purpose:
+                    lines.append(f"   {html.escape(purpose)}")
+                lines.append(f"   Outputs: <code>{html.escape(output_text)}</code>")
         if len(stages) > limit:
             lines.append(f"...and {len(stages) - limit} more stages.")
         if warnings:

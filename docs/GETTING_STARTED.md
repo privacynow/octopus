@@ -344,10 +344,11 @@ execution-healthy. Use [TELEGRAM.md](TELEGRAM.md) for Telegram command details.
 
 ## After Setup
 
-Use these next:
+Use these next, in a sensible order for most people:
 
 - [USER_GUIDE.md](USER_GUIDE.md) for the normal browser workflow
-- [PROTOCOLS.md](PROTOCOLS.md) for repeatable staged workflows
+- [PROTOCOLS.md](PROTOCOLS.md) for repeatable staged workflows, including Auto
+  Protocol when you want a structured first draft from plain language
 - [TELEGRAM.md](TELEGRAM.md) when Telegram is part of your environment
 - [OPERATIONS.md](OPERATIONS.md) for health checks, logs, demo readiness, and
   troubleshooting

@@ -575,6 +575,42 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "response_json",
             "created_at",
         },
+        "protocol_auto_sessions": {
+            "session_id",
+            "status",
+            "mode",
+            "surface",
+            "actor_ref",
+            "chat_ref",
+            "source_protocol_id",
+            "source_version_id",
+            "source_draft_revision",
+            "target_protocol_id",
+            "target_draft_revision",
+            "requirement_text",
+            "constraints_text",
+            "analysis_json",
+            "plan_json",
+            "draft_definition_json",
+            "run_profile_json",
+            "validation_json",
+            "warnings_json",
+            "unresolved_decisions_json",
+            "change_summary_json",
+            "applied_protocol_json",
+            "run_result_json",
+            "created_at",
+            "updated_at",
+        },
+        "protocol_auto_session_events": {
+            "event_id",
+            "session_id",
+            "sequence",
+            "event_kind",
+            "actor_ref",
+            "payload_json",
+            "created_at",
+        },
         "protocol_compliance_events": {
             "protocol_compliance_event_id",
             "protocol_run_id",
@@ -617,6 +653,8 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
     assert "jsonb" in defaults[("events", "metadata_json")]
     assert defaults[("protocol_definitions", "visibility")].startswith("'org_private'")
     assert defaults[("protocol_runs", "status")].startswith("'queued'")
+    assert defaults[("protocol_auto_sessions", "status")].startswith("'draft'")
+    assert "jsonb" in defaults[("protocol_auto_sessions", "draft_definition_json")]
     assert "jsonb" in defaults[("protocol_transitions", "metadata_json")]
 
 

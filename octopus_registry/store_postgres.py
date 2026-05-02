@@ -20,6 +20,8 @@ from octopus_sdk.content_models import (
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
+    ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignSessionRecord,
     ProtocolArtifactRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
@@ -1263,6 +1265,31 @@ class RegistryPostgresStore(AbstractRegistryStore):
             access=access,
             format=format,
         )
+
+    def create_protocol_auto_design_session(
+        self,
+        payload: ProtocolAutoDesignRequestRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        return self._protocol_store.create_protocol_auto_design_session(payload, access=access)
+
+    def get_protocol_auto_design_session(
+        self,
+        session_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        return self._protocol_store.get_protocol_auto_design_session(session_id, access=access)
+
+    def update_protocol_auto_design_session(
+        self,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        event_kind: str = "updated",
+    ) -> ProtocolAutoDesignSessionRecord:
+        return self._protocol_store.update_protocol_auto_design_session(session, access=access, event_kind=event_kind)
 
     def save_protocol_draft(
         self,

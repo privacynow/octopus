@@ -8,6 +8,7 @@ Use Octopus when you want more than a single chat thread:
 
 - coordinate one or more AI agents
 - run staged workflows with reviews and handoffs
+- generate protocol drafts from plain-language requirements
 - reuse skills and provider guidance
 - inspect what happened after a run
 - export or import protocol packages

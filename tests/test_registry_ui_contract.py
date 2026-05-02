@@ -243,6 +243,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
+    assert "btn.dataset.runAction = spec.action;" in workspace
+    assert "event.currentTarget?.dataset?.runAction" in workspace
+    assert "spec.action === 'cancel' ? 'btn btn-danger' : 'btn btn-primary'" in workspace
     assert "stageProgress: _runStageProgressData(currentRun)" in workspace
     assert "renderExpanded: () => _buildRunDetailPanel()" in workspace
     assert "run-stage-timeline" in workspace

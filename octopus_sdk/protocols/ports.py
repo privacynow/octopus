@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from .auto_design import (
+    ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignSessionRecord,
+)
 from .models import (
     ProtocolArtifactRecord,
     ProtocolAuthoringOptionsRecord,
@@ -85,6 +89,32 @@ class ProtocolAuthoringPort(Protocol):
     async def export_protocol_draft(self, protocol_id: str, format: str = "json") -> ProtocolTextDocumentRecord: ...
 
     async def diff_protocol_draft(self, protocol_id: str, format: str = "json") -> ProtocolDefinitionDiffRecord: ...
+
+
+@runtime_checkable
+class ProtocolAutoDesignSessionPort(Protocol):
+    async def create_protocol_auto_design_session(
+        self,
+        payload: ProtocolAutoDesignRequestRecord | dict[str, object],
+    ) -> ProtocolAutoDesignSessionRecord: ...
+
+    async def get_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord: ...
+
+    async def revise_protocol_auto_design_session(
+        self,
+        session_id: str,
+        payload: ProtocolAutoDesignRequestRecord | dict[str, object],
+    ) -> ProtocolAutoDesignSessionRecord: ...
+
+    async def apply_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord: ...
+
+    async def publish_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord: ...
+
+    async def run_protocol_auto_design_session(
+        self,
+        session_id: str,
+        payload: dict[str, object] | None = None,
+    ) -> ProtocolAutoDesignSessionRecord: ...
 
 
 @runtime_checkable

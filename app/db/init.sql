@@ -705,6 +705,55 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_idempotency (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_idempotency_unique
     ON agent_registry.protocol_idempotency (scope_kind, scope_ref, action_name, idempotency_key);
 
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
+    session_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'draft',
+    mode TEXT NOT NULL DEFAULT 'create',
+    surface TEXT NOT NULL DEFAULT 'api',
+    actor_ref TEXT NOT NULL DEFAULT '',
+    chat_ref TEXT NOT NULL DEFAULT '',
+    source_protocol_id TEXT NOT NULL DEFAULT '',
+    source_version_id TEXT NOT NULL DEFAULT '',
+    source_draft_revision INTEGER NOT NULL DEFAULT 0,
+    target_protocol_id TEXT NOT NULL DEFAULT '',
+    target_draft_revision INTEGER NOT NULL DEFAULT 0,
+    requirement_text TEXT NOT NULL DEFAULT '',
+    constraints_text TEXT NOT NULL DEFAULT '',
+    analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    plan_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    draft_definition_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    run_profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    validation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    warnings_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    unresolved_decisions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    change_summary_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    applied_protocol_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    run_result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_actor
+    ON agent_registry.protocol_auto_sessions (actor_ref, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_target
+    ON agent_registry.protocol_auto_sessions (target_protocol_id, updated_at DESC)
+    WHERE target_protocol_id <> '';
+CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_chat
+    ON agent_registry.protocol_auto_sessions (chat_ref, updated_at DESC)
+    WHERE chat_ref <> '';
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_session_events (
+    event_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_kind TEXT NOT NULL,
+    actor_ref TEXT NOT NULL DEFAULT '',
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES agent_registry.protocol_auto_sessions(session_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_auto_session_events_sequence
+    ON agent_registry.protocol_auto_session_events (session_id, sequence);
+
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_compliance_events (
     protocol_compliance_event_id TEXT PRIMARY KEY,
     protocol_run_id TEXT NOT NULL DEFAULT '',

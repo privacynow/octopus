@@ -83,6 +83,14 @@ def protocol_run_url(runtime: TelegramRuntime, run_id: str, *, registry_url: str
     return f"{base.rstrip('/')}/ui/runs?run_id={quote(str(run_id or '').strip())}"
 
 
+def protocol_editor_url(runtime: TelegramRuntime, protocol_id: str, *, registry_url: str = "") -> str:
+    base = _configured_registry_url(runtime, registry_url)
+    if not base:
+        return ""
+    token = quote(str(protocol_id or "").strip())
+    return f"{base.rstrip('/')}/ui/protocols?protocol_id={token}" if token else f"{base.rstrip('/')}/ui/protocols"
+
+
 def protocol_artifact_url(
     runtime: TelegramRuntime,
     run_id: str,
@@ -362,6 +370,29 @@ def remove_protocol_run_watch(session: SessionState, run_id: str) -> bool:
     before = len(session.protocol_run_watches)
     session.protocol_run_watches = [item for item in session.protocol_run_watches if item.run_id != token]
     return len(session.protocol_run_watches) != before
+
+
+def resolve_auto_protocol_session_ref(runtime: TelegramRuntime, chat_id: int | str, session_ref: str) -> str:
+    token = str(session_ref or "").strip()
+    if token and token.lower() != "latest":
+        return token
+    session = telegram_session_io.load(runtime, chat_id)
+    latest = str(session.last_auto_protocol_session_id or "").strip()
+    if not latest:
+        raise KeyError("latest")
+    return latest
+
+
+def persist_auto_protocol_session_ref(runtime: TelegramRuntime, *, chat_id: int | str, session_id: str) -> bool:
+    token = str(session_id or "").strip()
+    if not token:
+        return False
+    session = telegram_session_io.load(runtime, chat_id)
+    if str(session.last_auto_protocol_session_id or "") == token:
+        return False
+    session.last_auto_protocol_session_id = token
+    telegram_session_io.save(runtime, chat_id, session)
+    return True
 
 
 def persist_protocol_run_watch(

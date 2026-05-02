@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from collections.abc import Sequence
 
@@ -846,6 +847,38 @@ def protocol_participant_session_key(run_id: str, participant_key: str) -> str:
     return f"protocol:{str(run_id or '').strip()}:participant:{str(participant_key or '').strip()}"
 
 
+def _safe_path_token(value: object, *, fallback: str = "unknown") -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip(".-/")
+    return text or fallback
+
+
+def protocol_materialize_artifact_path(
+    path: str,
+    *,
+    document: ProtocolDefinitionDocumentRecord,
+    run: ProtocolRunRecord,
+    stage_execution_id: str = "",
+) -> str:
+    replacements = {
+        "protocol_run_id": _safe_path_token(run.protocol_run_id, fallback="run"),
+        "run_id": _safe_path_token(run.protocol_run_id, fallback="run"),
+        "protocol_id": _safe_path_token(run.protocol_id, fallback="protocol"),
+        "protocol_slug": _safe_path_token(default_protocol_document_slug(document), fallback="protocol"),
+        "protocol_definition_version_id": _safe_path_token(
+            run.protocol_definition_version_id,
+            fallback="version",
+        ),
+        "stage_execution_id": _safe_path_token(stage_execution_id, fallback="stage"),
+    }
+
+    def replace(match: re.Match[str]) -> str:
+        key = str(match.group(1) or "").strip()
+        return replacements.get(key, match.group(0))
+
+    return re.sub(r"\{([A-Za-z0-9_]+)\}", replace, str(path or "").strip())
+
+
 def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) -> str:
     artifact_instruction = (
         "update only the assigned output artifacts in the workspace"
@@ -853,16 +886,12 @@ def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) ->
         else "do not create or update protocol artifacts for this stage"
     )
     if stage.stage_kind == "work":
-        if stage.strict_completion:
-            return (
-                f"Complete the work for this stage, {artifact_instruction}, "
-                "and end your final response with explicit protocol control lines:\n"
-                "PROTOCOL_DECISION: completed\n"
-                "PROTOCOL_SUMMARY: one short sentence describing the completed work"
-            )
         return (
             f"Complete the work for this stage, {artifact_instruction}, "
-            "and end your final response with a short `PROTOCOL_SUMMARY:` line."
+            "and end your final response with explicit protocol control lines. "
+            "This is a work stage, so do not use review decisions such as accept, revise, or fail.\n"
+            "PROTOCOL_DECISION: completed\n"
+            "PROTOCOL_SUMMARY: one short sentence describing the completed work"
         )
     allowed = ", ".join(stage.allowed_decisions())
     review_artifact_instruction = (
@@ -872,6 +901,10 @@ def protocol_stage_instruction_contract(stage: ProtocolStageDefinitionRecord) ->
     )
     return (
         f"{review_artifact_instruction}\n"
+        "For review decisions, judge the assigned inputs, the reviewed stage output, and this stage's instructions only. "
+        "Do not revise or fail the stage because a later-stage artifact is not produced yet unless that artifact is explicitly listed as an input to this review.\n"
+        "Decision semantics: accept means the reviewed work has no material unresolved gap within this stage's scope. "
+        "If your review rationale identifies missing required evidence, weak fidelity, shallow coverage, unsupported claims, untested required behavior, or downstream-critical uncertainty, choose revise unless the issue cannot be corrected by another attempt, in which case choose fail.\n"
         f"PROTOCOL_DECISION: one of [{allowed}]\n"
         "PROTOCOL_SUMMARY: one short sentence explaining the decision\n"
         "Keep the rest of the response as the detailed review or acceptance rationale."
@@ -929,6 +962,12 @@ def render_protocol_stage_prompt(
             )
             or ""
         ).strip()
+        if artifact is None:
+            location = protocol_materialize_artifact_path(
+                location,
+                document=document,
+                run=run,
+            )
         detail = f"{artifact_key}: {location}" if location else artifact_key
         return f"- {detail}"
 
@@ -958,7 +997,11 @@ def render_protocol_stage_prompt(
         "Launch context parameterizes this run; it does not modify the published protocol contract. "
         "For this stage, create or update only the output artifacts listed above. "
         "Do not create, overwrite, or pre-fill artifacts assigned to later stages. "
-        "If launch context conflicts with declared artifacts or stage instructions, follow the protocol contract and call out the conflict."
+        "The artifact manifest can include declared outputs from later stages; treat this stage's input and output artifact lists as authoritative. "
+        "Do not block, reject, or send work back solely because an artifact owned by a later stage is still declared or missing. "
+        "If launch context conflicts with declared artifacts or stage instructions, follow the protocol contract and call out the conflict. "
+        "Do not leave long-running commands, servers, watchers, or development processes running; "
+        "if a temporary server is needed for checks, run it in a bounded way and stop it before the final response."
     )
     if participant.instructions:
         lines.append("Participant guidance:\n" + participant.instructions.strip())
@@ -1090,7 +1133,12 @@ def protocol_stage_runtime_contract(
         ProtocolStageArtifactContractRecord(
             artifact_key=artifact.artifact_key,
             artifact_kind=artifact.kind,
-            path=artifact.path,
+            path=protocol_materialize_artifact_path(
+                artifact.path,
+                document=document,
+                run=run,
+                stage_execution_id=stage_execution_id,
+            ),
             verify=artifact.verify if stage.require_output_verification is not False else False,
         )
         for artifact in (document.artifact(artifact_key) for artifact_key in stage.outputs)

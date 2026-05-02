@@ -14,6 +14,8 @@ from pydantic import ValidationError
 from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolArtifactRecord,
+    ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignSessionRecord,
     ProtocolDraftCreateRecord,
     ProtocolPackageImportApplyResultRecord,
     ProtocolPackageImportPlanRecord,
@@ -25,6 +27,8 @@ from octopus_sdk.protocols import (
     ProtocolTemplateCreateRecord,
     TargetSelector,
     canonical_protocol_document,
+    protocol_run_create_from_auto_session,
+    revise_auto_protocol_session,
     protocol_definition_content_hash,
     protocol_package_document,
     protocol_package_from_text,
@@ -118,6 +122,13 @@ def build_protocol_router(
             return _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=message)
         return _protocol_http_error(400, error_code="PROTOCOL_REQUEST_FAILED", message=message)
 
+    def _auto_protocol_access(auth: AuthContext) -> ProtocolAccessContextRecord:
+        access = protocol_access(auth)
+        roles = set(access.roles or ())
+        if auth.is_agent:
+            roles.update({"agent", "author", "publisher"})
+        return access.model_copy(update={"roles": sorted(roles)})
+
     def _package_format(value: object) -> str:
         token = str(value or "").strip().lower()
         if token in {"yaml", "yml"}:
@@ -144,6 +155,144 @@ def build_protocol_router(
             _agent_json(agent)
             for agent in store.list_agents(cursor=0, limit=200, connectivity_state="connected")
         ]
+
+    def _routing_skill_json(skill) -> dict[str, Any]:
+        row = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
+        return {
+            "skill_name": str(row.get("skill_name", "") or row.get("name", "") or ""),
+            "advertised_by_agents": [
+                str(item or "").strip()
+                for item in row.get("advertised_by_agents", []) or []
+                if str(item or "").strip()
+            ],
+            "enabled": row.get("enabled"),
+        }
+
+    def _auto_protocol_request(
+        payload: dict[str, Any],
+        *,
+        auth: AuthContext,
+        access: ProtocolAccessContextRecord,
+        store: AbstractRegistryStore,
+        default_mode: str = "create",
+    ) -> ProtocolAutoDesignRequestRecord:
+        target_protocol_id = str(
+            payload.get("target_protocol_id")
+            or payload.get("protocol_id")
+            or payload.get("source_protocol_id")
+            or ""
+        ).strip()
+        source_document: dict[str, object] = {}
+        target_version_id = ""
+        target_draft_revision = 0
+        if target_protocol_id:
+            loaded = store.get_protocol(target_protocol_id, access=access)
+            if not loaded.ok:
+                raise _protocol_result_http_error(loaded)
+            if loaded.protocol is not None:
+                target_version_id = str(loaded.protocol.current_version_id or "")
+                target_draft_revision = int(loaded.protocol.draft_revision or 0)
+            source_document = loaded.draft_definition_json.as_dict()
+        agents = _connected_agents(store)
+        preferred_agent_id = str(payload.get("preferred_design_agent_id") or payload.get("entry_agent_id") or "").strip()
+        if auth.is_agent and auth.agent_id and not preferred_agent_id:
+            preferred_agent_id = str(auth.agent_id)
+        return ProtocolAutoDesignRequestRecord.model_validate({
+            "mode": str(payload.get("mode") or default_mode or "create"),
+            "surface": str(payload.get("surface") or ("telegram" if auth.is_agent else "registry")),
+            "requirement_text": str(payload.get("requirement_text") or payload.get("change_request") or ""),
+            "constraints_text": str(payload.get("constraints_text") or payload.get("constraints") or ""),
+            "target_protocol_id": target_protocol_id,
+            "target_version_id": target_version_id,
+            "target_draft_revision": target_draft_revision,
+            "source_document": source_document,
+            "available_agents": agents,
+            "available_skills": [_routing_skill_json(item) for item in store.list_routing_skills()],
+            "workspace_ref": str(payload.get("workspace_ref") or ""),
+            "preferred_design_agent_id": preferred_agent_id,
+            "actor_ref": access.actor_ref,
+            "chat_ref": str(payload.get("chat_ref") or ""),
+        })
+
+    def _metadata_from_auto_session(session: ProtocolAutoDesignSessionRecord) -> dict[str, str]:
+        doc = session.draft_definition_json.as_dict()
+        metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        return {
+            "slug": str(metadata.get("slug", "") or session.plan.protocol_slug or "").strip(),
+            "display_name": str(metadata.get("display_name", "") or session.plan.protocol_name or "").strip(),
+            "description": str(metadata.get("description", "") or session.plan.description or "").strip(),
+        }
+
+    def _apply_auto_protocol_session(
+        store: AbstractRegistryStore,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        metadata = _metadata_from_auto_session(session)
+        definition_json = session.draft_definition_json
+        result = store.save_protocol_draft(
+            access=access,
+            protocol_id=str(session.target_protocol_id or ""),
+            slug=metadata["slug"],
+            display_name=metadata["display_name"],
+            description=metadata["description"],
+            definition_json=definition_json,
+            authoring_surface="standard",
+            expected_revision=int(session.target_draft_revision or 0) if session.target_protocol_id else None,
+        )
+        if not result.ok and str(result.status or "") == "duplicate_slug" and not str(session.target_protocol_id or "").strip():
+            copy_slug, copy_name = _suggest_generated_identity(store, metadata["slug"], metadata["display_name"], access)
+            copied_document = session.draft_definition_json.as_dict()
+            copied_metadata = dict(copied_document.get("metadata") or {})
+            copied_metadata.update({"slug": copy_slug, "display_name": copy_name})
+            copied_document["metadata"] = copied_metadata
+            definition_json = RegistryJsonRecord.model_validate(copied_document)
+            metadata = {**metadata, "slug": copy_slug, "display_name": copy_name}
+            result = store.save_protocol_draft(
+                access=access,
+                protocol_id="",
+                slug=metadata["slug"],
+                display_name=metadata["display_name"],
+                description=metadata["description"],
+                definition_json=definition_json,
+                authoring_surface="standard",
+                expected_revision=None,
+            )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        protocol_id = str(result.protocol.protocol_id if result.protocol is not None else session.target_protocol_id or "")
+        updated = session.model_copy(update={
+            "status": "applied",
+            "target_protocol_id": protocol_id,
+            "target_draft_revision": int(result.protocol.draft_revision if result.protocol is not None else session.target_draft_revision or 0),
+            "draft_definition_json": definition_json,
+            "applied_protocol": result,
+        })
+        return store.update_protocol_auto_design_session(updated, access=access, event_kind="applied")
+
+    def _ensure_auto_protocol_ready(session: ProtocolAutoDesignSessionRecord, *, action: str) -> None:
+        unresolved = list(session.unresolved_decisions or [])
+        validation = session.validation
+        if validation.ok and not unresolved:
+            return
+        details = {
+            "validation": _json_payload(validation),
+            "unresolved_decisions": _json_payload(unresolved),
+        }
+        if action == "publish":
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_AUTO_PUBLISH_BLOCKED",
+                message="Resolve Auto Protocol validation and assignment warnings before publishing.",
+                details=details,
+            )
+        raise _protocol_http_error(
+            400,
+            error_code="PROTOCOL_AUTO_RUN_BLOCKED",
+            message="Resolve Auto Protocol validation and assignment warnings before running.",
+            details=details,
+        )
 
     def _agents_for_skill(agents: list[dict[str, Any]], skill_name: str) -> list[dict[str, Any]]:
         name = str(skill_name or "").strip().lower()
@@ -182,6 +331,20 @@ def build_protocol_router(
             candidate = f"{base_slug}-copy-{index}"
             if candidate not in existing:
                 return candidate, f"{base_name} (Imported {index})"
+            index += 1
+
+    def _suggest_generated_identity(store: AbstractRegistryStore, slug: str, display_name: str, access: ProtocolAccessContextRecord) -> tuple[str, str]:
+        base_slug = str(slug or "auto-protocol").strip().lower() or "auto-protocol"
+        base_name = str(display_name or base_slug.replace("-", " ").title()).strip()
+        existing = {
+            str(item.slug or "").strip().lower()
+            for item in store.list_protocols(access=access, limit=500, include_drafts=True)
+        }
+        index = 2
+        while True:
+            candidate = f"{base_slug}-generated-{index}"
+            if candidate not in existing:
+                return candidate, f"{base_name} (Generated {index})"
             index += 1
 
     def _stage_mapping_choices(payload: dict[str, Any]) -> dict[str, str]:
@@ -252,6 +415,179 @@ def build_protocol_router(
                 message="If-Match must be an integer protocol draft revision.",
                 details={"if_match": value},
             ) from exc
+
+    @router.post("/v1/protocol-auto/sessions")
+    async def resource_create_protocol_auto_session(
+        payload: dict[str, Any] = Body(...),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise _protocol_http_error(400, error_code="PROTOCOL_AUTO_INVALID", message="Invalid Auto Protocol payload.")
+        access = _auto_protocol_access(auth)
+        try:
+            request_payload = _auto_protocol_request(payload, auth=auth, access=access, store=store)
+            session = store.create_protocol_auto_design_session(request_payload, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        except ValidationError as exc:
+            raise _protocol_http_error(400, error_code="PROTOCOL_AUTO_INVALID", message=str(exc)) from exc
+        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.created")
+        return _json_payload(session)
+
+    @router.get("/v1/protocol-auto/sessions/{session_id}")
+    def resource_get_protocol_auto_session(
+        session_id: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = _auto_protocol_access(auth)
+        try:
+            session = store.get_protocol_auto_design_session(session_id, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
+        return _json_payload(session)
+
+    @router.post("/v1/protocol-auto/sessions/{session_id}/revise")
+    async def resource_revise_protocol_auto_session(
+        session_id: str,
+        payload: dict[str, Any] = Body(...),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise _protocol_http_error(400, error_code="PROTOCOL_AUTO_INVALID", message="Invalid Auto Protocol payload.")
+        access = _auto_protocol_access(auth)
+        try:
+            existing = store.get_protocol_auto_design_session(session_id, access=access)
+            request_payload = _auto_protocol_request({
+                **payload,
+                "mode": "revise",
+                "target_protocol_id": payload.get("target_protocol_id") or existing.target_protocol_id,
+                "source_document": existing.draft_definition_json.as_dict(),
+            }, auth=auth, access=access, store=store, default_mode="revise")
+            if not request_payload.source_document.as_dict():
+                request_payload = request_payload.model_copy(update={"source_document": existing.draft_definition_json})
+            revised = revise_auto_protocol_session(
+                request_payload,
+                session_id=existing.session_id,
+                created_at=existing.created_at,
+                updated_at=existing.updated_at,
+            )
+            session = store.update_protocol_auto_design_session(revised, access=access, event_kind="revised")
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
+        except ValidationError as exc:
+            raise _protocol_http_error(400, error_code="PROTOCOL_AUTO_INVALID", message=str(exc)) from exc
+        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.revised")
+        return _json_payload(session)
+
+    @router.post("/v1/protocol-auto/sessions/{session_id}/apply")
+    async def resource_apply_protocol_auto_session(
+        session_id: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = _auto_protocol_access(auth)
+        try:
+            session = store.get_protocol_auto_design_session(session_id, access=access)
+            session = _apply_auto_protocol_session(store, session, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
+        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.applied")
+        return _json_payload(session)
+
+    @router.post("/v1/protocol-auto/sessions/{session_id}/publish")
+    async def resource_publish_protocol_auto_session(
+        session_id: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = _auto_protocol_access(auth)
+        try:
+            session = store.get_protocol_auto_design_session(session_id, access=access)
+            _ensure_auto_protocol_ready(session, action="publish")
+            if not str(session.target_protocol_id or "").strip():
+                session = _apply_auto_protocol_session(store, session, access=access)
+            result = store.publish_protocol(session.target_protocol_id, access=access)
+            if not result.ok:
+                raise _protocol_result_http_error(result)
+            session = store.update_protocol_auto_design_session(
+                session.model_copy(update={"status": "published", "applied_protocol": result}),
+                access=access,
+                event_kind="published",
+            )
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
+        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.published")
+        return _json_payload(session)
+
+    @router.post("/v1/protocol-auto/sessions/{session_id}/run")
+    async def resource_run_protocol_auto_session(
+        session_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        payload = payload if isinstance(payload, dict) else {}
+        access = _auto_protocol_access(auth)
+        try:
+            session = store.get_protocol_auto_design_session(session_id, access=access)
+            _ensure_auto_protocol_ready(session, action="run")
+            if not str(session.target_protocol_id or "").strip():
+                session = _apply_auto_protocol_session(store, session, access=access)
+            loaded = store.get_protocol(session.target_protocol_id, access=access)
+            if not loaded.ok:
+                raise _protocol_result_http_error(loaded)
+            if not loaded.protocol or not str(loaded.protocol.current_version_id or "").strip():
+                publish_result = store.publish_protocol(session.target_protocol_id, access=access)
+                if not publish_result.ok:
+                    raise _protocol_result_http_error(publish_result)
+            agents = _connected_agents(store)
+            entry_agent_id = str(payload.get("entry_agent_id") or "").strip()
+            if not entry_agent_id and auth.is_agent and auth.agent_id:
+                entry_agent_id = str(auth.agent_id)
+            if not entry_agent_id and agents:
+                entry_agent_id = str(agents[0].get("agent_id") or "").strip()
+            if not entry_agent_id:
+                raise _protocol_http_error(
+                    400,
+                    error_code="PROTOCOL_AUTO_RUN_BLOCKED",
+                    message="Choose an entry agent before running this generated protocol.",
+                )
+            run_payload = protocol_run_create_from_auto_session(
+                session,
+                protocol_id=session.target_protocol_id,
+                entry_agent_id=entry_agent_id,
+                root_conversation_id=str(payload.get("root_conversation_id") or ""),
+                origin_channel=str(payload.get("origin_channel") or ("telegram" if auth.is_agent else "registry")),
+            )
+            result = store.create_protocol_run(
+                run_payload,
+                access=access,
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+            )
+            if not result.ok:
+                raise _protocol_result_http_error(result)
+            session = store.update_protocol_auto_design_session(
+                session.model_copy(update={"status": "running", "run_result": result}),
+                access=access,
+                event_kind="run_started",
+            )
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
+        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}", "protocol-runs"), reason="protocol.auto.run_started")
+        return _json_payload(session)
 
     @router.get("/v1/protocols")
     def resource_list_protocols(
@@ -1174,10 +1510,12 @@ def build_protocol_router(
         return _json_payload({"artifacts": artifacts})
 
     @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content")
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content/{member_path_tail:path}")
     def resource_get_protocol_run_artifact_content(
         request: Request,
         run_id: str,
         artifact_key: str,
+        member_path_tail: str = "",
         download: bool = Query(default=False),
         browse: bool = Query(default=False),
         preview: bool = Query(default=False),
@@ -1236,7 +1574,7 @@ def build_protocol_router(
             download=download,
             browse=browse,
             preview=preview,
-            member_path=member_path,
+            member_path=member_path or member_path_tail,
             request=request,
         )
 

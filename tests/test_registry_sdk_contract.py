@@ -984,6 +984,65 @@ def test_sdk_client_protocol_document_routes_use_typed_models():
     assert captured[2][1].endswith("/v1/protocols/protocol-1/diff")
 
 
+def test_sdk_client_auto_protocol_routes_use_typed_models():
+    from unittest.mock import patch
+
+    from octopus_sdk.protocols import ProtocolAutoDesignRequestRecord, generate_auto_protocol_session
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured: list[tuple[str, str, dict]] = []
+    session_payload = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="telegram",
+            requirement_text="Build a 2D browser game with playtesting.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder", "routing_skills": ["game"]}],
+        ),
+        session_id="auto-1",
+        created_at="2026-04-16T00:00:00+00:00",
+        updated_at="2026-04-16T00:00:00+00:00",
+    ).model_dump(mode="json")
+
+    async def mock_request(method, url, **kwargs):
+        captured.append((method, str(url), kwargs))
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+            content = b"{}"
+
+            def json(self):
+                return session_payload
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        created = asyncio.run(client.create_protocol_auto_design_session({"requirement_text": "Build a 2D browser game with playtesting."}))
+        loaded = asyncio.run(client.get_protocol_auto_design_session("auto-1"))
+        revised = asyncio.run(client.revise_protocol_auto_design_session("auto-1", {"requirement_text": "Add UX review."}))
+        applied = asyncio.run(client.apply_protocol_auto_design_session("auto-1"))
+        published = asyncio.run(client.publish_protocol_auto_design_session("auto-1"))
+        running = asyncio.run(client.run_protocol_auto_design_session("auto-1", {"origin_channel": "telegram"}))
+
+    assert created.session_id == "auto-1"
+    assert loaded.plan.stages
+    assert revised.session_id == "auto-1"
+    assert applied.session_id == "auto-1"
+    assert published.session_id == "auto-1"
+    assert running.session_id == "auto-1"
+    assert captured[0][0] == "POST"
+    assert captured[0][1].endswith("/v1/protocol-auto/sessions")
+    assert captured[1][1].endswith("/v1/protocol-auto/sessions/auto-1")
+    assert captured[2][1].endswith("/v1/protocol-auto/sessions/auto-1/revise")
+    assert captured[3][1].endswith("/v1/protocol-auto/sessions/auto-1/apply")
+    assert captured[4][1].endswith("/v1/protocol-auto/sessions/auto-1/publish")
+    assert captured[5][1].endswith("/v1/protocol-auto/sessions/auto-1/run")
+
+
 def test_sdk_client_parse_protocol_document_supports_draft_validation_mode():
     from unittest.mock import patch
 

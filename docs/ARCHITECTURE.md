@@ -234,6 +234,13 @@ supporting plans, reviews, and release evidence. The normal generated topology
 keeps the primary outcome stage second-last and uses one final adversarial
 acceptance stage that can send the work back to the outcome stage.
 
+Auto Protocol surface parity is an architecture rule. Registry UI and Telegram
+must render the same session state, warnings, primary artifact contract, and
+available actions from the same Registry API records. Telegram may compress the
+presentation for chat, but it must not require users to memorize complex
+protocol command sequences when buttons, visible session ids, or short
+follow-up commands can carry the workflow.
+
 ### Registry Realtime
 
 The registry WebSocket endpoint is `GET /v1/ws`. Topics are explicit:
@@ -904,6 +911,11 @@ resolve runs and artifacts through `octopus_sdk.protocols.ProtocolService` and
 the same registry-backed ports used by slash commands; they must not introduce a
 Telegram-only protocol execution, artifact, or run-control path.
 
+Telegram protocol flows must be verified as human-usable chat workflows, not
+only as command parser coverage. Auto Protocol messages should explain the
+proposal, blockers, primary outcome, and next actions in the message itself,
+with buttons for common actions whenever the platform supports them.
+
 `/protocol export` is a run export command. Protocol package export/import are
 Registry authoring workflows because they need review UI, skill target mapping,
 and protocol copy/overwrite policy selection.
@@ -971,6 +983,9 @@ Verification expectations for UI architecture work:
 - Run focused route/API/unit tests for changed components.
 - Run Playwright for the affected browser flows.
 - Verify in real Safari at desktop and narrow widths before calling UI work done.
+- For Auto Protocol changes, also verify the Telegram Web flow in real Safari:
+  generate, inspect, modify or reopen, apply/publish/run when ready, and follow
+  run/artifact links.
 - When a live deployed UI looks wrong, hard-refresh Safari with macOS-specific
   refresh behavior before deciding whether code or cache is at fault.
 

@@ -216,6 +216,12 @@ the same controls as any other protocol. For revision from chat or deeper
 authoring notes, stay with [PROTOCOLS.md](PROTOCOLS.md) and
 [TELEGRAM.md](TELEGRAM.md).
 
+Telegram can also start an Auto Protocol session when you want a chat-first
+flow. The message should summarize the proposed workflow, show the primary
+outcome, and provide obvious actions such as Apply Draft, Publish, Publish &
+Run, Status, and Artifacts when they are available. Use Registry when you want
+more room to inspect or manually edit the draft.
+
 If a workflow matters, expect to see explicit review stages in the run history.
 Good protocols do not rely on one agent producing the final output in one pass;
 they route work through planner, implementer, and reviewer responsibilities so
@@ -272,6 +278,9 @@ for setup notes and command details.
 
 If you are new, learn the browser Registry workflow first after the agent exists.
 It exposes more context and is easier to inspect when something goes wrong.
+Telegram should still be readable without keeping this guide open: protocol
+cards should show the current state, the next safe actions, and the primary
+artifact when one exists.
 
 ## If Something Looks Wrong
 

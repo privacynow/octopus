@@ -117,6 +117,35 @@ promote that artifact first, then show supporting plans, reviews, and release
 evidence below it. Users should not have to hunt through intermediate review
 files to find the thing they asked Octopus to produce.
 
+### Auto Protocol Verification
+
+Treat Registry and Telegram as peer product surfaces for Auto Protocol. A
+change is not done just because the SDK compiler and Registry panel work. The
+same session lifecycle must be usable from Telegram without memorizing hidden
+commands or copying raw ids between screens.
+
+Minimum human verification:
+
+1. Generate a protocol from Registry and inspect the summary, packages, stages,
+   warnings, primary artifact, and available actions.
+2. Generate a protocol from Telegram with `/protocol auto <requirement>` and
+   confirm the returned card is readable, explains the proposed workflow, shows
+   the primary outcome, and offers obvious next actions.
+3. Modify or re-open the Telegram session with visible controls or short
+   follow-up commands shown in the message. A normal user should not need to
+   remember a complex protocol command grammar.
+4. Apply, publish, and run from the surface being tested when validation and
+   assignments are ready, or show clear blockers and next steps when they are
+   not ready.
+5. Open the run and confirm the primary artifact is promoted before supporting
+   plans, reviews, logs, and evidence.
+6. Verify Registry desktop, Registry narrow, Telegram Web, and Telegram links in
+   real Safari for UI-impacting changes.
+
+If Registry and Telegram disagree about readiness, actions, warnings, stage
+shape, or primary artifact prominence, treat that as a product defect rather
+than a documentation issue.
+
 ## Review Loop Pattern
 
 The highest-quality protocol runs usually have feedback loops.

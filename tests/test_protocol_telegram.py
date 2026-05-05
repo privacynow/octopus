@@ -178,6 +178,7 @@ async def test_protocol_auto_command_generates_actionable_summary(monkeypatch):
             args=["auto", "Build", "a", "2D", "browser", "game", "with", "historical", "figures", "and", "playtesting"],
         )
 
+        assert "Designing an Auto Protocol workflow" in msg.replies[0]["text"]
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         assert "Focus:" in reply
@@ -222,6 +223,7 @@ async def test_protocol_auto_modify_latest_revises_existing_session(monkeypatch)
             args=["auto", "modify", "latest", "Add", "a", "UX", "reviewer", "before", "release"],
         )
 
+        assert "Updating the Auto Protocol draft" in msg.replies[0]["text"]
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         assert "Modify:" in reply

@@ -1155,6 +1155,9 @@ async def cmd_protocol(
             if not change_request:
                 await update.effective_message.reply_text("Usage: /protocol auto modify latest|<session_id> <change request>")
                 return
+            await update.effective_message.reply_text(
+                "Updating the Auto Protocol draft. I will post the revised workflow here when planning finishes."
+            )
             try:
                 auto_session = await client.revise_protocol_auto_design_session(
                     session_id,
@@ -1194,6 +1197,9 @@ async def cmd_protocol(
             await update.effective_message.reply_text("Usage: /protocol auto <requirement>")
             return
         session_state = telegram_session_io.load(runtime, event.chat_id)
+        await update.effective_message.reply_text(
+            "Designing an Auto Protocol workflow. I will post the proposed stages, blockers, and actions here when planning finishes."
+        )
         try:
             auto_session = await client.create_protocol_auto_design_session({
                 "mode": "create",

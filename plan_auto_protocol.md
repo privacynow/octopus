@@ -972,18 +972,20 @@ Work:
 
 1. Document Auto Protocol from the user's perspective.
 2. Document architecture boundaries from the developer perspective.
-3. Add SDK unit tests.
-4. Add Registry API tests.
-5. Add Telegram tests.
-6. Add Safari wide and narrow manual verification notes.
-7. Add acceptance scenarios for the three probes below.
+3. Document the Telegram user flow, including what the chat card must show so a
+   user can proceed without memorizing complex commands.
+4. Add SDK unit tests.
+5. Add Registry API tests.
+6. Add Telegram tests.
+7. Add Safari wide, narrow, and Telegram Web manual verification notes.
+8. Add acceptance scenarios for the three probes below.
 
 Exit gate:
 
 - Focused tests pass.
 - Full suite passes after implementation is complete.
 - Docs explain how a new user generates, revises, publishes, runs, and inspects
-  outputs.
+  outputs from Registry and Telegram.
 
 ## Acceptance Probes
 
@@ -1070,10 +1072,14 @@ Required end-to-end tests:
   Manufacturing Analytics.
 - Generate, inspect, apply, publish, run, and inspect primary artifact for a
   scoped Risk Decision Engine acceptance run.
-- Repeat one create/publish/run flow from Telegram.
+- Repeat one create/publish/run flow from Telegram in real Safari through
+  Telegram Web. Confirm the flow is human usable: the card explains the
+  proposal, shows blockers or readiness, promotes the primary outcome, and
+  exposes obvious actions without requiring raw ids or memorized command
+  sequences.
 
-Manual verification must use real Safari for Registry and generated browser
-artifacts.
+Manual verification must use real Safari for Registry, Telegram Web, generated
+browser artifacts, and links emitted from Telegram.
 
 ## Non-Negotiable Quality Gates
 

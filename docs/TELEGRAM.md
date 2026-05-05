@@ -173,6 +173,32 @@ Open, Send, Export, Watch, Stop updates, Apply Draft, Publish, and Publish &
 Run. These buttons call the same registry-backed protocol service as the slash
 commands.
 
+### Auto Protocol Usability Bar
+
+Telegram Auto Protocol should be understandable as a guided chat flow. A user
+may start with one command, but the response should carry enough context and
+buttons that they do not have to memorize a long command manual.
+
+A usable Auto Protocol Telegram card should show:
+
+- what workflow Octopus proposes
+- the main work packages and stage count
+- the primary artifact or outcome
+- validation blockers or warnings in plain language
+- Apply Draft, Publish, Publish & Run, Status, and artifact actions when those
+  actions are valid
+- the shortest visible follow-up command for modification when a button cannot
+  collect text
+
+If a generated session is blocked, Telegram should say what to fix next instead
+of only reporting a code. If the session is ready, the user should be able to
+publish and run from Telegram or intentionally open Registry for richer editing.
+
+Real Safari verification for Telegram Web is part of the release bar for
+Telegram-facing protocol changes. Confirm that cards are readable, buttons are
+grouped sensibly, links open the configured Registry surface, and run/artifact
+messages promote the primary result before secondary evidence.
+
 ## Artifacts
 
 If a command reports produced artifacts, users should be able to preview, open,

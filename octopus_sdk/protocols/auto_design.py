@@ -294,6 +294,25 @@ class ProtocolAutoDesignModelResponseRecord(RegistryRecordModel):
     warnings: list[ProtocolAutoDesignWarningRecord] = Field(default_factory=list)
     planner_ref: str = ""
 
+    @field_validator("warnings", mode="before")
+    @classmethod
+    def _warning_list(cls, value: object) -> list[object]:
+        normalized: list[object] = []
+        for index, item in enumerate(_list(value)):
+            if isinstance(item, str):
+                message = item.strip()
+                if message:
+                    normalized.append({
+                        "code": f"planner.warning_{index + 1}",
+                        "message": message,
+                        "severity": "warning",
+                        "section": "planner",
+                        "action": "review_generated_protocol",
+                    })
+                continue
+            normalized.append(item)
+        return normalized
+
 
 class ProtocolAutoDesignEventSummaryRecord(RegistryRecordModel):
     event_kind: str = ""
@@ -2457,6 +2476,38 @@ def _warnings_for_session(
     return warnings, unresolved
 
 
+def _planner_warnings_for_session(
+    model_response: ProtocolAutoDesignModelResponseRecord | None,
+) -> tuple[list[ProtocolAutoDesignWarningRecord], list[ProtocolAutoDesignWarningRecord]]:
+    warnings: list[ProtocolAutoDesignWarningRecord] = []
+    unresolved: list[ProtocolAutoDesignWarningRecord] = []
+    if model_response is None:
+        return warnings, unresolved
+    for index, warning in enumerate(model_response.warnings):
+        if isinstance(warning, str):
+            message = warning.strip()
+            if not message:
+                continue
+            normalized = ProtocolAutoDesignWarningRecord(
+                code=f"planner.warning_{index + 1}",
+                message=message,
+                severity="warning",
+                section="planner",
+                action="review_generated_protocol",
+            )
+        else:
+            normalized = warning
+        if not normalized.code:
+            normalized = normalized.model_copy(update={"code": "planner.warning"})
+        if not normalized.message:
+            continue
+        if normalized.severity == "error":
+            unresolved.append(normalized)
+        else:
+            warnings.append(normalized)
+    return warnings, unresolved
+
+
 def auto_protocol_event_summary(
     session: ProtocolAutoDesignSessionRecord,
     *,
@@ -2512,8 +2563,11 @@ def generate_auto_protocol_session(
     draft, validation, repair_notes = _validate_and_repair_protocol_document(draft, request)
     warnings, unresolved = _warnings_for_session(request, validation)
     semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(analysis, plan)
+    planner_warnings, planner_unresolved = _planner_warnings_for_session(request.model_response)
     warnings.extend(semantic_warnings)
+    warnings.extend(planner_warnings)
     unresolved.extend(semantic_unresolved)
+    unresolved.extend(planner_unresolved)
     if request.model_response is None:
         unresolved.append(ProtocolAutoDesignWarningRecord(
             code="planner.model_response_missing",

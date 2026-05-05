@@ -105,6 +105,26 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
 
 
+def test_auto_protocol_normalizes_and_surfaces_planner_warning_strings():
+    response = _planner_response("experience_design").model_copy(update={
+        "warnings": [
+            "Keep this scoped to a first delivery tranche.",
+        ],
+    })
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text="Build a browser-runnable risk decision engine demo with Java verification.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=response,
+        )
+    )
+
+    planner_warning = next(item for item in session.warnings if item.code == "planner.warning_1")
+    assert planner_warning.message == "Keep this scoped to a first delivery tranche."
+    assert planner_warning.severity == "warning"
+    assert session.status == "ready"
+
+
 def test_auto_protocol_revision_updates_existing_canonical_document():
     original = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(

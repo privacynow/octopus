@@ -70,9 +70,10 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         '  "review_policy": {"stance": "adversarial", "max_review_rounds": 3, "stage_hard_cap": 18},\n'
         '  "run_inputs": [{"key": "problem_statement", "label": "Run objective", "kind": "textarea", "required": true, "default_value": "..."}],\n'
         '  "acceptance_criteria": ["..."],\n'
-        '  "warnings": [],\n'
+        '  "warnings": [{"code": "planner.scope_note", "message": "human-readable warning", "severity": "warning", "section": "planner", "action": "review_generated_protocol"}],\n'
         '  "planner_ref": "provider-semantic-planner"\n'
         "}\n\n"
+        "Warnings must be objects with code, message, severity, section, and action. Use an empty list when there are no warnings.\n\n"
         "Required package guidance: include requirement/planning work, requirement review will be added by the compiler, "
         "include focused supporting packages that are truly needed, and include one implementation/outcome package. "
         "For the outcome package use package_key 'implementation' if you include it; otherwise the compiler will create it. "

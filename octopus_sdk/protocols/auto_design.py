@@ -325,7 +325,7 @@ class ProtocolAutoDesignEventSummaryRecord(RegistryRecordModel):
     session_status: str = ""
     target_protocol_id: str = ""
     source_protocol_id: str = ""
-    protocol_run_id: str = ""
+    run_id: str = ""
     warning_codes: list[str] = Field(default_factory=list)
     blocker_codes: list[str] = Field(default_factory=list)
     unresolved_count: int = 0
@@ -2520,15 +2520,15 @@ def auto_protocol_event_summary(
     event_kind: str = "",
     created_at: str = "",
 ) -> ProtocolAutoDesignEventSummaryRecord:
-    protocol_run_id = ""
+    run_id = ""
     if session.run_result is not None:
-        protocol_run_id = str(session.run_result.run.protocol_run_id if session.run_result.run is not None else "")
+        run_id = str(session.run_result.run.protocol_run_id if session.run_result.run is not None else "")
     return ProtocolAutoDesignEventSummaryRecord(
         event_kind=str(event_kind or "").strip(),
         session_status=str(session.status or ""),
         target_protocol_id=str(session.target_protocol_id or ""),
         source_protocol_id=str(session.source_protocol_id or ""),
-        protocol_run_id=protocol_run_id,
+        run_id=run_id,
         warning_codes=[
             str(item.code or "").strip()
             for item in session.warnings

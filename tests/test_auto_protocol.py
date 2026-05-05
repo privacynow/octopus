@@ -161,7 +161,7 @@ def test_auto_protocol_accepts_model_run_inputs_with_display_keys():
     assert run_inputs[0]["required"] is True
 
 
-def test_auto_protocol_event_summary_uses_protocol_run_id():
+def test_auto_protocol_event_summary_uses_existing_run_id_field_from_protocol_run_record():
     session = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(
             requirement_text="Build a browser-runnable risk decision engine demo with Java verification.",
@@ -183,8 +183,8 @@ def test_auto_protocol_event_summary_uses_protocol_run_id():
     summary = auto_protocol_event_summary(session.model_copy(update={"run_result": run_result}), event_kind="run_started")
 
     assert summary.event_kind == "run_started"
-    assert summary.protocol_run_id == "run-auto"
-    assert "run_id" not in summary.model_dump(mode="json")
+    assert summary.run_id == "run-auto"
+    assert "protocol_run_id" not in summary.model_dump(mode="json")
 
 
 def test_auto_protocol_revision_updates_existing_canonical_document():

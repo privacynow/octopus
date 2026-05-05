@@ -332,6 +332,20 @@ class ProtocolRunEngine:
                 now=result.completed_at,
             )
         retention_until = run.retention_until or protocol_retention_until(run.created_at or result.completed_at)
+        if result.status == "interrupted":
+            detail = result.summary or "Stage work was interrupted before the result was durably reported."
+            return ProtocolEngineDecisionRecord(
+                run_status="blocked",
+                stage_status="blocked",
+                failure_code="interrupted",
+                failure_detail=detail,
+                transition_kind="blocked",
+                transition_reason=detail,
+                transition_error_code="TASK_INTERRUPTED",
+                run_blocked_code="interrupted",
+                run_blocked_detail=detail,
+                retention_until=retention_until,
+            )
         if result.status != "completed":
             detail = result.summary or result.status or "Stage failed"
             return ProtocolEngineDecisionRecord(

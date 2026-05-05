@@ -1726,6 +1726,7 @@ class ProtocolPostgresAdapter:
                 "target_draft_revision": int(row.get("target_draft_revision", 0) or 0),
                 "requirement_text": row.get("requirement_text", ""),
                 "constraints_text": row.get("constraints_text", ""),
+                "model_response": row.get("planner_response_json") or None,
                 "analysis": row.get("analysis_json") or {},
                 "plan": row.get("plan_json") or {},
                 "draft_definition_json": row.get("draft_definition_json") or {},
@@ -1764,6 +1765,7 @@ class ProtocolPostgresAdapter:
             "target_draft_revision": int(session.target_draft_revision or 0),
             "requirement_text": session.requirement_text,
             "constraints_text": session.constraints_text,
+            "planner_response_json": session.model_response.model_dump(mode="json") if session.model_response is not None else {},
             "analysis_json": session.analysis.model_dump(mode="json"),
             "plan_json": session.plan.model_dump(mode="json"),
             "draft_definition_json": session.draft_definition_json.as_dict(),
@@ -1838,11 +1840,11 @@ class ProtocolPostgresAdapter:
                         session_id, status, mode, surface, actor_ref, chat_ref,
                         source_protocol_id, source_version_id, source_draft_revision,
                         target_protocol_id, target_draft_revision, requirement_text, constraints_text,
-                        analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
+                        planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                         warnings_json, unresolved_decisions_json, change_summary_json,
                         applied_protocol_json, run_result_json, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (session_id) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -1857,6 +1859,7 @@ class ProtocolPostgresAdapter:
                         target_draft_revision = EXCLUDED.target_draft_revision,
                         requirement_text = EXCLUDED.requirement_text,
                         constraints_text = EXCLUDED.constraints_text,
+                        planner_response_json = EXCLUDED.planner_response_json,
                         analysis_json = EXCLUDED.analysis_json,
                         plan_json = EXCLUDED.plan_json,
                         draft_definition_json = EXCLUDED.draft_definition_json,
@@ -1884,6 +1887,7 @@ class ProtocolPostgresAdapter:
                         payload["target_draft_revision"],
                         payload["requirement_text"],
                         payload["constraints_text"],
+                        jsonb(payload["planner_response_json"]),
                         jsonb(payload["analysis_json"]),
                         jsonb(payload["plan_json"]),
                         jsonb(payload["draft_definition_json"]),

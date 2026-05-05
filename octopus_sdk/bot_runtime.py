@@ -841,19 +841,20 @@ class BotRuntime:
     ) -> None:
         if self.control_plane is None or not routed_task_id or not authority_ref:
             return
-        summary = "Routed work was interrupted and needs operator retry."
+        summary = "Work was interrupted; retry this stage to continue."
         full_text = (
-            "This routed task was interrupted and recovered after the worker "
-            "restarted before the provider result was durably reported. The "
-            "runtime marked the task failed instead of leaving it indefinitely "
-            "running. Retry the run or stage after checking any partial local files."
+            "This routed task was interrupted after the worker restarted before "
+            "the provider result was durably reported. The runtime recovered the "
+            "stuck task and marked the stage as blocked so an operator can retry "
+            "the same stage without hunting through logs. Check any partial local "
+            "files if needed, then use Retry to continue from this stage."
         )
         await self.control_plane.task_routing.report_routed_task_result(
             routed_task_id=routed_task_id,
             authority_ref=authority_ref,
             result=RoutedTaskResult(
                 routed_task_id=routed_task_id,
-                status="failed",
+                status="interrupted",
                 transition_id=uuid4().hex,
                 summary=summary,
                 full_text=full_text,

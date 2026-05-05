@@ -221,6 +221,52 @@ def test_auto_protocol_revision_updates_existing_canonical_document():
     assert revised.draft_definition_json.as_dict()["metadata"]["auto_protocol"]["revision_requests"]
 
 
+def test_auto_protocol_revision_preserves_planner_blockers_after_second_validation():
+    original = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text="Build a browser analytics dashboard.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("experience_design", "input_model"),
+        )
+    )
+    blocking_response = _planner_response("experience_design", "input_model").model_copy(update={
+        "open_questions": ["Which source system owns the risk decision audit trail?"],
+    })
+
+    revised = revise_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            mode="revise",
+            requirement_text="Add audit-trail requirements.",
+            source_document=original.draft_definition_json,
+            target_protocol_id="protocol-1",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=blocking_response,
+        )
+    )
+
+    blocker_codes = {item.code for item in revised.unresolved_decisions}
+    assert "planner.open_questions" in blocker_codes
+    assert revised.status == "blocked"
+
+
+def test_auto_protocol_session_preserves_raw_planner_response_for_audit():
+    response = _planner_response("experience_design", "input_model").model_copy(update={
+        "planner_ref": "test-planner",
+    })
+
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text="Build a browser analytics dashboard.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=response,
+        )
+    )
+
+    assert session.model_response is not None
+    assert session.model_response.planner_ref == "test-planner"
+    assert [item.package_key for item in session.model_response.work_packages] == ["experience_design", "input_model"]
+
+
 def test_auto_protocol_repairs_structural_validation_errors_before_surface():
     invalid_plan = ProtocolAutoDesignPlanRecord(
         protocol_name="Broken Generated Protocol",

@@ -208,12 +208,13 @@ route contracts change, regenerate and test it.
 
 Auto Protocol uses the same protocol lifecycle as manual authoring. Registry
 owns sessions, persistence, HTTP actions, and UI state. It does not execute a
-model provider. When a user creates or revises an Auto Protocol session,
-Registry sends a `design_auto_protocol` management request to a connected
-provider-capable bot. The bot runtime performs the provider-backed semantic
-planning step and returns typed SDK records. The SDK compiler then turns those
-records into one canonical protocol document and applies validation, semantic
-policy, stage budgets, review policy, and primary-artifact metadata.
+model provider in-process. When a user creates or revises an Auto Protocol
+session, Registry synchronously sends a `design_auto_protocol` management
+request to a connected provider-capable bot and waits for the typed planner
+response. The bot runtime performs the provider-backed semantic planning step
+and returns typed SDK records. The SDK compiler then turns those records into
+one canonical protocol document and applies validation, semantic policy, stage
+budgets, review policy, and primary-artifact metadata.
 
 The request path is:
 

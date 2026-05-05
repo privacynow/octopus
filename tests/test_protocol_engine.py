@@ -269,6 +269,30 @@ def test_protocol_run_engine_marks_late_completed_result_as_timeout() -> None:
     assert decision.failure_code == "stage_timeout"
 
 
+def test_protocol_run_engine_blocks_interrupted_results_for_operator_retry() -> None:
+    document = _document()
+    result = ProtocolStageTaskResultRecord(
+        routed_task_id="protocol-stage:planning-exec",
+        status="interrupted",
+        summary="Work was interrupted; retry this stage to continue.",
+        full_text="Worker restarted before the result was durably reported.",
+        completed_at="2026-04-16T00:10:00+00:00",
+    )
+
+    decision = _engine().evaluate_task_result(
+        document=document,
+        run=_run(),
+        stage_execution=_stage_execution(),
+        stage_executions=[],
+        result=result,
+    )
+
+    assert decision.run_status == "blocked"
+    assert decision.stage_status == "blocked"
+    assert decision.failure_code == "interrupted"
+    assert decision.run_blocked_code == "interrupted"
+
+
 def test_protocol_run_engine_blocks_when_artifact_is_missing() -> None:
     document = _document()
     result = ProtocolStageTaskResultRecord(

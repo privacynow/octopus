@@ -208,15 +208,22 @@ def build_protocol_router(
         preferred_agent_id = str(payload.get("preferred_design_agent_id") or "").strip()
         if auth.is_agent and auth.agent_id and not preferred_agent_id:
             preferred_agent_id = str(auth.agent_id)
+        mode = str(payload.get("mode") or default_mode or "create").strip() or "create"
+        if mode not in {"create", "revise"}:
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_AUTO_INVALID_MODE",
+                message="Auto Protocol mode must be create or revise.",
+            )
         requirement_text = str(payload.get("requirement_text") or "")
-        if not requirement_text.strip() and str(payload.get("mode") or default_mode or "create") != "explain":
+        if not requirement_text.strip():
             raise _protocol_http_error(
                 400,
                 error_code="PROTOCOL_AUTO_REQUIREMENT_REQUIRED",
                 message="requirement_text is required for Auto Protocol generation.",
             )
         return ProtocolAutoDesignRequestRecord.model_validate({
-            "mode": str(payload.get("mode") or default_mode or "create"),
+            "mode": mode,
             "surface": str(payload.get("surface") or ("telegram" if auth.is_agent else "registry")),
             "requirement_text": requirement_text,
             "constraints_text": str(payload.get("constraints_text") or ""),

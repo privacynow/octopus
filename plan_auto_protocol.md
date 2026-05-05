@@ -378,7 +378,7 @@ Required records:
 
 Required request fields:
 
-- `mode`: `create`, `revise`, or `explain`
+- `mode`: `create` or `revise`
 - `surface`: `registry`, `telegram`, or `api`
 - `requirement_text`
 - `constraints_text`
@@ -701,6 +701,15 @@ They must not silently fall back to a weaker protocol.
 
 The Registry UI must be progressive and outcome-focused.
 
+After the user submits the initial requirement, the second screen has two
+states:
+
+- while planning is running, it must show useful progress context so users know
+  the planner is analyzing requirements, shaping work packages, compiling the
+  protocol, and validating readiness
+- after planning completes, it must show a compact review surface, not a dense
+  raw dump of every inferred stage and package
+
 Auto Protocol preview should show:
 
 - plain-language outcome summary
@@ -811,12 +820,13 @@ Work:
 1. Add design job dispatch from Registry to bot runtime.
 2. Add bot runtime handler for Auto Protocol design jobs.
 3. Add provider prompt and structured output validation.
-4. Persist model response, job status, and errors.
+4. Persist the typed planner response, job status, and errors.
 5. Surface job events.
 
 Exit gate:
 
-- Registry does not call providers.
+- Registry does not execute providers in-process; it synchronously orchestrates
+  provider-backed planning through the bot management RPC.
 - A fake provider-backed worker can produce structured planner output.
 - Worker failure blocks the session with a user-readable error.
 

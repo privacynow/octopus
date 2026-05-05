@@ -1888,6 +1888,40 @@ def test_protocol_auto_route_rejects_alias_fields(monkeypatch, tmp_path: Path):
     assert response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_INVALID_FIELD"
 
 
+def test_protocol_auto_route_rejects_unimplemented_explain_mode(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            return []
+
+        def list_routing_skills(self):
+            return []
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "mode": "explain",
+                "surface": "registry",
+                "requirement_text": "Explain this protocol.",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_INVALID_MODE"
+
+
 def test_protocol_parse_route_accepts_draft_mode_for_incomplete_protocols(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

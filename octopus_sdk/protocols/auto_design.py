@@ -26,7 +26,7 @@ from .models import (
     ProtocolValidationResultRecord,
 )
 
-ProtocolAutoDesignMode = Literal["create", "revise", "explain"]
+ProtocolAutoDesignMode = Literal["create", "revise"]
 ProtocolAutoDesignSurface = Literal["registry", "telegram", "api"]
 ProtocolAutoDesignStatus = Literal["draft", "ready", "blocked", "applied", "published", "running", "failed"]
 ProtocolAutoDesignSeverity = Literal["info", "warning", "error"]
@@ -381,6 +381,7 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     target_draft_revision: int = 0
     requirement_text: str = ""
     constraints_text: str = ""
+    model_response: ProtocolAutoDesignModelResponseRecord | None = None
     analysis: ProtocolAutoDesignAnalysisRecord = Field(default_factory=ProtocolAutoDesignAnalysisRecord)
     plan: ProtocolAutoDesignPlanRecord = Field(default_factory=ProtocolAutoDesignPlanRecord)
     draft_definition_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
@@ -2514,6 +2515,26 @@ def _planner_warnings_for_session(
     return warnings, unresolved
 
 
+def _dedupe_auto_protocol_warnings(
+    warnings: Sequence[ProtocolAutoDesignWarningRecord],
+) -> list[ProtocolAutoDesignWarningRecord]:
+    deduped: list[ProtocolAutoDesignWarningRecord] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for warning in warnings:
+        item = ProtocolAutoDesignWarningRecord.model_validate(warning)
+        key = (
+            str(item.code or "").strip(),
+            str(item.message or "").strip(),
+            str(item.severity or "").strip(),
+            str(item.section or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def auto_protocol_event_summary(
     session: ProtocolAutoDesignSessionRecord,
     *,
@@ -2619,6 +2640,7 @@ def generate_auto_protocol_session(
         target_draft_revision=request.target_draft_revision,
         requirement_text=request.requirement_text,
         constraints_text=request.constraints_text,
+        model_response=request.model_response,
         analysis=analysis,
         plan=plan,
         draft_definition_json=RegistryJsonRecord.model_validate(draft),
@@ -2700,8 +2722,16 @@ def revise_auto_protocol_session(
     regenerated_draft, validation, repair_notes = _validate_and_repair_protocol_document(regenerated_draft, regenerate_request)
     warnings, unresolved = _warnings_for_session(regenerate_request, validation)
     semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(session.analysis, session.plan)
-    warnings.extend(semantic_warnings)
-    unresolved.extend(semantic_unresolved)
+    warnings = _dedupe_auto_protocol_warnings([
+        *session.warnings,
+        *warnings,
+        *semantic_warnings,
+    ])
+    unresolved = _dedupe_auto_protocol_warnings([
+        *session.unresolved_decisions,
+        *unresolved,
+        *semantic_unresolved,
+    ])
     status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
     revised_session = session.model_copy(update={
         "status": status,

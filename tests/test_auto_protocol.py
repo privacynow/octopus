@@ -13,7 +13,8 @@ from octopus_sdk.protocols import (
     render_protocol_stage_prompt,
     revise_auto_protocol_session,
 )
-from octopus_sdk.protocols.auto_design import _validate_and_repair_protocol_document
+from octopus_sdk.protocols.auto_design import _validate_and_repair_protocol_document, auto_protocol_event_summary
+from octopus_sdk.protocols.models import ProtocolRunMutationRecord
 
 
 def _planner_response(*package_keys: str) -> ProtocolAutoDesignModelResponseRecord:
@@ -158,6 +159,32 @@ def test_auto_protocol_accepts_model_run_inputs_with_display_keys():
     assert "Goal" not in keys
     assert "constraints" in keys
     assert run_inputs[0]["required"] is True
+
+
+def test_auto_protocol_event_summary_uses_protocol_run_id():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text="Build a browser-runnable risk decision engine demo with Java verification.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("implementation"),
+        )
+    )
+    run_result = ProtocolRunMutationRecord.model_validate({
+        "ok": True,
+        "status": "created",
+        "run": {
+            "protocol_run_id": "run-auto",
+            "protocol_id": "protocol-auto",
+            "protocol_definition_version_id": "version-1",
+            "status": "running",
+        },
+    })
+
+    summary = auto_protocol_event_summary(session.model_copy(update={"run_result": run_result}), event_kind="run_started")
+
+    assert summary.event_kind == "run_started"
+    assert summary.protocol_run_id == "run-auto"
+    assert "run_id" not in summary.model_dump(mode="json")
 
 
 def test_auto_protocol_revision_updates_existing_canonical_document():

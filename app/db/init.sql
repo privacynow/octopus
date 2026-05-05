@@ -754,6 +754,14 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_session_events (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_auto_session_events_sequence
     ON agent_registry.protocol_auto_session_events (session_id, sequence);
 
+UPDATE agent_registry.protocol_auto_session_events
+SET payload_json = (payload_json - 'run_id')
+    || CASE
+        WHEN payload_json ? 'protocol_run_id' THEN '{}'::jsonb
+        ELSE jsonb_build_object('protocol_run_id', payload_json ->> 'run_id')
+    END
+WHERE payload_json ? 'run_id';
+
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_compliance_events (
     protocol_compliance_event_id TEXT PRIMARY KEY,
     protocol_run_id TEXT NOT NULL DEFAULT '',

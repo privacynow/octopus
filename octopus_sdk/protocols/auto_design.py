@@ -50,6 +50,12 @@ def _slugify(value: str, *, fallback: str = "auto-protocol") -> str:
     return text
 
 
+def _snake(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
+
+
 def _title_from_requirement(text: str) -> str:
     source = str(text or "").strip()
     if not source:

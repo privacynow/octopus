@@ -125,6 +125,41 @@ def test_auto_protocol_normalizes_and_surfaces_planner_warning_strings():
     assert session.status == "ready"
 
 
+def test_auto_protocol_accepts_model_run_inputs_with_display_keys():
+    response = _planner_response("implementation").model_copy(update={
+        "run_inputs": [
+            {
+                "key": "Goal",
+                "label": "Delivery goal",
+                "kind": "textarea",
+                "required": False,
+                "default_value": "Build the first delivery tranche.",
+            },
+            {
+                "key": "Risk Domain",
+                "label": "Risk domain",
+                "kind": "text",
+                "required": False,
+            },
+        ],
+    })
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text="Build a browser-runnable risk decision engine demo with Java verification.",
+            constraints_text="Keep it bounded.",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=response,
+        )
+    )
+
+    run_inputs = session.draft_definition_json.as_dict()["metadata"]["run_inputs"]
+    keys = [field["key"] for field in run_inputs]
+    assert keys[:2] == ["problem_statement", "risk_domain"]
+    assert "Goal" not in keys
+    assert "constraints" in keys
+    assert run_inputs[0]["required"] is True
+
+
 def test_auto_protocol_revision_updates_existing_canonical_document():
     original = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(

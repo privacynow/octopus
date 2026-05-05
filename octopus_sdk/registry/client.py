@@ -123,6 +123,7 @@ PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
     "PROTOCOL_AUTO_PUBLISH_BLOCKED",
     "PROTOCOL_AUTO_RUN_BLOCKED",
 })
+AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS = 300.0
 
 
 class RegistryClientError(RuntimeError):
@@ -612,7 +613,12 @@ class RegistryClient(
         payload: ProtocolAutoDesignRequestRecord | Mapping[str, object],
     ) -> ProtocolAutoDesignSessionRecord:
         body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload)
-        result = await self._request("POST", "/v1/protocol-auto/sessions", json=body)
+        result = await self._request(
+            "POST",
+            "/v1/protocol-auto/sessions",
+            json=body,
+            timeout=AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS,
+        )
         return ProtocolAutoDesignSessionRecord.model_validate(result)
 
     async def get_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:
@@ -630,7 +636,12 @@ class RegistryClient(
         payload: ProtocolAutoDesignRequestRecord | Mapping[str, object],
     ) -> ProtocolAutoDesignSessionRecord:
         body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload)
-        result = await self._request("POST", f"/v1/protocol-auto/sessions/{session_id}/revise", json=body)
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-auto/sessions/{session_id}/revise",
+            json=body,
+            timeout=AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS,
+        )
         return ProtocolAutoDesignSessionRecord.model_validate(result)
 
     async def apply_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:

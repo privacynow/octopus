@@ -107,6 +107,7 @@ class _RegistryControlAccess:
 @dataclass(frozen=True)
 class RegistryDeliveryRuntime:
     provider_name: str
+    provider: Provider | None
     provider_state_factory: Callable[[str], dict[str, Any]]
     services: BotServices
     submitter: BotRuntimeHandle | None = None
@@ -117,6 +118,7 @@ class RegistryDeliveryRuntime:
 def build_registry_delivery_runtime(
     *,
     provider_name: str,
+    provider: Provider | None = None,
     provider_state_factory: Callable[[str], dict[str, Any]],
     services: BotServices,
     submitter: BotRuntimeHandle | None = None,
@@ -125,6 +127,7 @@ def build_registry_delivery_runtime(
 ) -> RegistryDeliveryRuntime:
     return RegistryDeliveryRuntime(
         provider_name=provider_name,
+        provider=provider,
         provider_state_factory=provider_state_factory,
         services=services,
         submitter=submitter,
@@ -641,6 +644,8 @@ async def handle_registry_delivery(
             from app.runtime.auto_protocol_design import design_auto_protocol_with_provider
 
             try:
+                if runtime.provider is None:
+                    raise RuntimeError("Auto Protocol planner requires a provider-capable runtime.")
                 response = await design_auto_protocol_with_provider(
                     request.payload.request,
                     config=config,
@@ -706,6 +711,7 @@ class RegistryDeliveryTransport(TransportImplementation):
         self._parent_stop_task: asyncio.Task[None] | None = None
         delivery_runtime = build_registry_delivery_runtime(
             provider_name=provider.name,
+            provider=provider,
             provider_state_factory=provider.new_provider_state,
             services=services,
             bot=None,

@@ -507,6 +507,7 @@ def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
     bot = current_bot_instance() if bot_instance is None else bot_instance
     return build_registry_delivery_runtime(
         provider_name=provider.name,
+        provider=provider,
         provider_state_factory=provider.new_provider_state,
         services=current_runtime().services,
         submitter=current_runtime().submitter,

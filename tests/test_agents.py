@@ -33,6 +33,11 @@ from octopus_sdk.identity import (
 )
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.client import RegistryClientError
+from octopus_sdk.registry.management import DesignAutoProtocolRequest, ManagementRequest
+from octopus_sdk.protocols.auto_design import (
+    ProtocolAutoDesignModelRequestRecord,
+    ProtocolAutoDesignModelResponseRecord,
+)
 from octopus_sdk.inbound_types import deserialize_inbound
 from octopus_sdk.transport import (
     DelegationContinuationResult,
@@ -1674,6 +1679,88 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             _reg_conv(registry_conversation_ref("prod", "conv-cancel")),
             registry_conversation_ref("prod", "conv-cancel"),
         )
+
+
+async def test_handle_registry_auto_protocol_management_uses_runtime_provider(monkeypatch):
+    seen: dict[str, object] = {}
+
+    async def fake_design(request, *, config, provider, provider_state_factory):
+        del request, config, provider_state_factory
+        seen["provider"] = provider
+        return ProtocolAutoDesignModelResponseRecord(
+            requirement_summary="Build a small browser artifact.",
+            planner_ref="test-planner",
+        )
+
+    class _FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", **kwargs):
+            del kwargs
+            seen["base_url"] = base_url
+            seen["agent_token"] = agent_token
+
+        async def management_result(self, request_id, result):
+            seen["request_id"] = request_id
+            seen["result"] = result
+
+    monkeypatch.setattr(
+        "app.runtime.auto_protocol_design.design_auto_protocol_with_provider",
+        fake_design,
+    )
+    monkeypatch.setattr(
+        "app.channels.registry.delivery_transport.RegistryClient",
+        _FakeRegistryClient,
+    )
+
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(registry_id="local"),),
+        },
+        provider_name="codex",
+    ) as (data_dir, cfg, provider):
+        save_registry_connection_state(
+            data_dir,
+            RegistryConnectionState(
+                registry_id="local",
+                registry_scope="full",
+                agent_id="agent-live",
+                agent_token="agent-token",
+                connectivity_state="connected",
+            ),
+        )
+        runtime = build_registry_delivery_runtime(
+            provider_name=provider.name,
+            provider=provider,
+            provider_state_factory=provider.new_provider_state,
+            services=current_runtime().services,
+            submitter=current_runtime().submitter,
+        )
+        request = ManagementRequest(
+            request_id="request-auto",
+            agent_id="agent-live",
+            payload=DesignAutoProtocolRequest(
+                request=ProtocolAutoDesignModelRequestRecord(
+                    requirement_text="Build a small browser app.",
+                ),
+            ),
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "delivery-auto",
+                "registry_id": "local",
+                "kind": "management_request",
+                "payload": request.model_dump(mode="json"),
+            },
+            runtime=runtime,
+        )
+
+    assert outcome == "accepted"
+    assert seen["provider"] is provider
+    assert seen["agent_token"] == "agent-token"
+    result = seen["result"]
+    assert result.success is True
 
 
 async def test_handle_registry_channel_action_preserves_already_qualified_future_surface_ref(tmp_path: Path):

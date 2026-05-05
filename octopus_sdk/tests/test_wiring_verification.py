@@ -289,7 +289,7 @@ async def test_sdk_wiring_verification_exercises_full_workflow_lifecycle(tmp_pat
     assert harness.transport.stopped is True
 
 
-async def test_sdk_wiring_reports_routed_recovery_as_failed_result(tmp_path: Path) -> None:
+async def test_sdk_wiring_reports_routed_recovery_as_interrupted_result(tmp_path: Path) -> None:
     harness = make_sdk_harness(tmp_path, process_role="bot")
     workflows = harness.composer.build_for_testing()
     runtime = harness.build_runtime(workflows)
@@ -321,7 +321,7 @@ async def test_sdk_wiring_reports_routed_recovery_as_failed_result(tmp_path: Pat
     assert len(task_routing.results) == 1
     result = task_routing.results[0]
     assert result.routed_task_id == "protocol-stage:recovered"
-    assert result.status == "failed"
+    assert result.status == "interrupted"
     assert "interrupted" in result.full_text.lower()
     assert result.working_dir == "/workspace/workspace"
 

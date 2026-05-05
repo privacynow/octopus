@@ -2853,7 +2853,7 @@ select {
 
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1180px) {
     body.mobile-nav-open {
         overflow: hidden;
     }
@@ -6165,6 +6165,151 @@ select {
 
     .run-focus-live {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 1180px) {
+    #content > .content-inner.protocol-runs-route-shell {
+        max-width: 100%;
+    }
+
+    #content > .content-inner.protocol-runs-route-shell .protocol-route-shell,
+    #content > .content-inner.protocol-runs-route-shell .protocol-runs-workbench,
+    #content > .content-inner.protocol-runs-route-shell .run-feed-panel,
+    #content > .content-inner.protocol-runs-route-shell .kit-runs-list,
+    #content > .content-inner.protocol-runs-route-shell .kit-runs-inline-detail,
+    #content > .content-inner.protocol-runs-route-shell .run-expansion-panel,
+    #content > .content-inner.protocol-runs-route-shell .protocol-lineage-card {
+        min-width: 0;
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    .run-focus-hero,
+    .run-primary-artifact-panel,
+    .run-stage-timeline-item > .protocol-lineage-card {
+        padding: var(--space-3);
+    }
+
+    .run-focus-title {
+        font-size: 1.08rem;
+        line-height: 1.22;
+    }
+
+    .run-focus-problem {
+        display: -webkit-box;
+        max-width: 100%;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+    }
+
+    .run-focus-live {
+        align-items: start;
+        padding: var(--space-2);
+    }
+
+    .run-focus-metrics,
+    .runs-overview-strip {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+    }
+
+    .run-focus-metric strong,
+    .run-focus-metric small,
+    .run-stage-timeline-copy strong,
+    .run-stage-timeline-copy small,
+    .protocol-lineage-title,
+    .protocol-lineage-subtitle,
+    .protocol-lineage-note,
+    #content > .content-inner.protocol-runs-route-shell .metadata-item,
+    #content > .content-inner.protocol-runs-route-shell .metadata-item strong,
+    #content > .content-inner.protocol-runs-route-shell .metadata-item div {
+        min-width: 0;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+    }
+
+    .run-primary-artifact-panel .task-item-facts,
+    .run-stage-timeline-item > .protocol-lineage-card .metadata-grid,
+    .run-stage-timeline-item > .protocol-lineage-card .task-item-facts {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    }
+
+    .run-primary-artifact-head {
+        align-items: flex-start;
+    }
+
+    .run-primary-artifact-head .editor-section-title {
+        min-width: 0;
+        line-height: 1.2;
+    }
+
+    .run-primary-artifact-panel .artifact-action-row,
+    .run-stage-timeline-item .artifact-action-row,
+    .run-stage-timeline-item .task-action-row {
+        width: 100%;
+        align-items: stretch;
+        justify-content: flex-start;
+    }
+
+    .run-focus-actions .editor-actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+        width: 100%;
+    }
+
+    .run-focus-actions .editor-actions .btn,
+    .run-primary-artifact-panel .artifact-action-row .btn,
+    .run-stage-timeline-item .artifact-action-row .btn,
+    .run-stage-timeline-item .task-action-row .btn {
+        min-width: 0;
+        justify-content: center;
+    }
+
+    .run-stage-timeline-button {
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: start;
+        padding: var(--space-2-5);
+    }
+
+    .run-stage-timeline-button > .badge {
+        grid-column: 2 / 3;
+        justify-self: start;
+        max-width: 100%;
+        white-space: normal;
+        line-height: 1.15;
+    }
+}
+
+@media (max-width: 720px) {
+    #content > .content-inner.protocol-runs-route-shell {
+        width: 100%;
+    }
+
+    .run-focus-hero,
+    .run-primary-artifact-panel,
+    .run-stage-timeline-item > .protocol-lineage-card {
+        padding: var(--space-2-5);
+    }
+
+    .run-focus-metrics,
+    .runs-overview-strip,
+    .run-primary-artifact-panel .task-item-facts,
+    .run-stage-timeline-item > .protocol-lineage-card .metadata-grid,
+    .run-stage-timeline-item > .protocol-lineage-card .task-item-facts {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .run-focus-progress.kit-run-stage-progress {
+        grid-auto-flow: row;
+        grid-auto-columns: auto;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .run-stage-timeline-list {
+        gap: var(--space-1-5);
     }
 }
 

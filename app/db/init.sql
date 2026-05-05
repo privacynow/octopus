@@ -719,6 +719,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     target_draft_revision INTEGER NOT NULL DEFAULT 0,
     requirement_text TEXT NOT NULL DEFAULT '',
     constraints_text TEXT NOT NULL DEFAULT '',
+    planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     plan_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     draft_definition_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -732,6 +733,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.protocol_auto_sessions
+    ADD COLUMN IF NOT EXISTS planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_actor
     ON agent_registry.protocol_auto_sessions (actor_ref, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_target

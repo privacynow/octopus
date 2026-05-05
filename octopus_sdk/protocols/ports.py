@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from .auto_design import (
+    ProtocolAutoDesignEventSummaryRecord,
+    ProtocolAutoDesignModelRequestRecord,
+    ProtocolAutoDesignModelResponseRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
 )
@@ -100,6 +103,8 @@ class ProtocolAutoDesignSessionPort(Protocol):
 
     async def get_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord: ...
 
+    async def list_protocol_auto_design_session_events(self, session_id: str) -> list[ProtocolAutoDesignEventSummaryRecord]: ...
+
     async def revise_protocol_auto_design_session(
         self,
         session_id: str,
@@ -115,6 +120,14 @@ class ProtocolAutoDesignSessionPort(Protocol):
         session_id: str,
         payload: dict[str, object] | None = None,
     ) -> ProtocolAutoDesignSessionRecord: ...
+
+
+@runtime_checkable
+class ProtocolAutoDesignModelPort(Protocol):
+    async def design_protocol(
+        self,
+        payload: ProtocolAutoDesignModelRequestRecord,
+    ) -> ProtocolAutoDesignModelResponseRecord: ...
 
 
 @runtime_checkable

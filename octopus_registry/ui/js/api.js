@@ -319,6 +319,8 @@ const API = (() => {
             request('POST', '/v1/protocol-auto/sessions', { body, timeoutMs: 120000 }),
         getProtocolAutoSession: (sessionId) =>
             request('GET', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}`),
+        listProtocolAutoSessionEvents: (sessionId) =>
+            request('GET', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/events`),
         reviseProtocolAutoSession: (sessionId, body = {}) =>
             request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body, timeoutMs: 120000 }),
         applyProtocolAutoSession: (sessionId) =>

@@ -26,10 +26,17 @@ from .models import (
     ProtocolValidationResultRecord,
 )
 
-ProtocolAutoDesignMode = Literal["create", "revise", "explain"]
+ProtocolAutoDesignMode = Literal["create", "revise"]
 ProtocolAutoDesignSurface = Literal["registry", "telegram", "api"]
 ProtocolAutoDesignStatus = Literal["draft", "ready", "blocked", "applied", "published", "running", "failed"]
 ProtocolAutoDesignSeverity = Literal["info", "warning", "error"]
+
+_AUTO_STAGE_BUDGET_SMALL_MAX = 7
+_AUTO_STAGE_BUDGET_STANDARD_MAX = 12
+_AUTO_STAGE_BUDGET_COMPLEX_MAX = 16
+_AUTO_STAGE_HARD_CAP = 18
+_AUTO_STANDARD_WORK_PACKAGE_BUDGET = 6
+_AUTO_REVIEW_ROUND_MAX = 6
 
 
 def _slugify(value: str, *, fallback: str = "auto-protocol") -> str:
@@ -41,6 +48,12 @@ def _slugify(value: str, *, fallback: str = "auto-protocol") -> str:
     if len(text) > 64:
         text = text[:64].rstrip("-") or fallback
     return text
+
+
+def _snake(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
 
 
 def _title_from_requirement(text: str) -> str:
@@ -163,12 +176,33 @@ class ProtocolAutoDesignArtifactPlanRecord(RegistryRecordModel):
     path: str = ""
 
 
+class ProtocolAutoDesignPrimaryArtifactRecord(RegistryRecordModel):
+    artifact_key: str = ""
+    display_name: str = ""
+    produced_by_stage_key: str = ""
+    artifact_kind: str = "workspace_file"
+    expected_path: str = ""
+    open_behavior: str = "browse"
+    evidence_requirements: list[str] = Field(default_factory=list)
+    supporting_artifact_keys: list[str] = Field(default_factory=list)
+
+
+class ProtocolAutoDesignReviewPolicyRecord(RegistryRecordModel):
+    stance: str = "adversarial"
+    max_review_rounds: int = 3
+    stage_hard_cap: int = _AUTO_STAGE_HARD_CAP
+    stage_budget_label: str = "standard"
+    stage_count_rationale: str = ""
+
+
 class ProtocolAutoDesignWorkPackageRecord(RegistryRecordModel):
     package_key: str = ""
     display_name: str = ""
+    rationale: str = ""
     role_key: str = ""
     role_display_name: str = ""
     role_responsibility: str = ""
+    required_skills: list[str] = Field(default_factory=list)
     purpose: str = ""
     quality_bar: str = ""
     artifact_key: str = ""
@@ -229,6 +263,84 @@ class ProtocolAutoDesignPlanRecord(RegistryRecordModel):
     artifacts: list[ProtocolAutoDesignArtifactPlanRecord] = Field(default_factory=list)
     stages: list[ProtocolAutoDesignStagePlanRecord] = Field(default_factory=list)
     run_profile: ProtocolAutoDesignRunProfileRecord = Field(default_factory=ProtocolAutoDesignRunProfileRecord)
+    primary_artifact: ProtocolAutoDesignPrimaryArtifactRecord = Field(default_factory=ProtocolAutoDesignPrimaryArtifactRecord)
+    review_policy: ProtocolAutoDesignReviewPolicyRecord = Field(default_factory=ProtocolAutoDesignReviewPolicyRecord)
+
+
+class ProtocolAutoDesignModelRequestRecord(RegistryRecordModel):
+    mode: ProtocolAutoDesignMode = "create"
+    requirement_text: str = ""
+    constraints_text: str = ""
+    source_document: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    available_agents: list[RegistryJsonRecord] = Field(default_factory=list)
+    available_skills: list[RegistryJsonRecord] = Field(default_factory=list)
+    workspace_ref: str = ""
+    actor_ref: str = ""
+    chat_ref: str = ""
+
+    @field_validator("available_agents", "available_skills", mode="before")
+    @classmethod
+    def _json_list(cls, value: object) -> list[RegistryJsonRecord]:
+        return [RegistryJsonRecord.model_validate(_dict(item)) for item in _list(value)]
+
+
+class ProtocolAutoDesignModelResponseRecord(RegistryRecordModel):
+    requirement_summary: str = ""
+    domain: str = "requirement-specific"
+    risk_assessment: str = ""
+    assumptions: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    work_packages: list[ProtocolAutoDesignWorkPackageRecord] = Field(default_factory=list)
+    roles: list[ProtocolAutoDesignRolePlanRecord] = Field(default_factory=list)
+    artifacts: list[ProtocolAutoDesignArtifactPlanRecord] = Field(default_factory=list)
+    primary_artifact: ProtocolAutoDesignPrimaryArtifactRecord = Field(default_factory=ProtocolAutoDesignPrimaryArtifactRecord)
+    review_policy: ProtocolAutoDesignReviewPolicyRecord = Field(default_factory=ProtocolAutoDesignReviewPolicyRecord)
+    run_inputs: list[dict[str, object]] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    warnings: list[ProtocolAutoDesignWarningRecord] = Field(default_factory=list)
+    planner_ref: str = ""
+
+    @field_validator("warnings", mode="before")
+    @classmethod
+    def _warning_list(cls, value: object) -> list[object]:
+        normalized: list[object] = []
+        for index, item in enumerate(_list(value)):
+            if isinstance(item, str):
+                message = item.strip()
+                if message:
+                    normalized.append({
+                        "code": f"planner.warning_{index + 1}",
+                        "message": message,
+                        "severity": "warning",
+                        "section": "planner",
+                        "action": "review_generated_protocol",
+                    })
+                continue
+            normalized.append(item)
+        return normalized
+
+
+class ProtocolAutoDesignEventSummaryRecord(RegistryRecordModel):
+    event_kind: str = ""
+    session_status: str = ""
+    target_protocol_id: str = ""
+    source_protocol_id: str = ""
+    run_id: str = ""
+    warning_codes: list[str] = Field(default_factory=list)
+    blocker_codes: list[str] = Field(default_factory=list)
+    unresolved_count: int = 0
+    stage_count: int = 0
+    package_count: int = 0
+    primary_artifact_key: str = ""
+    change_summary: list[str] = Field(default_factory=list)
+    actor_ref: str = ""
+    created_at: str = ""
+
+
+class ProtocolAutoDesignChangeSummaryRecord(RegistryRecordModel):
+    summary: str = ""
+    changed_sections: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
@@ -246,6 +358,8 @@ class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     preferred_design_agent_id: str = ""
     actor_ref: str = ""
     chat_ref: str = ""
+    idempotency_key: str = ""
+    model_response: ProtocolAutoDesignModelResponseRecord | None = None
 
     @field_validator("available_agents", "available_skills", mode="before")
     @classmethod
@@ -267,6 +381,7 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     target_draft_revision: int = 0
     requirement_text: str = ""
     constraints_text: str = ""
+    model_response: ProtocolAutoDesignModelResponseRecord | None = None
     analysis: ProtocolAutoDesignAnalysisRecord = Field(default_factory=ProtocolAutoDesignAnalysisRecord)
     plan: ProtocolAutoDesignPlanRecord = Field(default_factory=ProtocolAutoDesignPlanRecord)
     draft_definition_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
@@ -275,6 +390,7 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     warnings: list[ProtocolAutoDesignWarningRecord] = Field(default_factory=list)
     unresolved_decisions: list[ProtocolAutoDesignWarningRecord] = Field(default_factory=list)
     change_summary: list[str] = Field(default_factory=list)
+    event_summary: ProtocolAutoDesignEventSummaryRecord = Field(default_factory=ProtocolAutoDesignEventSummaryRecord)
     applied_protocol: ProtocolMutationRecord | None = None
     run_result: ProtocolRunMutationRecord | None = None
     created_at: str = ""
@@ -390,7 +506,7 @@ def _has_any(text: str, tokens: Sequence[str]) -> bool:
 def _analysis_skills(text: str) -> list[str]:
     """Infer workflow skills without selecting a closed use-case template."""
     skills = ["requirements planning", "implementation", "verification", "acceptance evidence"]
-    signals = [
+    signals: list[tuple[str, tuple[str, ...], tuple[tuple[str, ...], ...]]] = [
         (
             "technical architecture",
             (
@@ -403,6 +519,10 @@ def _analysis_skills(text: str) -> list[str]:
                 "api",
                 "web",
                 "deploy",
+            ),
+            (
+                ("architecture", "runtime", "integration", "api"),
+                ("library", "libraries", "framework", "deploy", "web"),
             ),
         ),
         (
@@ -422,6 +542,10 @@ def _analysis_skills(text: str) -> list[str]:
                 "legal",
                 "medical",
                 "financial",
+            ),
+            (
+                ("accurate", "factual", "research", "sources", "evidence", "audit"),
+                ("regulated", "compliance", "legal", "medical", "financial", "historical"),
             ),
         ),
         (
@@ -450,6 +574,10 @@ def _analysis_skills(text: str) -> list[str]:
                 "ux",
                 "ui",
             ),
+            (
+                ("user", "users", "human", "usable", "readable", "intuitive", "polished"),
+                ("responsive", "controls", "interaction", "interactive", "dashboard", "ux", "ui"),
+            ),
         ),
         (
             "supporting asset planning",
@@ -471,18 +599,31 @@ def _analysis_skills(text: str) -> list[str]:
                 "graph",
                 "graphs",
             ),
+            (
+                ("asset", "assets", "visual", "image", "images", "audio", "sound", "graphic"),
+                ("background", "animation", "animated", "chart", "charts", "graph", "graphs"),
+            ),
         ),
         (
             "data and input modeling",
             ("data", "dataset", "records", "metrics", "analysis", "reporting", "loading", "dimensions", "drill"),
+            (
+                ("dataset", "records", "metrics", "reporting", "loading", "drill"),
+                ("data", "analysis", "dimensions"),
+            ),
         ),
         (
             "safety and risk review",
             ("safe", "safety", "secure", "security", "risk", "threat", "abuse", "privacy"),
+            (
+                ("safe", "safety", "secure", "security", "risk", "threat", "abuse", "privacy"),
+            ),
         ),
     ]
-    for skill, tokens in signals:
-        if _has_any(text, tokens) and skill not in skills:
+    for skill, tokens, groups in signals:
+        group_hits = sum(1 for group in groups if _has_any(text, group))
+        single_strong_hit = bool(tokens) and _has_any(text, tokens) and len(str(text or "")) > 260
+        if (group_hits >= 1 and (len(groups) == 1 or group_hits >= 2 or single_strong_hit)) and skill not in skills:
             skills.append(skill)
     return skills
 
@@ -601,6 +742,8 @@ def _work_package(
     review_artifact_display_name: str = "",
     review_artifact_description: str = "",
     review_artifact_path: str = "",
+    rationale: str = "",
+    required_skills: Sequence[str] = (),
 ) -> ProtocolAutoDesignWorkPackageRecord:
     review_key = review_role_key or f"{package_key}_reviewer"
     review_label = review_display_name or f"{display_name} Reviewer"
@@ -608,9 +751,11 @@ def _work_package(
     return ProtocolAutoDesignWorkPackageRecord(
         package_key=package_key,
         display_name=display_name,
+        rationale=rationale or f"{display_name} is required to satisfy and verify the requested outcome.",
         role_key=role_key,
         role_display_name=role_display_name,
         role_responsibility=role_responsibility,
+        required_skills=list(required_skills),
         purpose=purpose,
         quality_bar=quality_bar,
         artifact_key=artifact_key,
@@ -973,55 +1118,330 @@ def _infer_work_packages(
                 ),
             ))
 
-    packages.extend([
-        _work_package(
+    packages.append(_work_package(
+        "implementation",
+        "Integrated Outcome",
+        "integrator",
+        "Outcome Integrator",
+        "Integrate accepted upstream production layers into the requested final outcome.",
+        (
+            f"Produce the final integrated outcome from the accepted plan, reviews, and production-layer artifacts. "
+            f"The result must visibly satisfy the requirement coverage terms: {terms}. "
+            "Do not discard upstream production work; reconcile it into one usable deliverable."
+        ),
+        (
+            "The deliverable is usable by the intended human, implements the accepted plan, integrates accepted production layers, "
+            "and leaves clear inspection evidence. Placeholder-level outcomes are not acceptable when the request asks for polish, variety, or commercial quality."
+        ),
+        "produced_outcome",
+        "Produced Outcome",
+        "The primary deliverable requested by the user.",
+        artifact_path=_auto_artifact_path("output", extension=""),
+        dependencies=list(dependency_artifacts),
+        review_role_key="outcome_acceptance_reviewer",
+        review_display_name="Outcome Acceptance Reviewer",
+        review_rubric=(
+            "Inspect the produced outcome directly, exercise it where practical, compare it to the accepted plan and upstream artifacts, "
+            "and choose revise if the outcome is low-detail, not usable, untested by inspection, or below the stated quality bar."
+        ),
+        rationale="The primary outcome package owns the artifact the user actually asked Octopus to produce.",
+        required_skills=("implementation", "verification", "acceptance evidence"),
+    ))
+    return _consolidate_work_packages(packages, terms=terms)
+
+
+def _consolidate_work_packages(
+    packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
+    *,
+    terms: str,
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    """Fit package shape into the stage budget by merging adjacent supporting slices."""
+    ordered = [package for package in packages if package.package_key != "verification"]
+    requirements = next((package for package in ordered if package.package_key == "requirements"), None)
+    implementation = next((package for package in ordered if package.package_key == "implementation"), None)
+    optional = [
+        package for package in ordered
+        if package.package_key not in {"requirements", "implementation"}
+    ]
+    if requirements is None:
+        requirements = _work_package(
+            "requirements",
+            "Requirement Coverage",
+            "planner",
+            "Workflow Planner",
+            "Turn the request into explicit scope and acceptance criteria.",
+            "Create a requirements coverage plan.",
+            "The plan is actionable and complete enough for downstream work.",
+            "requirements_plan",
+            "Requirements Coverage Plan",
+            "Goal, constraints, assumptions, work packages, deliverables, acceptance criteria, and coverage terms.",
+        )
+    if implementation is None:
+        implementation = _work_package(
             "implementation",
             "Integrated Outcome",
             "integrator",
             "Outcome Integrator",
-            "Integrate accepted upstream production layers into the requested final outcome.",
-            (
-                f"Produce the final integrated outcome from the accepted plan, reviews, and production-layer artifacts. "
-                f"The result must visibly satisfy the requirement coverage terms: {terms}. "
-                "Do not discard upstream production work; reconcile it into one usable deliverable."
-            ),
-            (
-                "The deliverable is usable by the intended human, implements the accepted plan, integrates accepted production layers, "
-                "and leaves clear inspection evidence. Placeholder-level outcomes are not acceptable when the request asks for polish, variety, or commercial quality."
-            ),
+            "Produce the primary requested outcome.",
+            "Produce the primary requested outcome.",
+            "The outcome is usable and inspectable.",
             "produced_outcome",
             "Produced Outcome",
             "The primary deliverable requested by the user.",
             artifact_path=_auto_artifact_path("output", extension=""),
-            dependencies=list(dependency_artifacts),
-            review_role_key="outcome_reviewer",
-            review_display_name="Outcome Reviewer",
-            review_rubric=(
-                "Inspect the produced outcome directly, compare it to the requirements plan and design artifacts, and look for better ways to meet the goal. "
-                "Choose revise if the outcome is low-detail, not usable, untested by inspection, or below the stated quality bar."
+        )
+
+    if len(optional) <= _AUTO_STANDARD_WORK_PACKAGE_BUDGET:
+        return [requirements, *optional, implementation]
+
+    kept = optional[: max(0, _AUTO_STANDARD_WORK_PACKAGE_BUDGET - 1)]
+    overflow = optional[len(kept):]
+    overflow_names = ", ".join(package.display_name for package in overflow)
+    dependencies = list(dict.fromkeys(
+        [
+            *(artifact for package in kept for artifact in [package.artifact_key, package.review_artifact_key] if artifact),
+            *(dependency for package in overflow for dependency in package.dependencies if dependency),
+        ]
+    ))
+    consolidated = _work_package(
+        "integrated_delivery_scope",
+        "Integrated Delivery Scope",
+        "delivery_architect",
+        "Delivery Architect",
+        "Consolidate remaining production concerns into one scoped delivery plan so the protocol stays runnable and reviewable.",
+        (
+            f"Consolidate these concerns into one delivery package without creating shallow separate stages: {overflow_names}. "
+            f"Preserve these requirement terms: {terms}."
+        ),
+        (
+            "The delivery scope is concrete, traceable to the omitted fine-grained concerns, and explicit about what is in the first delivery tranche "
+            "versus what belongs in backlog or a follow-up protocol."
+        ),
+        "integrated_delivery_scope",
+        "Integrated Delivery Scope",
+        "Consolidated plan, acceptance notes, backlog, and handoff guidance for remaining production concerns.",
+        dependencies=dependencies,
+        review_role_key="integrated_delivery_scope_reviewer",
+        review_display_name="Integrated Delivery Scope Reviewer",
+        review_rubric=(
+            "Review whether consolidation preserved the important requirements without creating a bloated protocol. "
+            "Choose revise if the scope hides important work, loses traceability, or leaves the outcome implementer guessing."
+        ),
+        rationale=(
+            "Multiple supporting slices were consolidated because separate stages would exceed the stage budget and burn tokens without improving the user outcome."
+        ),
+        required_skills=list(dict.fromkeys(
+            skill for package in overflow for skill in [*package.required_skills, package.display_name.lower()]
+            if str(skill or "").strip()
+        )),
+    )
+    implementation_dependencies = [
+        artifact
+        for package in [requirements, *kept, consolidated]
+        for artifact in (package.artifact_key, package.review_artifact_key)
+        if artifact
+    ]
+    implementation = implementation.model_copy(update={
+        "dependencies": list(dict.fromkeys(implementation_dependencies)),
+    })
+    return [requirements, *kept, consolidated, implementation]
+
+
+def _normalize_model_work_packages(
+    packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
+    *,
+    requirement_text: str,
+    constraints_text: str,
+    terms: Sequence[str],
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    model_packages = [package for package in packages if str(package.display_name or package.package_key or "").strip()]
+    if not model_packages:
+        return []
+    terms_text = ", ".join(list(terms)[:14]) or "the explicit user requirement"
+    dependency_artifacts: list[str] = ["requirements_plan"]
+    normalized: list[ProtocolAutoDesignWorkPackageRecord] = []
+
+    def normalized_package(package: ProtocolAutoDesignWorkPackageRecord, package_key: str) -> ProtocolAutoDesignWorkPackageRecord:
+        display = str(package.display_name or package_key.replace("_", " ").title()).strip()
+        role_key = _slugify(package.role_key or package.role_display_name or display, fallback=f"{package_key}_owner").replace("-", "_")
+        artifact_key = _slugify(package.artifact_key or display, fallback=f"{package_key}_artifact").replace("-", "_")
+        if package_key == "implementation":
+            artifact_key = "produced_outcome"
+        review_role_key = _slugify(
+            package.review_role_key or package.review_display_name or f"{display} Reviewer",
+            fallback=f"{package_key}_reviewer",
+        ).replace("-", "_")
+        dependency_candidates = [] if package_key == "requirements" else [
+            *(dependency for dependency in package.dependencies if str(dependency or "").strip()),
+            *dependency_artifacts,
+        ]
+        return package.model_copy(update={
+            "package_key": package_key,
+            "display_name": display,
+            "rationale": package.rationale or f"{display} is required by the planner's semantic decomposition.",
+            "role_key": role_key,
+            "role_display_name": package.role_display_name or display,
+            "role_responsibility": (
+                package.role_responsibility
+                or f"Own {display.lower()} for the requested outcome and produce actionable handoff evidence."
+            ),
+            "required_skills": list(dict.fromkeys(
+                str(item or "").strip().lower()
+                for item in package.required_skills
+                if str(item or "").strip()
+            )),
+            "purpose": (
+                package.purpose
+                or f"Produce {display.lower()} that preserves these requirement terms: {terms_text}."
+            ),
+            "quality_bar": (
+                package.quality_bar
+                or "The artifact is concrete, inspectable, evidence-backed, and specific enough for downstream work."
+            ),
+            "artifact_key": artifact_key,
+            "artifact_display_name": package.artifact_display_name or display,
+            "artifact_description": (
+                package.artifact_description
+                or f"Planner-requested artifact for {display.lower()}."
+            ),
+            "artifact_path": package.artifact_path or _auto_artifact_path(
+                "output" if package_key == "implementation" else artifact_key,
+                extension="" if package_key == "implementation" else ".md",
+            ),
+            "dependencies": list(dict.fromkeys(dependency_candidates)),
+            "review_role_key": review_role_key,
+            "review_display_name": package.review_display_name or f"{display} Reviewer",
+            "review_responsibility": (
+                package.review_responsibility
+                or f"Adversarially inspect {display.lower()} against the requirement and upstream artifacts."
+            ),
+            "review_artifact_key": (
+                package.review_artifact_key
+                or f"{artifact_key}_review"
+            ),
+            "review_artifact_display_name": package.review_artifact_display_name or f"{display} Review",
+            "review_artifact_description": (
+                package.review_artifact_description
+                or f"Critical review decision and revision requests for {display.lower()}."
+            ),
+            "review_artifact_path": package.review_artifact_path or _auto_artifact_path(f"{artifact_key}-review"),
+            "review_rubric": (
+                package.review_rubric
+                or f"Inspect {display.lower()} directly, compare it to the original requirement and accepted upstream artifacts, and choose revise for material gaps."
+            ),
+        })
+
+    has_requirements = any(
+        _slugify(package.package_key or package.display_name, fallback="") in {"requirements", "planning", "requirement-coverage"}
+        for package in model_packages
+    )
+    if not has_requirements:
+        normalized.append(_work_package(
+            "requirements",
+            "Requirement Coverage",
+            "planner",
+            "Workflow Planner",
+            "Turn the user request into explicit scope, assumptions, dependencies, acceptance criteria, and work-package coverage.",
+            f"Create a requirements coverage plan and map these terms: {terms_text}.",
+            "Every material request is either covered, recorded as an assumption, or called out as a gap.",
+            "requirements_plan",
+            "Requirements Coverage Plan",
+            "Goal, constraints, assumptions, work packages, deliverables, acceptance criteria, and coverage terms.",
+        ))
+    seen_package_keys = {package.package_key for package in normalized}
+    for package in model_packages:
+        raw_key = _slugify(package.package_key or package.display_name, fallback="work_package").replace("-", "_")
+        if raw_key in {"requirements", "planning", "requirement_coverage"}:
+            package_key = "requirements"
+        elif raw_key in {"implementation", "outcome", "primary_outcome", "integrated_outcome", "delivery"}:
+            package_key = "implementation"
+        else:
+            package_key = raw_key
+        if package_key == "requirements" and any(item.package_key == "requirements" for item in normalized):
+            continue
+        if package_key == "implementation":
+            continue
+        if package_key in seen_package_keys:
+            suffix = 2
+            candidate = f"{package_key}_{suffix}"
+            while candidate in seen_package_keys:
+                suffix += 1
+                candidate = f"{package_key}_{suffix}"
+            package_key = candidate
+        seen_package_keys.add(package_key)
+        item = normalized_package(package, package_key)
+        normalized.append(item)
+        dependency_artifacts.extend([item.artifact_key, item.review_artifact_key])
+    outcome_package = next(
+        (
+            package for package in model_packages
+            if _slugify(package.package_key or package.display_name, fallback="").replace("-", "_")
+            in {"implementation", "outcome", "primary_outcome", "integrated_outcome", "delivery"}
+        ),
+        ProtocolAutoDesignWorkPackageRecord(
+            display_name="Integrated Outcome",
+            purpose=(
+                f"Produce the final integrated outcome for: {_sentence(requirement_text) or terms_text}. "
+                f"Respect constraints: {_sentence(constraints_text)}"
             ),
         ),
-        _work_package(
-            "verification",
-            "Verification",
-            "verifier",
-            "Verification Lead",
-            "Run focused checks against acceptance criteria, artifact contracts, usability, and requirement coverage.",
-            "Run focused checks against the accepted plan, produced outcome, declared artifacts, and quality bars. Record commands, manual checks, defects, gaps, and unresolved risks.",
-            "Verification proves the important claims a human would care about and documents any remaining gaps.",
-            "verification_report",
-            "Verification Report",
-            "Checks, results, defects, gaps, and requirement coverage evidence.",
-            dependencies=[*dependency_artifacts, "produced_outcome"],
-            review_role_key="verification_reviewer",
-            review_display_name="Verification Reviewer",
-            review_rubric=(
-                "Review whether verification actually exercised the important requirements rather than merely describing them. "
-                "Choose revise if checks are superficial, missing human inspection, or do not prove the deliverable is usable."
-            ),
-        ),
-    ])
-    return packages
+    )
+    normalized.append(normalized_package(outcome_package, "implementation"))
+    return normalized
+
+
+def _dedupe_work_package_review_roles(
+    packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    """Planner output may reuse a reviewer label; protocols need isolated review roles."""
+    used_role_keys: set[str] = set()
+    used_artifact_keys: set[str] = set()
+    normalized: list[ProtocolAutoDesignWorkPackageRecord] = []
+    for package in packages:
+        if package.package_key == "implementation":
+            normalized.append(package)
+            continue
+        fallback_role = _slugify(
+            f"{package.package_key}_reviewer",
+            fallback=f"{package.package_key}_reviewer",
+        ).replace("-", "_")
+        role_key = _slugify(
+            package.review_role_key or package.review_display_name or fallback_role,
+            fallback=fallback_role,
+        ).replace("-", "_")
+        if not role_key or role_key in used_role_keys:
+            role_key = fallback_role
+        suffix = 2
+        base_role_key = role_key
+        while role_key in used_role_keys:
+            role_key = f"{base_role_key}_{suffix}"
+            suffix += 1
+        used_role_keys.add(role_key)
+
+        fallback_artifact = _slugify(
+            package.review_artifact_key or f"{package.artifact_key}_review",
+            fallback=f"{package.package_key}_review",
+        ).replace("-", "_")
+        artifact_key = fallback_artifact
+        if not artifact_key or artifact_key in used_artifact_keys:
+            artifact_key = _slugify(
+                f"{package.package_key}_review",
+                fallback=f"{package.package_key}_review",
+            ).replace("-", "_")
+        suffix = 2
+        base_artifact_key = artifact_key
+        while artifact_key in used_artifact_keys:
+            artifact_key = f"{base_artifact_key}_{suffix}"
+            suffix += 1
+        used_artifact_keys.add(artifact_key)
+
+        normalized.append(package.model_copy(update={
+            "review_role_key": role_key,
+            "review_display_name": package.review_display_name or f"{package.display_name} Reviewer",
+            "review_artifact_key": artifact_key,
+            "review_artifact_path": _auto_artifact_path(artifact_key),
+        }))
+    return normalized
 
 
 def _focus_label(requirement_text: str) -> str:
@@ -1035,7 +1455,9 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
     text = _normalized_words(requirement_text, constraints_text)
     terms = _requirement_terms(requirement_text, constraints_text)
     skills = _analysis_skills(text)
-    work_packages = _infer_work_packages(requirement_text, constraints_text, skills, terms)
+    work_packages = _dedupe_work_package_review_roles(
+        _infer_work_packages(requirement_text, constraints_text, skills, terms)
+    )
     deliverables = _requirement_phrases(requirement_text)
     complexity_signals = sum(1 for skill in skills if skill not in {"requirements planning", "implementation", "verification", "acceptance evidence"})
     complexity = "high" if complexity_signals >= 2 or len(text) > 700 or len(deliverables) >= 4 or len(work_packages) >= 6 else "standard"
@@ -1044,7 +1466,7 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
         "The generated protocol should be reviewed before publish.",
         "Stage instructions should carry the work contract so launch text can stay simple.",
         "The workflow is composed from requirement decomposition and reusable protocol primitives, not a closed use-case template.",
-        "Every generated work package with an output artifact should have its own critical review gate.",
+        "Every generated work package with an output artifact should have a direct critical review or final outcome acceptance gate.",
     ]
     risks = [
         "Assignments may need local agent mapping before publish/run.",
@@ -1063,11 +1485,15 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
             normalized = label.lower().strip()
             if normalized and normalized not in required_roles:
                 required_roles.append(normalized)
-    required_roles.append("readiness reviewer")
+    required_roles.append("outcome acceptance reviewer")
 
     expected_artifacts: list[str] = []
     for package in work_packages:
-        for label in (package.artifact_display_name, package.review_artifact_display_name):
+        labels = (package.artifact_display_name,) if package.package_key == "implementation" else (
+            package.artifact_display_name,
+            package.review_artifact_display_name,
+        )
+        for label in labels:
             normalized = label.lower().strip()
             if normalized and normalized not in expected_artifacts:
                 expected_artifacts.append(normalized)
@@ -1084,6 +1510,82 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
         deliverables=deliverables,
         assumptions=assumptions,
         risks=risks,
+        required_roles=required_roles,
+        expected_artifacts=expected_artifacts,
+    )
+
+
+def _analysis_from_model_response(
+    request: ProtocolAutoDesignRequestRecord,
+    model_response: ProtocolAutoDesignModelResponseRecord,
+) -> ProtocolAutoDesignAnalysisRecord:
+    requirement_text = str(request.requirement_text or "").strip()
+    constraints_text = str(request.constraints_text or "").strip()
+    terms = _requirement_terms(requirement_text, constraints_text)
+    normalized_model_packages = _normalize_model_work_packages(
+        model_response.work_packages,
+        requirement_text=requirement_text,
+        constraints_text=constraints_text,
+        terms=terms,
+    )
+    packages = _dedupe_work_package_review_roles(
+        _consolidate_work_packages(
+            normalized_model_packages or _infer_work_packages(
+                requirement_text,
+                constraints_text,
+                _analysis_skills(_normalized_words(requirement_text, constraints_text)),
+                terms,
+            ),
+            terms=", ".join(terms[:14]) or "the explicit user requirement",
+        )
+    )
+    skill_names: list[str] = []
+    for package in packages:
+        for skill in package.required_skills:
+            value = str(skill or "").strip().lower()
+            if value and value not in skill_names:
+                skill_names.append(value)
+    for value in _analysis_skills(_normalized_words(requirement_text, constraints_text)):
+        if value not in {"requirements planning", "implementation", "verification", "acceptance evidence"}:
+            continue
+        if value not in skill_names:
+            skill_names.append(value)
+    required_roles: list[str] = []
+    for package in packages:
+        for label in (package.role_display_name, package.review_display_name):
+            normalized = label.lower().strip()
+            if normalized and normalized not in required_roles:
+                required_roles.append(normalized)
+    if "outcome acceptance reviewer" not in required_roles:
+        required_roles.append("outcome acceptance reviewer")
+    expected_artifacts: list[str] = []
+    for package in packages:
+        for label in (package.artifact_display_name, package.review_artifact_display_name):
+            normalized = label.lower().strip()
+            if normalized and normalized not in expected_artifacts and package.package_key != "implementation":
+                expected_artifacts.append(normalized)
+        if package.package_key == "implementation" and package.artifact_display_name.lower() not in expected_artifacts:
+            expected_artifacts.append(package.artifact_display_name.lower())
+    if "release evidence" not in expected_artifacts:
+        expected_artifacts.append("release evidence")
+    complexity = "high" if len(packages) >= 6 or len(requirement_text) > 700 else "standard"
+    return ProtocolAutoDesignAnalysisRecord(
+        domain=model_response.domain or "requirement-specific",
+        complexity=complexity,
+        goal=_sentence(model_response.requirement_summary) or _sentence(requirement_text) or "Create the requested outcome.",
+        focus=_focus_label(model_response.requirement_summary or requirement_text),
+        requirement_terms=terms,
+        skills=skill_names,
+        work_packages=packages,
+        deliverables=_requirement_phrases(requirement_text),
+        assumptions=[
+            item for item in model_response.assumptions
+            if str(item or "").strip()
+        ],
+        risks=[
+            item for item in [model_response.risk_assessment, *model_response.open_questions]
+            if str(item or "").strip()
+        ],
         required_roles=required_roles,
         expected_artifacts=expected_artifacts,
     )
@@ -1138,6 +1640,13 @@ def _stage(
     )
 
 
+def _review_round_limit(policy: ProtocolAutoDesignReviewPolicyRecord | None = None) -> int:
+    raw = int((policy.max_review_rounds if policy is not None else 3) or 0)
+    if raw <= 0:
+        raw = 3
+    return min(raw, _AUTO_REVIEW_ROUND_MAX)
+
+
 def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) -> ProtocolAutoDesignRunProfileRecord:
     return ProtocolAutoDesignRunProfileRecord(
         problem_statement=_sentence(requirement) or "Run the generated workflow.",
@@ -1150,8 +1659,8 @@ def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) ->
         workspace_ref=str(workspace_ref or "").strip(),
         run_inputs=[
             {
-                "key": "goal",
-                "label": "Goal",
+                "key": "problem_statement",
+                "label": "Run objective",
                 "kind": "textarea",
                 "required": True,
                 "default_value": _sentence(requirement),
@@ -1169,6 +1678,60 @@ def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) ->
     )
 
 
+def _canonical_run_inputs(
+    run_inputs: Sequence[Mapping[str, object]] | None,
+    *,
+    fallback_requirement: str,
+    fallback_constraints: str,
+) -> list[dict[str, object]]:
+    fields: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for raw in run_inputs or []:
+        if not isinstance(raw, Mapping):
+            continue
+        field = dict(raw)
+        raw_key = _snake(str(field.get("key") or ""))
+        if not raw_key:
+            continue
+        key = "problem_statement" if raw_key == "goal" else raw_key
+        if key in seen:
+            continue
+        field["key"] = key
+        if key == "problem_statement":
+            field.setdefault("label", "Run objective")
+            field.setdefault("kind", "textarea")
+            field["required"] = True
+            field.setdefault("default_value", _sentence(fallback_requirement))
+            field.setdefault("help", "The run-specific outcome this protocol should accomplish.")
+        fields.append(field)
+        seen.add(key)
+    if "problem_statement" not in seen:
+        fields.insert(
+            0,
+            {
+                "key": "problem_statement",
+                "label": "Run objective",
+                "kind": "textarea",
+                "required": True,
+                "default_value": _sentence(fallback_requirement),
+                "help": "The run-specific outcome this protocol should accomplish.",
+            },
+        )
+        seen.add("problem_statement")
+    if "constraints" not in seen and _sentence(fallback_constraints):
+        fields.append(
+            {
+                "key": "constraints",
+                "label": "Constraints",
+                "kind": "textarea",
+                "required": False,
+                "default_value": _sentence(fallback_constraints),
+                "help": "Runtime constraints, inputs, or boundaries that matter for this run.",
+            }
+        )
+    return fields
+
+
 def _build_plan(
     request: ProtocolAutoDesignRequestRecord,
     analysis: ProtocolAutoDesignAnalysisRecord,
@@ -1180,7 +1743,22 @@ def _build_plan(
     description = _sentence(requirement) or "Auto-generated requirement-specific protocol."
     agents = [item.as_dict() for item in request.available_agents]
     skills = [item.as_dict() for item in request.available_skills]
+    model_response = request.model_response
     run_profile = _base_run_profile(requirement, constraints, request.workspace_ref)
+    if model_response is not None and model_response.run_inputs:
+        run_profile = run_profile.model_copy(update={
+            "run_inputs": _canonical_run_inputs(
+                model_response.run_inputs,
+                fallback_requirement=requirement,
+                fallback_constraints=constraints,
+            )
+        })
+    if model_response is not None and model_response.acceptance_criteria:
+        run_profile = run_profile.model_copy(update={
+            "acceptance_criteria": " ".join(
+                _sentence(item) for item in model_response.acceptance_criteria if str(item or "").strip()
+            ).strip() or run_profile.acceptance_criteria,
+        })
     work_packages = list(analysis.work_packages) or _infer_work_packages(
         requirement,
         constraints,
@@ -1196,18 +1774,19 @@ def _build_plan(
 
     for package in work_packages:
         ensure_role(package.role_key, package.role_display_name, package.role_responsibility)
-        ensure_role(
-            package.review_role_key,
-            package.review_display_name,
-            (
-                package.review_responsibility
-                + " Be independent and critical; choose revise when evidence, usability, completeness, or quality is below the stated bar."
-            ),
-        )
+        if package.package_key != "implementation":
+            ensure_role(
+                package.review_role_key,
+                package.review_display_name,
+                (
+                    package.review_responsibility
+                    + " Be independent and critical; choose revise when evidence, usability, completeness, or quality is below the stated bar."
+                ),
+            )
     ensure_role(
-        "readiness_reviewer",
-        "Readiness Reviewer",
-        "Accept final evidence only when the completed workflow, review decisions, artifacts, and inspection steps are coherent and commercially usable.",
+        "outcome_acceptance_reviewer",
+        "Outcome Acceptance Reviewer",
+        "Adversarially inspect or exercise the primary artifact against the original requirement, accepted upstream artifacts, and release evidence before accepting the run.",
     )
     roles = list(roles_by_key.values())
 
@@ -1219,12 +1798,13 @@ def _build_plan(
 
     for package in work_packages:
         ensure_artifact(package.artifact_key, package.artifact_display_name, package.artifact_description, package.artifact_path)
-        ensure_artifact(
-            package.review_artifact_key,
-            package.review_artifact_display_name,
-            package.review_artifact_description,
-            package.review_artifact_path,
-        )
+        if package.package_key != "implementation":
+            ensure_artifact(
+                package.review_artifact_key,
+                package.review_artifact_display_name,
+                package.review_artifact_description,
+                package.review_artifact_path,
+            )
     ensure_artifact(
         "release_evidence",
         "Release Evidence",
@@ -1248,7 +1828,6 @@ def _build_plan(
         "content_variation_layer": "build_content_variation_layer",
         "domain_content_layer": "apply_grounded_content",
         "implementation": "produce_outcome",
-        "verification": "verify_outcome",
     }
     review_key_by_package = {
         "requirements": "review_requirements",
@@ -1265,7 +1844,6 @@ def _build_plan(
         "content_variation_layer": "review_content_variation_layer",
         "domain_content_layer": "review_grounded_content",
         "implementation": "review_outcome",
-        "verification": "review_verification",
     }
     work_display_by_package = {
         "requirements": "Map requirement and acceptance criteria",
@@ -1282,7 +1860,6 @@ def _build_plan(
         "content_variation_layer": "Build content and variation layer",
         "domain_content_layer": "Apply grounded content",
         "implementation": "Integrate requested outcome",
-        "verification": "Verify outcome against requirement",
     }
     review_display_by_package = {
         "requirements": "Review requirement coverage",
@@ -1299,7 +1876,6 @@ def _build_plan(
         "content_variation_layer": "Review content and variation layer",
         "domain_content_layer": "Review grounded content application",
         "implementation": "Review produced outcome",
-        "verification": "Review verification evidence",
     }
 
     stages: list[ProtocolAutoDesignStagePlanRecord] = []
@@ -1322,6 +1898,9 @@ def _build_plan(
             inputs=work_inputs,
             outputs=[package.artifact_key],
         ))
+        if package.package_key == "implementation":
+            available_artifacts = list(dict.fromkeys([*available_artifacts, package.artifact_key]))
+            continue
         review_inputs = list(dict.fromkeys([*work_inputs, package.artifact_key]))
         review_purpose = "\n".join([
             f"Critically review {package.artifact_display_name}.",
@@ -1347,17 +1926,57 @@ def _build_plan(
 
     stages.append(_stage(
         "final_evidence",
-        "Prepare release evidence",
+        "Accept primary outcome and release evidence",
         "acceptance",
-        "readiness_reviewer",
+        "outcome_acceptance_reviewer",
         (
-            "Summarize the produced artifacts, accepted reviews, revision loops, verification evidence, remaining risks, and exact inspection steps. "
-            "Accept only if the full workflow evidence is coherent and the outcome is ready for a human user to inspect. "
-            "End with PROTOCOL_DECISION: accept or fail and PROTOCOL_SUMMARY."
+            "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
+            "Record final release evidence: what was inspected, what worked, what remains risky, and exact user-facing inspection steps. "
+            "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
+            "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
         ),
         inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
         outputs=["release_evidence"],
+        review_of="produce_outcome",
     ))
+
+    stage_count = len(stages)
+    if stage_count <= _AUTO_STAGE_BUDGET_SMALL_MAX:
+        budget_label = "small"
+    elif stage_count <= _AUTO_STAGE_BUDGET_STANDARD_MAX:
+        budget_label = "standard"
+    elif stage_count <= _AUTO_STAGE_BUDGET_COMPLEX_MAX:
+        budget_label = "complex"
+    else:
+        budget_label = "over_cap"
+    primary_artifact = ProtocolAutoDesignPrimaryArtifactRecord(
+        artifact_key="produced_outcome",
+        display_name="Produced Outcome",
+        produced_by_stage_key="produce_outcome",
+        artifact_kind="workspace_file",
+        expected_path=_auto_artifact_path("output", extension=""),
+        open_behavior="browse",
+        evidence_requirements=[
+            "Primary artifact exists and is inspectable.",
+            "Final acceptance records what was exercised or inspected.",
+            "Release evidence links the artifact to the original requirement.",
+        ],
+        supporting_artifact_keys=[
+            artifact.artifact_key
+            for artifact in artifacts
+            if artifact.artifact_key not in {"produced_outcome", "release_evidence"}
+        ],
+    )
+    proposed_policy = model_response.review_policy if model_response is not None else None
+    review_policy = ProtocolAutoDesignReviewPolicyRecord(
+        stance="adversarial",
+        max_review_rounds=_review_round_limit(proposed_policy),
+        stage_hard_cap=_AUTO_STAGE_HARD_CAP,
+        stage_budget_label=budget_label,
+        stage_count_rationale=(
+            f"{stage_count} stages: {len(work_packages)} work packages compiled with direct reviews for upstream artifacts and one final outcome acceptance."
+        ),
+    )
 
     return ProtocolAutoDesignPlanRecord(
         protocol_name=title,
@@ -1367,6 +1986,8 @@ def _build_plan(
         artifacts=artifacts,
         stages=stages,
         run_profile=run_profile,
+        primary_artifact=primary_artifact,
+        review_policy=review_policy,
     )
 
 
@@ -1388,7 +2009,11 @@ def compile_auto_protocol_plan(
                 "fail": "__failed__",
             }
         elif stage.stage_kind == "acceptance":
-            transitions = {"accept": "__complete__", "fail": "__failed__"}
+            transitions = {
+                "accept": "__complete__",
+                "revise": stage.review_of_stage_key or (plan.stages[index - 1].stage_key if index > 0 else next_key),
+                "fail": "__failed__",
+            }
         else:
             transitions = {"completed": next_key}
         role = role_by_key.get(stage.role_key)
@@ -1434,6 +2059,13 @@ def compile_auto_protocol_plan(
             "generated": True,
             "requirement": str(requirement_text or "").strip(),
             "constraints": str(constraints_text or "").strip(),
+            "primary_artifact_key": plan.primary_artifact.artifact_key,
+            "primary_artifact": plan.primary_artifact.model_dump(mode="json"),
+            "stage_count": len(plan.stages),
+            "stage_hard_cap": plan.review_policy.stage_hard_cap or _AUTO_STAGE_HARD_CAP,
+            "stage_budget_label": plan.review_policy.stage_budget_label,
+            "stage_count_rationale": plan.review_policy.stage_count_rationale,
+            "review_policy": plan.review_policy.model_dump(mode="json"),
         },
         "run_inputs": plan.run_profile.run_inputs,
     }
@@ -1462,7 +2094,7 @@ def compile_auto_protocol_plan(
         "stages": stages,
         "policies": {
             "single_active_writer": True,
-            "max_review_rounds": 5,
+            "max_review_rounds": _review_round_limit(plan.review_policy),
         },
     })
 
@@ -1749,18 +2381,68 @@ def _semantic_warnings_for_session(
             section="semantic_coverage",
             action="repair_generated_protocol",
         ))
+    if len(plan.stages) > _AUTO_STAGE_HARD_CAP:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.stage_budget_exceeded",
+            message=(
+                f"The generated protocol has {len(plan.stages)} stages, above the hard cap of {_AUTO_STAGE_HARD_CAP}. "
+                "Consolidate work packages or narrow the requested outcome before publishing."
+            ),
+            severity="error",
+            section="semantic_coverage",
+            action="repair_generated_protocol",
+        ))
+
+    stage_by_key = {stage.stage_key: stage for stage in plan.stages}
+    artifact_keys = {artifact.artifact_key for artifact in plan.artifacts if artifact.artifact_key}
+    primary = plan.primary_artifact
+    if not primary.artifact_key or primary.artifact_key not in artifact_keys:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.primary_artifact_missing",
+            message="The generated protocol does not declare an inspectable primary artifact.",
+            severity="error",
+            section="primary_artifact",
+            action="repair_generated_protocol",
+        ))
+    primary_stage = stage_by_key.get(primary.produced_by_stage_key or "")
+    if primary_stage is None or primary.artifact_key not in primary_stage.outputs:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.primary_artifact_stage_invalid",
+            message="The primary artifact is not produced by the declared primary outcome stage.",
+            severity="error",
+            section="primary_artifact",
+            action="repair_generated_protocol",
+        ))
+    elif len(plan.stages) >= 2 and plan.stages[-2].stage_key != primary_stage.stage_key:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="semantic.primary_artifact_not_second_last",
+            message="The primary artifact stage must be immediately before final outcome acceptance.",
+            severity="error",
+            section="primary_artifact",
+            action="repair_generated_protocol",
+        ))
+    if plan.stages:
+        final_stage = plan.stages[-1]
+        if final_stage.stage_kind != "acceptance" or final_stage.review_of_stage_key != primary.produced_by_stage_key:
+            unresolved.append(ProtocolAutoDesignWarningRecord(
+                code="semantic.final_acceptance_invalid",
+                message="The final stage must adversarially accept or send back the primary produced outcome.",
+                severity="error",
+                section="primary_artifact",
+                action="repair_generated_protocol",
+            ))
 
     skill_stage_requirements = {
-        "technical architecture": "technical",
-        "domain grounding": "domain",
-        "experience design": "experience",
-        "supporting asset planning": "supporting",
-        "data and input modeling": "input",
-        "safety and risk review": "risk",
+        "technical architecture": ("technical", "architecture", "foundation"),
+        "domain grounding": ("domain", "grounded"),
+        "experience design": ("experience", "interaction", "visual", "ux"),
+        "supporting asset planning": ("supporting", "asset", "visual", "media", "content"),
+        "data and input modeling": ("input", "data", "behavior"),
+        "safety and risk review": ("risk", "safety", "security"),
     }
     stage_text = _normalized_words(*(stage.stage_key for stage in plan.stages), *(stage.display_name for stage in plan.stages))
-    for skill, required_text in skill_stage_requirements.items():
-        if skill in analysis.skills and required_text not in stage_text:
+    for skill, required_tokens in skill_stage_requirements.items():
+        if skill in analysis.skills and not any(token in stage_text for token in required_tokens):
             unresolved.append(ProtocolAutoDesignWarningRecord(
                 code="semantic.skill_missing",
                 message=f"The generated protocol inferred {skill} but did not create a visible stage for it.",
@@ -1772,7 +2454,7 @@ def _semantic_warnings_for_session(
     reviewed_work_stage_keys = {
         stage.review_of_stage_key
         for stage in plan.stages
-        if stage.stage_kind == "review" and str(stage.review_of_stage_key or "").strip()
+        if stage.stage_kind in {"review", "acceptance"} and str(stage.review_of_stage_key or "").strip()
     }
     for stage in plan.stages:
         if stage.stage_kind != "work" or not stage.outputs:
@@ -1809,7 +2491,7 @@ def _semantic_warnings_for_session(
     if not unresolved:
         warnings.append(ProtocolAutoDesignWarningRecord(
             code="semantic.coverage_ready",
-            message="Requirement coverage passed: work packages, artifacts, isolated reviews, and final evidence reference the material request.",
+            message="Requirement coverage passed: work packages, artifacts, isolated reviews, primary artifact, and final acceptance reference the material request.",
             severity="info",
             section="semantic_coverage",
             action="review_generated_protocol",
@@ -1859,6 +2541,93 @@ def _warnings_for_session(
     return warnings, unresolved
 
 
+def _planner_warnings_for_session(
+    model_response: ProtocolAutoDesignModelResponseRecord | None,
+) -> tuple[list[ProtocolAutoDesignWarningRecord], list[ProtocolAutoDesignWarningRecord]]:
+    warnings: list[ProtocolAutoDesignWarningRecord] = []
+    unresolved: list[ProtocolAutoDesignWarningRecord] = []
+    if model_response is None:
+        return warnings, unresolved
+    for index, warning in enumerate(model_response.warnings):
+        if isinstance(warning, str):
+            message = warning.strip()
+            if not message:
+                continue
+            normalized = ProtocolAutoDesignWarningRecord(
+                code=f"planner.warning_{index + 1}",
+                message=message,
+                severity="warning",
+                section="planner",
+                action="review_generated_protocol",
+            )
+        else:
+            normalized = warning
+        if not normalized.code:
+            normalized = normalized.model_copy(update={"code": "planner.warning"})
+        if not normalized.message:
+            continue
+        if normalized.severity == "error":
+            unresolved.append(normalized)
+        else:
+            warnings.append(normalized)
+    return warnings, unresolved
+
+
+def _dedupe_auto_protocol_warnings(
+    warnings: Sequence[ProtocolAutoDesignWarningRecord],
+) -> list[ProtocolAutoDesignWarningRecord]:
+    deduped: list[ProtocolAutoDesignWarningRecord] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for warning in warnings:
+        item = ProtocolAutoDesignWarningRecord.model_validate(warning)
+        key = (
+            str(item.code or "").strip(),
+            str(item.message or "").strip(),
+            str(item.severity or "").strip(),
+            str(item.section or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def auto_protocol_event_summary(
+    session: ProtocolAutoDesignSessionRecord,
+    *,
+    event_kind: str = "",
+    created_at: str = "",
+) -> ProtocolAutoDesignEventSummaryRecord:
+    run_id = ""
+    if session.run_result is not None:
+        run_id = str(session.run_result.run.protocol_run_id if session.run_result.run is not None else "")
+    return ProtocolAutoDesignEventSummaryRecord(
+        event_kind=str(event_kind or "").strip(),
+        session_status=str(session.status or ""),
+        target_protocol_id=str(session.target_protocol_id or ""),
+        source_protocol_id=str(session.source_protocol_id or ""),
+        run_id=run_id,
+        warning_codes=[
+            str(item.code or "").strip()
+            for item in session.warnings
+            if str(item.code or "").strip()
+        ],
+        blocker_codes=[
+            str(item.code or "").strip()
+            for item in session.unresolved_decisions
+            if str(item.code or "").strip()
+        ],
+        unresolved_count=len(session.unresolved_decisions),
+        stage_count=len(session.plan.stages),
+        package_count=len(session.analysis.work_packages),
+        primary_artifact_key=str(session.plan.primary_artifact.artifact_key or ""),
+        change_summary=list(session.change_summary or [])[:10],
+        actor_ref=str(session.actor_ref or ""),
+        created_at=str(created_at or session.updated_at or session.created_at or ""),
+    )
+
+
 def generate_auto_protocol_session(
     request: ProtocolAutoDesignRequestRecord,
     *,
@@ -1866,7 +2635,10 @@ def generate_auto_protocol_session(
     created_at: str = "",
     updated_at: str = "",
 ) -> ProtocolAutoDesignSessionRecord:
-    analysis = _analyze_requirement(request.requirement_text, request.constraints_text)
+    if request.model_response is not None:
+        analysis = _analysis_from_model_response(request, request.model_response)
+    else:
+        analysis = _analyze_requirement(request.requirement_text, request.constraints_text)
     plan = _build_plan(request, analysis)
     draft = compile_auto_protocol_plan(
         plan,
@@ -1876,10 +2648,43 @@ def generate_auto_protocol_session(
     draft, validation, repair_notes = _validate_and_repair_protocol_document(draft, request)
     warnings, unresolved = _warnings_for_session(request, validation)
     semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(analysis, plan)
+    planner_warnings, planner_unresolved = _planner_warnings_for_session(request.model_response)
     warnings.extend(semantic_warnings)
+    warnings.extend(planner_warnings)
     unresolved.extend(semantic_unresolved)
+    unresolved.extend(planner_unresolved)
+    if request.model_response is None:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="planner.model_response_missing",
+            message=(
+                "Auto Protocol generation requires provider-backed semantic planning. "
+                "No structured planner response was available for this session."
+            ),
+            severity="error",
+            section="planner",
+            action="retry_generation",
+        ))
+    elif not request.model_response.work_packages:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="planner.work_packages_missing",
+            message="The semantic planner did not return work packages. Revise the request or retry generation.",
+            severity="error",
+            section="planner",
+            action="retry_generation",
+        ))
+    elif request.model_response.open_questions:
+        unresolved.append(ProtocolAutoDesignWarningRecord(
+            code="planner.open_questions",
+            message=(
+                "The planner reported open questions that block a commercially reliable protocol: "
+                + "; ".join(str(item or "").strip() for item in request.model_response.open_questions[:4] if str(item or "").strip())
+            ),
+            severity="error",
+            section="planner",
+            action="revise_requirement",
+        ))
     status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
-    return ProtocolAutoDesignSessionRecord(
+    session = ProtocolAutoDesignSessionRecord(
         session_id=session_id,
         status=status,
         mode=request.mode,
@@ -1893,6 +2698,7 @@ def generate_auto_protocol_session(
         target_draft_revision=request.target_draft_revision,
         requirement_text=request.requirement_text,
         constraints_text=request.constraints_text,
+        model_response=request.model_response,
         analysis=analysis,
         plan=plan,
         draft_definition_json=RegistryJsonRecord.model_validate(draft),
@@ -1909,6 +2715,9 @@ def generate_auto_protocol_session(
         created_at=created_at,
         updated_at=updated_at,
     )
+    return session.model_copy(update={
+        "event_summary": auto_protocol_event_summary(session, event_kind="generated", created_at=updated_at or created_at),
+    })
 
 
 def revise_auto_protocol_session(
@@ -1971,10 +2780,18 @@ def revise_auto_protocol_session(
     regenerated_draft, validation, repair_notes = _validate_and_repair_protocol_document(regenerated_draft, regenerate_request)
     warnings, unresolved = _warnings_for_session(regenerate_request, validation)
     semantic_warnings, semantic_unresolved = _semantic_warnings_for_session(session.analysis, session.plan)
-    warnings.extend(semantic_warnings)
-    unresolved.extend(semantic_unresolved)
+    warnings = _dedupe_auto_protocol_warnings([
+        *session.warnings,
+        *warnings,
+        *semantic_warnings,
+    ])
+    unresolved = _dedupe_auto_protocol_warnings([
+        *session.unresolved_decisions,
+        *unresolved,
+        *semantic_unresolved,
+    ])
     status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
-    return session.model_copy(update={
+    revised_session = session.model_copy(update={
         "status": status,
         "mode": "revise",
         "source_protocol_id": request.target_protocol_id,
@@ -1993,6 +2810,13 @@ def revise_auto_protocol_session(
             "Preserved the target protocol identity for apply, publish, and run.",
             *repair_notes,
         ],
+    })
+    return revised_session.model_copy(update={
+        "event_summary": auto_protocol_event_summary(
+            revised_session,
+            event_kind="revised",
+            created_at=updated_at or created_at,
+        ),
     })
 
 
@@ -2072,14 +2896,21 @@ __all__ = [
     "ProtocolAutoDesignWarningRecord",
     "ProtocolAutoDesignRolePlanRecord",
     "ProtocolAutoDesignArtifactPlanRecord",
+    "ProtocolAutoDesignPrimaryArtifactRecord",
+    "ProtocolAutoDesignReviewPolicyRecord",
     "ProtocolAutoDesignWorkPackageRecord",
     "ProtocolAutoDesignStagePlanRecord",
     "ProtocolAutoDesignRunProfileRecord",
     "ProtocolAutoDesignAnalysisRecord",
     "ProtocolAutoDesignPlanRecord",
+    "ProtocolAutoDesignModelRequestRecord",
+    "ProtocolAutoDesignModelResponseRecord",
+    "ProtocolAutoDesignEventSummaryRecord",
+    "ProtocolAutoDesignChangeSummaryRecord",
     "ProtocolAutoDesignRequestRecord",
     "ProtocolAutoDesignSessionRecord",
     "ProtocolAutoDesignRenderCardRecord",
+    "auto_protocol_event_summary",
     "compile_auto_protocol_plan",
     "generate_auto_protocol_session",
     "revise_auto_protocol_session",

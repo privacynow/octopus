@@ -988,7 +988,7 @@ def test_sdk_client_auto_protocol_routes_use_typed_models():
     from unittest.mock import patch
 
     from octopus_sdk.protocols import ProtocolAutoDesignRequestRecord, generate_auto_protocol_session
-    from octopus_sdk.registry.client import RegistryClient
+    from octopus_sdk.registry.client import AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS, RegistryClient
 
     client = RegistryClient("http://test:8787", "test-token")
     captured: list[tuple[str, str, dict]] = []
@@ -1036,8 +1036,10 @@ def test_sdk_client_auto_protocol_routes_use_typed_models():
     assert running.session_id == "auto-1"
     assert captured[0][0] == "POST"
     assert captured[0][1].endswith("/v1/protocol-auto/sessions")
+    assert captured[0][2]["timeout"] == AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS
     assert captured[1][1].endswith("/v1/protocol-auto/sessions/auto-1")
     assert captured[2][1].endswith("/v1/protocol-auto/sessions/auto-1/revise")
+    assert captured[2][2]["timeout"] == AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS
     assert captured[3][1].endswith("/v1/protocol-auto/sessions/auto-1/apply")
     assert captured[4][1].endswith("/v1/protocol-auto/sessions/auto-1/publish")
     assert captured[5][1].endswith("/v1/protocol-auto/sessions/auto-1/run")

@@ -589,6 +589,7 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "target_draft_revision",
             "requirement_text",
             "constraints_text",
+            "planner_response_json",
             "analysis_json",
             "plan_json",
             "draft_definition_json",

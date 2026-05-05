@@ -214,6 +214,20 @@ def test_registry_compose_command_uses_generated_workspace_override(tmp_path: Pa
     assert env["OCTOPUS_DB_HOST"] == "registry-postgres"
 
 
+def test_bot_compose_command_exports_provider_for_compose_interpolation(tmp_path: Path) -> None:
+    env_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / ".env").write_text("BOT_PROVIDER=codex\n", encoding="utf-8")
+
+    runner = DockerRunner(tmp_path)
+
+    _, env = runner.bot_compose_command("example-bot", "up", "-d", "bot")
+
+    assert env["BOT_PROVIDER"] == "codex"
+    assert env["OCTOPUS_RUNTIME_IMAGE"] == "octopus-agent:codex"
+    assert env["PROVIDER_AUTH_DIR"] == str(tmp_path / ".deploy" / "provider-auth" / "codex")
+
+
 def test_start_registry_regenerates_workspace_override_from_configured_workspaces(tmp_path: Path) -> None:
     registry_dir = tmp_path / ".deploy" / "registry"
     registry_dir.mkdir(parents=True, exist_ok=True)

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
+    ProtocolAutoDesignEventSummaryRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolDefinitionDiffRecord,
@@ -39,6 +40,7 @@ from octopus_sdk.protocols import (
     ProtocolTemplateSummaryRecord,
     ProtocolArtifactAccessPort,
     ProtocolAuthoringPort,
+    ProtocolAutoDesignSessionPort,
     ProtocolInvocationPort,
     ProtocolObservationPort,
 )
@@ -121,6 +123,7 @@ PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
     "PROTOCOL_AUTO_PUBLISH_BLOCKED",
     "PROTOCOL_AUTO_RUN_BLOCKED",
 })
+AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS = 300.0
 
 
 class RegistryClientError(RuntimeError):
@@ -174,7 +177,13 @@ def _validated_model(
     return schema.model_validate(dict(value))
 
 
-class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObservationPort, ProtocolArtifactAccessPort):
+class RegistryClient(
+    ProtocolAuthoringPort,
+    ProtocolAutoDesignSessionPort,
+    ProtocolInvocationPort,
+    ProtocolObservationPort,
+    ProtocolArtifactAccessPort,
+):
     """Async HTTP client wrapping the registry's /v1/ endpoints."""
 
     def __init__(
@@ -604,12 +613,22 @@ class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObse
         payload: ProtocolAutoDesignRequestRecord | Mapping[str, object],
     ) -> ProtocolAutoDesignSessionRecord:
         body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload)
-        result = await self._request("POST", "/v1/protocol-auto/sessions", json=body)
+        result = await self._request(
+            "POST",
+            "/v1/protocol-auto/sessions",
+            json=body,
+            timeout=AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS,
+        )
         return ProtocolAutoDesignSessionRecord.model_validate(result)
 
     async def get_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:
         result = await self._request("GET", f"/v1/protocol-auto/sessions/{session_id}")
         return ProtocolAutoDesignSessionRecord.model_validate(result)
+
+    async def list_protocol_auto_design_session_events(self, session_id: str) -> list[ProtocolAutoDesignEventSummaryRecord]:
+        result = await self._request("GET", f"/v1/protocol-auto/sessions/{session_id}/events")
+        items = result.get("items", []) if isinstance(result, Mapping) else []
+        return [ProtocolAutoDesignEventSummaryRecord.model_validate(item) for item in items]
 
     async def revise_protocol_auto_design_session(
         self,
@@ -617,7 +636,12 @@ class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObse
         payload: ProtocolAutoDesignRequestRecord | Mapping[str, object],
     ) -> ProtocolAutoDesignSessionRecord:
         body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else dict(payload)
-        result = await self._request("POST", f"/v1/protocol-auto/sessions/{session_id}/revise", json=body)
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-auto/sessions/{session_id}/revise",
+            json=body,
+            timeout=AUTO_PROTOCOL_DESIGN_REQUEST_TIMEOUT_SECONDS,
+        )
         return ProtocolAutoDesignSessionRecord.model_validate(result)
 
     async def apply_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:

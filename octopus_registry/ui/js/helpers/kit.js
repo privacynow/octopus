@@ -337,6 +337,26 @@ window.Kit = (() => {
         return PROTOCOL_RUN_LAUNCH_FIELDS.map((field) => ({ ...field }));
     }
 
+    function normalizedProtocolRunLaunchFields(fields = null) {
+        const sourceFields = Array.isArray(fields) && fields.length
+            ? fields.map((field) => ({ ...(field || {}) }))
+            : protocolRunLaunchFields();
+        const normalized = [];
+        const seen = new Set();
+        sourceFields.forEach((field) => {
+            const rawKey = String(field.key || '').trim();
+            if (!rawKey) return;
+            const key = rawKey === 'goal' ? 'problem_statement' : rawKey;
+            if (seen.has(key)) return;
+            normalized.push({ ...field, key });
+            seen.add(key);
+        });
+        if (!seen.has('problem_statement')) {
+            normalized.unshift({ ...PROTOCOL_RUN_LAUNCH_FIELDS[0] });
+        }
+        return normalized;
+    }
+
     function protocolRunLaunchForm({
         values = {},
         fields = null,
@@ -396,9 +416,7 @@ window.Kit = (() => {
             }, workspace);
         }
 
-        const launchFields = Array.isArray(fields) && fields.length
-            ? fields.map((field) => ({ ...field }))
-            : protocolRunLaunchFields();
+        const launchFields = normalizedProtocolRunLaunchFields(fields);
         launchFields.forEach((field) => {
             const kind = String(field.kind || 'textarea').trim().toLowerCase();
             if (kind === 'select' && Array.isArray(field.options) && field.options.length) {

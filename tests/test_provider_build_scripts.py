@@ -129,6 +129,66 @@ exit 1
     return bin_dir, command_log
 
 
+def test_bot_dockerfile_installs_common_stage_toolchain() -> None:
+    dockerfile = (REPO_ROOT / "infra/docker/Dockerfile.bot").read_text(encoding="utf-8")
+    expected_packages = {
+        "bind9-dnsutils",
+        "build-essential",
+        "cmake",
+        "curl",
+        "fonts-liberation",
+        "git",
+        "gosu",
+        "iproute2",
+        "iputils-ping",
+        "jq",
+        "libasound2t64",
+        "libatk-bridge2.0-0t64",
+        "libatk1.0-0t64",
+        "libatspi2.0-0t64",
+        "libcairo2",
+        "libcups2t64",
+        "libdbus-1-3",
+        "libdrm2",
+        "libfontconfig1",
+        "libfreetype6",
+        "libgbm1",
+        "libglib2.0-0t64",
+        "libgtk-3-0t64",
+        "libharfbuzz0b",
+        "libnspr4",
+        "libnss3",
+        "libpango-1.0-0",
+        "libx11-6",
+        "libx11-xcb1",
+        "libxcb1",
+        "libxcomposite1",
+        "libxdamage1",
+        "libxext6",
+        "libxfixes3",
+        "libxkbcommon0",
+        "libxrandr2",
+        "libxrender1",
+        "libxshmfence1",
+        "libxtst6",
+        "maven",
+        "netcat-openbsd",
+        "nodejs",
+        "npm",
+        "openjdk-21-jdk-headless",
+        "pkg-config",
+        "ripgrep",
+        "unzip",
+        "xvfb",
+        "zip",
+    }
+
+    for package in expected_packages:
+        assert package in dockerfile
+
+    assert dockerfile.count("apt-get install") == 1
+
+
 def test_install_provider_claude_defaults_to_npm(tmp_path: Path) -> None:
     script = REPO_ROOT / "scripts/provider/install_provider_claude.sh"
     bin_dir, command_log = _make_fake_install_bin(tmp_path)

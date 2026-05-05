@@ -2011,27 +2011,39 @@ function renderProtocolWorkspace(container) {
 
     function _autoProtocolSummaryEl(session) {
         const panel = document.createElement('div');
-        panel.className = 'protocol-auto-summary';
+        panel.className = 'protocol-auto-summary protocol-auto-review';
         const plan = session?.plan || {};
         const analysis = session?.analysis || {};
         const validation = session?.validation || {};
         const stagesForSummary = Array.isArray(plan.stages) ? plan.stages : [];
         const artifactsForSummary = Array.isArray(plan.artifacts) ? plan.artifacts : [];
         const workPackagesForSummary = Array.isArray(analysis.work_packages) ? analysis.work_packages : [];
+        const primaryArtifact = plan.primary_artifact || session?.draft_definition_json?.metadata?.auto_protocol?.primary_artifact || {};
+        const unresolved = Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : [];
+        const warningItems = Array.isArray(session?.warnings) ? session.warnings : [];
         const reviewCount = stagesForSummary.filter((stage) => String(stage?.stage_kind || '') === 'review').length;
+        const ready = Boolean(session?.session_id && validation.ok && !unresolved.length);
+        const header = document.createElement('div');
+        header.className = 'protocol-auto-review-header';
         const title = document.createElement('h4');
         title.textContent = String(plan.protocol_name || 'Generated protocol');
-        panel.appendChild(title);
+        header.appendChild(title);
+        const summary = document.createElement('p');
+        summary.textContent = String(analysis.goal || plan.description || 'Review the generated workflow before applying it.');
+        header.appendChild(summary);
+        const readiness = document.createElement('span');
+        readiness.className = ready ? 'protocol-auto-readiness is-ready' : 'protocol-auto-readiness';
+        readiness.textContent = ready ? 'Ready to apply, publish, or run' : 'Needs attention before publishing';
+        header.appendChild(readiness);
+        panel.appendChild(header);
         const facts = document.createElement('div');
         facts.className = 'kit-catalog-card-meta';
         [
-            `Focus: ${String(analysis.focus || plan.protocol_name || 'Requirement-specific workflow')}`,
-            `Design: ${String(analysis.domain || 'requirement-specific')}`,
             `${workPackagesForSummary.length} work packages`,
             `${reviewCount} reviews`,
             `${stagesForSummary.length} stages`,
             `${artifactsForSummary.length} artifacts`,
-            validation.ok ? 'Validation: ready' : 'Validation: needs attention',
+            validation.ok ? 'Validation ready' : 'Validation needs attention',
         ].forEach((label) => {
             const item = document.createElement('span');
             item.className = 'kit-catalog-card-meta-item';
@@ -2045,9 +2057,60 @@ function renderProtocolWorkspace(container) {
             facts.appendChild(skill);
         }
         panel.appendChild(facts);
+        const primary = document.createElement('div');
+        primary.className = 'protocol-auto-primary';
+        const primaryTitle = document.createElement('strong');
+        primaryTitle.textContent = `Primary outcome: ${String(primaryArtifact.display_name || primaryArtifact.artifact_key || 'Produced Outcome')}`;
+        primary.appendChild(primaryTitle);
+        const primaryMeta = document.createElement('span');
+        primaryMeta.textContent = [
+            String(primaryArtifact.artifact_key || '').trim() ? `Artifact ${primaryArtifact.artifact_key}` : '',
+            String(primaryArtifact.produced_by_stage_key || '').trim() ? `Produced by ${primaryArtifact.produced_by_stage_key}` : '',
+            String(primaryArtifact.expected_path || '').trim() ? String(primaryArtifact.expected_path) : '',
+        ].filter(Boolean).join(' · ');
+        primary.appendChild(primaryMeta);
+        panel.appendChild(primary);
+
+        const makeDetails = (label, count, children, { open = false, emptyText = 'Nothing to show.' } = {}) => {
+            const details = document.createElement('details');
+            details.className = 'protocol-auto-detail';
+            details.open = open;
+            const summaryEl = document.createElement('summary');
+            summaryEl.textContent = `${label}${Number.isFinite(count) ? ` (${count})` : ''}`;
+            details.appendChild(summaryEl);
+            const body = document.createElement('div');
+            body.className = 'protocol-auto-detail-body';
+            if (children.length) {
+                children.forEach((child) => body.appendChild(child));
+            } else {
+                const empty = document.createElement('p');
+                empty.className = 'quiet-note';
+                empty.textContent = emptyText;
+                body.appendChild(empty);
+            }
+            details.appendChild(body);
+            return details;
+        };
+
+        if (workPackagesForSummary.length) {
+            const packages = document.createElement('div');
+            packages.className = 'protocol-auto-packages';
+            workPackagesForSummary.forEach((pkg) => {
+                const item = document.createElement('div');
+                item.className = 'protocol-auto-package';
+                const name = document.createElement('strong');
+                name.textContent = String(pkg.display_name || pkg.package_key || 'Work package');
+                item.appendChild(name);
+                const rationale = document.createElement('span');
+                rationale.textContent = String(pkg.rationale || pkg.purpose || '').replace(/\s+/g, ' ').trim();
+                item.appendChild(rationale);
+                packages.appendChild(item);
+            });
+            panel.appendChild(makeDetails('Work packages', workPackagesForSummary.length, [packages], { open: false }));
+        }
         const stages = document.createElement('ol');
         stages.className = 'protocol-auto-stage-list';
-        (Array.isArray(plan.stages) ? plan.stages : []).slice(0, 12).forEach((stage) => {
+        (Array.isArray(plan.stages) ? plan.stages : []).forEach((stage) => {
             const item = document.createElement('li');
             const label = document.createElement('strong');
             label.textContent = `${String(stage.display_name || stage.stage_key || 'Stage')} - ${String(stage.stage_kind || 'work')}`;
@@ -2066,22 +2129,43 @@ function renderProtocolWorkspace(container) {
             item.appendChild(output);
             stages.appendChild(item);
         });
-        panel.appendChild(stages);
-        const warnings = [
-            ...(Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : []),
-            ...(Array.isArray(session?.warnings) ? session.warnings : []),
-        ];
+        panel.appendChild(makeDetails('Stage map', stagesForSummary.length, [stages], { open: false }));
+        const warnings = [...unresolved, ...warningItems];
         if (warnings.length) {
             const warningList = document.createElement('div');
             warningList.className = 'validation-list';
-            warnings.slice(0, 5).forEach((warning) => {
+            warnings.forEach((warning) => {
                 const row = document.createElement('div');
                 row.className = 'validation-item';
                 row.textContent = String(warning.message || warning.code || '');
                 warningList.appendChild(row);
             });
-            panel.appendChild(warningList);
+            panel.appendChild(makeDetails('Warnings and blockers', warnings.length, [warningList], { open: true }));
         }
+        return panel;
+    }
+
+    function _autoProtocolProgressEl() {
+        const panel = document.createElement('div');
+        panel.className = 'protocol-auto-progress';
+        const title = document.createElement('strong');
+        title.textContent = 'Designing the protocol';
+        panel.appendChild(title);
+        const note = document.createElement('p');
+        note.textContent = 'The planner is analyzing the requirement, shaping work packages, adding review gates, and validating the draft before it is shown.';
+        panel.appendChild(note);
+        const steps = document.createElement('ol');
+        [
+            'Analyze the requested outcome',
+            'Design work packages and review gates',
+            'Compile a normal protocol draft',
+            'Validate readiness and assignment blockers',
+        ].forEach((label) => {
+            const item = document.createElement('li');
+            item.textContent = label;
+            steps.appendChild(item);
+        });
+        panel.appendChild(steps);
         return panel;
     }
 
@@ -2115,7 +2199,7 @@ function renderProtocolWorkspace(container) {
     function _openAutoProtocolDialog({ mode = 'create' } = {}) {
         const isRevision = mode === 'revise' && currentProtocolId;
         const form = document.createElement('div');
-        form.className = 'protocol-package-dialog';
+        form.className = 'protocol-package-dialog protocol-auto-dialog';
         const requirement = document.createElement('textarea');
         requirement.className = 'input';
         requirement.rows = 7;
@@ -2140,7 +2224,14 @@ function renderProtocolWorkspace(container) {
         revise.rows = 3;
         revise.placeholder = 'Optional: ask for a modification after generation.';
         revise.hidden = true;
-        form.appendChild(revise);
+        const reviseWrap = document.createElement('details');
+        reviseWrap.className = 'protocol-auto-modify';
+        reviseWrap.hidden = true;
+        const reviseSummary = document.createElement('summary');
+        reviseSummary.textContent = 'Ask Auto Protocol to change the draft';
+        reviseWrap.appendChild(reviseSummary);
+        reviseWrap.appendChild(revise);
+        form.appendChild(reviseWrap);
 
         let session = null;
         const cancelBtn = document.createElement('button');
@@ -2176,19 +2267,28 @@ function renderProtocolWorkspace(container) {
             maxWidth: '760px',
             initialFocus: requirement,
         });
+        view.dialog.classList.add('protocol-auto-modal');
         const syncActions = () => {
             const hasSession = Boolean(session?.session_id);
             const ready = _autoProtocolReady(session);
+            cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
+            generateBtn.hidden = hasSession;
             reviseBtn.hidden = !hasSession;
             applyBtn.hidden = !hasSession;
             publishBtn.hidden = !hasSession;
             runBtn.hidden = !hasSession;
+            reviseWrap.hidden = !hasSession;
+            revise.hidden = !hasSession;
+            reviseBtn.disabled = !hasSession || !revise.value.trim();
             publishBtn.disabled = !ready;
             runBtn.disabled = !ready;
+            applyBtn.className = ready ? 'btn' : 'btn btn-primary';
+            runBtn.className = ready ? 'btn btn-primary' : 'btn';
             const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
             publishBtn.title = gateTitle;
             runBtn.title = gateTitle;
         };
+        revise.addEventListener('input', syncActions);
         cancelBtn.addEventListener('click', () => view.close());
         generateBtn.addEventListener('click', async () => {
             const text = requirement.value.trim();
@@ -2198,6 +2298,7 @@ function renderProtocolWorkspace(container) {
             }
             generateBtn.disabled = true;
             status.textContent = 'Designing protocol…';
+            UI.reconcileChildren(preview, [_autoProtocolProgressEl()]);
             try {
                 session = await API.createProtocolAutoSession({
                     mode: isRevision ? 'revise' : 'create',
@@ -2209,7 +2310,6 @@ function renderProtocolWorkspace(container) {
                 });
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 status.textContent = 'Review the generated structure. Apply it to continue in the normal editor.';
-                revise.hidden = false;
                 syncActions();
             } catch (err) {
                 UI.reportError('Failed to generate protocol', err, { context: 'Auto Protocol generate failed' });
@@ -7601,6 +7701,8 @@ function renderProtocolRuns(container) {
             currentStageKey && String(item?.stage_key || '') === currentStageKey,
         ) || null;
         const currentStageStatus = String(currentStageExecution?.status || '').trim().toLowerCase();
+        const currentFailureCode = String(currentStageExecution?.failure_code || currentRun?.run?.blocked_code || '').trim().toLowerCase();
+        const interrupted = currentFailureCode === 'interrupted';
         const currentStageBusy = ['queued', 'submitted', 'leased', 'running'].includes(currentStageStatus);
         const interventionNote = currentStageBusy
             ? ' This is an operator intervention while the current stage may still be working.'
@@ -7608,10 +7710,12 @@ function renderProtocolRuns(container) {
         return [
             {
                 action: 'retry',
-                label: 'Retry',
-                note: 'Retry creates a new execution of the current stage using the same protocol definition and workspace context.',
-                confirmLabel: 'Retry run',
-                successMessage: 'Protocol run retry submitted.',
+                label: interrupted ? 'Retry interrupted stage' : 'Retry',
+                note: interrupted
+                    ? 'This stage was interrupted before the agent result was saved. Retry will continue from the same stage with the same protocol definition and workspace context.'
+                    : 'Retry creates a new execution of the current stage using the same protocol definition and workspace context.',
+                confirmLabel: interrupted ? 'Retry stage' : 'Retry run',
+                successMessage: interrupted ? 'Interrupted stage retry submitted.' : 'Protocol run retry submitted.',
                 requireReason: false,
                 visible: ['blocked', 'failed', 'cancelled'].includes(status),
                 enabled: ['blocked', 'failed', 'cancelled'].includes(status),
@@ -8744,7 +8848,54 @@ function renderProtocolRuns(container) {
             return section;
         };
 
+        const buildPrimaryArtifactPanel = () => {
+            const metadata = currentRun.version?.definition_json?.metadata || {};
+            const autoMeta = metadata.auto_protocol || {};
+            const primary = autoMeta.primary_artifact || {};
+            const key = String(primary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            if (!key) return null;
+            const artifact = artifactRows.find((item) => String(item.artifact_key || '').trim() === key)
+                || pendingArtifactRows.find((item) => String(item.artifact_key || '').trim() === key)
+                || { artifact_key: key, exists: false };
+            const definition = artifactDefinitionByKey.get(key) || {};
+            const panel = document.createElement('article');
+            panel.className = 'run-primary-artifact-panel';
+            const head = document.createElement('div');
+            head.className = 'run-primary-artifact-head';
+            const title = document.createElement('div');
+            title.className = 'editor-section-title';
+            title.textContent = `Primary outcome: ${String(primary.display_name || definition.display_name || key)}`;
+            head.appendChild(title);
+            const badge = document.createElement('span');
+            badge.className = artifact.exists ? 'badge-connected' : 'badge-blocked';
+            badge.textContent = artifact.exists ? 'available' : 'not produced yet';
+            head.appendChild(badge);
+            panel.appendChild(head);
+            panel.appendChild(UI.renderMetadataGrid([
+                { label: 'Artifact', value: key },
+                { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },
+                { label: 'Expected path', value: primary.expected_path || _artifactDefinitionPath(definition) || '-' },
+                { label: 'Observed path', value: _protocolArtifactDisplayPath(artifact) || '-' },
+                { label: 'Verification', value: artifact.verification_state || artifact.state || '-' },
+            ], { compact: true }));
+            panel.appendChild(_protocolArtifactActionRow(
+                currentRun.run.protocol_run_id,
+                artifact,
+                definition,
+                { missing: !artifact.exists },
+            ));
+            const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
+            if (evidence) {
+                panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence' }));
+            }
+            return panel;
+        };
+
         detailPanel.appendChild(buildRunFocusHero());
+        const primaryArtifactPanel = buildPrimaryArtifactPanel();
+        if (primaryArtifactPanel) {
+            detailPanel.appendChild(primaryArtifactPanel);
+        }
 
         const stagePanel = document.createElement('div');
         stagePanel.className = 'run-stage-timeline';

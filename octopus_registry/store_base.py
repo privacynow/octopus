@@ -20,6 +20,7 @@ from octopus_sdk.content_models import (
 from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
+    ProtocolAutoDesignEventSummaryRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolAccessContextRecord,
@@ -841,6 +842,14 @@ class AbstractRegistryStore(Protocol):
         event_kind: str = "updated",
     ) -> ProtocolAutoDesignSessionRecord:
         """Persist one Auto Protocol session state update."""
+
+    def list_protocol_auto_design_session_events(
+        self,
+        session_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolAutoDesignEventSummaryRecord]:
+        """Return safe user-facing Auto Protocol session event summaries."""
 
     def list_protocol_issues(
         self,

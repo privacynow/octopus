@@ -144,9 +144,10 @@ Behavior:
 - `recent` lists visible runs with numbers, status, current stage, and short
   ids.
 - `auto` generates a protocol from a high-level requirement and returns a
-  compact review card with Summary, Stages, Artifacts, Warnings, Apply Draft,
-  Publish, and Publish & Run buttons. Publish and run buttons appear only when
-  validation and assignments are ready.
+  compact review card with Summary, Work packages, Stages, Artifacts,
+  Warnings, the primary outcome, Apply Draft, Publish, and Publish & Run
+  buttons. Publish and run buttons appear only when validation and assignments
+  are ready.
 - `auto modify latest` revises the most recent generated protocol in this chat.
 - `auto status latest` shows the latest generated protocol again.
 - `improve` creates a draft revision proposal for an existing published

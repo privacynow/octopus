@@ -1162,7 +1162,7 @@ async def cmd_protocol(
                         "mode": "revise",
                         "surface": "telegram",
                         "requirement_text": change_request,
-                        "entry_agent_id": agent_id,
+                        "preferred_design_agent_id": agent_id,
                         "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
                     },
                 )
@@ -1200,7 +1200,7 @@ async def cmd_protocol(
                 "surface": "telegram",
                 "requirement_text": requirement,
                 "workspace_ref": str(session_state.project_id or ""),
-                "entry_agent_id": agent_id,
+                "preferred_design_agent_id": agent_id,
                 "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
             })
         except RegistryClientError as exc:
@@ -1225,7 +1225,7 @@ async def cmd_protocol(
                 "surface": "telegram",
                 "target_protocol_id": match.protocol_id,
                 "requirement_text": change_request,
-                "entry_agent_id": agent_id,
+                "preferred_design_agent_id": agent_id,
                 "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
             })
         except KeyError:

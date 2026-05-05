@@ -212,6 +212,26 @@ def test_protocol_launch_form_and_input_request_are_transport_neutral():
     assert [field.key for field in form.fields] == ["problem_statement", "privacy_constraints"]
     assert form.fields[1].default_value == "Keep raw data local."
 
+    document = protocol_document()
+    document["metadata"]["run_inputs"] = [
+        {
+            "key": "goal",
+            "label": "Goal",
+            "kind": "textarea",
+            "required": True,
+            "default_value": "Build the requested artifact.",
+        },
+        {
+            "key": "privacy_constraints",
+            "label": "Privacy",
+            "kind": "textarea",
+        },
+    ]
+    form = protocol_run_launch_form(definition, canonical_protocol_document(document))
+    assert [field.key for field in form.fields] == ["problem_statement", "privacy_constraints"]
+    assert form.fields[0].label == "Goal"
+    assert form.fields[0].default_value == "Build the requested artifact."
+
     request = build_protocol_run_request_from_inputs(
         definition,
         {

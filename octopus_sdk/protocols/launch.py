@@ -74,6 +74,28 @@ DEFAULT_PROTOCOL_RUN_INPUT_FIELDS: tuple[ProtocolRunInputFieldRecord, ...] = (
 )
 
 
+def _canonical_launch_fields(
+    fields: list[ProtocolRunInputFieldRecord],
+) -> list[ProtocolRunInputFieldRecord]:
+    source = fields if fields else [item.model_copy(deep=True) for item in DEFAULT_PROTOCOL_RUN_INPUT_FIELDS]
+    result: list[ProtocolRunInputFieldRecord] = []
+    seen: set[str] = set()
+    for field in source:
+        key = str(field.key or "").strip()
+        if not key:
+            continue
+        if key == "goal":
+            field = field.model_copy(update={"key": "problem_statement", "required": True}, deep=True)
+            key = "problem_statement"
+        if key in seen:
+            continue
+        result.append(field)
+        seen.add(key)
+    if "problem_statement" not in seen:
+        result.insert(0, DEFAULT_PROTOCOL_RUN_INPUT_FIELDS[0].model_copy(deep=True))
+    return result
+
+
 def protocol_run_launch_form(
     definition: ProtocolDefinitionRecord,
     document: ProtocolDefinitionDocumentRecord | dict[str, object] | None = None,
@@ -101,8 +123,7 @@ def protocol_run_launch_form(
                         fields.append(ProtocolRunInputFieldRecord.model_validate(item))
                     except ValueError:
                         continue
-    if not fields:
-        fields = [item.model_copy(deep=True) for item in DEFAULT_PROTOCOL_RUN_INPUT_FIELDS]
+    fields = _canonical_launch_fields(fields)
     return ProtocolRunLaunchFormRecord(
         protocol_id=str(definition.protocol_id or ""),
         slug=str(definition.slug or ""),

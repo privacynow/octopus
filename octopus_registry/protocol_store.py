@@ -24,6 +24,7 @@ from octopus_sdk.protocols import (
     REHEARSAL_AUTHORITY_REF,
     ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
+    ProtocolAutoDesignEventSummaryRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactObservationRecord,
@@ -60,6 +61,7 @@ from octopus_sdk.protocols import (
     protocol_participant_session_key,
     protocol_retention_until,
     protocol_review_edge_counts,
+    auto_protocol_event_summary,
     generate_auto_protocol_session,
     revise_auto_protocol_session,
     validate_protocol_document,
@@ -1708,7 +1710,7 @@ class ProtocolPostgresAdapter:
 
     @staticmethod
     def _auto_design_session_from_row(row: Mapping[str, object]) -> ProtocolAutoDesignSessionRecord:
-        return record(
+        session = record(
             ProtocolAutoDesignSessionRecord,
             {
                 "session_id": row.get("session_id", ""),
@@ -1724,6 +1726,7 @@ class ProtocolPostgresAdapter:
                 "target_draft_revision": int(row.get("target_draft_revision", 0) or 0),
                 "requirement_text": row.get("requirement_text", ""),
                 "constraints_text": row.get("constraints_text", ""),
+                "model_response": row.get("planner_response_json") or None,
                 "analysis": row.get("analysis_json") or {},
                 "plan": row.get("plan_json") or {},
                 "draft_definition_json": row.get("draft_definition_json") or {},
@@ -1738,6 +1741,13 @@ class ProtocolPostgresAdapter:
                 "updated_at": row.get("updated_at", ""),
             },
         )
+        return session.model_copy(update={
+            "event_summary": auto_protocol_event_summary(
+                session,
+                event_kind="loaded",
+                created_at=str(row.get("updated_at", "") or ""),
+            ),
+        })
 
     @classmethod
     def _auto_design_payload(cls, session: ProtocolAutoDesignSessionRecord) -> dict[str, object]:
@@ -1755,6 +1765,7 @@ class ProtocolPostgresAdapter:
             "target_draft_revision": int(session.target_draft_revision or 0),
             "requirement_text": session.requirement_text,
             "constraints_text": session.constraints_text,
+            "planner_response_json": session.model_response.model_dump(mode="json") if session.model_response is not None else {},
             "analysis_json": session.analysis.model_dump(mode="json"),
             "plan_json": session.plan.model_dump(mode="json"),
             "draft_definition_json": session.draft_definition_json.as_dict(),
@@ -1816,9 +1827,11 @@ class ProtocolPostgresAdapter:
         if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
             raise PermissionError("Auto Protocol requires agent or author access.")
         now = utcnow_iso()
-        payload = self._auto_design_payload(session.model_copy(update={"updated_at": now}))
+        session_for_save = session.model_copy(update={"updated_at": now})
+        payload = self._auto_design_payload(session_for_save)
         if not str(payload.get("created_at", "") or "").strip():
             payload["created_at"] = now
+            session_for_save = session_for_save.model_copy(update={"created_at": now})
         with self._connect() as conn, write_tx(conn):
             with cur(conn) as db_cur:
                 db_cur.execute(
@@ -1827,11 +1840,11 @@ class ProtocolPostgresAdapter:
                         session_id, status, mode, surface, actor_ref, chat_ref,
                         source_protocol_id, source_version_id, source_draft_revision,
                         target_protocol_id, target_draft_revision, requirement_text, constraints_text,
-                        analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
+                        planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                         warnings_json, unresolved_decisions_json, change_summary_json,
                         applied_protocol_json, run_result_json, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (session_id) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -1846,6 +1859,7 @@ class ProtocolPostgresAdapter:
                         target_draft_revision = EXCLUDED.target_draft_revision,
                         requirement_text = EXCLUDED.requirement_text,
                         constraints_text = EXCLUDED.constraints_text,
+                        planner_response_json = EXCLUDED.planner_response_json,
                         analysis_json = EXCLUDED.analysis_json,
                         plan_json = EXCLUDED.plan_json,
                         draft_definition_json = EXCLUDED.draft_definition_json,
@@ -1873,6 +1887,7 @@ class ProtocolPostgresAdapter:
                         payload["target_draft_revision"],
                         payload["requirement_text"],
                         payload["constraints_text"],
+                        jsonb(payload["planner_response_json"]),
                         jsonb(payload["analysis_json"]),
                         jsonb(payload["plan_json"]),
                         jsonb(payload["draft_definition_json"]),
@@ -1893,7 +1908,11 @@ class ProtocolPostgresAdapter:
                 session_id=str(payload["session_id"]),
                 event_kind=str(event_kind or "updated"),
                 actor_ref=self._access_actor_ref(access),
-                payload=payload,
+                payload=auto_protocol_event_summary(
+                    session_for_save,
+                    event_kind=str(event_kind or "updated"),
+                    created_at=now,
+                ).model_dump(mode="json"),
                 now=now,
             )
         if row is None:
@@ -1917,6 +1936,38 @@ class ProtocolPostgresAdapter:
         if row is None:
             raise KeyError(session_id)
         return self._auto_design_session_from_row(row)
+
+    def list_protocol_auto_design_session_events(
+        self,
+        session_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolAutoDesignEventSummaryRecord]:
+        if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
+            raise PermissionError("Auto Protocol requires agent or author access.")
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return []
+        with self._connect() as conn:
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT event_kind, actor_ref, payload_json, created_at
+                FROM {SCHEMA}.protocol_auto_session_events
+                WHERE session_id = %s
+                ORDER BY sequence ASC
+                """,
+                (session_id,),
+            )
+        events: list[ProtocolAutoDesignEventSummaryRecord] = []
+        for row in rows:
+            payload = row.get("payload_json") if isinstance(row, Mapping) else {}
+            payload_map = dict(payload) if isinstance(payload, Mapping) else {}
+            payload_map.setdefault("event_kind", row.get("event_kind", ""))
+            payload_map.setdefault("actor_ref", row.get("actor_ref", ""))
+            payload_map.setdefault("created_at", row.get("created_at", ""))
+            events.append(record(ProtocolAutoDesignEventSummaryRecord, payload_map))
+        return events
 
     def create_protocol_auto_design_session(
         self,

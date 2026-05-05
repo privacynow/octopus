@@ -46,7 +46,12 @@ from octopus_sdk.inbound_types import (
 from octopus_sdk.providers import Provider
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import RoutedTaskResult
-from octopus_sdk.registry.management import ManagementRequest
+from octopus_sdk.registry.management import (
+    DesignAutoProtocolRequest,
+    DesignAutoProtocolResult,
+    ManagementRequest,
+    ManagementResult,
+)
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
@@ -102,6 +107,7 @@ class _RegistryControlAccess:
 @dataclass(frozen=True)
 class RegistryDeliveryRuntime:
     provider_name: str
+    provider: Provider | None
     provider_state_factory: Callable[[str], dict[str, Any]]
     services: BotServices
     submitter: BotRuntimeHandle | None = None
@@ -112,6 +118,7 @@ class RegistryDeliveryRuntime:
 def build_registry_delivery_runtime(
     *,
     provider_name: str,
+    provider: Provider | None = None,
     provider_state_factory: Callable[[str], dict[str, Any]],
     services: BotServices,
     submitter: BotRuntimeHandle | None = None,
@@ -120,6 +127,7 @@ def build_registry_delivery_runtime(
 ) -> RegistryDeliveryRuntime:
     return RegistryDeliveryRuntime(
         provider_name=provider_name,
+        provider=provider,
         provider_state_factory=provider_state_factory,
         services=services,
         submitter=submitter,
@@ -632,15 +640,42 @@ async def handle_registry_delivery(
         )
         if not state.agent_token:
             return "retry_later"
-        result = await execute_management_request(
-            request,
-            context=ManagementExecutionContext(
-                config=config,
-                workflows=runtime.services.workflows,
-                provider_state_factory=runtime.provider_state_factory,
-                execution_faults=runtime.services.execution_services.execution_faults,
-            ),
-        )
+        if isinstance(request.payload, DesignAutoProtocolRequest):
+            from app.runtime.auto_protocol_design import design_auto_protocol_with_provider
+
+            try:
+                if runtime.provider is None:
+                    raise RuntimeError("Auto Protocol planner requires a provider-capable runtime.")
+                response = await design_auto_protocol_with_provider(
+                    request.payload.request,
+                    config=config,
+                    provider=runtime.provider,
+                    provider_state_factory=runtime.provider_state_factory,
+                )
+                result = ManagementResult(
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    success=True,
+                    payload=DesignAutoProtocolResult(response=response),
+                )
+            except Exception as exc:
+                result = ManagementResult(
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    success=False,
+                    error_code="request_failed",
+                    error_detail=str(exc),
+                )
+        else:
+            result = await execute_management_request(
+                request,
+                context=ManagementExecutionContext(
+                    config=config,
+                    workflows=runtime.services.workflows,
+                    provider_state_factory=runtime.provider_state_factory,
+                    execution_faults=runtime.services.execution_services.execution_faults,
+                ),
+            )
         client = RegistryClient(registry.url, agent_token=state.agent_token)
         try:
             await client.management_result(request.request_id, result)
@@ -676,6 +711,7 @@ class RegistryDeliveryTransport(TransportImplementation):
         self._parent_stop_task: asyncio.Task[None] | None = None
         delivery_runtime = build_registry_delivery_runtime(
             provider_name=provider.name,
+            provider=provider,
             provider_state_factory=provider.new_provider_state,
             services=services,
             bot=None,

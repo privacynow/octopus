@@ -3,7 +3,12 @@ from types import SimpleNamespace
 from app.presentation import telegram as telegram_presenters
 from app.runtime import telegram_protocols
 from octopus_sdk.identity import telegram_conversation_key
-from octopus_sdk.protocols import ProtocolAutoDesignRequestRecord, generate_auto_protocol_session
+from octopus_sdk.protocols import (
+    ProtocolAutoDesignModelResponseRecord,
+    ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignWorkPackageRecord,
+    generate_auto_protocol_session,
+)
 from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord, ProtocolRunRecord
 from tests.support.handler_support import (
     FakeChat,
@@ -76,6 +81,24 @@ def _run_detail(*, run_id="run-1", status="running", version=2, stage_key="plann
     )
 
 
+def _auto_planner_response() -> ProtocolAutoDesignModelResponseRecord:
+    return ProtocolAutoDesignModelResponseRecord(
+        requirement_summary="Build the requested protocol.",
+        domain="requirement-specific",
+        work_packages=[
+            ProtocolAutoDesignWorkPackageRecord(
+                package_key="experience_design",
+                display_name="Experience Design",
+                rationale="The user asked for a human-facing outcome.",
+                purpose="Design the human-facing experience.",
+                quality_bar="The experience is usable and specific enough for implementation.",
+                required_skills=["experience design"],
+            )
+        ],
+        acceptance_criteria=["Primary artifact exists and has release evidence."],
+    )
+
+
 def _auto_session(*, session_id="auto-1", requirement="Build a 2D browser game.", target_protocol_id=""):
     session = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(
@@ -83,6 +106,7 @@ def _auto_session(*, session_id="auto-1", requirement="Build a 2D browser game."
             requirement_text=requirement,
             target_protocol_id=target_protocol_id,
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder", "routing_skills": ["game", "testing"]}],
+            model_response=_auto_planner_response(),
         ),
         session_id=session_id,
         created_at="2026-04-16T00:00:00+00:00",
@@ -132,7 +156,7 @@ async def test_protocol_auto_command_generates_actionable_summary(monkeypatch):
         class _Client:
             async def create_protocol_auto_design_session(self, payload):
                 assert payload["surface"] == "telegram"
-                assert payload["entry_agent_id"] == "agent-1"
+                assert payload["preferred_design_agent_id"] == "agent-1"
                 assert "browser game" in payload["requirement_text"]
                 return _auto_session(requirement=payload["requirement_text"])
 

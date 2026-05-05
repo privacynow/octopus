@@ -1052,6 +1052,9 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     helper = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
     ).read_text(encoding="utf-8")
+    kit = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
 
     assert "function renderProtocolsPanel()" in detail
     assert "function conversationProtocolOptions(" in detail
@@ -1083,6 +1086,9 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "const launchValues = launchForm.readValues();" in detail
     assert "const problemStatement = String(launchValues.problem_statement || '').trim();" in detail
     assert "Object.keys(launchValues).forEach((key) => {" in detail
+    assert "function normalizedProtocolRunLaunchFields(" in kit
+    assert "rawKey === 'goal' ? 'problem_statement' : rawKey" in kit
+    assert "if (!seen.has('problem_statement'))" in kit
     assert "constraints_json: constraints" in detail
     assert "raw private data" not in detail
     assert "requestedManagementMode === 'protocols'" in detail

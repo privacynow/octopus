@@ -308,6 +308,7 @@ class DockerRunner:
         command += ["--env-file", str(env_file.relative_to(self.repo_dir)), *args]
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
+            "BOT_PROVIDER": provider,
             "OCTOPUS_DB_HOST": database_host,
             "OCTOPUS_RUNTIME_IMAGE": f"octopus-agent:{provider}",
             "PROVIDER_AUTH_DIR": provider_auth_dir,

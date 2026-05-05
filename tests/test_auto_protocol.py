@@ -81,7 +81,12 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert len(session.plan.stages) >= 8
     assert len(session.plan.stages) <= 18
     assert session.plan.primary_artifact.artifact_key == "produced_outcome"
-    assert session.draft_definition_json.as_dict()["metadata"]["run_inputs"]
+    run_input_keys = [
+        str(field.get("key") or "")
+        for field in session.draft_definition_json.as_dict()["metadata"]["run_inputs"]
+    ]
+    assert "problem_statement" in run_input_keys
+    assert "goal" not in run_input_keys
     plan_text = " ".join(stage.purpose.lower() for stage in session.plan.stages)
     assert "platform" in plan_text
     assert "fighter" in plan_text

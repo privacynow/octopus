@@ -68,7 +68,7 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "  ],\n"
         '  "primary_artifact": {"artifact_key": "produced_outcome", "display_name": "Produced Outcome", "produced_by_stage_key": "produce_outcome"},\n'
         '  "review_policy": {"stance": "adversarial", "max_review_rounds": 3, "stage_hard_cap": 18},\n'
-        '  "run_inputs": [{"key": "goal", "label": "Goal", "kind": "textarea", "required": true, "default_value": "..."}],\n'
+        '  "run_inputs": [{"key": "problem_statement", "label": "Run objective", "kind": "textarea", "required": true, "default_value": "..."}],\n'
         '  "acceptance_criteria": ["..."],\n'
         '  "warnings": [],\n'
         '  "planner_ref": "provider-semantic-planner"\n'

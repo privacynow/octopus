@@ -1575,8 +1575,8 @@ def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) ->
         workspace_ref=str(workspace_ref or "").strip(),
         run_inputs=[
             {
-                "key": "goal",
-                "label": "Goal",
+                "key": "problem_statement",
+                "label": "Run objective",
                 "kind": "textarea",
                 "required": True,
                 "default_value": _sentence(requirement),
@@ -1594,6 +1594,60 @@ def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) ->
     )
 
 
+def _canonical_run_inputs(
+    run_inputs: Sequence[Mapping[str, object]] | None,
+    *,
+    fallback_requirement: str,
+    fallback_constraints: str,
+) -> list[dict[str, object]]:
+    fields: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for raw in run_inputs or []:
+        if not isinstance(raw, Mapping):
+            continue
+        field = dict(raw)
+        raw_key = _snake(str(field.get("key") or ""))
+        if not raw_key:
+            continue
+        key = "problem_statement" if raw_key == "goal" else raw_key
+        if key in seen:
+            continue
+        field["key"] = key
+        if key == "problem_statement":
+            field.setdefault("label", "Run objective")
+            field.setdefault("kind", "textarea")
+            field["required"] = True
+            field.setdefault("default_value", _sentence(fallback_requirement))
+            field.setdefault("help", "The run-specific outcome this protocol should accomplish.")
+        fields.append(field)
+        seen.add(key)
+    if "problem_statement" not in seen:
+        fields.insert(
+            0,
+            {
+                "key": "problem_statement",
+                "label": "Run objective",
+                "kind": "textarea",
+                "required": True,
+                "default_value": _sentence(fallback_requirement),
+                "help": "The run-specific outcome this protocol should accomplish.",
+            },
+        )
+        seen.add("problem_statement")
+    if "constraints" not in seen and _sentence(fallback_constraints):
+        fields.append(
+            {
+                "key": "constraints",
+                "label": "Constraints",
+                "kind": "textarea",
+                "required": False,
+                "default_value": _sentence(fallback_constraints),
+                "help": "Runtime constraints, inputs, or boundaries that matter for this run.",
+            }
+        )
+    return fields
+
+
 def _build_plan(
     request: ProtocolAutoDesignRequestRecord,
     analysis: ProtocolAutoDesignAnalysisRecord,
@@ -1608,7 +1662,13 @@ def _build_plan(
     model_response = request.model_response
     run_profile = _base_run_profile(requirement, constraints, request.workspace_ref)
     if model_response is not None and model_response.run_inputs:
-        run_profile = run_profile.model_copy(update={"run_inputs": model_response.run_inputs})
+        run_profile = run_profile.model_copy(update={
+            "run_inputs": _canonical_run_inputs(
+                model_response.run_inputs,
+                fallback_requirement=requirement,
+                fallback_constraints=constraints,
+            )
+        })
     if model_response is not None and model_response.acceptance_criteria:
         run_profile = run_profile.model_copy(update={
             "acceptance_criteria": " ".join(

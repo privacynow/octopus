@@ -1507,6 +1507,7 @@ def protocol_auto_session_message(
     status = html.escape(str(data.get("status") or "draft"))
     stages = plan.get("stages") if isinstance(plan.get("stages"), list) else []
     artifacts = plan.get("artifacts") if isinstance(plan.get("artifacts"), list) else []
+    primary = plan.get("primary_artifact") if isinstance(plan.get("primary_artifact"), dict) else {}
     review_count = sum(1 for stage in stages if isinstance(stage, dict) and str(stage.get("stage_kind") or "") == "review")
     unresolved = list(data.get("unresolved_decisions") if isinstance(data.get("unresolved_decisions"), list) else [])
     warnings = [
@@ -1525,9 +1526,22 @@ def protocol_auto_session_message(
         f"Stages: <code>{len(stages)}</code> · Artifacts: <code>{len(artifacts)}</code>",
         f"Validation: <code>{'ready' if validation.get('ok') else 'needs attention'}</code>",
     ]
+    primary_label = html.escape(str(primary.get("display_name") or primary.get("artifact_key") or "Produced Outcome"))
+    primary_key = html.escape(str(primary.get("artifact_key") or "produced_outcome"))
+    lines.append(f"Primary outcome: {primary_label} <code>{primary_key}</code>")
     if skills:
         skill_text = ", ".join(html.escape(str(item)) for item in skills[:5])
         lines.append(f"Skills: {skill_text}")
+    if normalized_view == "summary" and work_packages:
+        lines.append("\n<b>Work packages</b>")
+        for index, package in enumerate(work_packages[:6], start=1):
+            label = html.escape(str(package.get("display_name") or package.get("package_key") or "Work package"))
+            rationale = re.sub(r"\s+", " ", str(package.get("rationale") or package.get("purpose") or "").strip())
+            if len(rationale) > 140:
+                rationale = rationale[:137].rstrip() + "..."
+            lines.append(f"{index}. {label}")
+            if rationale:
+                lines.append(f"   {html.escape(rationale)}")
     if normalized_view == "artifacts":
         lines.append("\n<b>Artifacts</b>")
         for index, artifact in enumerate(artifacts[:12], start=1):

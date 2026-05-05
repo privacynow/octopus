@@ -471,6 +471,7 @@ def test_workflow_composer_tracks_supported_admin_operations_from_optional_ports
         "conversation_settings_state",
         "set_conversation_setting",
         "reset_conversation",
+        "design_auto_protocol",
     )
 
 

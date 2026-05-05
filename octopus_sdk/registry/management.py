@@ -9,6 +9,10 @@ from pydantic import Field
 
 from octopus_sdk.content_models import SkillFileRecord as DomainSkillFileRecord
 from octopus_sdk.providers import ProviderConfigRecord, coerce_provider_config
+from octopus_sdk.protocols.auto_design import (
+    ProtocolAutoDesignModelRequestRecord,
+    ProtocolAutoDesignModelResponseRecord,
+)
 from octopus_sdk.registry.models import ExecutionStateRecord, RegistryJsonRecord, RegistryRecordModel, utcnow_iso
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.workflows.conversation import (
@@ -70,6 +74,7 @@ ManagementOperation = Literal[
     "reject_provider_guidance",
     "publish_provider_guidance",
     "archive_provider_guidance",
+    "design_auto_protocol",
 ]
 
 ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
@@ -106,6 +111,7 @@ ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
     "reject_provider_guidance",
     "publish_provider_guidance",
     "archive_provider_guidance",
+    "design_auto_protocol",
 )
 
 ManagementErrorCode = Literal[
@@ -1051,6 +1057,11 @@ class ArchiveProviderGuidanceRequest(RegistryRecordModel):
     scope_key: str = ""
 
 
+class DesignAutoProtocolRequest(RegistryRecordModel):
+    operation: Literal["design_auto_protocol"] = "design_auto_protocol"
+    request: ProtocolAutoDesignModelRequestRecord
+
+
 ManagementRequestPayload = Annotated[
     ListCatalogSkillsRequest
     | SearchCatalogSkillsRequest
@@ -1084,7 +1095,8 @@ ManagementRequestPayload = Annotated[
     | ApproveProviderGuidanceRequest
     | RejectProviderGuidanceRequest
     | PublishProviderGuidanceRequest
-    | ArchiveProviderGuidanceRequest,
+    | ArchiveProviderGuidanceRequest
+    | DesignAutoProtocolRequest,
     Field(discriminator="operation"),
 ]
 
@@ -1259,6 +1271,11 @@ class ArchiveProviderGuidanceResult(RegistryRecordModel):
     result: ProviderGuidanceLifecycleMutationRecord
 
 
+class DesignAutoProtocolResult(RegistryRecordModel):
+    operation: Literal["design_auto_protocol"] = "design_auto_protocol"
+    response: ProtocolAutoDesignModelResponseRecord
+
+
 ManagementResultPayload = Annotated[
     ListCatalogSkillsResult
     | SearchCatalogSkillsResult
@@ -1292,7 +1309,8 @@ ManagementResultPayload = Annotated[
     | ApproveProviderGuidanceResult
     | RejectProviderGuidanceResult
     | PublishProviderGuidanceResult
-    | ArchiveProviderGuidanceResult,
+    | ArchiveProviderGuidanceResult
+    | DesignAutoProtocolResult,
     Field(discriminator="operation"),
 ]
 

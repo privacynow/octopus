@@ -74,12 +74,14 @@ Auto Protocol is the fastest authoring path when the user knows the outcome but
 does not want to manually design every stage.
 
 From `Build -> Protocols`, choose `Auto protocol`, describe the desired outcome,
-and add optional constraints. Octopus generates a normal editable protocol
-draft with inferred roles, stages, artifacts, review loops, run inputs, and
-final evidence. Review the generated structure, ask for changes if needed, then
-apply it as a normal draft. When validation and assignments are already ready,
-the Auto Protocol panel can also publish or publish and run directly; otherwise
-use the normal editor to resolve the warnings first.
+and add optional constraints. Registry sends the design job to a connected
+provider-capable bot, which returns structured planning records. The SDK then
+compiles those records into a normal editable protocol draft with inferred
+roles, stages, artifacts, adversarial review loops, run inputs, and final
+evidence. Review the generated structure, ask for changes if needed, then apply
+it as a normal draft. When validation and assignments are already ready, the
+Auto Protocol panel can also publish or publish and run directly; otherwise use
+the normal editor to resolve the warnings first.
 
 Auto Protocol validates its generated draft before it shows it as ready. The
 generator repairs structural issues such as missing slugs, missing artifact
@@ -103,6 +105,17 @@ generic sequence for every request. A game workflow may need creative,
 historical, art, sound, implementation, playtest, UX, and release reviewers. An
 analytics workflow may need data modeling, visualization, validation, and
 readiness evidence. A simple workflow may need fewer stages.
+
+Generated workflows are budgeted. The normal compiler keeps the primary outcome
+stage immediately before final acceptance and rejects plans above the hard stage
+cap instead of silently creating a token-heavy workflow. The final stage is an
+adversarial outcome acceptance gate: it inspects or exercises the primary
+artifact and can send the work back to the outcome stage.
+
+Every Auto Protocol declares primary artifact metadata. Runs UI and Telegram
+promote that artifact first, then show supporting plans, reviews, and release
+evidence below it. Users should not have to hunt through intermediate review
+files to find the thing they asked Octopus to produce.
 
 ## Review Loop Pattern
 

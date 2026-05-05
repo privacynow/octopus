@@ -2018,6 +2018,7 @@ function renderProtocolWorkspace(container) {
         const stagesForSummary = Array.isArray(plan.stages) ? plan.stages : [];
         const artifactsForSummary = Array.isArray(plan.artifacts) ? plan.artifacts : [];
         const workPackagesForSummary = Array.isArray(analysis.work_packages) ? analysis.work_packages : [];
+        const primaryArtifact = plan.primary_artifact || session?.draft_definition_json?.metadata?.auto_protocol?.primary_artifact || {};
         const reviewCount = stagesForSummary.filter((stage) => String(stage?.stage_kind || '') === 'review').length;
         const title = document.createElement('h4');
         title.textContent = String(plan.protocol_name || 'Generated protocol');
@@ -2045,6 +2046,35 @@ function renderProtocolWorkspace(container) {
             facts.appendChild(skill);
         }
         panel.appendChild(facts);
+        const primary = document.createElement('div');
+        primary.className = 'protocol-auto-primary';
+        const primaryTitle = document.createElement('strong');
+        primaryTitle.textContent = `Primary outcome: ${String(primaryArtifact.display_name || primaryArtifact.artifact_key || 'Produced Outcome')}`;
+        primary.appendChild(primaryTitle);
+        const primaryMeta = document.createElement('span');
+        primaryMeta.textContent = [
+            String(primaryArtifact.artifact_key || '').trim() ? `Artifact ${primaryArtifact.artifact_key}` : '',
+            String(primaryArtifact.produced_by_stage_key || '').trim() ? `Produced by ${primaryArtifact.produced_by_stage_key}` : '',
+            String(primaryArtifact.expected_path || '').trim() ? String(primaryArtifact.expected_path) : '',
+        ].filter(Boolean).join(' · ');
+        primary.appendChild(primaryMeta);
+        panel.appendChild(primary);
+        if (workPackagesForSummary.length) {
+            const packages = document.createElement('div');
+            packages.className = 'protocol-auto-packages';
+            workPackagesForSummary.slice(0, 8).forEach((pkg) => {
+                const item = document.createElement('div');
+                item.className = 'protocol-auto-package';
+                const name = document.createElement('strong');
+                name.textContent = String(pkg.display_name || pkg.package_key || 'Work package');
+                item.appendChild(name);
+                const rationale = document.createElement('span');
+                rationale.textContent = String(pkg.rationale || pkg.purpose || '').replace(/\s+/g, ' ').trim();
+                item.appendChild(rationale);
+                packages.appendChild(item);
+            });
+            panel.appendChild(packages);
+        }
         const stages = document.createElement('ol');
         stages.className = 'protocol-auto-stage-list';
         (Array.isArray(plan.stages) ? plan.stages : []).slice(0, 12).forEach((stage) => {
@@ -8744,7 +8774,54 @@ function renderProtocolRuns(container) {
             return section;
         };
 
+        const buildPrimaryArtifactPanel = () => {
+            const metadata = currentRun.version?.definition_json?.metadata || {};
+            const autoMeta = metadata.auto_protocol || {};
+            const primary = autoMeta.primary_artifact || {};
+            const key = String(primary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            if (!key) return null;
+            const artifact = artifactRows.find((item) => String(item.artifact_key || '').trim() === key)
+                || pendingArtifactRows.find((item) => String(item.artifact_key || '').trim() === key)
+                || { artifact_key: key, exists: false };
+            const definition = artifactDefinitionByKey.get(key) || {};
+            const panel = document.createElement('article');
+            panel.className = 'run-primary-artifact-panel';
+            const head = document.createElement('div');
+            head.className = 'run-primary-artifact-head';
+            const title = document.createElement('div');
+            title.className = 'editor-section-title';
+            title.textContent = `Primary outcome: ${String(primary.display_name || definition.display_name || key)}`;
+            head.appendChild(title);
+            const badge = document.createElement('span');
+            badge.className = artifact.exists ? 'badge-connected' : 'badge-blocked';
+            badge.textContent = artifact.exists ? 'available' : 'not produced yet';
+            head.appendChild(badge);
+            panel.appendChild(head);
+            panel.appendChild(UI.renderMetadataGrid([
+                { label: 'Artifact', value: key },
+                { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },
+                { label: 'Expected path', value: primary.expected_path || _artifactDefinitionPath(definition) || '-' },
+                { label: 'Observed path', value: _protocolArtifactDisplayPath(artifact) || '-' },
+                { label: 'Verification', value: artifact.verification_state || artifact.state || '-' },
+            ], { compact: true }));
+            panel.appendChild(_protocolArtifactActionRow(
+                currentRun.run.protocol_run_id,
+                artifact,
+                definition,
+                { missing: !artifact.exists },
+            ));
+            const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
+            if (evidence) {
+                panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence' }));
+            }
+            return panel;
+        };
+
         detailPanel.appendChild(buildRunFocusHero());
+        const primaryArtifactPanel = buildPrimaryArtifactPanel();
+        if (primaryArtifactPanel) {
+            detailPanel.appendChild(primaryArtifactPanel);
+        }
 
         const stagePanel = document.createElement('div');
         stagePanel.className = 'run-stage-timeline';

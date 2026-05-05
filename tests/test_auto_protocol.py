@@ -1,9 +1,11 @@
 from octopus_sdk.protocols import (
     ProtocolDefinitionDocumentRecord,
+    ProtocolAutoDesignModelResponseRecord,
     ProtocolAutoDesignPlanRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignRolePlanRecord,
     ProtocolAutoDesignStagePlanRecord,
+    ProtocolAutoDesignWorkPackageRecord,
     ProtocolRunRecord,
     compile_auto_protocol_plan,
     generate_auto_protocol_session,
@@ -12,6 +14,35 @@ from octopus_sdk.protocols import (
     revise_auto_protocol_session,
 )
 from octopus_sdk.protocols.auto_design import _validate_and_repair_protocol_document
+
+
+def _planner_response(*package_keys: str) -> ProtocolAutoDesignModelResponseRecord:
+    packages = [
+        ProtocolAutoDesignWorkPackageRecord(
+            package_key=key,
+            display_name=key.replace("_", " ").title(),
+            rationale=f"{key} is required by the semantic planner.",
+            purpose=f"Produce {key.replace('_', ' ')} for the requested outcome.",
+            quality_bar="The artifact is specific, actionable, inspectable, and ready for downstream use.",
+            required_skills=[key.replace("_", " ")],
+        )
+        for key in package_keys
+    ]
+    return ProtocolAutoDesignModelResponseRecord(
+        requirement_summary="Create the requested outcome.",
+        domain="requirement-specific",
+        work_packages=packages or [
+            ProtocolAutoDesignWorkPackageRecord(
+                package_key="implementation",
+                display_name="Integrated Outcome",
+                rationale="The user asked for a produced outcome.",
+                purpose="Produce the final integrated outcome.",
+                quality_bar="The outcome is usable and inspectable.",
+                required_skills=["implementation"],
+            )
+        ],
+        acceptance_criteria=["The primary artifact is produced, inspectable, reviewed, and supported by release evidence."],
+    )
 
 
 def test_auto_protocol_generates_requirement_specific_protocol_without_template_classifier():
@@ -31,6 +62,11 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
                     "routing_skills": ["planning", "testing"],
                 }
             ],
+            model_response=_planner_response(
+                "experience_design",
+                "domain_grounding",
+                "supporting_assets",
+            ),
         )
     )
 
@@ -41,9 +77,10 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     stage_names = [stage.display_name.lower() for stage in session.plan.stages]
     assert any("coverage" in name for name in stage_names)
     assert any("experience" in name for name in stage_names)
-    assert any("verify" in name for name in stage_names)
-    assert any("release evidence" in name for name in stage_names)
+    assert any("accept" in name for name in stage_names)
     assert len(session.plan.stages) >= 8
+    assert len(session.plan.stages) <= 18
+    assert session.plan.primary_artifact.artifact_key == "produced_outcome"
     assert session.draft_definition_json.as_dict()["metadata"]["run_inputs"]
     plan_text = " ".join(stage.purpose.lower() for stage in session.plan.stages)
     assert "platform" in plan_text
@@ -52,16 +89,13 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "versus" in plan_text
     assert "playable" in plan_text
     document = session.draft_definition_json.as_dict()
-    verify_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "verify_outcome")
-    assert "only valid protocol decision is completed" in verify_stage["instructions"]
-    assert "When this stage is a review" not in verify_stage["instructions"]
-    assert "Do not leave foreground servers" in verify_stage["instructions"]
-    review_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "review_outcome")
-    assert "Critically review Produced Outcome" in review_stage["instructions"]
-    assert "choose revise" in review_stage["instructions"].lower()
-    assert "Do not accept merely because the stage produced something" in review_stage["instructions"]
-    assert "Use a fail-first review posture" in review_stage["instructions"]
-    assert "PROTOCOL_DECISION must be revise" in review_stage["instructions"]
+    produce_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_outcome")
+    assert "only valid protocol decision is completed" in produce_stage["instructions"]
+    assert "Do not leave foreground servers" in produce_stage["instructions"]
+    acceptance_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "final_evidence")
+    assert acceptance_stage["transitions"]["revise"] == "produce_outcome"
+    assert "Adversarially inspect or exercise" in acceptance_stage["instructions"]
+    assert "choose revise" in acceptance_stage["instructions"].lower()
     assert session.analysis.work_packages
     assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
 
@@ -71,6 +105,7 @@ def test_auto_protocol_revision_updates_existing_canonical_document():
         ProtocolAutoDesignRequestRecord(
             requirement_text="Build a browser analytics dashboard.",
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("experience_design", "input_model"),
         )
     )
 
@@ -82,6 +117,7 @@ def test_auto_protocol_revision_updates_existing_canonical_document():
             source_document=original.draft_definition_json,
             target_protocol_id="protocol-1",
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("experience_design", "input_model"),
         ),
         session_id=original.session_id,
         created_at=original.created_at,
@@ -92,7 +128,7 @@ def test_auto_protocol_revision_updates_existing_canonical_document():
     stage_keys = [stage["stage_key"] for stage in revised.draft_definition_json.as_dict()["stages"]]
     assert "design_experience" in stage_keys
     assert "review_experience" in stage_keys
-    assert "verify_outcome" in stage_keys
+    assert "produce_outcome" in stage_keys
     assert "final_evidence" in stage_keys
     assert revised.target_protocol_id == "protocol-1"
     assert revised.draft_definition_json.as_dict()["metadata"]["auto_protocol"]["revision_requests"]
@@ -162,22 +198,31 @@ def test_auto_protocol_adds_direct_review_after_every_generated_work_stage():
                 "verification, and release evidence."
             ),
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response(
+                "domain_grounding",
+                "experience_design",
+                "supporting_assets",
+                "input_model",
+                "risk_assessment",
+            ),
         )
     )
 
     assert session.status == "ready"
     stages = session.draft_definition_json.as_dict()["stages"]
-    review_by_target = {
+    gate_by_target = {
         str(stage.get("transitions", {}).get("revise") or ""): stage
         for stage in stages
-        if stage.get("stage_kind") == "review"
+        if stage.get("stage_kind") in {"review", "acceptance"}
     }
     work_stages = [stage for stage in stages if stage.get("stage_kind") == "work" and stage.get("outputs")]
 
     assert work_stages
-    assert all(stage["stage_key"] in review_by_target for stage in work_stages)
-    assert "review_verification" in {stage["stage_key"] for stage in stages}
-    assert all("choose revise" in review_by_target[stage["stage_key"]]["instructions"].lower() for stage in work_stages)
+    assert all(stage["stage_key"] in gate_by_target for stage in work_stages)
+    assert "review_verification" not in {stage["stage_key"] for stage in stages}
+    assert all("choose revise" in gate_by_target[stage["stage_key"]]["instructions"].lower() for stage in work_stages)
+    assert stages[-2]["stage_key"] == "produce_outcome"
+    assert stages[-1]["stage_key"] == "final_evidence"
 
 
 def test_auto_protocol_uses_distinct_reviewer_participants_for_review_domains():
@@ -189,6 +234,13 @@ def test_auto_protocol_uses_distinct_reviewer_participants_for_review_domains():
                 "and final evidence."
             ),
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response(
+                "input_model",
+                "domain_grounding",
+                "experience_design",
+                "supporting_assets",
+                "risk_assessment",
+            ),
         )
     )
 
@@ -211,6 +263,7 @@ def test_auto_protocol_infers_reviews_without_user_prompting_review_stages():
                 "smooth controls, visuals, sound, accurate references, and a playable result."
             ),
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("experience_design", "domain_grounding", "supporting_assets"),
         )
     )
 
@@ -219,8 +272,10 @@ def test_auto_protocol_infers_reviews_without_user_prompting_review_stages():
 
     assert "review_requirements" in stage_keys
     assert "review_experience" in stage_keys
-    assert "review_outcome" in stage_keys
-    assert "review_verification" in stage_keys
+    assert "review_outcome" not in stage_keys
+    assert "review_verification" not in stage_keys
+    assert stage_keys[-2] == "produce_outcome"
+    assert stage_keys[-1] == "final_evidence"
     assert len(review_keys) >= 4
     assert "review" not in session.requirement_text.lower()
 
@@ -234,6 +289,13 @@ def test_auto_protocol_splits_complex_human_facing_work_into_production_layers()
                 "multiple levels, sound, playtesting, and release evidence."
             ),
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response(
+                "production_foundation",
+                "interaction_layer",
+                "visual_media_layer",
+                "content_variation_layer",
+                "domain_content_layer",
+            ),
         )
     )
 
@@ -241,6 +303,7 @@ def test_auto_protocol_splits_complex_human_facing_work_into_production_layers()
     stage_keys = [stage.stage_key for stage in session.plan.stages]
 
     assert session.status == "ready"
+    assert len(session.plan.stages) <= 18
     assert "production_foundation" in package_keys
     assert "interaction_layer" in package_keys
     assert "visual_media_layer" in package_keys
@@ -263,6 +326,14 @@ def test_auto_protocol_applies_same_production_slicing_to_analytics_requirements
                 "release-ready artifacts."
             ),
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response(
+                "input_model",
+                "production_foundation",
+                "data_behavior_layer",
+                "interaction_layer",
+                "visual_media_layer",
+                "content_variation_layer",
+            ),
         )
     )
 
@@ -283,6 +354,7 @@ def test_auto_protocol_uses_run_scoped_artifact_paths():
         ProtocolAutoDesignRequestRecord(
             requirement_text="Build a browser-runnable analytics dashboard with charts and review evidence.",
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("input_model", "visual_media_layer"),
         )
     )
 
@@ -297,6 +369,7 @@ def test_protocol_stage_prompts_materialize_run_scoped_artifact_paths():
         ProtocolAutoDesignRequestRecord(
             requirement_text="Build a browser-runnable analytics dashboard with charts and review evidence.",
             available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("input_model", "visual_media_layer"),
         )
     )
     document = ProtocolDefinitionDocumentRecord.model_validate(session.draft_definition_json.as_dict())

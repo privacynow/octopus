@@ -24,6 +24,7 @@ from octopus_sdk.protocols import (
     REHEARSAL_AUTHORITY_REF,
     ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
+    ProtocolAutoDesignEventSummaryRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactObservationRecord,
@@ -60,6 +61,7 @@ from octopus_sdk.protocols import (
     protocol_participant_session_key,
     protocol_retention_until,
     protocol_review_edge_counts,
+    auto_protocol_event_summary,
     generate_auto_protocol_session,
     revise_auto_protocol_session,
     validate_protocol_document,
@@ -1708,7 +1710,7 @@ class ProtocolPostgresAdapter:
 
     @staticmethod
     def _auto_design_session_from_row(row: Mapping[str, object]) -> ProtocolAutoDesignSessionRecord:
-        return record(
+        session = record(
             ProtocolAutoDesignSessionRecord,
             {
                 "session_id": row.get("session_id", ""),
@@ -1738,6 +1740,13 @@ class ProtocolPostgresAdapter:
                 "updated_at": row.get("updated_at", ""),
             },
         )
+        return session.model_copy(update={
+            "event_summary": auto_protocol_event_summary(
+                session,
+                event_kind="loaded",
+                created_at=str(row.get("updated_at", "") or ""),
+            ),
+        })
 
     @classmethod
     def _auto_design_payload(cls, session: ProtocolAutoDesignSessionRecord) -> dict[str, object]:
@@ -1816,9 +1825,11 @@ class ProtocolPostgresAdapter:
         if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
             raise PermissionError("Auto Protocol requires agent or author access.")
         now = utcnow_iso()
-        payload = self._auto_design_payload(session.model_copy(update={"updated_at": now}))
+        session_for_save = session.model_copy(update={"updated_at": now})
+        payload = self._auto_design_payload(session_for_save)
         if not str(payload.get("created_at", "") or "").strip():
             payload["created_at"] = now
+            session_for_save = session_for_save.model_copy(update={"created_at": now})
         with self._connect() as conn, write_tx(conn):
             with cur(conn) as db_cur:
                 db_cur.execute(
@@ -1893,7 +1904,11 @@ class ProtocolPostgresAdapter:
                 session_id=str(payload["session_id"]),
                 event_kind=str(event_kind or "updated"),
                 actor_ref=self._access_actor_ref(access),
-                payload=payload,
+                payload=auto_protocol_event_summary(
+                    session_for_save,
+                    event_kind=str(event_kind or "updated"),
+                    created_at=now,
+                ).model_dump(mode="json"),
                 now=now,
             )
         if row is None:
@@ -1917,6 +1932,38 @@ class ProtocolPostgresAdapter:
         if row is None:
             raise KeyError(session_id)
         return self._auto_design_session_from_row(row)
+
+    def list_protocol_auto_design_session_events(
+        self,
+        session_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolAutoDesignEventSummaryRecord]:
+        if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
+            raise PermissionError("Auto Protocol requires agent or author access.")
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return []
+        with self._connect() as conn:
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT event_kind, actor_ref, payload_json, created_at
+                FROM {SCHEMA}.protocol_auto_session_events
+                WHERE session_id = %s
+                ORDER BY sequence ASC
+                """,
+                (session_id,),
+            )
+        events: list[ProtocolAutoDesignEventSummaryRecord] = []
+        for row in rows:
+            payload = row.get("payload_json") if isinstance(row, Mapping) else {}
+            payload_map = dict(payload) if isinstance(payload, Mapping) else {}
+            payload_map.setdefault("event_kind", row.get("event_kind", ""))
+            payload_map.setdefault("actor_ref", row.get("actor_ref", ""))
+            payload_map.setdefault("created_at", row.get("created_at", ""))
+            events.append(record(ProtocolAutoDesignEventSummaryRecord, payload_map))
+        return events
 
     def create_protocol_auto_design_session(
         self,

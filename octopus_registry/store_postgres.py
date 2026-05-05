@@ -1291,6 +1291,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> ProtocolAutoDesignSessionRecord:
         return self._protocol_store.update_protocol_auto_design_session(session, access=access, event_kind=event_kind)
 
+    def list_protocol_auto_design_session_events(
+        self,
+        session_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ):
+        return self._protocol_store.list_protocol_auto_design_session_events(session_id, access=access)
+
     def save_protocol_draft(
         self,
         *,

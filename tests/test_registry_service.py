@@ -38,7 +38,9 @@ from app.storage import default_session, ensure_data_dirs, load_session, save_se
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
+    ProtocolAutoDesignModelResponseRecord,
     ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignWorkPackageRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
@@ -49,6 +51,7 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.registry.management import (
     ALL_MANAGEMENT_OPERATIONS,
+    DesignAutoProtocolResult,
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
     ManagementRequest,
@@ -63,6 +66,25 @@ from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.skill_packages import SkillPackageRecord, skill_document_to_text, skill_package_document
 
 _FULL_MANAGEMENT_OPERATIONS = list(ALL_MANAGEMENT_OPERATIONS)
+
+
+def _auto_design_model_response(*package_keys: str) -> ProtocolAutoDesignModelResponseRecord:
+    return ProtocolAutoDesignModelResponseRecord(
+        requirement_summary="Create the requested protocol.",
+        domain="requirement-specific",
+        work_packages=[
+            ProtocolAutoDesignWorkPackageRecord(
+                package_key=key,
+                display_name=key.replace("_", " ").title(),
+                rationale=f"{key} is needed for the requested outcome.",
+                purpose=f"Produce {key.replace('_', ' ')} for the requested outcome.",
+                quality_bar="The artifact is concrete, inspectable, and ready for downstream use.",
+                required_skills=[key.replace("_", " ")],
+            )
+            for key in (package_keys or ("experience_design",))
+        ],
+        acceptance_criteria=["Primary artifact exists, opens, and has release evidence."],
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1494,9 +1516,32 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
                     provider="codex",
                     role="worker",
                     routing_skills=["game", "testing"],
+                    supported_admin_operations=["design_auto_protocol"],
                     connectivity_state="connected",
                 )
             ]
+
+        def get_agent_status(self, agent_id: str):
+            assert agent_id == "agent-1"
+            return AgentRecord(
+                agent_id="agent-1",
+                display_name="Builder",
+                connectivity_state="connected",
+                supported_admin_operations=["design_auto_protocol"],
+            )
+
+        def create_management_request(self, request: ManagementRequest) -> ManagementRequest:
+            return request
+
+        def get_management_result(self, request_id: str):
+            return ManagementResult(
+                request_id=request_id,
+                agent_id="agent-1",
+                success=True,
+                payload=DesignAutoProtocolResult(
+                    response=_auto_design_model_response("experience_design", "domain_grounding", "supporting_assets")
+                ),
+            )
 
         def list_routing_skills(self):
             return []
@@ -1655,9 +1700,32 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                     provider="codex",
                     role="worker",
                     routing_skills=[],
+                    supported_admin_operations=["design_auto_protocol"],
                     connectivity_state="connected",
                 )
             ]
+
+        def get_agent_status(self, agent_id: str):
+            assert agent_id == "agent-1"
+            return AgentRecord(
+                agent_id="agent-1",
+                display_name="Builder",
+                connectivity_state="connected",
+                supported_admin_operations=["design_auto_protocol"],
+            )
+
+        def create_management_request(self, request: ManagementRequest) -> ManagementRequest:
+            return request
+
+        def get_management_result(self, request_id: str):
+            return ManagementResult(
+                request_id=request_id,
+                agent_id="agent-1",
+                success=True,
+                payload=DesignAutoProtocolResult(
+                    response=_auto_design_model_response("experience_design", "supporting_assets")
+                ),
+            )
 
         def list_routing_skills(self):
             return []
@@ -1785,6 +1853,39 @@ def test_protocol_auto_publish_blocks_unresolved_assignments(monkeypatch, tmp_pa
     assert response.status_code == 400
     assert response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_PUBLISH_BLOCKED"
     assert response.json()["detail"]["details"]["unresolved_decisions"]
+
+
+def test_protocol_auto_route_rejects_alias_fields(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            return []
+
+        def list_routing_skills(self):
+            return []
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "change_request": "Build a protocol.",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_INVALID_FIELD"
 
 
 def test_protocol_parse_route_accepts_draft_mode_for_incomplete_protocols(monkeypatch, tmp_path: Path):

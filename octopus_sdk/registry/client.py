@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
+    ProtocolAutoDesignEventSummaryRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolDefinitionDiffRecord,
@@ -39,6 +40,7 @@ from octopus_sdk.protocols import (
     ProtocolTemplateSummaryRecord,
     ProtocolArtifactAccessPort,
     ProtocolAuthoringPort,
+    ProtocolAutoDesignSessionPort,
     ProtocolInvocationPort,
     ProtocolObservationPort,
 )
@@ -174,7 +176,13 @@ def _validated_model(
     return schema.model_validate(dict(value))
 
 
-class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObservationPort, ProtocolArtifactAccessPort):
+class RegistryClient(
+    ProtocolAuthoringPort,
+    ProtocolAutoDesignSessionPort,
+    ProtocolInvocationPort,
+    ProtocolObservationPort,
+    ProtocolArtifactAccessPort,
+):
     """Async HTTP client wrapping the registry's /v1/ endpoints."""
 
     def __init__(
@@ -610,6 +618,11 @@ class RegistryClient(ProtocolAuthoringPort, ProtocolInvocationPort, ProtocolObse
     async def get_protocol_auto_design_session(self, session_id: str) -> ProtocolAutoDesignSessionRecord:
         result = await self._request("GET", f"/v1/protocol-auto/sessions/{session_id}")
         return ProtocolAutoDesignSessionRecord.model_validate(result)
+
+    async def list_protocol_auto_design_session_events(self, session_id: str) -> list[ProtocolAutoDesignEventSummaryRecord]:
+        result = await self._request("GET", f"/v1/protocol-auto/sessions/{session_id}/events")
+        items = result.get("items", []) if isinstance(result, Mapping) else []
+        return [ProtocolAutoDesignEventSummaryRecord.model_validate(item) for item in items]
 
     async def revise_protocol_auto_design_session(
         self,

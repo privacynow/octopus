@@ -54,8 +54,8 @@ Examples:
 - routing decisions
 - conversation workflow logic
 - protocol list/start/status/actions/artifacts/export behavior
-- Auto Protocol generation, revision, compilation, validation handoff, and
-  transport-neutral render summaries
+- Auto Protocol records, compilation, validation handoff, review policy,
+  primary-artifact metadata, and transport-neutral render summaries
 
 ### Protocol behavior
 
@@ -71,6 +71,8 @@ Rules:
 - protocol state decisions live in SDK protocol engine/model code
 - auto-generated protocols compile into canonical protocol documents in the SDK
 - registry owns protocol persistence and API
+- provider-backed Auto Protocol planning runs in bot runtime through the
+  `design_auto_protocol` management operation
 - Telegram and UI call shared protocol service paths
 - stage execution uses routed work/task paths
 - artifact observations must feed the canonical run state

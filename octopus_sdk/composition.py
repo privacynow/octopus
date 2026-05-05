@@ -324,6 +324,7 @@ class WorkflowComposer:
                 "set_conversation_setting",
                 "reset_conversation",
             ])
+        supported_admin_operations.append("design_auto_protocol")
 
         catalog = RuntimeSkillCatalogUseCases(
             catalog_service=catalog_service,

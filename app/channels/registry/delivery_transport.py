@@ -46,7 +46,12 @@ from octopus_sdk.inbound_types import (
 from octopus_sdk.providers import Provider
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import RoutedTaskResult
-from octopus_sdk.registry.management import ManagementRequest
+from octopus_sdk.registry.management import (
+    DesignAutoProtocolRequest,
+    DesignAutoProtocolResult,
+    ManagementRequest,
+    ManagementResult,
+)
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
@@ -632,15 +637,40 @@ async def handle_registry_delivery(
         )
         if not state.agent_token:
             return "retry_later"
-        result = await execute_management_request(
-            request,
-            context=ManagementExecutionContext(
-                config=config,
-                workflows=runtime.services.workflows,
-                provider_state_factory=runtime.provider_state_factory,
-                execution_faults=runtime.services.execution_services.execution_faults,
-            ),
-        )
+        if isinstance(request.payload, DesignAutoProtocolRequest):
+            from app.runtime.auto_protocol_design import design_auto_protocol_with_provider
+
+            try:
+                response = await design_auto_protocol_with_provider(
+                    request.payload.request,
+                    config=config,
+                    provider=runtime.provider,
+                    provider_state_factory=runtime.provider_state_factory,
+                )
+                result = ManagementResult(
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    success=True,
+                    payload=DesignAutoProtocolResult(response=response),
+                )
+            except Exception as exc:
+                result = ManagementResult(
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    success=False,
+                    error_code="request_failed",
+                    error_detail=str(exc),
+                )
+        else:
+            result = await execute_management_request(
+                request,
+                context=ManagementExecutionContext(
+                    config=config,
+                    workflows=runtime.services.workflows,
+                    provider_state_factory=runtime.provider_state_factory,
+                    execution_faults=runtime.services.execution_services.execution_faults,
+                ),
+            )
         client = RegistryClient(registry.url, agent_token=state.agent_token)
         try:
             await client.management_result(request.request_id, result)

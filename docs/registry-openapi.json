@@ -1007,6 +1007,25 @@
         "title": "DelegationTaskDraft",
         "type": "object"
       },
+      "DesignAutoProtocolResult": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "design_auto_protocol",
+            "default": "design_auto_protocol",
+            "title": "Operation",
+            "type": "string"
+          },
+          "response": {
+            "$ref": "#/components/schemas/ProtocolAutoDesignModelResponseRecord"
+          }
+        },
+        "required": [
+          "response"
+        ],
+        "title": "DesignAutoProtocolResult",
+        "type": "object"
+      },
       "DiffCatalogSkillResult": {
         "additionalProperties": false,
         "properties": {
@@ -1344,6 +1363,7 @@
                     "conversation_settings_state": "#/components/schemas/ConversationSettingsStateResult",
                     "conversation_skill_state": "#/components/schemas/ConversationSkillStateResult",
                     "deactivate_conversation_skill": "#/components/schemas/DeactivateConversationSkillResult",
+                    "design_auto_protocol": "#/components/schemas/DesignAutoProtocolResult",
                     "diff_catalog_skill": "#/components/schemas/DiffCatalogSkillResult",
                     "edit_catalog_skill_draft": "#/components/schemas/EditCatalogSkillDraftResult",
                     "edit_provider_guidance_draft": "#/components/schemas/EditProviderGuidanceDraftResult",
@@ -1468,6 +1488,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/ArchiveProviderGuidanceResult"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DesignAutoProtocolResult"
                   }
                 ]
               },
@@ -1511,6 +1534,394 @@
           "preview"
         ],
         "title": "PreviewProviderGuidanceResult",
+        "type": "object"
+      },
+      "ProtocolAutoDesignArtifactPlanRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_key": {
+            "default": "",
+            "title": "Artifact Key",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolAutoDesignArtifactPlanRecord",
+        "type": "object"
+      },
+      "ProtocolAutoDesignModelResponseRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance_criteria": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Acceptance Criteria",
+            "type": "array"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ProtocolAutoDesignArtifactPlanRecord"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "domain": {
+            "default": "requirement-specific",
+            "title": "Domain",
+            "type": "string"
+          },
+          "open_questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Open Questions",
+            "type": "array"
+          },
+          "planner_ref": {
+            "default": "",
+            "title": "Planner Ref",
+            "type": "string"
+          },
+          "primary_artifact": {
+            "$ref": "#/components/schemas/ProtocolAutoDesignPrimaryArtifactRecord"
+          },
+          "requirement_summary": {
+            "default": "",
+            "title": "Requirement Summary",
+            "type": "string"
+          },
+          "review_policy": {
+            "$ref": "#/components/schemas/ProtocolAutoDesignReviewPolicyRecord"
+          },
+          "risk_assessment": {
+            "default": "",
+            "title": "Risk Assessment",
+            "type": "string"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/ProtocolAutoDesignRolePlanRecord"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "run_inputs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Run Inputs",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/ProtocolAutoDesignWarningRecord"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "work_packages": {
+            "items": {
+              "$ref": "#/components/schemas/ProtocolAutoDesignWorkPackageRecord"
+            },
+            "title": "Work Packages",
+            "type": "array"
+          }
+        },
+        "title": "ProtocolAutoDesignModelResponseRecord",
+        "type": "object"
+      },
+      "ProtocolAutoDesignPrimaryArtifactRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_key": {
+            "default": "",
+            "title": "Artifact Key",
+            "type": "string"
+          },
+          "artifact_kind": {
+            "default": "workspace_file",
+            "title": "Artifact Kind",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "evidence_requirements": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Requirements",
+            "type": "array"
+          },
+          "expected_path": {
+            "default": "",
+            "title": "Expected Path",
+            "type": "string"
+          },
+          "open_behavior": {
+            "default": "browse",
+            "title": "Open Behavior",
+            "type": "string"
+          },
+          "produced_by_stage_key": {
+            "default": "",
+            "title": "Produced By Stage Key",
+            "type": "string"
+          },
+          "supporting_artifact_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supporting Artifact Keys",
+            "type": "array"
+          }
+        },
+        "title": "ProtocolAutoDesignPrimaryArtifactRecord",
+        "type": "object"
+      },
+      "ProtocolAutoDesignReviewPolicyRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "max_review_rounds": {
+            "default": 3,
+            "title": "Max Review Rounds",
+            "type": "integer"
+          },
+          "stage_budget_label": {
+            "default": "standard",
+            "title": "Stage Budget Label",
+            "type": "string"
+          },
+          "stage_count_rationale": {
+            "default": "",
+            "title": "Stage Count Rationale",
+            "type": "string"
+          },
+          "stage_hard_cap": {
+            "default": 18,
+            "title": "Stage Hard Cap",
+            "type": "integer"
+          },
+          "stance": {
+            "default": "adversarial",
+            "title": "Stance",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolAutoDesignReviewPolicyRecord",
+        "type": "object"
+      },
+      "ProtocolAutoDesignRolePlanRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_note": {
+            "default": "",
+            "title": "Assignment Note",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "responsibility": {
+            "default": "",
+            "title": "Responsibility",
+            "type": "string"
+          },
+          "role_key": {
+            "default": "",
+            "title": "Role Key",
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/RegistryJsonRecord"
+          }
+        },
+        "title": "ProtocolAutoDesignRolePlanRecord",
+        "type": "object"
+      },
+      "ProtocolAutoDesignWarningRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "default": "",
+            "title": "Action",
+            "type": "string"
+          },
+          "code": {
+            "default": "",
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "section": {
+            "default": "",
+            "title": "Section",
+            "type": "string"
+          },
+          "severity": {
+            "default": "warning",
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolAutoDesignWarningRecord",
+        "type": "object"
+      },
+      "ProtocolAutoDesignWorkPackageRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_description": {
+            "default": "",
+            "title": "Artifact Description",
+            "type": "string"
+          },
+          "artifact_display_name": {
+            "default": "",
+            "title": "Artifact Display Name",
+            "type": "string"
+          },
+          "artifact_key": {
+            "default": "",
+            "title": "Artifact Key",
+            "type": "string"
+          },
+          "artifact_path": {
+            "default": "",
+            "title": "Artifact Path",
+            "type": "string"
+          },
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "display_name": {
+            "default": "",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "package_key": {
+            "default": "",
+            "title": "Package Key",
+            "type": "string"
+          },
+          "purpose": {
+            "default": "",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "quality_bar": {
+            "default": "",
+            "title": "Quality Bar",
+            "type": "string"
+          },
+          "rationale": {
+            "default": "",
+            "title": "Rationale",
+            "type": "string"
+          },
+          "required_skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Skills",
+            "type": "array"
+          },
+          "review_artifact_description": {
+            "default": "",
+            "title": "Review Artifact Description",
+            "type": "string"
+          },
+          "review_artifact_display_name": {
+            "default": "",
+            "title": "Review Artifact Display Name",
+            "type": "string"
+          },
+          "review_artifact_key": {
+            "default": "",
+            "title": "Review Artifact Key",
+            "type": "string"
+          },
+          "review_artifact_path": {
+            "default": "",
+            "title": "Review Artifact Path",
+            "type": "string"
+          },
+          "review_display_name": {
+            "default": "",
+            "title": "Review Display Name",
+            "type": "string"
+          },
+          "review_responsibility": {
+            "default": "",
+            "title": "Review Responsibility",
+            "type": "string"
+          },
+          "review_role_key": {
+            "default": "",
+            "title": "Review Role Key",
+            "type": "string"
+          },
+          "review_rubric": {
+            "default": "",
+            "title": "Review Rubric",
+            "type": "string"
+          },
+          "role_display_name": {
+            "default": "",
+            "title": "Role Display Name",
+            "type": "string"
+          },
+          "role_key": {
+            "default": "",
+            "title": "Role Key",
+            "type": "string"
+          },
+          "role_responsibility": {
+            "default": "",
+            "title": "Role Responsibility",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolAutoDesignWorkPackageRecord",
         "type": "object"
       },
       "ProtocolRunCreateRecord": {
@@ -8807,6 +9218,79 @@
         "summary": "Resource Apply Protocol Auto Session"
       }
     },
+    "/v1/protocol-auto/sessions/{session_id}/events": {
+      "get": {
+        "operationId": "resource_list_protocol_auto_session_events_v1_protocol_auto_sessions__session_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource List Protocol Auto Session Events V1 Protocol Auto Sessions  Session Id  Events Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource List Protocol Auto Session Events"
+      }
+    },
     "/v1/protocol-auto/sessions/{session_id}/publish": {
       "post": {
         "operationId": "resource_publish_protocol_auto_session_v1_protocol_auto_sessions__session_id__publish_post",
@@ -9775,6 +10259,143 @@
             "required": true,
             "schema": {
               "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "member_path_tail",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Member Path Tail",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Download",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "browse",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Browse",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "preview",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Preview",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Protocol Run Artifact Content"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content/{member_path_tail}": {
+      "get": {
+        "operationId": "resource_get_protocol_run_artifact_content_v1_protocol_runs__run_id__artifacts__artifact_key__content__member_path_tail__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_path_tail",
+            "required": true,
+            "schema": {
+              "title": "Member Path Tail",
               "type": "string"
             }
           },
@@ -12460,6 +13081,143 @@
             "required": true,
             "schema": {
               "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "member_path_tail",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Member Path Tail",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Download",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "browse",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Browse",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "preview",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Preview",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Task Artifact Content"
+      }
+    },
+    "/v1/tasks/{routed_task_id}/artifacts/{artifact_key}/content/{member_path_tail}": {
+      "get": {
+        "operationId": "resource_get_task_artifact_content_v1_tasks__routed_task_id__artifacts__artifact_key__content__member_path_tail__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "routed_task_id",
+            "required": true,
+            "schema": {
+              "title": "Routed Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_path_tail",
+            "required": true,
+            "schema": {
+              "title": "Member Path Tail",
               "type": "string"
             }
           },

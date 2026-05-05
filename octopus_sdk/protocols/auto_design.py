@@ -1390,6 +1390,60 @@ def _normalize_model_work_packages(
     return normalized
 
 
+def _dedupe_work_package_review_roles(
+    packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    """Planner output may reuse a reviewer label; protocols need isolated review roles."""
+    used_role_keys: set[str] = set()
+    used_artifact_keys: set[str] = set()
+    normalized: list[ProtocolAutoDesignWorkPackageRecord] = []
+    for package in packages:
+        if package.package_key == "implementation":
+            normalized.append(package)
+            continue
+        fallback_role = _slugify(
+            f"{package.package_key}_reviewer",
+            fallback=f"{package.package_key}_reviewer",
+        ).replace("-", "_")
+        role_key = _slugify(
+            package.review_role_key or package.review_display_name or fallback_role,
+            fallback=fallback_role,
+        ).replace("-", "_")
+        if not role_key or role_key in used_role_keys:
+            role_key = fallback_role
+        suffix = 2
+        base_role_key = role_key
+        while role_key in used_role_keys:
+            role_key = f"{base_role_key}_{suffix}"
+            suffix += 1
+        used_role_keys.add(role_key)
+
+        fallback_artifact = _slugify(
+            package.review_artifact_key or f"{package.artifact_key}_review",
+            fallback=f"{package.package_key}_review",
+        ).replace("-", "_")
+        artifact_key = fallback_artifact
+        if not artifact_key or artifact_key in used_artifact_keys:
+            artifact_key = _slugify(
+                f"{package.package_key}_review",
+                fallback=f"{package.package_key}_review",
+            ).replace("-", "_")
+        suffix = 2
+        base_artifact_key = artifact_key
+        while artifact_key in used_artifact_keys:
+            artifact_key = f"{base_artifact_key}_{suffix}"
+            suffix += 1
+        used_artifact_keys.add(artifact_key)
+
+        normalized.append(package.model_copy(update={
+            "review_role_key": role_key,
+            "review_display_name": package.review_display_name or f"{package.display_name} Reviewer",
+            "review_artifact_key": artifact_key,
+            "review_artifact_path": _auto_artifact_path(artifact_key),
+        }))
+    return normalized
+
+
 def _focus_label(requirement_text: str) -> str:
     title = _title_from_requirement(requirement_text)
     if title == "Auto Protocol":
@@ -1401,7 +1455,9 @@ def _analyze_requirement(requirement_text: str, constraints_text: str) -> Protoc
     text = _normalized_words(requirement_text, constraints_text)
     terms = _requirement_terms(requirement_text, constraints_text)
     skills = _analysis_skills(text)
-    work_packages = _infer_work_packages(requirement_text, constraints_text, skills, terms)
+    work_packages = _dedupe_work_package_review_roles(
+        _infer_work_packages(requirement_text, constraints_text, skills, terms)
+    )
     deliverables = _requirement_phrases(requirement_text)
     complexity_signals = sum(1 for skill in skills if skill not in {"requirements planning", "implementation", "verification", "acceptance evidence"})
     complexity = "high" if complexity_signals >= 2 or len(text) > 700 or len(deliverables) >= 4 or len(work_packages) >= 6 else "standard"
@@ -1472,14 +1528,16 @@ def _analysis_from_model_response(
         constraints_text=constraints_text,
         terms=terms,
     )
-    packages = _consolidate_work_packages(
-        normalized_model_packages or _infer_work_packages(
-            requirement_text,
-            constraints_text,
-            _analysis_skills(_normalized_words(requirement_text, constraints_text)),
-            terms,
-        ),
-        terms=", ".join(terms[:14]) or "the explicit user requirement",
+    packages = _dedupe_work_package_review_roles(
+        _consolidate_work_packages(
+            normalized_model_packages or _infer_work_packages(
+                requirement_text,
+                constraints_text,
+                _analysis_skills(_normalized_words(requirement_text, constraints_text)),
+                terms,
+            ),
+            terms=", ".join(terms[:14]) or "the explicit user requirement",
+        )
     )
     skill_names: list[str] = []
     for package in packages:

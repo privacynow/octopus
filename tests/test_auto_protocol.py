@@ -388,6 +388,40 @@ def test_auto_protocol_uses_distinct_reviewer_participants_for_review_domains():
     assert not any(item.code == "semantic.review_context_not_isolated" for item in session.unresolved_decisions)
 
 
+def test_auto_protocol_repairs_duplicate_planner_review_roles_before_surface():
+    response = _planner_response("input_model", "experience_design", "supporting_assets")
+    response = response.model_copy(update={
+        "work_packages": [
+            package.model_copy(update={
+                "review_role_key": "requirements_reviewer",
+                "review_display_name": "Requirement Coverage Reviewer",
+                "review_artifact_key": "requirements_review",
+            })
+            for package in response.work_packages
+        ],
+    })
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text=(
+                "Create a browser-runnable onboarding risk checklist with a polished HTML "
+                "artifact, concise support-manager guidance, and final release evidence."
+            ),
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=response,
+        )
+    )
+
+    review_roles = [
+        stage.role_key
+        for stage in session.plan.stages
+        if stage.stage_kind == "review"
+    ]
+
+    assert session.status == "ready"
+    assert len(review_roles) == len(set(review_roles))
+    assert not any(item.code == "semantic.review_context_not_isolated" for item in session.unresolved_decisions)
+
+
 def test_auto_protocol_infers_reviews_without_user_prompting_review_stages():
     session = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(

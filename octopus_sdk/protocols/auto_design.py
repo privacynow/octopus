@@ -37,6 +37,48 @@ _AUTO_STAGE_BUDGET_COMPLEX_MAX = 16
 _AUTO_STAGE_HARD_CAP = 18
 _AUTO_STANDARD_WORK_PACKAGE_BUDGET = 6
 _AUTO_REVIEW_ROUND_MAX = 6
+_AUTO_RUNTIME_OPEN_BEHAVIORS = {"runtime", "app", "service", "api", "playable"}
+_AUTO_RUNTIME_WORDS = {
+    "app",
+    "application",
+    "api",
+    "backend",
+    "browser",
+    "dashboard",
+    "frontend",
+    "game",
+    "html",
+    "interface",
+    "playable",
+    "portal",
+    "service",
+    "server",
+    "spa",
+    "ui",
+    "web",
+    "website",
+}
+_AUTO_RUNTIME_PHRASES = (
+    "api service",
+    "back end",
+    "browser based",
+    "browser-runnable",
+    "front end",
+    "health endpoint",
+    "operator console",
+    "operator ui",
+    "public api",
+    "running system",
+    "runnable artifact",
+    "runnable product",
+    "start command",
+    "user interface",
+    "user-facing api",
+    "user-facing ui",
+    "web app",
+    "web application",
+    "web browser",
+)
 
 
 def _slugify(value: str, *, fallback: str = "auto-protocol") -> str:
@@ -76,6 +118,27 @@ def _sentence(text: str) -> str:
 
 def _normalized_words(*values: object) -> str:
     return " ".join(str(value or "").lower() for value in values if str(value or "").strip())
+
+
+def auto_protocol_runtime_expected_from_text(*values: object) -> bool:
+    """Return whether an Auto Protocol outcome should be exposed as a runtime."""
+    text = _normalized_words(*values)
+    if not text:
+        return False
+    if "octopus-runtime.json" in text or "runtime manifest" in text:
+        return True
+    if any(phrase in text for phrase in _AUTO_RUNTIME_PHRASES):
+        return True
+    words = {
+        token
+        for token in re.split(r"[^a-z0-9]+", text)
+        if token
+    }
+    if words & _AUTO_RUNTIME_WORDS:
+        return True
+    if "engine" in words and words & {"api", "backend", "service", "server", "ui", "web"}:
+        return True
+    return False
 
 
 def _dict(value: object) -> dict[str, object]:
@@ -1765,6 +1828,27 @@ def _build_plan(
         analysis.skills,
         analysis.requirement_terms,
     )
+    implementation_package = next((package for package in work_packages if package.package_key == "implementation"), None)
+    proposed_primary = model_response.primary_artifact if model_response is not None else None
+    proposed_open_behavior = str((proposed_primary.open_behavior if proposed_primary is not None else "") or "").strip().lower()
+    runtime_expected = (
+        proposed_open_behavior in _AUTO_RUNTIME_OPEN_BEHAVIORS
+        or auto_protocol_runtime_expected_from_text(
+            proposed_open_behavior,
+            requirement,
+            constraints,
+            analysis.goal,
+            analysis.focus,
+            *(analysis.deliverables or []),
+            *((implementation_package.required_skills if implementation_package is not None else []) or []),
+            implementation_package.display_name if implementation_package is not None else "",
+            implementation_package.purpose if implementation_package is not None else "",
+            implementation_package.quality_bar if implementation_package is not None else "",
+            implementation_package.artifact_description if implementation_package is not None else "",
+            model_response.requirement_summary if model_response is not None else "",
+            model_response.domain if model_response is not None else "",
+        )
+    )
 
     roles_by_key: dict[str, ProtocolAutoDesignRolePlanRecord] = {}
 
@@ -1889,9 +1973,14 @@ def _build_plan(
             f"Quality bar: {package.quality_bar.strip()}",
             "Keep this stage focused on its owned artifact and avoid doing later-stage work early.",
             (
-                "If the artifact is interactive or API-backed, package it as a runnable product: include a coherent user-facing UI/API, "
-                "tests or smoke steps, and octopus-runtime.json at the package root so Octopus can start it, proxy it, and let users try it."
-                if package.package_key == "implementation"
+                "This protocol expects a runnable primary artifact. Package it as a user-facing product: include a coherent UI/API, "
+                "tests or smoke steps, a root octopus-runtime.json manifest, and enough start/health/smoke metadata for Octopus to start it, proxy it, and let users try it."
+                if package.package_key == "implementation" and runtime_expected
+                else ""
+            ),
+            (
+                "If this outcome unexpectedly becomes interactive or API-backed, include octopus-runtime.json at the package root so Octopus can start it, proxy it, and let users try it."
+                if package.package_key == "implementation" and not runtime_expected
                 else ""
             ),
         ]).strip()
@@ -1936,10 +2025,21 @@ def _build_plan(
         "acceptance",
         "outcome_acceptance_reviewer",
         (
-            "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
-            "If the primary artifact declares octopus-runtime.json, start or open the Octopus-managed runtime, exercise the UI/API, and record runtime evidence before accepting. "
+            (
+                "Adversarially exercise the runnable primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
+                "The produced outcome must include octopus-runtime.json at the package root. Start or open the Octopus-managed runtime, exercise the UI/API through the Registry URL, "
+                "and record runtime evidence before accepting. Choose revise if the manifest is missing, the runtime cannot start, health fails, the UI/API cannot be exercised, "
+                "the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
+            )
+            if runtime_expected
+            else (
+                "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
+                "If the primary artifact declares octopus-runtime.json, start or open the Octopus-managed runtime, exercise the UI/API, and record runtime evidence before accepting. "
+                "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
+            )
+        )
+        + (
             "Record final release evidence: what was inspected, what worked, what remains risky, and exact user-facing inspection steps. "
-            "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
             "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
         ),
         inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
@@ -1962,11 +2062,19 @@ def _build_plan(
         produced_by_stage_key="produce_outcome",
         artifact_kind="workspace_file",
         expected_path=_auto_artifact_path("output", extension=""),
-        open_behavior="browse",
+        open_behavior="runtime" if runtime_expected else "browse",
         evidence_requirements=[
             "Primary artifact exists and is inspectable.",
             "Final acceptance records what was exercised or inspected.",
             "Release evidence links the artifact to the original requirement.",
+            *(
+                [
+                    "A root octopus-runtime.json manifest exists for the primary artifact.",
+                    "The Octopus-managed runtime starts, passes health, and is exercised through Registry routing.",
+                ]
+                if runtime_expected
+                else []
+            ),
         ],
         supporting_artifact_keys=[
             artifact.artifact_key
@@ -2917,6 +3025,7 @@ __all__ = [
     "ProtocolAutoDesignRequestRecord",
     "ProtocolAutoDesignSessionRecord",
     "ProtocolAutoDesignRenderCardRecord",
+    "auto_protocol_runtime_expected_from_text",
     "auto_protocol_event_summary",
     "compile_auto_protocol_plan",
     "generate_auto_protocol_session",

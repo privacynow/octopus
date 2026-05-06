@@ -1637,6 +1637,119 @@ def test_registry_store_protocol_maintenance_expires_artifact_runtimes(postgres_
     assert any(item.event_kind == "stopped" for item in events)
 
 
+def test_registry_store_blocks_final_accept_when_expected_runtime_manifest_is_missing(postgres_registry_truncated: str, tmp_path: Path) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    artifact_root = tmp_path / "output"
+    artifact_root.mkdir()
+    (artifact_root / "README.md").write_text("Run this service with a routed UI.\n", encoding="utf-8")
+    document = {
+        "metadata": {
+            "slug": "runtime-manifest-required",
+            "display_name": "Runtime Manifest Required",
+            "auto_protocol": {
+                "primary_artifact_key": "produced_outcome",
+                "primary_artifact": {
+                    "artifact_key": "produced_outcome",
+                    "open_behavior": "runtime",
+                },
+                "requirement": "Build a browser-runnable service with a user-facing UI and API.",
+            },
+        },
+        "participants": [
+            {"participant_key": "worker", "display_name": "Worker"},
+            {"participant_key": "acceptor", "display_name": "Acceptor"},
+        ],
+        "artifacts": [
+            {"artifact_key": "produced_outcome", "kind": "workspace_file", "path": "output"},
+            {"artifact_key": "release_evidence", "kind": "workspace_file", "path": "release.md"},
+        ],
+        "stages": [
+            {
+                "stage_key": "produce",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "implementation"},
+                "stage_kind": "work",
+                "write_capable": True,
+                "outputs": ["produced_outcome"],
+                "transitions": {"completed": "final"},
+                "instructions": "Produce the runtime artifact.",
+            },
+            {
+                "stage_key": "final",
+                "participant_key": "acceptor",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "inputs": ["produced_outcome"],
+                "outputs": ["release_evidence"],
+                "transitions": {"accept": "__complete__", "revise": "produce", "fail": "__failed__"},
+                "instructions": "Accept only after runtime evidence exists.",
+            },
+        ],
+        "policies": {"single_active_writer": True, "max_review_rounds": 2},
+    }
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_registry.protocol_runs SET workspace_ref = %s WHERE protocol_run_id = %s",
+                (str(tmp_path), created.run.protocol_run_id),
+            )
+        conn.commit()
+
+    produce = detail.stage_executions[0]
+    store.update_routed_task_result(
+        enroll.agent_token,
+        produce.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "runtime-manifest-produce",
+            "summary": "Produced package without manifest.",
+            "full_text": "Produced output.\nPROTOCOL_SUMMARY: Produced package.",
+            "artifacts": [
+                {
+                    "artifact_key": "produced_outcome",
+                    "artifact_kind": "workspace_file",
+                    "path": "output",
+                    "exists": True,
+                    "size_bytes": 100,
+                    "content_hash": "runtime-no-manifest",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    final_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    final_stage = next(item for item in final_detail.stage_executions if item.stage_key == "final")
+    store.update_routed_task_result(
+        enroll.agent_token,
+        final_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "runtime-manifest-final",
+            "summary": "Accepted.",
+            "full_text": "Looks good.\nPROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Accepted.",
+            "artifacts": [
+                {
+                    "artifact_key": "release_evidence",
+                    "artifact_kind": "workspace_file",
+                    "path": "release.md",
+                    "exists": True,
+                    "size_bytes": 10,
+                    "content_hash": "release-no-manifest",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    blocked = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert blocked.run.status == "blocked"
+    assert blocked.run.blocked_code == "runtime_manifest_required"
+    assert "octopus-runtime.json" in blocked.run.blocked_detail
+
+
 def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgres_registry_truncated: str, tmp_path: Path) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     artifact_root = tmp_path / "output"

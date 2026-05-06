@@ -65,6 +65,7 @@ from octopus_sdk.protocols import (
     protocol_retention_until,
     protocol_review_edge_counts,
     auto_protocol_event_summary,
+    auto_protocol_runtime_expected_from_text,
     generate_auto_protocol_session,
     revise_auto_protocol_session,
     validate_protocol_document,
@@ -985,6 +986,27 @@ class ProtocolPostgresAdapter:
         root = resolved if resolved.is_dir() else resolved.parent
         return (root / "octopus-runtime.json").is_file()
 
+    @staticmethod
+    def _primary_artifact_expects_runtime(document: ProtocolDefinitionDocumentRecord) -> bool:
+        metadata = document.metadata.as_dict()
+        auto_protocol = metadata.get("auto_protocol") if isinstance(metadata, Mapping) else {}
+        if not isinstance(auto_protocol, Mapping):
+            return False
+        primary = auto_protocol.get("primary_artifact")
+        if isinstance(primary, Mapping):
+            open_behavior = str(primary.get("open_behavior", "") or "").strip().lower()
+            if open_behavior in {"runtime", "app", "service", "api", "playable"}:
+                return True
+            evidence = primary.get("evidence_requirements")
+            if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)):
+                if auto_protocol_runtime_expected_from_text(*evidence):
+                    return True
+        return auto_protocol_runtime_expected_from_text(
+            auto_protocol.get("requirement", ""),
+            auto_protocol.get("constraints", ""),
+            auto_protocol.get("description", ""),
+        )
+
     def _runtime_acceptance_evidence_gate(
         self,
         conn,
@@ -1020,9 +1042,38 @@ class ProtocolPostgresAdapter:
         if artifact is None:
             return engine
         runtime = next((item for item in detail.runtime_instances if item.artifact_key == primary_key), None)
-        manifest_required = bool(runtime and runtime.manifest) or self._artifact_declares_runtime_manifest(detail, artifact)
+        manifest_present = self._artifact_declares_runtime_manifest(detail, artifact)
+        runtime_expected = self._primary_artifact_expects_runtime(document)
+        manifest_required = runtime_expected or bool(runtime and runtime.manifest) or manifest_present
         if not manifest_required:
             return engine
+        if runtime_expected and not manifest_present and not bool(runtime and runtime.manifest):
+            detail_text = (
+                "Final acceptance for this runnable primary artifact requires a root octopus-runtime.json manifest before completion. "
+                "Send the work back to the primary outcome stage so the package includes runtime metadata, start/health paths, and smoke steps that Octopus can route through the Registry."
+            )
+            metadata = engine.transition_metadata.as_dict()
+            metadata.update({
+                "runtime_evidence_required": True,
+                "runtime_manifest_required": True,
+                "primary_artifact_key": primary_key,
+                "missing_runtime_evidence": ["root octopus-runtime.json manifest"],
+            })
+            return engine.model_copy(update={
+                "run_status": "blocked",
+                "stage_status": "blocked",
+                "failure_code": "runtime_manifest_required",
+                "failure_detail": detail_text,
+                "transition_kind": "blocked",
+                "transition_reason": detail_text,
+                "transition_error_code": "RUNTIME_MANIFEST_REQUIRED",
+                "run_blocked_code": "runtime_manifest_required",
+                "run_blocked_detail": detail_text,
+                "terminal_status": None,
+                "create_next_execution": False,
+                "next_stage_key": "",
+                "transition_metadata": RegistryJsonRecord.model_validate(metadata),
+            })
 
         events = [item for item in detail.runtime_events if item.artifact_key == primary_key]
         has_started = any(str(item.event_kind or "") == "started" for item in events)

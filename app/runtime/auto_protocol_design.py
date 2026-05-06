@@ -70,7 +70,7 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         '      "review_rubric": "adversarial rubric with revise conditions"\n'
         "    }\n"
         "  ],\n"
-        '  "primary_artifact": {"artifact_key": "produced_outcome", "display_name": "Produced Outcome", "produced_by_stage_key": "produce_outcome"},\n'
+        '  "primary_artifact": {"artifact_key": "produced_outcome", "display_name": "Produced Outcome", "produced_by_stage_key": "produce_outcome", "open_behavior": "runtime"},\n'
         '  "review_policy": {"stance": "adversarial", "max_review_rounds": 3, "stage_hard_cap": 18},\n'
         '  "run_inputs": [{"key": "problem_statement", "label": "Run objective", "kind": "textarea", "required": true, "default_value": "..."}],\n'
         '  "acceptance_criteria": ["..."],\n'
@@ -81,6 +81,7 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "Required package guidance: include requirement/planning work, requirement review will be added by the compiler, "
         "include focused supporting packages that are truly needed, and include one implementation/outcome package. "
         "For the outcome package use package_key 'implementation' if you include it; otherwise the compiler will create it. "
+        "For runnable outcomes, set primary_artifact.open_behavior to 'runtime' and make the implementation artifact contract require a root octopus-runtime.json manifest. "
         "Do not include validation-only or final-review-only packages.\n\n"
         "Planning input JSON:\n"
         f"{json.dumps(payload, sort_keys=True)}"

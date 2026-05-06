@@ -100,8 +100,15 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "Do not leave foreground servers" in produce_stage["instructions"]
     acceptance_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "final_evidence")
     assert acceptance_stage["transitions"]["revise"] == "produce_outcome"
-    assert "Adversarially inspect or exercise" in acceptance_stage["instructions"]
+    assert "Adversarially" in acceptance_stage["instructions"]
+    assert "exercise" in acceptance_stage["instructions"]
+    assert "octopus-runtime.json" in acceptance_stage["instructions"]
     assert "choose revise" in acceptance_stage["instructions"].lower()
+    assert document["metadata"]["auto_protocol"]["primary_artifact"]["open_behavior"] == "runtime"
+    assert any(
+        "root octopus-runtime.json" in item
+        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+    )
     assert session.analysis.work_packages
     assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
 

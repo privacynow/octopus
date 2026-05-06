@@ -235,6 +235,14 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     logsBtn.type = 'button';
     logsBtn.className = 'btn';
     logsBtn.textContent = 'Logs';
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.className = 'btn btn-primary';
+    startBtn.textContent = 'Start app';
+    const stopBtn = document.createElement('button');
+    stopBtn.type = 'button';
+    stopBtn.className = 'btn';
+    stopBtn.textContent = 'Stop app';
     const openBtn = document.createElement('a');
     openBtn.className = 'btn btn-primary';
     openBtn.textContent = 'Open app';
@@ -251,7 +259,7 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     deleteBtn.textContent = 'Delete';
 
     const view = UI.showDialog(`Runtime: ${artifactLabel || artifactKey}`, body, {
-        actions: [closeBtn, refreshBtn, healthBtn, logsBtn, openBtn, archiveBtn, deleteBtn],
+        actions: [closeBtn, refreshBtn, healthBtn, logsBtn, startBtn, openBtn, stopBtn, archiveBtn, deleteBtn],
         maxWidth: '820px',
     });
     closeBtn.addEventListener('click', () => view.close());
@@ -275,7 +283,9 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
         body.dataset.docsUrl = nextBody.dataset.docsUrl || '';
         const status = body.dataset.runtimeStatus;
         const manifestAvailable = body.dataset.manifestAvailable === 'true';
+        startBtn.hidden = !manifestAvailable || ['running', 'starting', 'archived', 'deleted'].includes(status);
         openBtn.hidden = status !== 'running';
+        stopBtn.hidden = !['running', 'starting'].includes(status);
         healthBtn.hidden = !manifestAvailable || status !== 'running';
         logsBtn.hidden = !manifestAvailable;
         archiveBtn.hidden = !manifestAvailable || status === 'running';
@@ -288,6 +298,7 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
             latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
             if (health && latestSnapshot?.runtime) {
                 latestHealth = await API.getProtocolRunArtifactRuntimeHealth(runId, artifactKey);
+                latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
             }
             if (logs && latestSnapshot?.runtime) {
                 latestLogs = await API.getProtocolRunArtifactRuntimeLogs(runId, artifactKey);
@@ -304,6 +315,32 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     refreshBtn.addEventListener('click', () => void refresh());
     healthBtn.addEventListener('click', () => void refresh({ health: true }));
     logsBtn.addEventListener('click', () => void refresh({ logs: true }));
+    startBtn.addEventListener('click', async () => {
+        startBtn.disabled = true;
+        try {
+            await API.startProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('Runtime started.', 'success');
+            latestHealth = null;
+            latestLogs = null;
+            await refresh();
+        } catch (err) {
+            UI.reportError('Failed to start artifact runtime', err, { context: 'Artifact runtime start failed' });
+        } finally {
+            startBtn.disabled = false;
+        }
+    });
+    stopBtn.addEventListener('click', async () => {
+        stopBtn.disabled = true;
+        try {
+            await API.stopProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('Runtime stopped.', 'success');
+            await refresh();
+        } catch (err) {
+            UI.reportError('Failed to stop artifact runtime', err, { context: 'Artifact runtime stop failed' });
+        } finally {
+            stopBtn.disabled = false;
+        }
+    });
     archiveBtn.addEventListener('click', async () => {
         archiveBtn.disabled = true;
         try {

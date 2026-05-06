@@ -37,6 +37,9 @@ _AUTO_STAGE_BUDGET_COMPLEX_MAX = 16
 _AUTO_STAGE_HARD_CAP = 18
 _AUTO_STANDARD_WORK_PACKAGE_BUDGET = 6
 _AUTO_REVIEW_ROUND_MAX = 6
+_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS = 1800
+_AUTO_RUN_OBJECTIVE_MAX_CHARS = 1000
+_AUTO_REVISION_HISTORY_MAX = 20
 _AUTO_RUNTIME_OPEN_BEHAVIORS = {"runtime", "app", "service", "api", "playable"}
 _AUTO_RUNTIME_WORDS = {
     "app",
@@ -129,6 +132,221 @@ def _sentence(text: str) -> str:
     if not value:
         return ""
     return value if value[-1] in ".!?" else f"{value}."
+
+
+_AUTO_CONTEXT_LABELS = (
+    "current stage",
+    "existing objective",
+    "existing artifacts",
+    "existing protocol objective",
+    "original objective",
+    "primary artifact expected path",
+    "primary artifact",
+    "protocol id",
+    "protocol name",
+    "requested improvement",
+    "revision request",
+    "run id",
+    "run objective",
+    "run status",
+    "source objective",
+    "user improvement request",
+)
+_AUTO_REVISION_LABELS = {"requested improvement", "revision request", "user improvement request"}
+_AUTO_SOURCE_LABELS = {"existing objective", "existing protocol objective", "original objective", "run objective", "source objective"}
+_AUTO_CONTEXT_NOISE_PREFIXES = {
+    "bring the revised protocol up to the current octopus standard",
+    "existing artifacts",
+    "improve the existing protocol that produced this run",
+    "use the prior run as context",
+}
+_AUTO_GENERIC_REQUIREMENTS = {
+    "auto protocol",
+    "auto-generated requirement-specific protocol",
+    "create requested outcome",
+    "create the requested outcome",
+    "create the requested outcome.",
+    "revise the selected protocol",
+    "run the generated workflow",
+}
+
+
+def _text_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _bounded_text(value: str, *, max_chars: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return clipped or text[:max_chars].strip()
+
+
+def _auto_context_lines(value: object) -> list[str]:
+    text = str(value or "").replace("\r", "\n").strip()
+    if not text:
+        return []
+    label_pattern = "|".join(re.escape(label) for label in sorted(_AUTO_CONTEXT_LABELS, key=len, reverse=True))
+    text = re.sub(rf"(?i)(?<!^)\b({label_pattern})\s*:", r"\n\1:", text)
+    return [re.sub(r"^\s*[-*]\s*", "", line).strip() for line in text.splitlines()]
+
+
+def _labeled_auto_context_values(value: object, labels: set[str]) -> list[str]:
+    values: list[str] = []
+    for line in _auto_context_lines(value):
+        if ":" not in line:
+            continue
+        raw_label, payload = line.split(":", 1)
+        label = _text_key(raw_label)
+        if label in labels and payload.strip():
+            values.append(payload.strip())
+    return values
+
+
+def _dedupe_text_items(values: Sequence[object], *, max_items: int = 20, max_chars: int = 1000) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _compact_auto_protocol_context_text(value, max_chars=max_chars)
+        key = _text_key(text)
+        if not text or key in seen or key in _AUTO_GENERIC_REQUIREMENTS:
+            continue
+        seen.add(key)
+        items.append(text)
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def _compact_auto_protocol_context_text(value: object, *, max_chars: int = _AUTO_REQUIREMENT_CONTEXT_MAX_CHARS) -> str:
+    pieces: list[str] = []
+    seen: set[str] = set()
+    for line in _auto_context_lines(value):
+        if not line:
+            continue
+        if ":" in line:
+            raw_label, payload = line.split(":", 1)
+            label = _text_key(raw_label)
+            if label in _AUTO_REVISION_LABELS or label in _AUTO_CONTEXT_LABELS:
+                continue
+            line = payload.strip() if label in _AUTO_SOURCE_LABELS else line
+        key = _text_key(line)
+        if not key or key in _AUTO_GENERIC_REQUIREMENTS:
+            continue
+        if any(key.startswith(prefix) for prefix in _AUTO_CONTEXT_NOISE_PREFIXES):
+            continue
+        for chunk in re.split(r"(?<=[.!?])\s+|\n+", line):
+            text = re.sub(r"\s+", " ", chunk).strip()
+            chunk_key = _text_key(text)
+            if not text or chunk_key in seen or chunk_key in _AUTO_GENERIC_REQUIREMENTS:
+                continue
+            if any(chunk_key.startswith(prefix) for prefix in _AUTO_CONTEXT_NOISE_PREFIXES):
+                continue
+            seen.add(chunk_key)
+            pieces.append(text)
+    return _bounded_text(" ".join(pieces), max_chars=max_chars)
+
+
+def _source_requirement_from_auto_metadata(metadata: Mapping[str, object], auto_meta: Mapping[str, object]) -> str:
+    source_labeled_values: list[str] = []
+    for value in [auto_meta.get("requirement"), metadata.get("description")]:
+        source_labeled_values.extend(_labeled_auto_context_values(value, _AUTO_SOURCE_LABELS))
+    candidates = [
+        *source_labeled_values,
+        auto_meta.get("requirement"),
+        metadata.get("description"),
+        metadata.get("display_name") or metadata.get("slug"),
+    ]
+    base_candidates = [
+        re.sub(
+            r"(?i)[,;]?\s+(with this requested improvement:|including the requested improvement to)\s+.*$",
+            "",
+            _compact_auto_protocol_context_text(candidate, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS),
+        ).strip()
+        for candidate in candidates
+    ]
+    for candidate in _dedupe_text_items(base_candidates, max_items=1, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS):
+        return candidate
+    return ""
+
+
+def _revision_request_from_text(value: object) -> str:
+    labeled = _labeled_auto_context_values(value, _AUTO_REVISION_LABELS)
+    if labeled:
+        values = _dedupe_text_items(labeled, max_items=1, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS)
+        if values:
+            return values[0]
+    return _compact_auto_protocol_context_text(value, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS)
+
+
+def _model_requirement_summary(model_response: ProtocolAutoDesignModelResponseRecord | None) -> str:
+    if model_response is None:
+        return ""
+    summary = _compact_auto_protocol_context_text(
+        model_response.requirement_summary,
+        max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS,
+    )
+    return "" if _text_key(summary) in _AUTO_GENERIC_REQUIREMENTS else summary
+
+
+def _revision_planner_requirement(source_requirement: str, change_request: str) -> str:
+    parts = []
+    if source_requirement:
+        parts.append(f"Existing protocol objective: {source_requirement}")
+    if change_request:
+        parts.append(f"Requested improvement: {change_request}")
+    return "\n".join(parts) or change_request or source_requirement or "Revise the selected protocol."
+
+
+def _revision_run_objective(
+    source_requirement: str,
+    change_request: str,
+    model_response: ProtocolAutoDesignModelResponseRecord | None,
+) -> str:
+    summary = _model_requirement_summary(model_response)
+    if summary:
+        return _sentence(_bounded_text(summary, max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS))
+    if source_requirement and change_request:
+        change_fragment = change_request[:1].lower() + change_request[1:] if change_request else ""
+        return _sentence(_bounded_text(
+            f"{source_requirement.rstrip('.!?')}, including the requested improvement to {change_fragment}",
+            max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS,
+        ))
+    return _sentence(_bounded_text(change_request or source_requirement, max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS))
+
+
+def _run_objective_sentence(value: object) -> str:
+    return _sentence(_compact_auto_protocol_context_text(value, max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS))
+
+
+def _run_profile_with_problem_statement(
+    profile: ProtocolAutoDesignRunProfileRecord,
+    problem_statement: str,
+) -> ProtocolAutoDesignRunProfileRecord:
+    objective = _run_objective_sentence(problem_statement) or profile.problem_statement
+    fields: list[dict[str, object]] = []
+    found = False
+    for field in profile.run_inputs:
+        item = dict(field)
+        if str(item.get("key") or "").strip() == "problem_statement":
+            item["default_value"] = objective
+            item["required"] = True
+            found = True
+        fields.append(item)
+    if not found:
+        fields.insert(0, {
+            "key": "problem_statement",
+            "label": "Run objective",
+            "kind": "textarea",
+            "required": True,
+            "default_value": objective,
+            "help": "The run-specific outcome this protocol should accomplish.",
+        })
+    return profile.model_copy(update={
+        "problem_statement": objective,
+        "run_inputs": fields,
+    })
 
 
 def _normalized_words(*values: object) -> str:
@@ -1726,8 +1944,9 @@ def _review_round_limit(policy: ProtocolAutoDesignReviewPolicyRecord | None = No
 
 
 def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) -> ProtocolAutoDesignRunProfileRecord:
+    objective = _run_objective_sentence(requirement)
     return ProtocolAutoDesignRunProfileRecord(
-        problem_statement=_sentence(requirement) or "Run the generated workflow.",
+        problem_statement=objective or "Run the generated workflow.",
         context="Use the protocol stages as the work contract. Add only run-specific facts here.",
         constraints=_sentence(constraints),
         acceptance_criteria=(
@@ -1741,7 +1960,7 @@ def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) ->
                 "label": "Run objective",
                 "kind": "textarea",
                 "required": True,
-                "default_value": _sentence(requirement),
+                "default_value": objective,
                 "help": "The run-specific outcome this protocol should accomplish.",
             },
             {
@@ -2867,22 +3086,22 @@ def revise_auto_protocol_session(
     draft = draft_protocol_document_data(source)
     metadata = dict(draft.get("metadata") or {})
     auto_meta = dict(metadata.get("auto_protocol") or {})
-    change_request = str(request.requirement_text or "").strip()
-    previous_requirement = str(auto_meta.get("requirement") or "").strip()
-    base_parts = [
-        str(metadata.get("display_name") or metadata.get("slug") or "").strip(),
-        str(metadata.get("description") or "").strip(),
-        previous_requirement,
-    ]
-    combined_requirement = "\n".join(part for part in base_parts if part)
-    if change_request:
-        combined_requirement = "\n".join(part for part in [combined_requirement, f"Revision request: {change_request}"] if part)
-    if not combined_requirement:
-        combined_requirement = change_request or "Revise the selected protocol."
+    change_request = _revision_request_from_text(request.requirement_text)
+    previous_requirement = _source_requirement_from_auto_metadata(metadata, auto_meta)
+    combined_requirement = _revision_planner_requirement(previous_requirement, change_request)
+    canonical_requirement = _revision_run_objective(previous_requirement, change_request, request.model_response)
 
-    revisions = [str(item or "").strip() for item in _list(auto_meta.get("revision_requests")) if str(item or "").strip()]
-    if change_request:
-        revisions.append(change_request)
+    existing_revisions = [str(item or "").strip() for item in _list(auto_meta.get("revision_requests")) if str(item or "").strip()]
+    revisions = _dedupe_text_items(
+        [
+            *existing_revisions,
+            *_labeled_auto_context_values(auto_meta.get("requirement"), _AUTO_REVISION_LABELS),
+            *_labeled_auto_context_values(request.requirement_text, _AUTO_REVISION_LABELS),
+            change_request,
+        ],
+        max_items=_AUTO_REVISION_HISTORY_MAX,
+        max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS,
+    )
     regenerate_request = request.model_copy(update={
         "mode": "revise",
         "requirement_text": combined_requirement,
@@ -2900,16 +3119,22 @@ def revise_auto_protocol_session(
         regenerated_metadata["slug"] = str(metadata.get("slug") or "")
     if metadata.get("display_name"):
         regenerated_metadata["display_name"] = str(metadata.get("display_name") or "")
-    if metadata.get("description"):
-        regenerated_metadata["description"] = str(metadata.get("description") or "")
+    source_description = _compact_auto_protocol_context_text(metadata.get("description"), max_chars=420)
+    if source_description:
+        regenerated_metadata["description"] = source_description
+    elif canonical_requirement:
+        regenerated_metadata["description"] = _sentence(canonical_requirement)
     regenerated_auto_meta = dict(regenerated_metadata.get("auto_protocol") or {})
     regenerated_auto_meta.update({
         "generated": True,
+        "requirement": canonical_requirement,
         "revision_of_protocol_id": str(request.target_protocol_id or ""),
         "revision_of_version_id": str(request.target_version_id or ""),
-        "revision_requests": revisions[-20:],
+        "revision_requests": revisions[-_AUTO_REVISION_HISTORY_MAX:],
     })
     regenerated_metadata["auto_protocol"] = regenerated_auto_meta
+    compact_profile = _run_profile_with_problem_statement(session.run_profile, canonical_requirement)
+    regenerated_metadata["run_inputs"] = compact_profile.run_inputs
     regenerated_draft["metadata"] = regenerated_metadata
     regenerated_draft, validation, repair_notes = _validate_and_repair_protocol_document(regenerated_draft, regenerate_request)
     warnings, unresolved = _warnings_for_session(regenerate_request, validation)
@@ -2935,6 +3160,10 @@ def revise_auto_protocol_session(
         "target_draft_revision": request.target_draft_revision,
         "requirement_text": request.requirement_text,
         "constraints_text": request.constraints_text,
+        "plan": session.plan.model_copy(update={
+            "run_profile": compact_profile,
+        }),
+        "run_profile": compact_profile,
         "draft_definition_json": RegistryJsonRecord.model_validate(regenerated_draft),
         "validation": validation,
         "warnings": warnings,

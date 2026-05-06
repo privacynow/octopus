@@ -8013,6 +8013,32 @@ function renderProtocolRuns(container) {
         return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
     }
 
+    function _stripRunImprovementBoilerplate(value, maxLength = 1200) {
+        const contextLabels = /^(run id|protocol id|protocol name|run status|run objective|current stage|primary artifact|primary artifact expected path|existing artifacts)\s*:/i;
+        const revisionLabel = /^(user improvement request|requested improvement|revision request)\s*:\s*(.*)$/i;
+        const noise = /^(improve the existing protocol that produced this run|use the prior run as context|bring the revised protocol up to the current octopus standard)/i;
+        const parts = String(value || '')
+            .replace(/\r/g, '\n')
+            .split('\n')
+            .map((line) => {
+                const cleaned = line.replace(/^\s*[-*]\s*/, '').trim();
+                const revisionMatch = cleaned.match(revisionLabel);
+                return revisionMatch ? revisionMatch[2].trim() : cleaned;
+            })
+            .filter((line) => line && !contextLabels.test(line) && !noise.test(line));
+        const seen = new Set();
+        const compact = [];
+        parts.forEach((part) => {
+            const key = part.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            compact.push(part);
+        });
+        const text = compact.join(' ').replace(/\s+/g, ' ').trim();
+        if (text.length <= maxLength) return text;
+        return text.slice(0, maxLength).replace(/\s+\S*$/, '').trim();
+    }
+
     function _runLaunchContextEntries(run) {
         const labels = {
             context: 'Additional context',
@@ -8099,36 +8125,37 @@ function renderProtocolRuns(container) {
     }
 
     function _runImprovementRequirement(runDetail, changeRequest) {
+        return _stripRunImprovementBoilerplate(changeRequest, 1400) || 'Improve this protocol from the selected run.';
+    }
+
+    function _runImprovementContext(runDetail) {
         const detail = runDetail || {};
         const run = detail.run || {};
         const version = detail.version || {};
         const definition = version.definition_json || {};
         const artifacts = (detail.artifacts || [])
             .filter((item) => item && (item.exists || item.artifact_key || item.workspace_path || item.location))
-            .slice(0, 12)
+            .slice(0, 6)
             .map((item) => [
                 String(item.artifact_key || 'artifact').trim(),
                 String(item.workspace_path || item.location || '').trim(),
                 String(item.verification_state || item.state || '').trim(),
             ].filter(Boolean).join(' | '));
         const primary = _primaryRunArtifactInfo(detail);
-        const userRequest = String(changeRequest || '').trim();
+        const runObjective = _stripRunImprovementBoilerplate(run.problem_statement || '', 520);
         return [
-            'Improve the existing protocol that produced this run. Use the prior run as context, but generate a normal Auto Protocol revision of the protocol rather than patching the old artifact directly.',
-            '',
-            `User improvement request: ${userRequest}`,
-            '',
+            'Prior run context for this protocol improvement. Use this as evidence and orientation, not as text to copy into the new run objective.',
             `Run id: ${run.protocol_run_id || ''}`,
             `Protocol id: ${run.protocol_id || ''}`,
             `Protocol name: ${run.protocol_display_name || definition.display_name || definition.name || ''}`,
             `Run status: ${run.status || ''}`,
-            `Run objective: ${run.problem_statement || ''}`,
+            runObjective ? `Prior run objective: ${runObjective}` : '',
             `Current stage: ${run.current_stage_key || ''}`,
             primary?.artifact_key ? `Primary artifact: ${primary.artifact_key}` : '',
             primary?.expected_path ? `Primary artifact expected path: ${primary.expected_path}` : '',
             artifacts.length ? `Existing artifacts:\n- ${artifacts.join('\n- ')}` : 'Existing artifacts: none recorded',
             '',
-            'Bring the revised protocol up to the current Octopus standard: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
+            'Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
         ].filter((line) => line !== '').join('\n');
     }
 
@@ -8540,7 +8567,7 @@ function renderProtocolRuns(container) {
                     surface: 'registry',
                     target_protocol_id: sourceRun.run.protocol_id,
                     requirement_text: _runImprovementRequirement(sourceRun, changeRequest),
-                    constraints_text: '',
+                    constraints_text: _runImprovementContext(sourceRun),
                     workspace_ref: sourceRun.run.workspace_ref || '',
                 });
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);

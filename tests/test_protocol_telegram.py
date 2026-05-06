@@ -261,6 +261,7 @@ async def test_protocol_improve_run_creates_auto_protocol_revision_from_run_cont
                 assert payload["target_protocol_id"] == "risk-protocol"
                 assert payload["preferred_design_agent_id"] == "agent-1"
                 seen["requirement"] = payload["requirement_text"]
+                seen["constraints"] = payload["constraints_text"]
                 return _auto_session(
                     requirement=payload["requirement_text"],
                     target_protocol_id=payload["target_protocol_id"],
@@ -286,8 +287,9 @@ async def test_protocol_improve_run_creates_auto_protocol_revision_from_run_cont
 
         assert "Designing an improved protocol from that run" in msg.replies[0]["text"]
         assert "Add a routed UI and runtime manifest" in seen["requirement"]
-        assert "Build a payments and onboarding risk engine" in seen["requirement"]
-        assert "root octopus-runtime.json" in seen["requirement"]
+        assert "Build a payments and onboarding risk engine" not in seen["requirement"]
+        assert "Build a payments and onboarding risk engine" in seen["constraints"]
+        assert "root octopus-runtime.json" in seen["constraints"]
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)

@@ -769,6 +769,8 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
     assert "const runSource = [...(runs || [])];" in workspace
     assert "if (!_runMatchesViewFilter(item, issue)) return false;" in workspace
     assert "Improve this run" in workspace
+    assert "function _runImprovementContext(runDetail)" in workspace
+    assert "constraints_text: _runImprovementContext(sourceRun)" in workspace
     assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs')" in workspace
     assert "No normal runs match this filter." in workspace
     assert "String(item?.conversation_type || 'conversation') !== 'task_thread'" in usage_view

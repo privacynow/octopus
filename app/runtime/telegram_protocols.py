@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -167,7 +168,55 @@ def protocol_artifact_human_label(artifact) -> str:
     return name or key or "Artifact"
 
 
+def _strip_run_improvement_boilerplate(value: object, *, max_chars: int = 1200) -> str:
+    context_labels = {
+        "current stage",
+        "existing artifacts",
+        "primary artifact",
+        "primary artifact expected path",
+        "protocol id",
+        "protocol name",
+        "run id",
+        "run objective",
+        "run status",
+    }
+    revision_labels = {"requested improvement", "revision request", "user improvement request"}
+    noise_prefixes = (
+        "bring the revised protocol up to the current octopus standard",
+        "improve the existing protocol that produced this run",
+        "use the prior run as context",
+    )
+    parts: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(value or "").replace("\r", "\n").splitlines():
+        line = raw_line.strip().lstrip("-*").strip()
+        if not line:
+            continue
+        if ":" in line:
+            raw_label, payload = line.split(":", 1)
+            label = raw_label.strip().lower()
+            if label in context_labels:
+                continue
+            if label in revision_labels:
+                line = payload.strip()
+                if not line:
+                    continue
+        key = re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()
+        if not key or key in seen or any(key.startswith(prefix) for prefix in noise_prefixes):
+            continue
+        seen.add(key)
+        parts.append(line)
+    text = " ".join(parts).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rsplit(" ", 1)[0].strip()
+
+
 def protocol_run_improvement_requirement(detail, change_request: str) -> str:
+    return _strip_run_improvement_boilerplate(change_request, max_chars=1400) or "Improve this protocol from the selected run."
+
+
+def protocol_run_improvement_constraints(detail) -> str:
     run = getattr(detail, "run", None) or detail
     version = getattr(detail, "version", None)
     definition = getattr(version, "definition_json", None) if version is not None else None
@@ -178,7 +227,7 @@ def protocol_run_improvement_requirement(detail, change_request: str) -> str:
     primary = auto_meta.get("primary_artifact") if isinstance(auto_meta.get("primary_artifact"), dict) else {}
     primary_key = str(primary.get("artifact_key") or auto_meta.get("primary_artifact_key") or "").strip()
     artifact_lines: list[str] = []
-    for artifact in list(getattr(detail, "artifacts", []) or [])[:12]:
+    for artifact in list(getattr(detail, "artifacts", []) or [])[:6]:
         artifact_lines.append(
             " | ".join(
                 item
@@ -197,23 +246,21 @@ def protocol_run_improvement_requirement(detail, change_request: str) -> str:
         if artifact_lines
         else "Existing artifacts: none recorded"
     )
+    run_objective = _strip_run_improvement_boilerplate(getattr(run, "problem_statement", "") or "", max_chars=520)
     return "\n".join(
         line
         for line in [
-            "Improve the existing protocol that produced this run. Use the prior run as context, but generate a normal Auto Protocol revision of the protocol rather than patching the old artifact directly.",
-            "",
-            f"User improvement request: {str(change_request or '').strip()}",
-            "",
+            "Prior run context for this protocol improvement. Use this as evidence and orientation, not as text to copy into the new run objective.",
             f"Run id: {getattr(run, 'protocol_run_id', '') or ''}",
             f"Protocol id: {getattr(run, 'protocol_id', '') or ''}",
             f"Protocol name: {getattr(run, 'protocol_display_name', '') or definition.get('display_name') or definition.get('name') or ''}",
             f"Run status: {getattr(run, 'status', '') or ''}",
-            f"Run objective: {getattr(run, 'problem_statement', '') or ''}",
+            f"Prior run objective: {run_objective}" if run_objective else "",
             f"Current stage: {getattr(run, 'current_stage_key', '') or ''}",
             f"Primary artifact: {primary_key}" if primary_key else "",
             artifacts_block,
             "",
-            "Bring the revised protocol up to the current Octopus standard: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.",
+            "Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.",
         ]
         if line != ""
     )

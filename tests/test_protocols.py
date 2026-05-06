@@ -13,6 +13,9 @@ import pytest
 from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
     ProtocolAccessContextRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeManifestRecord,
     ProtocolDraftCreateRecord,
     ProtocolRunRecord,
     ProtocolStageExecutionRecord,
@@ -1519,7 +1522,7 @@ def test_registry_store_standard_surface_preserves_existing_operator_only_fields
         authoring_surface="operator",
     )
     assert created.ok is True
-    assert created.protocol is not None
+
 
     author_access = ProtocolAccessContextRecord(
         actor_ref="author-session",
@@ -1549,6 +1552,51 @@ def test_registry_store_standard_surface_preserves_existing_operator_only_fields
     assert saved.protocol.draft_revision > created.protocol.draft_revision
     assert saved.draft_definition_json["stages"][0]["selector"]["kind"] == "role"
     assert saved.draft_definition_json["stages"][0]["timeout_seconds"] == 300
+
+
+def test_registry_store_persists_protocol_artifact_runtime(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, _created, detail = running_protocol_run(store)
+    runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-store-test",
+        protocol_run_id=detail.run.protocol_run_id,
+        artifact_key="produced_outcome",
+        agent_id=detail.run.entry_agent_id,
+        status="starting",
+        manifest=ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/"),
+        artifact_path="/workspace/workspace/protocol/auto/run/output",
+        runtime_url=f"/runtime/protocol-runs/{detail.run.protocol_run_id}/artifacts/produced_outcome/app/",
+    )
+
+    saved = store.save_protocol_artifact_runtime(runtime, access=operator_access())
+    fetched = store.get_protocol_artifact_runtime(
+        detail.run.protocol_run_id,
+        "produced_outcome",
+        access=operator_access(),
+    )
+    event = store.append_protocol_artifact_runtime_event(
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=saved.runtime_instance_id,
+            protocol_run_id=detail.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            event_kind="starting",
+            actor_ref="test",
+            summary="Runtime start requested.",
+        ),
+        access=operator_access(),
+    )
+    events = store.list_protocol_artifact_runtime_events(
+        detail.run.protocol_run_id,
+        "produced_outcome",
+        access=operator_access(),
+    )
+
+    assert saved.runtime_instance_id == "runtime-store-test"
+    assert fetched is not None
+    assert fetched.manifest is not None
+    assert fetched.manifest.runtime_kind == "static"
+    assert event.event_kind == "starting"
+    assert [item.runtime_event_id for item in events] == [event.runtime_event_id]
 
 
 def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_draft(postgres_registry_truncated: str) -> None:

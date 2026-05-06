@@ -3197,7 +3197,7 @@ class ProtocolPostgresAdapter:
     ) -> ProtocolArtifactRuntimeInstanceRecord:
         if not any(self._access_has_role(access, role) for role in ("operator", "admin", "agent")):
             raise PermissionError("Protocol runtime mutation requires operator, admin, or agent access.")
-        with write_tx(self._connect) as conn:
+        with self._connect() as conn, write_tx(conn):
             detail = self._protocol_run_detail_in_tx(conn, runtime.protocol_run_id, access=access)
             if detail is None:
                 raise KeyError(runtime.protocol_run_id)
@@ -3293,7 +3293,7 @@ class ProtocolPostgresAdapter:
     ) -> ProtocolArtifactRuntimeEventRecord:
         if not any(self._access_has_role(access, role) for role in ("operator", "admin", "agent", "auditor")):
             raise PermissionError("Protocol runtime event mutation requires protocol access.")
-        with write_tx(self._connect) as conn:
+        with self._connect() as conn, write_tx(conn):
             detail = self._protocol_run_detail_in_tx(conn, event.protocol_run_id, access=access)
             if detail is None:
                 raise KeyError(event.protocol_run_id)

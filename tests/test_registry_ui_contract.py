@@ -1185,6 +1185,8 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace
+    assert "const inferPrimaryArtifact = () => {" in protocol_workspace
+    assert "Promoted from produced artifacts because this run did not declare a primary outcome." in protocol_workspace
     assert "unavailableReason: missing ? 'Declared artifact, not produced yet.'" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
     assert "function createTaskArtifactListRow(task, artifact, expectedOutput = null)" in helper

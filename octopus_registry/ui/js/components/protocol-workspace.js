@@ -8918,16 +8918,71 @@ function renderProtocolRuns(container) {
             return section;
         };
 
-        const buildPrimaryArtifactPanel = () => {
+        const artifactStageFor = (artifact) => {
+            const executionId = String(artifact?.produced_by_stage_execution_id || '').trim();
+            return executionId ? stageById.get(executionId) || null : null;
+        };
+
+        const inferPrimaryArtifact = () => {
             const metadata = currentRun.version?.definition_json?.metadata || {};
             const autoMeta = metadata.auto_protocol || {};
-            const primary = autoMeta.primary_artifact || {};
-            const key = String(primary.artifact_key || autoMeta.primary_artifact_key || '').trim();
-            if (!key) return null;
-            const artifact = artifactRows.find((item) => String(item.artifact_key || '').trim() === key)
-                || pendingArtifactRows.find((item) => String(item.artifact_key || '').trim() === key)
-                || { artifact_key: key, exists: false };
-            const definition = artifactDefinitionByKey.get(key) || {};
+            const explicitPrimary = autoMeta.primary_artifact || {};
+            const explicitKey = String(explicitPrimary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            const allArtifacts = [...artifactRows, ...pendingArtifactRows]
+                .filter((item) => String(item?.artifact_key || '').trim());
+            if (explicitKey) {
+                const explicitArtifact = allArtifacts.find((item) => String(item.artifact_key || '').trim() === explicitKey)
+                    || { artifact_key: explicitKey, exists: false };
+                return {
+                    artifact: explicitArtifact,
+                    definition: artifactDefinitionByKey.get(explicitKey) || {},
+                    primary: explicitPrimary,
+                    inferred: false,
+                    key: explicitKey,
+                };
+            }
+            if (!allArtifacts.length) return null;
+            const evidenceLike = /(^|[_-])(review|audit|evidence|logs?)([_-]|$)/i;
+            const scored = allArtifacts.map((artifact, index) => {
+                const key = String(artifact.artifact_key || '').trim();
+                const definition = artifactDefinitionByKey.get(key) || {};
+                const pathLabel = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
+                const stage = artifactStageFor(artifact);
+                const stageKey = String(stage?.stage_key || '').trim();
+                const verified = String(artifact.verification_state || artifact.state || '').trim().toLowerCase() === 'verified';
+                let score = 0;
+                if (artifact.exists !== false) score += 50;
+                if (UI.isLikelyDirectoryArtifactPath(pathLabel)) score += 40;
+                if (_protocolArtifactPreviewable(artifact)) score += 20;
+                if (verified) score += 10;
+                if (!evidenceLike.test(key)) score += 12;
+                if (stageKey && !evidenceLike.test(stageKey)) score += 8;
+                if (Number(artifact.size_bytes || 0) > 0) score += Math.min(10, Math.log10(Number(artifact.size_bytes || 1)));
+                return { artifact, definition, key, score, index };
+            }).sort((left, right) => {
+                if (right.score !== left.score) return right.score - left.score;
+                return left.index - right.index;
+            });
+            const selected = scored[0] || null;
+            if (!selected) return null;
+            return {
+                artifact: selected.artifact,
+                definition: selected.definition,
+                primary: {
+                    artifact_key: selected.key,
+                    display_name: selected.definition.display_name || _protocolArtifactDisplayLabel(selected.artifact, selected.definition),
+                    produced_by_stage_key: artifactStageFor(selected.artifact)?.stage_key || '',
+                    expected_path: _artifactDefinitionPath(selected.definition || selected.artifact),
+                },
+                inferred: true,
+                key: selected.key,
+            };
+        };
+
+        const buildPrimaryArtifactPanel = () => {
+            const inferred = inferPrimaryArtifact();
+            if (!inferred) return null;
+            const { artifact, definition, primary, key } = inferred;
             const panel = document.createElement('article');
             panel.className = 'run-primary-artifact-panel';
             const head = document.createElement('div');
@@ -8941,6 +8996,12 @@ function renderProtocolRuns(container) {
             badge.textContent = artifact.exists ? 'available' : 'not produced yet';
             head.appendChild(badge);
             panel.appendChild(head);
+            const note = document.createElement('p');
+            note.className = 'quiet-note';
+            note.textContent = inferred.inferred
+                ? 'Promoted from produced artifacts because this run did not declare a primary outcome.'
+                : 'This is the protocol-declared main outcome for the run.';
+            panel.appendChild(note);
             panel.appendChild(UI.renderMetadataGrid([
                 { label: 'Artifact', value: key },
                 { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },

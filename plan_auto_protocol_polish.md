@@ -234,11 +234,12 @@ avoid presenting it as remotely usable.
 
 Telegram cards for runnable artifacts should show:
 
-- Open app.
+- One prominent app action at a time: `Start app` before a runtime exists, then `Open app`, `Status`, and `Stop` after it starts.
 - API docs, when available.
-- Download zip.
-- Runtime status.
-- Stop/archive actions where safe and authorized.
+- Download zip/package.
+- A clear path back to the full artifact list.
+
+Telegram must not render a dense grid of preview/open/send buttons for every artifact by default. Non-primary artifacts can stay in the text body with command/link fallbacks; the tappable buttons should privilege the primary runnable outcome and the safest next action.
 
 ### Decision 8: Final review should exercise runtime when declared
 
@@ -352,10 +353,11 @@ For runnable artifacts, Telegram messages should include:
 
 - Primary outcome name.
 - Status.
-- Open app link.
+- A progressive app action: start first, open/status/stop only after the runtime exists.
 - Download package link.
 - API docs link if available.
 - Stop/archive action if appropriate.
+- Compact fallback links for supporting artifacts without turning the message into a button wall.
 
 Telegram should use configured public URLs and should never emit `127.0.0.1` unless the deployment explicitly declares localhost-only use.
 

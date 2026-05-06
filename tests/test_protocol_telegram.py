@@ -594,15 +594,13 @@ async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
         assert ">http://registry.local" not in reply
         assert "Open the full run in Registry" in reply
         callbacks = get_callback_data_values(msg.replies[-1])
-        assert "protocol:download:run-1:1" in callbacks
+        assert "protocol:download:run-1:1" not in callbacks
         buttons = [
             button.text
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert "Preview plan.md" in buttons
-        assert "Open plan.md" in buttons
-        assert "Send plan.md" in buttons
+        assert buttons == ["Open Run in Registry"]
 
 
 async def test_protocol_artifacts_download_sends_requested_document(monkeypatch):
@@ -717,15 +715,72 @@ async def test_protocol_artifacts_callback_shows_action_buttons(monkeypatch):
         reply = last_reply(msg)
         assert "Protocol artifacts" in reply
         callbacks = get_callback_data_values(msg.replies[-1])
+        assert "protocol:download:run-1:1" not in callbacks
+        buttons = [
+            button.text
+            for row in msg.replies[-1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert buttons == ["Open Run in Registry"]
+
+
+async def test_protocol_artifacts_highlights_runnable_package_actions(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        def _detail():
+            detail = _run_detail(run_id="run-1", version=2, stage_key="build")
+            detail.artifacts = [
+                SimpleNamespace(
+                    artifact_key="playable_package",
+                    verification_state="verified",
+                    state="available",
+                    exists=True,
+                    workspace_path="output",
+                    location="output",
+                    size_bytes=4096,
+                )
+            ]
+            return detail
+
+        class _Client:
+            async def get_run(self, run_id):
+                return _detail()
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol artifacts run-1",
+            args=["artifacts", "run-1"],
+        )
+
+        reply = last_reply(msg)
+        assert "Protocol artifacts" in reply
+        assert "Open app" in reply
+        assert "Contents" in reply
+        assert "Running app" not in reply
+        callbacks = get_callback_data_values(msg.replies[-1])
+        assert "protocol:runtime_start:run-1:1" in callbacks
         assert "protocol:download:run-1:1" in callbacks
         buttons = [
             button.text
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert "Preview plan.md" in buttons
-        assert "Open plan.md" in buttons
-        assert "Send plan.md" in buttons
+        assert buttons == ["Open Run in Registry", "Start app", "Send package"]
 
 
 async def test_protocol_artifacts_download_names_package_zip(monkeypatch):

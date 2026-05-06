@@ -1749,6 +1749,21 @@ def test_registry_store_blocks_final_accept_when_expected_runtime_manifest_is_mi
     assert blocked.run.blocked_code == "runtime_manifest_required"
     assert "octopus-runtime.json" in blocked.run.blocked_detail
 
+    (artifact_root / "octopus-runtime.json").write_text(
+        json.dumps({"runtime_kind": "java21-maven-spring-service", "endpoints": {"health": "/health"}}),
+        encoding="utf-8",
+    )
+    store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="accept",
+        reason="Retry acceptance after adding manifest.",
+    )
+    invalid = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert invalid.run.status == "blocked"
+    assert invalid.run.blocked_code == "runtime_manifest_invalid"
+    assert "canonical Octopus runtime manifest schema" in invalid.run.blocked_detail
+
 
 def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgres_registry_truncated: str, tmp_path: Path) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)

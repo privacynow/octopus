@@ -976,15 +976,22 @@ class ProtocolPostgresAdapter:
         return document.artifacts[-1].artifact_key if document.artifacts else ""
 
     @staticmethod
-    def _artifact_declares_runtime_manifest(
+    def _artifact_runtime_manifest_state(
         detail: ProtocolRunDetailRecord,
         artifact: ProtocolArtifactRecord,
-    ) -> bool:
+    ) -> tuple[bool, ProtocolArtifactRuntimeManifestRecord | None, str]:
         resolved = resolve_protocol_artifact_path(detail, artifact)
         if resolved is None:
-            return False
+            return False, None, ""
         root = resolved if resolved.is_dir() else resolved.parent
-        return (root / "octopus-runtime.json").is_file()
+        manifest_path = root / "octopus-runtime.json"
+        if not manifest_path.is_file():
+            return False, None, ""
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            return True, ProtocolArtifactRuntimeManifestRecord.model_validate(raw), ""
+        except Exception as exc:
+            return True, None, str(exc)
 
     @staticmethod
     def _primary_artifact_expects_runtime(document: ProtocolDefinitionDocumentRecord) -> bool:
@@ -1042,11 +1049,40 @@ class ProtocolPostgresAdapter:
         if artifact is None:
             return engine
         runtime = next((item for item in detail.runtime_instances if item.artifact_key == primary_key), None)
-        manifest_present = self._artifact_declares_runtime_manifest(detail, artifact)
+        manifest_present, file_manifest, manifest_error = self._artifact_runtime_manifest_state(detail, artifact)
         runtime_expected = self._primary_artifact_expects_runtime(document)
         manifest_required = runtime_expected or bool(runtime and runtime.manifest) or manifest_present
         if not manifest_required:
             return engine
+        if manifest_present and file_manifest is None:
+            detail_text = (
+                "Final acceptance for this runnable primary artifact requires a valid root octopus-runtime.json manifest before completion. "
+                f"Registry could not parse the manifest for artifact '{primary_key}': {manifest_error}. "
+                "Send the work back to the primary outcome stage so the package uses the canonical Octopus runtime manifest schema."
+            )
+            metadata = engine.transition_metadata.as_dict()
+            metadata.update({
+                "runtime_evidence_required": True,
+                "runtime_manifest_invalid": True,
+                "primary_artifact_key": primary_key,
+                "missing_runtime_evidence": ["valid root octopus-runtime.json manifest"],
+                "runtime_manifest_error": manifest_error,
+            })
+            return engine.model_copy(update={
+                "run_status": "blocked",
+                "stage_status": "blocked",
+                "failure_code": "runtime_manifest_invalid",
+                "failure_detail": detail_text,
+                "transition_kind": "blocked",
+                "transition_reason": detail_text,
+                "transition_error_code": "RUNTIME_MANIFEST_INVALID",
+                "run_blocked_code": "runtime_manifest_invalid",
+                "run_blocked_detail": detail_text,
+                "terminal_status": None,
+                "create_next_execution": False,
+                "next_stage_key": "",
+                "transition_metadata": RegistryJsonRecord.model_validate(metadata),
+            })
         if runtime_expected and not manifest_present and not bool(runtime and runtime.manifest):
             detail_text = (
                 "Final acceptance for this runnable primary artifact requires a root octopus-runtime.json manifest before completion. "

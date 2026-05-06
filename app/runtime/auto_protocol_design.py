@@ -8,6 +8,7 @@ from typing import Any
 
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.protocols.auto_design import (
+    AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE,
     ProtocolAutoDesignModelRequestRecord,
     ProtocolAutoDesignModelResponseRecord,
 )
@@ -40,7 +41,7 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "Each work package must be domain-specific to the requirement, have a strict quality bar, and include an adversarial review rubric. "
         "Do not add several final reviewers after the primary artifact; final acceptance will inspect or exercise the primary outcome. "
         "When the outcome is an app, game, report SPA, API service, backend system, or any other interactive product, the implementation package must produce a user-facing UI/API package, tests/smoke evidence, and an octopus-runtime.json manifest at the package root. "
-        "The manifest is artifact metadata for Octopus runtime routing; it must declare runtime_kind, start_command for process-backed runtimes, ui_path, health_path, api_base_path, endpoints, and smoke_test steps. "
+        f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE} "
         "For static HTML packages, runtime_kind can be static and index.html must be at the package root. "
         "For Java, Python, Node, binary, or process-backed systems, choose coherent public APIs and an operator UI that exercises those APIs through the runtime surface.\n\n"
         "Return this JSON object shape:\n"

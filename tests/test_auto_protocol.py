@@ -98,11 +98,16 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     produce_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_outcome")
     assert "only valid protocol decision is completed" in produce_stage["instructions"]
     assert "Do not leave foreground servers" in produce_stage["instructions"]
+    assert "runtime_kind 'java'" in produce_stage["instructions"]
+    assert "endpoints as an array of objects" in produce_stage["instructions"]
+    assert "endpoint_kind 'docs'" in produce_stage["instructions"]
     acceptance_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "final_evidence")
     assert acceptance_stage["transitions"]["revise"] == "produce_outcome"
     assert "Adversarially" in acceptance_stage["instructions"]
     assert "exercise" in acceptance_stage["instructions"]
     assert "octopus-runtime.json" in acceptance_stage["instructions"]
+    assert "invalid" in acceptance_stage["instructions"]
+    assert "direct localhost or container-only smoke checks" in acceptance_stage["instructions"]
     assert "choose revise" in acceptance_stage["instructions"].lower()
     assert document["metadata"]["auto_protocol"]["primary_artifact"]["open_behavior"] == "runtime"
     assert any(

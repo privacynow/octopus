@@ -80,6 +80,21 @@ _AUTO_RUNTIME_PHRASES = (
     "web browser",
 )
 
+AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE = (
+    "Runtime manifest contract: runnable primary artifacts must place octopus-runtime.json at the artifact package root "
+    "and it must validate as ProtocolArtifactRuntimeManifestRecord. Use runtime_kind exactly one of static, node, python, "
+    "java, binary, or process. For a Java/Maven service use runtime_kind 'java', not a descriptive phrase. For process-backed "
+    "runtimes include start_command, ui_path, health_path, api_base_path, smoke_test steps, and endpoints as an array of objects. "
+    "Each endpoint object uses label, path, endpoint_kind, method, and description; endpoint_kind must be one of ui, api, health, "
+    "docs, or other, and every process-backed runtime must include at least one endpoint with endpoint_kind 'docs'. "
+    "Example for Java: {\"runtime_kind\":\"java\",\"start_command\":\"mvn spring-boot:run\",\"ui_path\":\"/\","
+    "\"health_path\":\"/health\",\"api_base_path\":\"/api\",\"endpoints\":[{\"label\":\"Operator UI\",\"path\":\"/\","
+    "\"endpoint_kind\":\"ui\",\"method\":\"GET\",\"description\":\"Service-backed operator console\"},{\"label\":\"Health\","
+    "\"path\":\"/health\",\"endpoint_kind\":\"health\",\"method\":\"GET\",\"description\":\"Runtime readiness\"},"
+    "{\"label\":\"API docs\",\"path\":\"/api/docs\",\"endpoint_kind\":\"docs\",\"method\":\"GET\","
+    "\"description\":\"Human-readable API documentation\"}],\"smoke_test\":[\"GET /health\",\"GET /\",\"GET /api/docs\"]}."
+)
+
 
 def _slugify(value: str, *, fallback: str = "auto-protocol") -> str:
     text = str(value or "").strip().lower()
@@ -1974,7 +1989,8 @@ def _build_plan(
             "Keep this stage focused on its owned artifact and avoid doing later-stage work early.",
             (
                 "This protocol expects a runnable primary artifact. Package it as a user-facing product: include a coherent UI/API, "
-                "tests or smoke steps, a root octopus-runtime.json manifest, and enough start/health/smoke metadata for Octopus to start it, proxy it, and let users try it."
+                "tests or smoke steps, a root octopus-runtime.json manifest, and enough start/health/smoke metadata for Octopus to start it, proxy it, and let users try it. "
+                f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE}"
                 if package.package_key == "implementation" and runtime_expected
                 else ""
             ),
@@ -2027,15 +2043,18 @@ def _build_plan(
         (
             (
                 "Adversarially exercise the runnable primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
-                "The produced outcome must include octopus-runtime.json at the package root. Start or open the Octopus-managed runtime, exercise the UI/API through the Registry URL, "
-                "and record runtime evidence before accepting. Choose revise if the manifest is missing, the runtime cannot start, health fails, the UI/API cannot be exercised, "
+                "The produced outcome must include octopus-runtime.json at the package root. "
+                f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE} "
+                "Start or open the Octopus-managed runtime, exercise the UI/API through the Registry URL, "
+                "and record runtime evidence before accepting. Do not accept based on direct localhost or container-only smoke checks when the Registry-managed runtime cannot parse, start, route, or fetch the app. "
+                "Choose revise if the manifest is missing or invalid, the runtime cannot start, health fails, the UI/API cannot be exercised, "
                 "the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
             )
             if runtime_expected
             else (
                 "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
-                "If the primary artifact declares octopus-runtime.json, start or open the Octopus-managed runtime, exercise the UI/API, and record runtime evidence before accepting. "
-                "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
+                "If the primary artifact declares octopus-runtime.json, it must follow the Octopus runtime manifest contract, then start or open the Octopus-managed runtime, exercise the UI/API, and record runtime evidence before accepting. "
+                "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, has an invalid runtime manifest, or falls below the stated quality bar. "
             )
         )
         + (

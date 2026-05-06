@@ -4,7 +4,11 @@ testpaths = ["tests", "octopus_sdk/tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v"
+filterwarnings = [
+    "ignore:codecs.open\\(\\) is deprecated:DeprecationWarning:frontmatter",
+]
 markers = [
+    "postgres: requires the harness-owned Postgres database",
     "unit_fast: fast unit and pure contract coverage for local iteration",
     "registry_contract: Registry HTTP/store/API contract coverage",
     "bot_runtime_focused: bot runtime and management bridge coverage",

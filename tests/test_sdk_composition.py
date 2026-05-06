@@ -472,6 +472,11 @@ def test_workflow_composer_tracks_supported_admin_operations_from_optional_ports
         "set_conversation_setting",
         "reset_conversation",
         "design_auto_protocol",
+        "start_artifact_runtime",
+        "stop_artifact_runtime",
+        "artifact_runtime_health",
+        "artifact_runtime_logs",
+        "artifact_runtime_fetch",
     )
 
 

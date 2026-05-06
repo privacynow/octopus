@@ -1885,6 +1885,32 @@ def protocol_run_artifacts_message(
                     actions.append(fallback)
             if actions:
                 line += " · " + " · ".join(actions)
+            if not (browse_link or runtime_link):
+                artifact_row: list[InlineKeyboardButton] = []
+                if preview_link:
+                    button = _telegram_url_button(
+                        preview_link,
+                        _telegram_button_label("Preview", label),
+                    )
+                    if button is not None:
+                        artifact_row.append(button)
+                if open_link:
+                    button = _telegram_url_button(
+                        open_link,
+                        _telegram_button_label("Open", label),
+                    )
+                    if button is not None:
+                        artifact_row.append(button)
+                if download_link:
+                    _append_button(
+                        artifact_row,
+                        _telegram_button_label("Send", label),
+                        "download",
+                        run.protocol_run_id,
+                        str(index),
+                    )
+                if artifact_row:
+                    keyboard_rows.append(artifact_row)
             if featured_artifact is None and (browse_link or runtime_link):
                 featured_artifact = {
                     "artifact_ref": str(index),

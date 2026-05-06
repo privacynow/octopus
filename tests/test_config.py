@@ -706,11 +706,13 @@ def test_main_registry_only_starts_without_telegram_ingress():
         stack.enter_context(patch("app.main.load_config", return_value=cfg))
         stack.enter_context(patch("app.main.make_provider", return_value=provider))
         stack.enter_context(patch("app.main.fail_fast"))
+        stack.enter_context(patch("app.runtime.startup.run_database_startup_checks"))
         stack.enter_context(patch("app.runtime.startup.runtime_backend.init"))
         stack.enter_context(patch("app.runtime_backend.transport_store", return_value=MagicMock(name="transport_store")))
         stack.enter_context(patch("app.runtime.startup.ensure_data_dirs"))
         stack.enter_context(patch("app.runtime.startup.init_content_store_for_config"))
         stack.enter_context(patch("app.runtime.startup.init_credential_store_for_config"))
+        stack.enter_context(patch("app.runtime.composition.get_content_store", return_value=MagicMock(name="content_store")))
         stack.enter_context(patch("app.runtime.transport_builders.TransportDispatcher", return_value=dispatcher))
         control_plane_bus_cls = stack.enter_context(patch("app.runtime.services.ControlPlaneBus"))
         register_registry_channels = stack.enter_context(

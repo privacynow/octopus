@@ -66,17 +66,32 @@ def get_run_id() -> str:
 
 
 def docker_available() -> bool:
-    """True if Docker is available and we can run containers."""
-    try:
-        r = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-        return r.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+    """True if Docker is installed and reachable; fail loudly on daemon errors."""
+    last_error = ""
+    for attempt in range(3):
+        try:
+            r = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False
+        except subprocess.TimeoutExpired:
+            last_error = "docker info timed out"
+        else:
+            if r.returncode == 0:
+                return True
+            stderr = (r.stderr or "").strip() or "(no stderr)"
+            last_error = f"docker info exited {r.returncode}: {stderr}"
+        if attempt < 2:
+            time.sleep(1.0)
+    raise RuntimeError(
+        f"docker info failed while checking test Postgres availability after 3 attempts: "
+        f"{last_error or 'unknown Docker error'}"
+    )
 
 
 def _worker_index(worker_id: str) -> int:
@@ -177,6 +192,47 @@ def stop_test_postgres_container(worker_id: str = "master", run_id: str | None =
     )
 
 
+def stop_test_postgres_containers_for_run(run_id: str) -> None:
+    """Best-effort cleanup for every worker container owned by a pytest run."""
+    safe_run = str(run_id or "").replace("-", "_")[:16]
+    if not safe_run:
+        return
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--format",
+                "{{.Names}}",
+                "--filter",
+                f"name={TEST_POSTGRES_CONTAINER_PREFIX}_",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return
+    if result.returncode != 0:
+        return
+    names = [
+        line.strip()
+        for line in (result.stdout or "").splitlines()
+        if line.strip().startswith(f"{TEST_POSTGRES_CONTAINER_PREFIX}_")
+        and line.strip().endswith(f"_{safe_run}")
+    ]
+    if not names:
+        return
+    subprocess.run(
+        ["docker", "rm", "-f", *names],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+
 def get_worker_id(config) -> str:
     """Return pytest worker id (e.g. gw0, gw1) or 'master' when not under xdist."""
     try:
@@ -207,63 +263,83 @@ def create_test_database(base_url: str, db_name: str) -> None:
         conn.close()
 
 
+_RUNTIME_TABLES = (
+    "bot_runtime.control_plane_commands",
+    "bot_runtime.deferred_notifications",
+    "bot_runtime.work_items",
+    "bot_runtime.worker_heartbeats",
+    "bot_runtime.updates",
+    "bot_runtime.sessions",
+    "bot_runtime.usage_log",
+    "bot_runtime.user_access",
+)
+_REGISTRY_TABLES = (
+    "agent_registry.deliveries",
+    "agent_registry.events",
+    "agent_registry.routed_tasks",
+    "agent_registry.protocol_transitions",
+    "agent_registry.protocol_artifacts",
+    "agent_registry.protocol_stage_executions",
+    "agent_registry.protocol_run_participants",
+    "agent_registry.protocol_runs",
+    "agent_registry.protocol_definition_versions",
+    "agent_registry.protocol_definitions",
+    "agent_registry.conversations",
+    "agent_registry.agents",
+    "agent_registry.skills_override",
+    "agent_registry.meta",
+)
+_CONTENT_TABLES = (
+    "bot_content.skill_files",
+    "bot_content.skill_approval_records",
+    "bot_content.provider_guidance_approval_records",
+    "bot_content.skill_revisions",
+    "bot_content.provider_guidance_revisions",
+    "bot_content.skill_tracks",
+    "bot_content.provider_guidance_tracks",
+    "bot_content.skill_namespaces",
+)
+_CREDENTIAL_TABLES = ("bot_credentials.credentials",)
+
+
+def _truncate_tables(conn, tables: tuple[str, ...]) -> None:
+    if not tables:
+        return
+    with conn.cursor() as cur:
+        cur.execute(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE")
+    conn.commit()
+
+
+def truncate_all_test_tables(conn) -> None:
+    """Reset every test-owned schema group with one DB round trip."""
+    _truncate_tables(
+        conn,
+        _RUNTIME_TABLES + _REGISTRY_TABLES + _CONTENT_TABLES + _CREDENTIAL_TABLES,
+    )
+
+
 def truncate_runtime_tables(conn) -> None:
     """Truncate bot_runtime tables used by runtime and transport tests.
 
     Must only be called for connections to the harness-started test Postgres container,
     never for dev/staging/production (see module docstring).
     """
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE bot_runtime.control_plane_commands RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.deferred_notifications CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.work_items CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.worker_heartbeats CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.updates CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.sessions CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.usage_log RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.user_access RESTART IDENTITY CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _RUNTIME_TABLES)
 
 
 def truncate_registry_tables(conn) -> None:
     """Truncate registry tables in the test schema. Safe only for harness-owned DBs."""
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE agent_registry.deliveries RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.events RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.routed_tasks RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_transitions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_artifacts RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_stage_executions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_run_participants RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_runs RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_definition_versions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_definitions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.conversations RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.agents RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.skills_override RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.meta RESTART IDENTITY CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _REGISTRY_TABLES)
 
 
 def truncate_content_tables(conn) -> None:
     """Reset the dedicated content schema in the test database."""
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE bot_content.skill_files CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_approval_records CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_approval_records CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_revisions CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_revisions CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_tracks CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_tracks CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_namespaces CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _CONTENT_TABLES)
 
 
 def truncate_credential_tables(conn) -> None:
     """Reset the dedicated credential schema in the test database."""
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE bot_credentials.credentials CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _CREDENTIAL_TABLES)
 
 
 def init_test_db(conn) -> list[str]:

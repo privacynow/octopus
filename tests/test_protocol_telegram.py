@@ -594,13 +594,13 @@ async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
         assert ">http://registry.local" not in reply
         assert "Open the full run in Registry" in reply
         callbacks = get_callback_data_values(msg.replies[-1])
-        assert "protocol:download:run-1:1" not in callbacks
+        assert "protocol:download:run-1:1" in callbacks
         buttons = [
             button.text
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert buttons == ["Open Run in Registry"]
+        assert buttons == ["Open Run in Registry", "Preview plan.md", "Open plan.md", "Send plan.md"]
 
 
 async def test_protocol_artifacts_download_sends_requested_document(monkeypatch):
@@ -715,13 +715,13 @@ async def test_protocol_artifacts_callback_shows_action_buttons(monkeypatch):
         reply = last_reply(msg)
         assert "Protocol artifacts" in reply
         callbacks = get_callback_data_values(msg.replies[-1])
-        assert "protocol:download:run-1:1" not in callbacks
+        assert "protocol:download:run-1:1" in callbacks
         buttons = [
             button.text
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert buttons == ["Open Run in Registry"]
+        assert buttons == ["Open Run in Registry", "Preview plan.md", "Open plan.md", "Send plan.md"]
 
 
 async def test_protocol_artifacts_highlights_runnable_package_actions(monkeypatch):

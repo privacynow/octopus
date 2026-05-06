@@ -3,13 +3,15 @@
 Priority 4: per-test handler runtime isolation. Every test gets a clean
 handler-global state before and after, so no ambient leakage between cases.
 
-Phase 12: Postgres test harness — one DB per pytest worker, truncate between
-tests. Use fixture postgres_truncated when a test needs a real Postgres backend.
+Phase 12: Postgres test harness — one DB per pytest worker, truncate only for
+tests that need Postgres. Use fixture postgres_truncated when a test needs a
+real Postgres backend.
 """
 
 import os
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +25,81 @@ _RUNTIME_ENV_PREFIXES = (
     "CLAUDE_",
     "CODEX_",
 )
+_POSTGRES_FIXTURE_NAMES = frozenset(
+    {
+        "postgres_db_url",
+        "postgres_truncated",
+        "postgres_registry_truncated",
+        "postgres_content_truncated",
+        "postgres_credentials_truncated",
+    }
+)
+_POSTGRES_TRUNCATING_FIXTURE_NAMES = frozenset(
+    {
+        "postgres_truncated",
+        "postgres_registry_truncated",
+        "postgres_content_truncated",
+        "postgres_credentials_truncated",
+    }
+)
+_POSTGRES_ENV_DEFAULT_FILES = frozenset(
+    {
+        # These tests exercise FastAPI/runtime paths that read OCTOPUS_DATABASE_URL
+        # through application config instead of declaring a DB fixture on each case.
+        "tests/test_artifact_runtime.py",
+        "tests/test_agents.py",
+        "tests/test_cancel.py",
+        "tests/test_channel_egress_factory.py",
+        "tests/test_control_plane_ports.py",
+        "tests/test_doctor.py",
+        "tests/test_execution_context.py",
+        "tests/test_handlers.py",
+        "tests/test_handlers_admin.py",
+        "tests/test_handlers_approval.py",
+        "tests/test_handlers_codex.py",
+        "tests/test_handlers_credentials.py",
+        "tests/test_handlers_delegation.py",
+        "tests/test_handlers_export.py",
+        "tests/test_handlers_output.py",
+        "tests/test_handlers_ratelimit.py",
+        "tests/test_handlers_store.py",
+        "tests/test_invariants.py",
+        "tests/test_lifecycle_workflows.py",
+        "tests/test_protocol_telegram.py",
+        "tests/test_registry.py",
+        "tests/test_registry_adapter.py",
+        "tests/test_registry_mirroring.py",
+        "tests/test_registry_service.py",
+        "tests/test_request_flow.py",
+        "tests/test_runtime_health.py",
+        "tests/test_runtime_process_profile.py",
+        "tests/test_runtime_dispatch_boundary.py",
+        "tests/test_runtime_skill_use_cases.py",
+        "tests/test_sdk_certification_profiles.py",
+        "tests/test_sdk_composition.py",
+        "tests/test_session_runtime.py",
+        "tests/test_shared_runtime.py",
+        "tests/test_skill_inspection.py",
+        "tests/test_skills.py",
+        "tests/test_store.py",
+        "tests/test_store_e2e.py",
+        "tests/test_telegram_channel_egress.py",
+        "tests/test_telegram_channel_state.py",
+        "tests/test_telegram_delegation_channel.py",
+        "tests/test_telegram_progress_module.py",
+        "tests/test_telegram_runtime_skills.py",
+        "tests/test_transport.py",
+        "tests/test_worker_workflows.py",
+        "tests/test_workitem_integration.py",
+    }
+)
+
+
+def _repo_relative_test_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 
@@ -42,9 +119,36 @@ def pytest_configure(config):
             pass
 
 
+def pytest_collection_modifyitems(config, items):
+    """Mark Postgres-backed tests from their declared fixtures or legacy module needs."""
+    del config
+    postgres_marker = pytest.mark.postgres
+    for item in items:
+        path = _repo_relative_test_path(item.path)
+        if (
+            _POSTGRES_FIXTURE_NAMES.intersection(getattr(item, "fixturenames", ()))
+            or path in _POSTGRES_ENV_DEFAULT_FILES
+        ):
+            item.add_marker(postgres_marker)
+
+
 def pytest_unconfigure(config):
     """Remove the run-id file created by this invocation so concurrent runs don't read it later."""
     path = getattr(config, "_postgres_run_id_file", None)
+    run_id = None
+    if path and os.path.isfile(path):
+        try:
+            with open(path) as f:
+                run_id = f.read().strip() or None
+        except OSError:
+            run_id = None
+    if run_id:
+        try:
+            from tests.support.postgres_support import stop_test_postgres_containers_for_run
+
+            stop_test_postgres_containers_for_run(run_id)
+        except Exception:
+            pass
     if path and os.path.isfile(path):
         try:
             os.unlink(path)
@@ -55,23 +159,11 @@ def pytest_unconfigure(config):
 
 
 @pytest.fixture(autouse=True)
-def reset_handler_runtime(postgres_db_url):
-    """Reset handler globals and DB caches before and after each test (Priority 4)."""
-    from app.db.postgres import get_connection
+def reset_handler_runtime():
+    """Reset handler globals before and after each test without forcing DB startup."""
     from tests.support.handler_support import reset_handler_test_runtime
-    from tests.support.postgres_support import (
-        truncate_content_tables,
-        truncate_credential_tables,
-        truncate_registry_tables,
-        truncate_runtime_tables,
-    )
     from octopus_registry.backend import reset_for_test as reset_registry_store
 
-    with get_connection(postgres_db_url) as conn:
-        truncate_runtime_tables(conn)
-        truncate_registry_tables(conn)
-        truncate_content_tables(conn)
-        truncate_credential_tables(conn)
     reset_registry_store()
     reset_handler_test_runtime()
     yield
@@ -98,6 +190,48 @@ def restore_runtime_env():
             os.environ.pop(key, None)
     for key, value in before.items():
         os.environ[key] = value
+
+
+@pytest.fixture(autouse=True)
+def postgres_env_for_db_tests(request):
+    """Expose and reset the harness-owned DB only for tests that actually use it.
+
+    Most tests in this repository are pure unit or contract tests. Pulling in
+    postgres_db_url from a global autouse fixture makes all of them start Docker
+    and pay truncation cost. This fixture keeps the old safety contract for DB
+    tests while letting pure tests stay pure.
+    """
+    fixturenames = set(getattr(request, "fixturenames", ()))
+    uses_postgres = bool(
+        _POSTGRES_FIXTURE_NAMES.intersection(fixturenames)
+        or request.node.get_closest_marker("postgres")
+    )
+    if not uses_postgres:
+        yield
+        return
+
+    database_url = request.getfixturevalue("postgres_db_url")
+    previous = os.environ.get("OCTOPUS_DATABASE_URL")
+    os.environ["OCTOPUS_DATABASE_URL"] = database_url
+
+    should_default_truncate = (
+        "postgres_db_url" in fixturenames
+        and not _POSTGRES_TRUNCATING_FIXTURE_NAMES.intersection(fixturenames)
+    ) or _repo_relative_test_path(request.node.path) in _POSTGRES_ENV_DEFAULT_FILES
+    if should_default_truncate:
+        from app.db.postgres import get_connection
+        from tests.support.postgres_support import truncate_all_test_tables
+
+        with get_connection(database_url) as conn:
+            truncate_all_test_tables(conn)
+
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("OCTOPUS_DATABASE_URL", None)
+        else:
+            os.environ["OCTOPUS_DATABASE_URL"] = previous
 
 
 # ---------------------------------------------------------------------------
@@ -150,20 +284,6 @@ def postgres_db_url(postgres_base_url, request):
         if errors:
             raise RuntimeError(f"Postgres init failed: {errors}")
     yield url
-
-
-@pytest.fixture(scope="session", autouse=True)
-def default_postgres_env(postgres_db_url):
-    """Expose the harness-owned Postgres URL as the default runtime DB for tests."""
-    previous = os.environ.get("OCTOPUS_DATABASE_URL")
-    os.environ["OCTOPUS_DATABASE_URL"] = postgres_db_url
-    try:
-        yield
-    finally:
-        if previous is None:
-            os.environ.pop("OCTOPUS_DATABASE_URL", None)
-        else:
-            os.environ["OCTOPUS_DATABASE_URL"] = previous
 
 
 @pytest.fixture

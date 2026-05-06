@@ -408,9 +408,20 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/health`),
         getProtocolRunArtifactRuntimeLogs: (id, artifactKey) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/logs`),
+        getProtocolRunArtifactRuntimeEvents: (id, artifactKey, limit = 25) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/events?limit=${encodeURIComponent(limit)}`),
+        archiveProtocolRunArtifactRuntime: (id, artifactKey) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/archive`, { body: {} }),
+        deleteProtocolRunArtifactRuntime: (id, artifactKey) =>
+            request('DELETE', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime`),
         protocolRunArtifactRuntimeAppUrl: (id, artifactKey, path = '') => {
             const tail = String(path || '').replace(/^\/+/, '');
             const base = `/runtime/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/app`;
+            return new URL(tail ? `${base}/${tail}` : `${base}/`, window.location.origin).toString();
+        },
+        protocolRunArtifactRuntimeApiUrl: (id, artifactKey, path = '') => {
+            const tail = String(path || '').replace(/^\/+/, '');
+            const base = `/runtime/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/api`;
             return new URL(tail ? `${base}/${tail}` : `${base}/`, window.location.origin).toString();
         },
         getProtocolRunTimeline: (id) =>

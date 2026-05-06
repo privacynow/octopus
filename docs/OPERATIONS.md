@@ -146,6 +146,9 @@ For every customer-relevant artifact:
 6. For runnable artifacts, start the app, open the Registry-routed URL, exercise
    the primary UI/API path, inspect health/logs if available, and stop the
    runtime when evaluation is complete.
+7. Export the run when audit handoff matters; runtime instances and runtime
+   events are included in the run export alongside stages, artifacts, tasks, and
+   transitions.
 
 If a produced artifact cannot be previewed, opened, downloaded, or located from
 the customer-facing surface where it appears, record that as a product issue.
@@ -211,6 +214,11 @@ For a reusable demo environment:
 2. Preserve agents, credentials, skills, guidance, and tokens unless the goal is
    a full teardown.
 3. Do not clean a customer environment without an explicit operator decision.
+
+Runnable artifact processes have explicit runtime limits. The bot runtime reaps
+expired local processes, and Registry maintenance records expired runtime state
+and events so operators can see what happened. Prefer `Stop app`, `Archive`, or
+`Delete` from the run artifact controls before using broader workspace cleanup.
 
 ## What To Avoid
 

@@ -668,6 +668,12 @@ class ProtocolArtifactRuntimeManifestRecord(RegistryRecordModel):
     def _validate_runtime_contract(self) -> "ProtocolArtifactRuntimeManifestRecord":
         if self.runtime_kind != "static" and not str(self.start_command or "").strip():
             raise ValueError("process-backed runtime artifacts require start_command")
+        if self.runtime_kind != "static" and not self.smoke_test:
+            raise ValueError("process-backed runtime artifacts require smoke_test steps")
+        if self.runtime_kind != "static":
+            endpoint_kinds = {str(item.endpoint_kind or "").strip().lower() for item in self.endpoints}
+            if "docs" not in endpoint_kinds:
+                raise ValueError("process-backed runtime artifacts require a docs endpoint")
         return self
 
 
@@ -802,6 +808,8 @@ class ProtocolRunDetailRecord(RegistryRecordModel):
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
     tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
+    runtime_instances: list[ProtocolArtifactRuntimeInstanceRecord] = Field(default_factory=list)
+    runtime_events: list[ProtocolArtifactRuntimeEventRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
 
@@ -814,6 +822,8 @@ class ProtocolRunExportRecord(RegistryRecordModel):
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
     tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
+    runtime_instances: list[ProtocolArtifactRuntimeInstanceRecord] = Field(default_factory=list)
+    runtime_events: list[ProtocolArtifactRuntimeEventRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
 

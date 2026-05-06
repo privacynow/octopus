@@ -1998,6 +1998,7 @@ def protocol_artifact_runtime_message(
     status: str,
     message: str,
     runtime_link: str = "",
+    package_link: str = "",
     artifact_ref: str = "",
 ) -> TelegramRenderedMessage:
     short_id = _short_run_id(run_id)
@@ -2011,7 +2012,8 @@ def protocol_artifact_runtime_message(
         lines.append(html.escape(message))
     keyboard: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
-    if runtime_link:
+    normalized_status = str(status or "").strip().lower()
+    if runtime_link and normalized_status == "running":
         button = _telegram_url_button(runtime_link, "Open app")
         if button is not None:
             row.append(button)
@@ -2020,9 +2022,16 @@ def protocol_artifact_runtime_message(
             if fallback:
                 lines.append(f"Open app: {fallback}")
     if artifact_ref:
+        if normalized_status not in {"running", "starting"}:
+            _append_button(row, "Start app", "runtime_start", run_id, artifact_ref)
         _append_button(row, "Status", "runtime_status", run_id, artifact_ref)
-        _append_button(row, "Stop", "runtime_stop", run_id, artifact_ref)
+        if normalized_status in {"running", "starting"}:
+            _append_button(row, "Stop", "runtime_stop", run_id, artifact_ref)
         _append_button(row, "Artifacts", "artifacts", run_id)
+    if package_link:
+        fallback = _telegram_named_link(package_link, "Download package")
+        if fallback:
+            lines.append(f"Download: {fallback}")
     if row:
         keyboard.append(row)
     return TelegramRenderedMessage(

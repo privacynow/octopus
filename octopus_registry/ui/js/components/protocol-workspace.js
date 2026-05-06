@@ -58,6 +58,282 @@ function _protocolArtifactPreviewable(item) {
     return UI.isPreviewableFilePath(_protocolArtifactDisplayPath(item));
 }
 
+function _runtimeStatusLabel(runtime = {}) {
+    const status = String(runtime?.status || '').trim().toLowerCase();
+    if (!status) return 'Unknown';
+    return _titleCaseWords(status.replace(/_/g, ' '));
+}
+
+function _runtimeEndpoint(runtime = {}, key = '') {
+    const manifest = runtime?.manifest || {};
+    if (key === 'api_docs') {
+        const docsEndpoint = (Array.isArray(manifest.endpoints) ? manifest.endpoints : [])
+            .find((item) => String(item?.endpoint_kind || '').toLowerCase() === 'docs');
+        return docsEndpoint?.path || '';
+    }
+    return '';
+}
+
+function _runtimeFact(label, value, { link = false } = {}) {
+    const row = document.createElement('div');
+    row.className = 'kit-details-row';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'kit-details-label';
+    labelEl.textContent = label;
+    row.appendChild(labelEl);
+    const valueEl = link && value ? document.createElement('a') : document.createElement('div');
+    valueEl.className = 'kit-artifact-guide-fact-value';
+    if (link && value) {
+        valueEl.href = String(value);
+        valueEl.target = '_blank';
+        valueEl.rel = 'noreferrer noopener';
+        valueEl.textContent = String(value);
+    } else {
+        valueEl.textContent = String(value || 'Not available');
+    }
+    row.appendChild(valueEl);
+    return row;
+}
+
+async function _artifactRuntimeSnapshot(runId, artifactKey) {
+    const [status, events] = await Promise.all([
+        API.getProtocolRunArtifactRuntime(runId, artifactKey),
+        API.getProtocolRunArtifactRuntimeEvents(runId, artifactKey, 12).catch(() => ({ items: [] })),
+    ]);
+    return {
+        runtime: status?.runtime || null,
+        manifestAvailable: Boolean(status?.manifest_available),
+        packageUrl: status?.package_url || '',
+        browseUrl: status?.browse_url || '',
+        events: Array.isArray(events?.items) ? events.items : [],
+    };
+}
+
+function _renderArtifactRuntimeDialogBody({
+    runId,
+    artifactKey,
+    artifactLabel,
+    snapshot,
+    health = null,
+    logs = null,
+} = {}) {
+    const runtime = snapshot?.runtime || {};
+    const manifest = runtime?.manifest || {};
+    const status = String(runtime?.status || '').toLowerCase();
+    const appUrl = API.protocolRunArtifactRuntimeAppUrl(runId, artifactKey);
+    const apiUrl = API.protocolRunArtifactRuntimeApiUrl(runId, artifactKey);
+    const docsPath = _runtimeEndpoint(runtime, 'api_docs');
+    const docsUrl = docsPath ? API.protocolRunArtifactRuntimeApiUrl(runId, artifactKey, docsPath) : '';
+
+    const body = document.createElement('div');
+    body.className = 'artifact-runtime-dialog';
+
+    const intro = document.createElement('p');
+    intro.className = 'quiet-note';
+    intro.textContent = snapshot?.manifestAvailable
+        ? `Runtime controls for ${artifactLabel || artifactKey}. Use Open app to exercise the product, Health to verify it, and Download zip to keep the package.`
+        : 'This artifact does not declare a runtime. You can still browse files or download the package.';
+    body.appendChild(intro);
+
+    const facts = document.createElement('div');
+    facts.className = 'kit-details-panel artifact-runtime-facts';
+    facts.appendChild(_runtimeFact('Status', _runtimeStatusLabel(runtime)));
+    facts.appendChild(_runtimeFact('Kind', manifest.runtime_kind || 'Not declared'));
+    facts.appendChild(_runtimeFact('Started', runtime.started_at ? UI.formatTime(runtime.started_at) : 'Not started'));
+    facts.appendChild(_runtimeFact('Updated', runtime.updated_at ? UI.relativeTime(runtime.updated_at) : 'Not recorded'));
+    facts.appendChild(_runtimeFact('Owning agent', runtime.agent_id || 'Not resolved'));
+    if (runtime.ui_url || snapshot?.manifestAvailable) {
+        facts.appendChild(_runtimeFact('App URL', appUrl, { link: true }));
+    }
+    if (manifest.api_base_path || String(manifest.runtime_kind || '') !== 'static') {
+        facts.appendChild(_runtimeFact('API URL', apiUrl, { link: true }));
+    }
+    if (docsUrl) {
+        facts.appendChild(_runtimeFact('API docs', docsUrl, { link: true }));
+    }
+    body.appendChild(facts);
+
+    if (health) {
+        const healthPanel = document.createElement('div');
+        healthPanel.className = 'kit-details-panel artifact-runtime-section';
+        const title = document.createElement('div');
+        title.className = 'detail-label';
+        title.textContent = 'Latest health check';
+        healthPanel.appendChild(title);
+        healthPanel.appendChild(_runtimeFact('Result', health.ok ? 'Healthy' : 'Not healthy'));
+        healthPanel.appendChild(_runtimeFact('HTTP status', health.status_code || 'No response'));
+        healthPanel.appendChild(_runtimeFact('Message', health.message || 'No health message'));
+        body.appendChild(healthPanel);
+    }
+
+    const events = Array.isArray(snapshot?.events) ? snapshot.events : [];
+    const eventPanel = document.createElement('details');
+    eventPanel.className = 'kit-stage-editor-section is-collapsible artifact-runtime-section';
+    eventPanel.open = events.length > 0;
+    const eventSummary = document.createElement('summary');
+    eventSummary.className = 'kit-stage-editor-summary';
+    eventSummary.textContent = `Runtime events (${events.length})`;
+    eventPanel.appendChild(eventSummary);
+    const eventList = document.createElement('div');
+    eventList.className = 'task-artifact-list';
+    UI.reconcileChildren(eventList, events.length
+        ? events.map((event) => UI.renderListRow({
+            label: _titleCaseWords(String(event.event_kind || 'event').replace(/_/g, ' ')),
+            sublabel: [
+                event.summary || '',
+                event.created_at ? UI.relativeTime(event.created_at) : '',
+            ].filter(Boolean).join(' · '),
+            badgeText: event.actor_ref || '',
+        }))
+        : [UI.renderEmptyState('No runtime events have been recorded yet.', true)]);
+    eventPanel.appendChild(eventList);
+    body.appendChild(eventPanel);
+
+    const logPanel = document.createElement('details');
+    logPanel.className = 'kit-stage-editor-section is-collapsible artifact-runtime-section';
+    logPanel.open = Boolean(logs?.log_tail);
+    const logSummary = document.createElement('summary');
+    logSummary.className = 'kit-stage-editor-summary';
+    logSummary.textContent = 'Runtime logs';
+    logPanel.appendChild(logSummary);
+    const logPre = document.createElement('pre');
+    logPre.className = 'event-pre artifact-runtime-log';
+    logPre.textContent = String(logs?.log_tail || runtime.log_tail || 'Logs are not available for this runtime state.').trim();
+    logPanel.appendChild(logPre);
+    body.appendChild(logPanel);
+
+    if (runtime.failure_detail) {
+        const failure = document.createElement('p');
+        failure.className = 'error-card';
+        failure.textContent = runtime.failure_detail;
+        body.appendChild(failure);
+    }
+
+    body.dataset.runtimeStatus = status;
+    body.dataset.manifestAvailable = snapshot?.manifestAvailable ? 'true' : 'false';
+    body.dataset.docsUrl = docsUrl;
+    return body;
+}
+
+async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = '') {
+    const body = document.createElement('div');
+    body.appendChild(UI.renderEmptyState('Loading runtime status…', true));
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn';
+    closeBtn.textContent = 'Close';
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'btn';
+    refreshBtn.textContent = 'Refresh';
+    const healthBtn = document.createElement('button');
+    healthBtn.type = 'button';
+    healthBtn.className = 'btn';
+    healthBtn.textContent = 'Health';
+    const logsBtn = document.createElement('button');
+    logsBtn.type = 'button';
+    logsBtn.className = 'btn';
+    logsBtn.textContent = 'Logs';
+    const openBtn = document.createElement('a');
+    openBtn.className = 'btn btn-primary';
+    openBtn.textContent = 'Open app';
+    openBtn.target = '_blank';
+    openBtn.rel = 'noreferrer noopener';
+    openBtn.href = API.protocolRunArtifactRuntimeAppUrl(runId, artifactKey);
+    const archiveBtn = document.createElement('button');
+    archiveBtn.type = 'button';
+    archiveBtn.className = 'btn';
+    archiveBtn.textContent = 'Archive';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn btn-danger';
+    deleteBtn.textContent = 'Delete';
+
+    const view = UI.showDialog(`Runtime: ${artifactLabel || artifactKey}`, body, {
+        actions: [closeBtn, refreshBtn, healthBtn, logsBtn, openBtn, archiveBtn, deleteBtn],
+        maxWidth: '820px',
+    });
+    closeBtn.addEventListener('click', () => view.close());
+
+    let latestSnapshot = null;
+    let latestHealth = null;
+    let latestLogs = null;
+
+    const render = () => {
+        const nextBody = _renderArtifactRuntimeDialogBody({
+            runId,
+            artifactKey,
+            artifactLabel,
+            snapshot: latestSnapshot || {},
+            health: latestHealth,
+            logs: latestLogs,
+        });
+        body.replaceChildren(...Array.from(nextBody.childNodes));
+        body.dataset.runtimeStatus = nextBody.dataset.runtimeStatus || '';
+        body.dataset.manifestAvailable = nextBody.dataset.manifestAvailable || '';
+        body.dataset.docsUrl = nextBody.dataset.docsUrl || '';
+        const status = body.dataset.runtimeStatus;
+        const manifestAvailable = body.dataset.manifestAvailable === 'true';
+        openBtn.hidden = status !== 'running';
+        healthBtn.hidden = !manifestAvailable || status !== 'running';
+        logsBtn.hidden = !manifestAvailable;
+        archiveBtn.hidden = !manifestAvailable || status === 'running';
+        deleteBtn.hidden = !manifestAvailable || status === 'running';
+    };
+
+    const refresh = async ({ health = false, logs = false } = {}) => {
+        refreshBtn.disabled = true;
+        try {
+            latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
+            if (health && latestSnapshot?.runtime) {
+                latestHealth = await API.getProtocolRunArtifactRuntimeHealth(runId, artifactKey);
+            }
+            if (logs && latestSnapshot?.runtime) {
+                latestLogs = await API.getProtocolRunArtifactRuntimeLogs(runId, artifactKey);
+            }
+            render();
+        } catch (err) {
+            body.replaceChildren(UI.createErrorCard('Failed to load runtime status.', () => refresh()));
+            UI.reportError('Failed to load runtime status', err, { context: 'Artifact runtime status failed' });
+        } finally {
+            refreshBtn.disabled = false;
+        }
+    };
+
+    refreshBtn.addEventListener('click', () => void refresh());
+    healthBtn.addEventListener('click', () => void refresh({ health: true }));
+    logsBtn.addEventListener('click', () => void refresh({ logs: true }));
+    archiveBtn.addEventListener('click', async () => {
+        archiveBtn.disabled = true;
+        try {
+            await API.archiveProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('Runtime archived.', 'success');
+            await refresh();
+        } catch (err) {
+            UI.reportError('Failed to archive artifact runtime', err, { context: 'Artifact runtime archive failed' });
+        } finally {
+            archiveBtn.disabled = false;
+        }
+    });
+    deleteBtn.addEventListener('click', async () => {
+        const confirmed = window.confirm('Delete this runtime instance record? The artifact package remains available.');
+        if (!confirmed) return;
+        deleteBtn.disabled = true;
+        try {
+            await API.deleteProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('Runtime deleted.', 'success');
+            view.close();
+        } catch (err) {
+            UI.reportError('Failed to delete artifact runtime', err, { context: 'Artifact runtime delete failed' });
+        } finally {
+            deleteBtn.disabled = false;
+        }
+    });
+
+    await refresh();
+}
+
 function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
     const available = !missing && artifact?.exists !== false;
@@ -80,20 +356,41 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
         runtimeBtn.type = 'button';
         runtimeBtn.className = 'btn btn-sm btn-primary';
         runtimeBtn.textContent = 'Start app';
+        runtimeBtn.hidden = true;
+        const runtimeStatus = document.createElement('button');
+        runtimeStatus.type = 'button';
+        runtimeStatus.className = 'btn btn-sm';
+        runtimeStatus.textContent = 'Runtime';
+        runtimeStatus.hidden = true;
         const stopRuntime = document.createElement('button');
         stopRuntime.type = 'button';
         stopRuntime.className = 'btn btn-sm';
         stopRuntime.textContent = 'Stop app';
         stopRuntime.hidden = true;
+        const openRuntime = document.createElement('a');
+        openRuntime.href = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
+        openRuntime.className = 'btn btn-sm';
+        openRuntime.target = '_blank';
+        openRuntime.rel = 'noreferrer noopener';
+        openRuntime.textContent = 'Open app';
+        openRuntime.hidden = true;
+        openRuntime.addEventListener('click', (event) => event.stopPropagation());
         const setRuntimeState = (runtime = {}) => {
             const status = String(runtime?.status || '').toLowerCase();
-            stopRuntime.hidden = status !== 'running';
+            const configured = status && status !== 'not_configured';
+            runtimeStatus.hidden = !configured;
+            runtimeBtn.hidden = !configured || ['running', 'starting', 'archived', 'deleted'].includes(status);
+            openRuntime.hidden = status !== 'running';
+            stopRuntime.hidden = !['running', 'starting'].includes(status);
         };
         const refreshRuntimeState = async () => {
             try {
                 const status = await API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key);
                 setRuntimeState(status?.runtime || {});
             } catch (_err) {
+                runtimeBtn.hidden = true;
+                runtimeStatus.hidden = true;
+                openRuntime.hidden = true;
                 stopRuntime.hidden = true;
             }
         };
@@ -118,14 +415,16 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
             }
         });
         actionRow.insertBefore(runtimeBtn, actionRow.firstChild);
-        const openRuntime = document.createElement('a');
-        openRuntime.href = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
-        openRuntime.className = 'btn btn-sm';
-        openRuntime.target = '_blank';
-        openRuntime.rel = 'noreferrer noopener';
-        openRuntime.textContent = 'Open app';
-        openRuntime.addEventListener('click', (event) => event.stopPropagation());
         actionRow.insertBefore(openRuntime, runtimeBtn.nextSibling);
+        runtimeStatus.addEventListener('click', (event) => {
+            event.stopPropagation();
+            void _openArtifactRuntimeDialog(
+                runId,
+                artifact.artifact_key,
+                _protocolArtifactDisplayLabel(artifact, definition),
+            );
+        });
+        actionRow.insertBefore(runtimeStatus, openRuntime.nextSibling);
         stopRuntime.addEventListener('click', async (event) => {
             event.stopPropagation();
             stopRuntime.disabled = true;

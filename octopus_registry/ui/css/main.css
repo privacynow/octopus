@@ -1066,6 +1066,22 @@ select {
     line-height: 1.4;
 }
 
+.artifact-runtime-dialog {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.artifact-runtime-facts,
+.artifact-runtime-section {
+    min-width: 0;
+}
+
+.artifact-runtime-log {
+    max-height: 18rem;
+    overflow: auto;
+}
+
 .list-row-with-artifact-actions {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

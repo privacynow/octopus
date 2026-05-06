@@ -29,6 +29,7 @@ from octopus_sdk.registry.management import (
 )
 from octopus_sdk.protocols import (
     ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeEndpointRecord,
     ProtocolArtifactRuntimeManifestRecord,
 )
 from octopus_sdk.identity import conversation_key_for_ref
@@ -154,6 +155,10 @@ def test_artifact_runtime_management_payloads_round_trip() -> None:
         ui_path="/",
         health_path="/health",
         api_base_path="/api",
+        endpoints=[
+            ProtocolArtifactRuntimeEndpointRecord(label="API docs", path="/docs", endpoint_kind="docs"),
+        ],
+        smoke_test=["GET /health", "GET /docs"],
     )
     request = ManagementRequest(
         agent_id="agent-1",

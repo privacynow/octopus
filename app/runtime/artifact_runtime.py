@@ -51,6 +51,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _expires_at(seconds: int) -> str:
+    return datetime.fromtimestamp(
+        datetime.now(timezone.utc).timestamp() + max(int(seconds or 0), 60),
+        tz=timezone.utc,
+    ).isoformat()
+
+
+def _is_expired(runtime: ProtocolArtifactRuntimeInstanceRecord) -> bool:
+    text = str(runtime.expires_at or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed <= datetime.now(timezone.utc)
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -135,6 +155,7 @@ def _runtime_record(
         created_at=_now(),
         updated_at=_now(),
         started_at=_now() if status == "running" else "",
+        expires_at=_expires_at(manifest.max_runtime_seconds),
     )
 
 
@@ -169,6 +190,7 @@ async def start_artifact_runtime(
     *,
     config: BotConfig,
 ) -> StartArtifactRuntimeResult:
+    await reap_expired_artifact_runtimes()
     existing = _RUNTIMES.get(request.runtime_instance_id)
     if existing is not None and existing.process.returncode is None:
         return StartArtifactRuntimeResult(
@@ -253,6 +275,7 @@ async def start_artifact_runtime(
 
 
 async def stop_artifact_runtime(request: StopArtifactRuntimeRequest) -> StopArtifactRuntimeResult:
+    await reap_expired_artifact_runtimes()
     entry = _RUNTIMES.get(request.runtime_instance_id)
     if entry is None or entry.process.returncode is not None:
         runtime = ProtocolArtifactRuntimeInstanceRecord(
@@ -324,6 +347,7 @@ async def stop_artifact_runtime(request: StopArtifactRuntimeRequest) -> StopArti
 
 
 async def artifact_runtime_health(request: ArtifactRuntimeHealthRequest) -> ArtifactRuntimeHealthResult:
+    await reap_expired_artifact_runtimes()
     entry = _RUNTIMES.get(request.runtime_instance_id)
     if entry is None or entry.process.returncode is not None:
         return ArtifactRuntimeHealthResult(
@@ -350,6 +374,7 @@ async def artifact_runtime_health(request: ArtifactRuntimeHealthRequest) -> Arti
 
 
 async def artifact_runtime_logs(request: ArtifactRuntimeLogsRequest) -> ArtifactRuntimeLogsResult:
+    await reap_expired_artifact_runtimes()
     entry = _RUNTIMES.get(request.runtime_instance_id)
     runtime = entry.runtime if entry is not None else ProtocolArtifactRuntimeInstanceRecord(
         runtime_instance_id=request.runtime_instance_id,
@@ -362,6 +387,7 @@ async def artifact_runtime_logs(request: ArtifactRuntimeLogsRequest) -> Artifact
 
 
 async def artifact_runtime_fetch(request: ArtifactRuntimeFetchRequest) -> ArtifactRuntimeFetchResult:
+    await reap_expired_artifact_runtimes()
     entry = _RUNTIMES.get(request.runtime_instance_id)
     if entry is None or entry.process.returncode is not None:
         raise RuntimeError("Runtime is not running.")
@@ -404,3 +430,30 @@ async def artifact_runtime_fetch(request: ArtifactRuntimeFetchRequest) -> Artifa
         headers=RegistryJsonRecord(headers),
         body_base64=base64.b64encode(raw).decode("ascii"),
     )
+
+
+async def reap_expired_artifact_runtimes() -> int:
+    expired_ids = [
+        runtime_id
+        for runtime_id, entry in list(_RUNTIMES.items())
+        if entry.process.returncode is None and _is_expired(entry.runtime)
+    ]
+    for runtime_id in expired_ids:
+        entry = _RUNTIMES.get(runtime_id)
+        if entry is None or entry.process.returncode is not None:
+            _RUNTIMES.pop(runtime_id, None)
+            continue
+        try:
+            os.killpg(entry.process.pid, signal.SIGTERM)
+        except Exception:
+            entry.process.terminate()
+        try:
+            await asyncio.wait_for(entry.process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            try:
+                os.killpg(entry.process.pid, signal.SIGKILL)
+            except Exception:
+                entry.process.kill()
+            await entry.process.wait()
+        _RUNTIMES.pop(runtime_id, None)
+    return len(expired_ids)

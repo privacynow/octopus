@@ -723,7 +723,9 @@ Artifact resolution rules:
   dashboard link, the same preview/open/download/copy affordance should be used.
 - Rehearsal text can be served even when no workspace file exists.
 - Protocol run export includes metadata and lineage. It should not silently
-  expose file contents except through explicit content routes.
+  expose file contents except through explicit content routes. Runtime
+  instances and runtime events are part of the run export so reviewer evidence,
+  health checks, starts/stops, and routed UI/API exercises are auditable.
 - Protocol package export is a definition-sharing path. It includes the
   protocol document and required skill package documents, not produced run
   artifacts.
@@ -986,6 +988,9 @@ Verification expectations for UI architecture work:
 
 - Test static contracts first.
 - Run focused route/API/unit tests for changed components.
+- Use `bash scripts/test/test_focused.sh <tier>` for local iteration tiers:
+  `unit-fast`, `registry-contract`, `bot-runtime-focused`,
+  `browser-focused`, `integration-focused`, or `full`.
 - Run Playwright for the affected browser flows.
 - Verify in real Safari at desktop and narrow widths before calling UI work done.
 - For Auto Protocol changes, also verify the Telegram Web flow in real Safari:

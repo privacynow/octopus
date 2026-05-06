@@ -262,12 +262,19 @@ Process-backed packages should declare:
 - `runtime_kind`: `node`, `python`, `java`, `binary`, or `process`
 - `start_command`: the command the bot runtime runs inside the package
 - `ui_path`, `health_path`, and `api_base_path`
-- endpoint notes and smoke-test steps for reviewers
+- a docs endpoint
+- smoke-test steps for reviewers
 
 Registry owns the user-facing URL, auth, status, and lifecycle. The bot runtime
 owns the process. Users should be able to start/open the app, exercise the UI or
 API, inspect logs/status, stop the runtime, and still download the artifact as a
 zip package.
+
+Final acceptance for a runnable primary artifact is evidence-gated. If the
+primary artifact declares `octopus-runtime.json`, Octopus expects runtime start
+evidence, a healthy runtime check, and at least one routed UI/API exercise event
+before the acceptance stage can complete successfully. This keeps a reviewer
+from accepting a runnable system only because files exist.
 
 ## Starting A Run
 

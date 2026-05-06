@@ -74,6 +74,7 @@ from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 
 from .config import RegistryConfig
+from .artifact_paths import resolve_protocol_artifact_path
 from .postgres import get_connection
 from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
 from .protocol_runtime import evaluate_protocol_dispatch
@@ -785,6 +786,8 @@ class ProtocolPostgresAdapter:
                 routed_task_ids=routed_task_ids,
             ),
             artifacts=self._protocol_artifacts_for_run(conn, run_id),
+            runtime_instances=self._protocol_artifact_runtimes_for_run(conn, run_id),
+            runtime_events=self._protocol_artifact_runtime_events_for_run(conn, run_id),
             transitions=transition_records,
         )
 
@@ -916,6 +919,159 @@ class ProtocolPostgresAdapter:
             artifact = self._protocol_artifact_from_row(row)
             newest.setdefault(artifact.artifact_key, artifact)
         return list(newest.values())
+
+    def _protocol_artifact_runtimes_for_run(
+        self,
+        conn,
+        run_id: str,
+    ) -> list[ProtocolArtifactRuntimeInstanceRecord]:
+        rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {SCHEMA}.protocol_artifact_runtime_instances
+            WHERE protocol_run_id = %s
+            ORDER BY updated_at DESC, runtime_instance_id ASC
+            """,
+            (run_id,),
+        )
+        return [self._protocol_artifact_runtime_from_row(row) for row in rows]
+
+    def _protocol_artifact_runtime_events_for_run(
+        self,
+        conn,
+        run_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {SCHEMA}.protocol_artifact_runtime_events
+            WHERE protocol_run_id = %s
+            ORDER BY created_at DESC, runtime_event_id DESC
+            LIMIT %s
+            """,
+            (run_id, max(1, min(int(limit or 200), 500))),
+        )
+        return [self._protocol_artifact_runtime_event_from_row(row) for row in rows]
+
+    @staticmethod
+    def _primary_artifact_key(document: ProtocolDefinitionDocumentRecord) -> str:
+        metadata = document.metadata.as_dict()
+        auto_protocol = metadata.get("auto_protocol") if isinstance(metadata, Mapping) else {}
+        if isinstance(auto_protocol, Mapping):
+            primary = str(auto_protocol.get("primary_artifact_key", "") or "").strip()
+            if primary:
+                return primary
+            primary_record = auto_protocol.get("primary_artifact")
+            if isinstance(primary_record, Mapping):
+                primary = str(primary_record.get("artifact_key", "") or "").strip()
+                if primary:
+                    return primary
+        if any(item.artifact_key == "produced_outcome" for item in document.artifacts):
+            return "produced_outcome"
+        return document.artifacts[-1].artifact_key if document.artifacts else ""
+
+    @staticmethod
+    def _artifact_declares_runtime_manifest(
+        detail: ProtocolRunDetailRecord,
+        artifact: ProtocolArtifactRecord,
+    ) -> bool:
+        resolved = resolve_protocol_artifact_path(detail, artifact)
+        if resolved is None:
+            return False
+        root = resolved if resolved.is_dir() else resolved.parent
+        return (root / "octopus-runtime.json").is_file()
+
+    def _runtime_acceptance_evidence_gate(
+        self,
+        conn,
+        *,
+        run_row: Mapping[str, object],
+        stage_execution_row: Mapping[str, object],
+        engine,
+    ):
+        if str(engine.terminal_status or "") != "completed":
+            return engine
+        if str(engine.decision or "").strip().lower() != "accept":
+            return engine
+        run_id = str(run_row.get("protocol_run_id", "") or "").strip()
+        document = self._protocol_document_for_run(conn, run_row)
+        try:
+            stage = document.stage(str(stage_execution_row.get("stage_key", "") or ""))
+        except Exception:
+            return engine
+        if stage.stage_kind != "acceptance":
+            return engine
+
+        primary_key = self._primary_artifact_key(document)
+        if not primary_key:
+            return engine
+        detail = self._protocol_run_detail_in_tx(
+            conn,
+            run_id,
+            access=ProtocolAccessContextRecord(actor_ref=PROTOCOL_DEFAULT_OPERATOR_REF, roles=["operator"]),
+        )
+        if detail is None:
+            return engine
+        artifact = next((item for item in detail.artifacts if item.artifact_key == primary_key), None)
+        if artifact is None:
+            return engine
+        runtime = next((item for item in detail.runtime_instances if item.artifact_key == primary_key), None)
+        manifest_required = bool(runtime and runtime.manifest) or self._artifact_declares_runtime_manifest(detail, artifact)
+        if not manifest_required:
+            return engine
+
+        events = [item for item in detail.runtime_events if item.artifact_key == primary_key]
+        has_started = any(str(item.event_kind or "") == "started" for item in events)
+        has_healthy = any(
+            str(item.event_kind or "") == "health_checked"
+            and bool(item.metadata_json.as_dict().get("ok"))
+            for item in events
+        )
+        has_exercised = any(
+            str(item.event_kind or "") == "fetch"
+            and int(item.metadata_json.as_dict().get("status_code", 0) or 0) < 500
+            for item in events
+        )
+        missing = []
+        if not has_started:
+            missing.append("runtime start")
+        if not has_healthy:
+            missing.append("healthy runtime check")
+        if not has_exercised:
+            missing.append("UI/API exercise through Registry routing")
+        if not missing:
+            return engine
+
+        detail_text = (
+            "Final acceptance for this runnable primary artifact requires Octopus runtime evidence before completion: "
+            + ", ".join(missing)
+            + ". Start or open the artifact runtime, run Health, exercise the UI/API through the Registry URL, then accept again."
+        )
+        metadata = engine.transition_metadata.as_dict()
+        metadata.update({
+            "runtime_evidence_required": True,
+            "primary_artifact_key": primary_key,
+            "missing_runtime_evidence": missing,
+        })
+        return engine.model_copy(update={
+            "run_status": "blocked",
+            "stage_status": "blocked",
+            "failure_code": "runtime_evidence_required",
+            "failure_detail": detail_text,
+            "transition_kind": "blocked",
+            "transition_reason": detail_text,
+            "transition_error_code": "RUNTIME_EVIDENCE_REQUIRED",
+            "run_blocked_code": "runtime_evidence_required",
+            "run_blocked_detail": detail_text,
+            "terminal_status": None,
+            "create_next_execution": False,
+            "next_stage_key": "",
+            "transition_metadata": RegistryJsonRecord.model_validate(metadata),
+        })
 
     def _latest_protocol_review_feedback(
         self,
@@ -1448,6 +1604,12 @@ class ProtocolPostgresAdapter:
                 self._protocol_run_transitions_history(conn, str(run_row["protocol_run_id"] or ""))
             ),
         )
+        engine = self._runtime_acceptance_evidence_gate(
+            conn,
+            run_row=run_row,
+            stage_execution_row=stage_execution_row,
+            engine=engine,
+        )
         self._apply_protocol_engine_decision_in_tx(
             conn,
             run_row=run_row,
@@ -1514,13 +1676,77 @@ class ProtocolPostgresAdapter:
             affected_run_ids=sorted(set(item for item in affected_run_ids if item)),
         )
 
+    def _sweep_protocol_artifact_runtimes_in_tx(self, conn, *, now: str) -> ProtocolMaintenanceResultRecord:
+        rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {SCHEMA}.protocol_artifact_runtime_instances
+            WHERE status IN ('starting', 'running')
+              AND coalesce(expires_at, '') <> ''
+              AND expires_at::timestamptz <= %s::timestamptz
+            ORDER BY expires_at ASC, runtime_instance_id ASC
+            """,
+            (now,),
+        )
+        affected_run_ids: list[str] = []
+        for row in rows:
+            runtime = self._protocol_artifact_runtime_from_row(row)
+            summary = "Runtime exceeded its configured maximum duration and was stopped by maintenance."
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    UPDATE {SCHEMA}.protocol_artifact_runtime_instances
+                    SET status = 'stopped',
+                        failure_code = 'runtime_expired',
+                        failure_detail = %s,
+                        updated_at = %s,
+                        stopped_at = %s
+                    WHERE runtime_instance_id = %s
+                    """,
+                    (summary, now, now, runtime.runtime_instance_id),
+                )
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_artifact_runtime_events (
+                        runtime_event_id, runtime_instance_id, protocol_run_id, artifact_key,
+                        event_kind, actor_ref, summary, metadata_json, created_at
+                    ) VALUES (%s, %s, %s, %s, 'stopped', 'system:protocol-maintenance', %s, %s, %s)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        runtime.runtime_instance_id,
+                        runtime.protocol_run_id,
+                        runtime.artifact_key,
+                        summary,
+                        jsonb({"reason": "runtime_expired"}),
+                        now,
+                    ),
+                )
+            affected_run_ids.append(runtime.protocol_run_id)
+        return ProtocolMaintenanceResultRecord(
+            swept_count=len(affected_run_ids),
+            affected_run_ids=sorted(set(item for item in affected_run_ids if item)),
+        )
+
     def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
         maintenance_now = str(now or utcnow_iso())
         with self._connect() as conn, write_tx(conn):
-            result = self._sweep_protocol_timeouts_in_tx(conn, now=maintenance_now)
-            if result.swept_count:
-                log.info("protocol maintenance swept_timeouts=%s at=%s", result.swept_count, maintenance_now)
-            return result
+            timeout_result = self._sweep_protocol_timeouts_in_tx(conn, now=maintenance_now)
+            runtime_result = self._sweep_protocol_artifact_runtimes_in_tx(conn, now=maintenance_now)
+            swept_count = timeout_result.swept_count + runtime_result.swept_count
+            affected_run_ids = sorted(set([*timeout_result.affected_run_ids, *runtime_result.affected_run_ids]))
+            if swept_count:
+                log.info(
+                    "protocol maintenance swept_timeouts=%s swept_artifact_runtimes=%s at=%s",
+                    timeout_result.swept_count,
+                    runtime_result.swept_count,
+                    maintenance_now,
+                )
+            return ProtocolMaintenanceResultRecord(
+                swept_count=swept_count,
+                affected_run_ids=affected_run_ids,
+            )
 
     def list_protocols(
         self,
@@ -3370,6 +3596,8 @@ class ProtocolPostgresAdapter:
                 stage_executions=detail.stage_executions,
                 tasks=detail.tasks,
                 artifacts=detail.artifacts,
+                runtime_instances=detail.runtime_instances,
+                runtime_events=detail.runtime_events,
                 transitions=detail.transitions,
             )
 
@@ -3467,6 +3695,12 @@ class ProtocolPostgresAdapter:
                 reason=reason,
                 now=now,
                 review_edge_counts=protocol_review_edge_counts(self._protocol_run_transitions_history(conn, run_id)),
+            )
+            engine = self._runtime_acceptance_evidence_gate(
+                conn,
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
             )
             self._apply_protocol_engine_decision_in_tx(
                 conn,

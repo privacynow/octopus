@@ -2,8 +2,61 @@
 
 ## Status
 
-Implemented in this branch as the runnable-artifact polish workstream. Keep this
-document as the execution record and QA checklist for future refinement.
+Implemented in `feature/auto_protocol`, pending final deployment and live
+Safari proof across Registry and Telegram.
+
+This document is now the mandatory execution plan for finishing the runnable
+artifact and Auto Protocol polish work. The work is not complete until every
+acceptance criterion below is implemented, tested, documented, deployed, and
+verified through the real Registry and Telegram surfaces.
+
+Already implemented and covered by focused tests:
+
+- Registry can persist artifact runtime instances and events.
+- Bot runtime can start, fetch, health-check, log, and stop artifact processes
+  through typed SDK/management contracts.
+- Registry routes runnable artifact UI/API traffic through stable `/runtime/...`
+  URLs instead of exposing raw bot ports.
+- Directory artifacts still expose browse/open/download behavior, including zip
+  download.
+- Registry run detail surfaces a primary outcome card with Start/Open/Stop,
+  browse, and download actions; older runs without declared primary metadata get
+  a generic primary-artifact fallback.
+- Telegram can start, open, and stop runnable artifacts through Registry APIs.
+- Static/browser runnable artifacts were previously verified in real Safari
+  from Registry and Telegram; the current implementation pass must be verified
+  again after deploy.
+
+Remaining work is live product proof, not alternate implementation. Nothing is
+optional or deferred. The next complete bar is the risk-engine class of
+artifact: a Java/Maven backend with a browser UI, meaningful routed APIs,
+runtime manifest, smoke evidence, review evidence, package download, and
+lifecycle cleanup, verified through Registry and Telegram.
+
+## Completion Ledger
+
+This ledger is the accountability mechanism for the plan. A backend route,
+SDK record, prompt instruction, or UI button is not enough by itself. A row is
+complete only when every column needed for that outcome is implemented,
+documented, covered by focused tests, and verified through the human-facing
+surface.
+
+| Outcome | Backend Contract | Registry UI | Telegram | Engine/Store Enforcement | Docs | Focused Tests | Real Safari Proof |
+|---------|------------------|-------------|----------|--------------------------|------|---------------|-------------------|
+| Runtime manifest detection | Implemented | Implemented | Implemented through artifact cards | Implemented via manifest validation | Documented | Covered | Pending current Safari proof |
+| Start/open/stop runtime | Implemented | Implemented | Implemented | Implemented for lifecycle state | Documented | Covered | Pending current Safari proof |
+| Health/logs/events visibility | Implemented | Implemented in runtime dialog | Status card implemented; detailed logs remain Registry-owned | Events persisted | Documented | Covered | Pending current Safari proof |
+| Archive/delete runtime | Implemented HTTP | Implemented in runtime dialog | Registry-owned destructive lifecycle; Telegram links back to artifacts | Stop-before-archive/delete enforced | Documented | Covered | Pending current Safari proof |
+| Package browse/download zip | Implemented | Implemented | Implemented fallback package link | Existing artifact path | Documented | Covered | Pending current Safari proof |
+| Runtime evidence in review | Prompt guidance present | Evidence visible through runtime dialog and run detail | Status linked from cards | Hard accept gate implemented | Documented | Covered | Pending current Safari proof |
+| Runtime evidence in export | Implemented | N/A | N/A | Export payload includes runtime instances/events | Documented | Covered | Pending current Safari proof |
+| Runtime cleanup/retention | Bot reaper and Registry sweep implemented | Operator lifecycle visible through runtime dialog | N/A | Runtime expiry policy enforced | Documented | Covered | Pending current Safari proof |
+| Fast/tiered tests | Focused runner and markers implemented | N/A | N/A | N/A | Documented | Focused tiers covered | N/A |
+| Risk-engine Java/Maven proof | Toolchain expected and runtime contract enforced | Pending live proof | Pending live proof | Pending live proof | Documented | Covered by contracts; live proof pending | Pending current Safari proof |
+
+Every implementation phase below must update this ledger when the product
+state changes. The ledger favors user outcomes over internal implementation
+claims.
 
 The prerequisite Auto Protocol closeout was completed before this workstream:
 user/developer docs were updated, Telegram Web was verified in real Safari, and
@@ -235,7 +288,7 @@ avoid presenting it as remotely usable.
 Telegram cards for runnable artifacts should show:
 
 - One prominent app action at a time: `Start app` before a runtime exists, then `Open app`, `Status`, and `Stop` after it starts.
-- API docs, when available.
+- API docs for every backend/API runtime.
 - Download zip/package.
 - A clear path back to the full artifact list.
 
@@ -311,7 +364,11 @@ The first implementation must support:
 - Node and Python apps when the generated artifact declares them and the bot image provides the toolchain
 - generic process/binary execution under the same bot-container policy
 
-Registry proxying must support normal browser and API traffic: HTML, JS, CSS, images/assets, JSON APIs, common HTTP methods, request bodies, response headers, redirects, and health checks. Streaming and WebSocket behavior must be decided in Phase 1 for artifacts that declare those transports, but standard HTTP UI/API support is required for the first probe.
+Registry proxying must support normal browser and API traffic: HTML, JS, CSS,
+images/assets, JSON APIs, common HTTP methods, request bodies, response headers,
+redirects, and health checks. Streaming HTTP and WebSocket transports are not
+part of this plan's supported runtime transport set; artifacts that declare them
+must receive a clear blocked response instead of a broken link.
 
 ## Target User Experience
 
@@ -355,8 +412,8 @@ For runnable artifacts, Telegram messages should include:
 - Status.
 - A progressive app action: start first, open/status/stop only after the runtime exists.
 - Download package link.
-- API docs link if available.
-- Stop/archive action if appropriate.
+- API docs link for backend/API runtimes.
+- Stop/archive action when a runtime instance exists and the user is authorized.
 - Compact fallback links for supporting artifacts without turning the message into a button wall.
 
 Telegram should use configured public URLs and should never emit `127.0.0.1` unless the deployment explicitly declares localhost-only use.
@@ -551,7 +608,12 @@ This avoids exposing raw bot container ports to users and makes Telegram links s
 
 Deployment-specific reverse proxies can sit in front of Registry, but the product contract remains Registry-owned routing and configured public URLs.
 
-Standard HTTP UI/API routing is required in the first implementation. Registry routing must handle static assets and JSON API calls well enough for the risk-engine probe: HTML, JS, CSS, images, common HTTP methods, request bodies, redirects, response headers, health checks, and API errors. Streaming HTTP and WebSocket behavior must be specified during Phase 1 for artifacts that declare those transports.
+Standard HTTP UI/API routing is required in this implementation. Registry
+routing must handle static assets and JSON API calls well enough for the
+risk-engine probe: HTML, JS, CSS, images, common HTTP methods, request bodies,
+redirects, response headers, health checks, and API errors. Streaming HTTP and
+WebSocket transports are not supported by this plan; artifacts that declare
+those transports must receive a clear blocked response.
 
 ### Public URL configuration
 
@@ -675,7 +737,7 @@ Use clear labels. Avoid dumping raw paths as the dominant content. Paths can rem
 
 Update directory artifact index pages:
 
-- Rename "Download package" to "Download zip" where appropriate.
+- Rename directory artifact controls from "Download package" to "Download zip".
 - If runtime manifest exists, show "Open app" or "Start app".
 - If an `index.html` exists inside a known static app folder, surface it as a default entry.
 - Keep browse table for developers.
@@ -711,7 +773,8 @@ Runtime failures should be plain:
 - "The health endpoint did not respond within 30 seconds."
 - "This artifact has no runtime manifest. You can still browse or download the package."
 
-Each error should include next steps where possible.
+Each runtime error must include a next step, or an explicit statement that no
+user action is available.
 
 ## Telegram Implementation Plan
 
@@ -794,7 +857,7 @@ When Auto Protocol builds a backend system, it should require meaningful user-fa
 
 - versioned or clearly named routes
 - health endpoint
-- scenario/test endpoint where appropriate
+- scenario/test endpoint for interactive backend artifacts
 - domain nouns in route names
 - stable error shape
 - explainability or audit retrieval where relevant
@@ -1015,247 +1078,389 @@ Update architecture docs:
 - Lifecycle state model.
 - Event and audit model.
 
-## Implementation Phases
+## Remaining Execution Sequence
 
-### Phase 1: Baseline audit and contract finalization
+The following phases replace the original implementation-phase checklist. They
+start from the code already shipped in this branch and sequence the remaining
+work to the final commercial bar. Do not split these into optional tracks. Each
+phase must leave the product more coherent, preserve one path, and include
+focused tests before moving on.
 
-1. Audit existing artifact content paths:
-   - file response
-   - directory listing
-   - zip download
-   - preview
-   - protocol run artifact API
-   - task artifact API
+### Phase 0: Lock the shipped baseline
 
-2. Audit existing run lifecycle and review evidence:
-   - stage execution records
-   - transitions
-   - decisions
-   - rationale fields
-   - exports
-
-3. Audit existing Registry to bot management transport.
-
-4. Define SDK records for runtime manifests, instances, events, and action results.
-
-5. Define exact HTTP routes and OpenAPI schema.
-
-6. Confirm supported runtime kinds for the first implementation: `static`, `java`, `node`, `python`, `binary`, and `process`, all executed inside the bot container.
-
-7. Define Registry proxy scope for standard HTTP UI/API routing required by the risk-engine probe.
-
-8. Define OpenAPI regeneration/check behavior for CI when contracts change.
+1. Re-audit the current branch against this plan:
+   - SDK runtime records and ports.
+   - Registry runtime store methods, routes, OpenAPI, and proxy paths.
+   - Bot runtime supervisor and management transport.
+   - Registry Runs UI primary artifact card.
+   - Telegram runtime card/callback flow.
+   - Docs and examples.
+2. Mark implemented plan items in this file only when code, tests, and live QA
+   prove them.
+3. Confirm no duplicate runtime or artifact serving path was introduced.
+4. Confirm all runtime state used by UI/Telegram is sourced from persisted
+   runtime instance/event records or from current artifact records.
 
 Acceptance:
 
-- Written contract aligns with existing architecture.
-- No parallel artifact serving path is proposed.
-- Existing browse/download behavior remains preserved.
-- The plan explicitly rejects static-only runtime scope.
-- The risk-engine class of Java/Maven UI/API artifact remains a required first probe.
+- The branch has one runtime-artifact path: protocol artifact -> Registry
+  runtime API -> SDK/management -> bot runtime -> Registry-routed URL.
+- The shipped static/browser artifact flow remains working in Registry and
+  Telegram.
+- The working tree is clean before Phase 1 starts.
 
-### Phase 2: Zip/package polish for multi-file artifacts
+### Phase 1: Harden runtime manifests and artifact package contracts
 
-1. Make directory artifact zip download explicit in UI labels.
-2. Ensure every multi-file artifact exposes Download zip from:
-   - Runs primary artifact card
-   - stage output rows
-   - artifact directory page
-   - Telegram card
-3. Improve directory artifact index page:
-   - readable title
-   - Open default when meaningful
-   - Download zip
-   - file browse table
-4. Add tests for directory zip behavior.
-
-Acceptance:
-
-- Multi-file artifact can always be downloaded as zip.
-- Runtime-enabled artifacts still expose zip.
-- No regression to file preview or browse.
-
-### Phase 3: Runtime manifest validation and persisted runtime instances
-
-1. Add SDK manifest and runtime instance records.
-2. Add DB migration for runtime instances and runtime events.
-3. Add store methods:
-   - get runtime manifest for artifact
-   - create runtime instance
-   - update runtime state
-   - append runtime event
-   - list runtime events
-4. Parse runtime manifest from artifact package.
-5. Validate manifest against policy.
-6. Add blocked responses for invalid/missing manifest.
+1. Make `octopus-runtime.json` mandatory for every new Auto Protocol artifact
+   that declares a process-backed or API-backed runnable outcome.
+2. Keep the static `index.html` fallback for existing/simple static directory
+   artifacts, but make new Auto Protocol static app/game outputs emit a manifest
+   as well so lifecycle, Telegram actions, and review evidence are explicit.
+3. Validate manifest fields in SDK and Registry:
+   - runtime kind
+   - working directory within artifact/workspace scope
+   - start command for process-backed runtimes
+   - UI path
+   - health path
+   - API base path and API docs path when an API is declared
+   - smoke-test steps
+   - required files
+   - timeouts and resource policy
+4. Return actionable blocked responses for invalid or missing manifests.
+5. Update artifact content and primary artifact UI copy to distinguish:
+   - static file open
+   - runtime app open
+   - browse files
+   - download zip
+6. Add focused tests for:
+   - valid static manifest
+   - valid Java/process manifest
+   - invalid working directory
+   - missing start command for process-backed runtime
+   - missing API docs for API-backed runtime
+   - missing smoke-test declaration
 
 Acceptance:
 
-- Runtime metadata is persisted.
-- UI does not rely on non-persisted synthetic fields.
-- Invalid manifests produce human-readable errors.
+- Serious runnable outputs cannot silently rely on directory browsing or
+  incidental static fallback.
+- Simple static artifacts remain usable.
+- Users get a clear next step when a manifest is missing or invalid.
 
-### Phase 4: Bot runtime supervisor through SDK/management path
+### Phase 2: Complete Registry runtime UX and artifact browser
 
-1. Add typed management request/response for:
-   - start artifact runtime
-   - stop artifact runtime
-   - health check
-   - log tail
-2. Implement bot-side supervisor.
-3. Start processes in isolated process groups.
-4. Capture logs.
-5. Poll health.
-6. Report events to Registry.
-7. Enforce runtime policy.
-
-Acceptance:
-
-- Registry does not shell directly into bots.
-- Bot runtime owns process execution.
-- Runtime processes execute inside the bot container.
-- Start/stop/health work with static, Java/Maven UI/API, and process-style artifacts.
-
-### Phase 5: Registry runtime APIs and routing
-
-1. Add runtime lifecycle HTTP endpoints.
-2. Add Registry-routed app/API proxy path.
-3. Attach auth and permissions.
-4. Implement health/log/status endpoints.
-5. Ensure public base URL generation is consistent.
-6. Update OpenAPI.
-7. Add CI check that generated OpenAPI matches live route contracts.
-
-Acceptance:
-
-- User can start runtime from Registry API.
-- User can open routed UI/API path.
-- User can stop runtime.
-- OpenAPI matches live behavior.
-- Registry-routed standard HTTP UI/API traffic works for the risk-engine probe.
-
-### Phase 6: Runs UI and artifact browser
-
-1. Extend primary artifact card with runtime actions.
-2. Add runtime status panel.
-3. Add runtime logs/events disclosure.
-4. Keep browse and download zip actions visible.
-5. Update directory artifact page to link runtime when available.
-6. Verify wide and narrow Safari layouts.
+1. Add a complete runtime status panel on the run detail primary artifact card:
+   - state
+   - start time
+   - owning bot/agent
+   - routed app URL
+   - API base URL
+   - API docs URL
+   - health URL
+   - last health summary
+   - recent runtime events
+   - recent bounded log tail
+2. Add `Health`, `Logs`, `API docs`, `Archive`, and `Delete runtime` actions
+   where the manifest and permissions allow them.
+3. Keep `Start app`, `Open app`, `Stop app`, `Browse files`, and `Download zip`
+   visible without forcing users into stage output details.
+4. Update the directory artifact browser page to show:
+   - app/runtime action when a runtime manifest exists
+   - default static entry when the artifact has an indexable static entry point
+   - download zip
+   - readable file table
+   - link back to run detail
+5. Run wide and narrow Safari QA for:
+   - completed run with runnable primary artifact
+   - run with non-runnable artifact
+   - invalid manifest
+   - runtime failed to start
+   - stopped runtime
 
 Acceptance:
 
-- Nontechnical user sees Open app/Start app first for runnable artifacts.
-- Download zip remains obvious.
-- Narrow layout has no horizontal overflow.
-- Runtime errors are understandable.
+- A nontechnical user can find, start, inspect, stop, browse, and download the
+  main outcome from the run detail without hunting through stage rows.
+- Narrow Registry remains readable and has no horizontal overflow or button
+  pileup.
 
-### Phase 7: Telegram runtime actions and reachable links
+### Phase 3: Complete Telegram runtime and public-link behavior
 
-1. Add runtime status/action buttons to Telegram cards.
-2. Use configured public Registry/runtime base URL.
-3. Add warning behavior for localhost-only deployments.
-4. Add start/stop/status callbacks through Registry API.
-5. Add tests for link generation.
-
-Acceptance:
-
-- Telegram user can open a runnable artifact link when deployment is configured for reachable access.
-- Telegram does not emit misleading localhost links in public mode.
-
-### Phase 8: Auto Protocol runtime-aware generation and review evidence
-
-1. Update planner prompt/contract to identify runnable outcomes.
-2. Require runtime manifest when generated outcome is runnable.
-3. Add runtime smoke-test requirements to implementation/review stages.
-4. Update final review instructions to exercise runtime through Octopus.
-5. Persist and surface runtime evidence in review rationale.
-6. Enforce final acceptance blocking when runnable artifacts lack linked start, health, and smoke evidence.
-7. Add tests with model-planner fixtures for static and API-backed runnable outcomes.
-
-Acceptance:
-
-- Auto Protocol for a browser game produces runnable static manifest.
-- Auto Protocol for risk-engine style backend produces runtime manifest and API/UI expectations.
-- Final review acceptance includes runtime evidence.
-- Final review cannot silently accept a runnable artifact with no runtime evidence.
-
-### Phase 9: Lifecycle, cleanup, and operations
-
-1. Add stop/archive/delete runtime operations.
-2. Add retention policy.
-3. Add cleanup job.
-4. Add operator docs.
-5. Add run export runtime evidence.
-6. Add bot workspace transient-directory cleanup policy.
-7. Add permission tests.
+1. Make Telegram runtime messages progressive:
+   - before start: primary artifact summary + `Start app` + `Download package`
+   - after start: `Open app`, `Status`, `Stop`, `Download package`
+   - for API artifacts: `API docs` and `Health`
+2. Route every Telegram link through the same configured public Registry URL
+   source used elsewhere.
+3. Add localhost-only language when the configured base URL is localhost.
+4. Add tests for:
+   - public URL configured
+   - localhost-only mode
+   - start/status/stop callbacks
+   - static artifact message
+   - API-backed artifact message
+5. Verify in real Safari with Telegram Web:
+   - start runtime
+   - open app
+   - open API docs when present
+   - stop runtime
+   - download package
 
 Acceptance:
 
-- Runtime can be stopped without deleting artifacts.
-- Artifact package remains downloadable after stop.
-- Archive/delete semantics are clear and tested.
-- Bot workspace cleanup does not delete retained artifacts or audit evidence.
+- Telegram never presents a localhost link as remotely usable.
+- Telegram users can execute the same runtime lifecycle as Registry users
+  through Registry APIs, not Telegram-only behavior.
 
-### Phase 10: Test performance program
+### Phase 4: Make Auto Protocol runtime-aware in generation, revision, and validation
 
-1. Capture current full-suite timings.
-2. Identify slowest tests.
-3. Add test markers or scripts for focused tiers.
-4. Parallelize safe tests.
-5. Remove accidental sleeps and replace with state polling.
-6. Add fake runtime supervisor for most lifecycle tests.
-7. Keep real integration tests for the static artifact and Java/Maven risk-engine style artifact.
-8. Add OpenAPI regeneration/check gate.
-9. Set CI wall-time budget.
+1. Extend the model planner contract so it must classify runnable outcomes and
+   return runtime expectations:
+   - runtime kind
+   - manifest requirement
+   - UI/API expectations
+   - smoke-test steps
+   - final review evidence requirements
+2. Compile those expectations into the canonical protocol document:
+   - implementation stage instructions
+   - integration/smoke stage
+   - final review stage
+   - artifact definitions
+   - primary artifact metadata
+3. Add semantic validation so runnable protocols are not ready when:
+   - no primary artifact is declared
+   - runtime manifest is missing from the expected package
+   - API-backed requirements lack API docs/health/scenario endpoints
+   - final review is not instructed to exercise the runtime
+   - primary artifact is buried before unnecessary late reviewers
+4. Keep the logic generic. Do not hard-code games, risk engines, manufacturing,
+   fintech, or any example domain into Octopus product code.
+5. Add model-fixture tests for:
+   - browser game/static app
+   - Java/Maven API-backed system
+   - non-runnable report/document package
+   - revise path preserving runtime expectations
+   - blocked generated protocol when runtime expectations are incomplete
 
 Acceptance:
 
-- Developers can run focused tests quickly.
-- Full suite remains meaningful and bounded.
-- Runtime/artifact behavior is protected by tests.
+- Auto Protocol generates requirement-specific runnable workflows without the
+  user manually prompting for runtime manifests, reviews, or smoke tests.
+- The risk-engine class of prompt generates a Java/Maven UI/API workflow with
+  manifest and smoke evidence requirements.
 
-### Phase 11: Documentation and QA matrix
+### Phase 5: Enforce runtime review evidence in the protocol engine
 
-1. Update user docs.
-2. Update architecture docs.
-3. Update protocol guide.
-4. Add runtime artifact examples:
-   - static app/game
-   - Java API-backed app
-5. Add QA matrix for:
-   - Registry
-   - Telegram
-   - runtime artifacts
+1. Extend existing stage execution, transition, and artifact evidence paths in
+   place. Do not create a parallel review-history model.
+2. Persist runtime evidence references:
+   - runtime instance id
+   - start event
+   - health event
+   - smoke-test result
+   - API/UI path exercised
+   - relevant log/event ids
+3. Surface review evidence in:
+   - Registry run detail
+   - stage/decision detail
+   - Telegram summary
+   - run export
+4. Enforce final acceptance for runnable artifacts:
+   - final review cannot accept a declared runnable primary artifact unless
+     linked runtime start, health, and smoke evidence exist
+   - missing evidence creates a blocked/send-back condition with a clear message
+   - non-runnable protocols are unaffected
+5. Add tests for:
+   - accept blocked with no runtime start
+   - accept blocked with failed health
+   - accept blocked with no smoke evidence
+   - accept succeeds with complete evidence
+   - send-back rationale preserved across attempts
+   - export includes runtime/review evidence
+
+Acceptance:
+
+- A runnable artifact cannot be commercially “accepted” by prompt sympathy alone.
+- The product can explain why work was accepted or sent back without reading bot
+  logs.
+
+### Phase 6: Complete lifecycle, retention, and cleanup
+
+1. Finish user-facing operations:
+   - stop runtime
+   - archive runtime
+   - delete runtime instance
+   - terminate/cancel allowed runs
+   - archive completed runs where product rules allow
+2. Define and implement retention policy:
+   - runtime idle timeout
+   - maximum runtime duration
+   - bounded log retention
+   - bot workspace transient cleanup
+   - artifact/audit retention
+3. Add cleanup job or operator command that:
+   - stops idle runtimes
+   - removes expired runtime temp files
+   - removes expired transient bot workspace files
+   - preserves retained artifacts and audit
+   - records cleanup events
+4. Add permission tests for start, stop, archive, delete, and cleanup.
+5. Document the lifecycle semantics in user and operator docs.
+
+Acceptance:
+
+- Users can try a runtime artifact and shut it down cleanly.
+- Operators can keep workspaces from accumulating live processes or transient
+  files without destroying retained artifacts or audit evidence.
+
+### Phase 7: Build and prove the Java/Maven risk-engine probe
+
+1. Use Auto Protocol from Registry to generate a risk-engine protocol from the
+   high-level payments/onboarding/lending/investor-onboarding requirement.
+2. Do not manually hard-code risk-engine behavior into Octopus.
+3. Publish and run the generated protocol through the UI.
+4. The protocol must produce a package with:
+   - Java 21/Maven backend
+   - browser operator UI
+   - meaningful API routes
+   - API docs or route index
+   - seed/scenario data
+   - audit/explainability output
+   - tests/smoke evidence
+   - `octopus-runtime.json`
+   - downloadable zip
+5. Start the runtime from Registry.
+6. Open the operator UI through Registry routing in real Safari.
+7. Submit a scenario decision through the UI/API.
+8. Inspect audit/explainability output.
+9. Stop the runtime from Registry.
+10. Repeat the essential lifecycle from Telegram Web in real Safari:
+    - start
+    - open UI
+    - open API docs/health
+    - stop
+    - download package
+11. If the probe exposes a product gap, fix the product first, then rerun the
+    probe. Do not patch the artifact directly as the solution.
+
+Acceptance:
+
+- The risk-engine class of artifact runs inside the bot container and is
+  reachable through Registry-routed UI/API URLs.
+- A nondeveloper can open the UI, exercise a decision flow, inspect evidence,
+  download the package, and stop the runtime.
+
+### Phase 8: Finish the fast, trustworthy test program
+
+1. Capture current focused and full-suite timings.
+2. Add formal test markers or scripts:
+   - `unit-fast`
+   - `registry-contract`
+   - `bot-runtime-focused`
+   - `integration-focused`
+   - `browser-focused`
+   - `full`
+3. Replace accidental sleeps with polling on observable state.
+4. Use fake runtime supervisors for most lifecycle tests.
+5. Keep real integration tests for:
+   - static browser artifact
+   - Java/Maven UI/API artifact
+6. Parallelize safe tests with proven DB isolation or cheaper fixture reset.
+7. Add an OpenAPI regeneration/check gate so route/schema drift fails CI.
+8. Set and enforce a full-suite wall-time budget in team policy.
+
+Acceptance:
+
+- Developers have fast focused tests that protect changed paths.
+- Full CI remains meaningful, bounded, and aligned with product behavior.
+- Runtime/artifact behavior is not protected only by manual Safari QA.
+
+### Phase 9: Documentation and QA matrix closure
+
+1. Update docs to match implemented behavior:
+   - README
+   - Getting Started
+   - User Guide
+   - Protocol Guide
+   - Telegram Guide
+   - Operations
+   - Architecture
+   - SDK Bot Development
+   - examples
+2. Add a repeatable QA matrix covering:
+   - Registry static runnable artifact
+   - Registry Java/Maven API-backed artifact
+   - Telegram static runnable artifact
+   - Telegram Java/Maven API-backed artifact
    - narrow Safari
-   - public links
+   - public URL/local URL behavior
+   - runtime start/open/health/logs/stop/archive/delete
+   - package download after stop
+   - review evidence enforcement
    - cleanup
+3. Run the QA matrix in real Safari where it tests UI behavior.
+4. Fix every product defect found by QA before declaring the plan complete.
 
 Acceptance:
 
-- Docs match actual behavior.
-- QA matrix is repeatable by a human tester.
+- Docs are progressive and accurate for nontechnical and technical users.
+- A human tester can repeat the matrix without private context from this
+  development thread.
+
+### Phase 10: Final release gate
+
+1. Run focused tests for all changed areas.
+2. Run the full suite after implementation is complete and test-performance work
+   has bounded it.
+3. Commit and push from this repository.
+4. Pull and redeploy in `/Users/tinker/octopus` using `./octopus redeploy --yes`.
+5. Verify deployed Registry health and connected bot health.
+6. Run final real Safari checks for Registry and Telegram.
+7. Confirm working trees are clean in both the source repo and octopus deploy
+   checkout.
+
+Acceptance:
+
+- The shipped branch satisfies every acceptance criterion below.
+- The deployed octopus checkout runs the same committed branch.
+- No known plan item remains open.
 
 ## Acceptance Criteria
 
-The plan is complete when:
+The plan is complete only when all of the following are true in committed code,
+focused tests, final full-suite verification, docs, deployment, and real Safari
+QA:
 
 1. Multi-file artifacts always expose zip download.
-2. Runnable artifacts declare a runtime manifest.
+2. New Auto Protocol runnable artifacts declare a runtime manifest; process- and
+   API-backed artifacts cannot be accepted without one.
 3. Registry validates and persists runtime state.
 4. Bot runtime starts/stops artifact processes through SDK/management contracts.
 5. Registry routes UI/API access through stable authenticated URLs.
-6. Telegram links use configured public base URLs.
+6. Telegram links use configured public base URLs and clearly label localhost
+   links as host-local.
 7. Runs UI makes runnable primary artifacts obvious and usable.
-8. Users can start, open, test, stop, archive, and delete runtime instances according to permissions.
+8. Users can start, open, test, check health, inspect logs/events, stop,
+   archive, and delete runtime instances according to permissions.
 9. Final reviewers exercise runnable artifacts and persist rationale/evidence.
-10. Review send-back and acceptance reasons are visible in Registry, Telegram, and exports.
-11. Directory browse and zip download remain available for every multi-file artifact.
-12. Tests cover SDK, Registry, Bot runtime, Telegram, UI, routing, lifecycle, and cleanup.
-13. Full suite has a defined wall-time budget and focused suites support fast local iteration.
-14. Documentation explains runtime artifacts, links, lifecycle, cleanup, and tests.
-15. The risk-engine class of Java/Maven backend plus browser UI runs inside the bot container and is reachable through Registry and Telegram URLs.
-16. OpenAPI contract checks fail CI when route behavior and docs drift.
+10. Final acceptance is blocked for runnable artifacts without linked start,
+   health, and smoke evidence.
+11. Review send-back and acceptance reasons are visible in Registry, Telegram,
+   and exports.
+12. Directory browse and zip download remain available for every multi-file artifact.
+13. Tests cover SDK, Registry, Bot runtime, Telegram, UI, routing, lifecycle,
+   cleanup, review evidence, and Auto Protocol planner/validation behavior.
+14. Full suite has a defined wall-time budget and focused suites support fast
+   local iteration.
+15. Documentation explains runtime artifacts, links, lifecycle, cleanup, review
+   evidence, test tiers, and the Java/Maven risk-engine probe.
+16. The risk-engine class of Java/Maven backend plus browser UI runs inside the
+   bot container and is reachable through Registry and Telegram URLs.
+17. The risk-engine UI submits at least one scenario decision through routed API
+   paths and exposes audit/explainability evidence.
+18. OpenAPI contract checks fail CI when route behavior and docs drift.
+19. The final deployed `/Users/tinker/octopus` checkout is on the committed
+   branch, healthy, and verified in real Safari.
 
 ## Non-Goals
 
@@ -1271,37 +1476,47 @@ These are not part of this plan:
 - Static-only runtime scope that cannot run real backend systems.
 - Running generated artifact processes inside Registry.
 
-## Open Implementation Questions
+## Resolved Implementation Decisions
 
-These must be answered during Phase 1 before implementation proceeds:
+These decisions govern the remaining execution sequence. They are not deferred
+questions.
 
-1. Which bot owns a runtime when multiple agents contributed to the artifact?
-   Initial rule: use the agent that produced the artifact when known; otherwise
-   use the run entry agent. Persist the selected bot/agent on the runtime
-   instance so future stop/health/proxy actions do not re-infer ownership.
-2. What port range should the runtime supervisor reserve?
-   Initial rule: supervisor allocates from a configurable bot-local range and
-   never trusts a manifest-selected public port.
-3. How should Registry proxy streaming responses and websockets for artifacts
-   that declare those transports?
-   Initial rule: standard HTTP UI/API is required first. Unsupported streaming
-   or websocket declarations produce a clear blocked response rather than a
-   broken link.
-4. What is the default idle timeout?
-   Initial rule: use conservative runtime policy defaults in the SDK record and
-   persist them per instance.
-5. What public URL config is required for Telegram links in local deployments?
-   Initial rule: reuse the existing Registry public URL environment variables
-   and show localhost-only language when the resolved base is localhost.
-6. Which actors may start, stop, archive, or delete runtime instances?
-   Initial rule: use the same protocol-run visibility/access path for start and
-   status; restrict delete/archive to actors that can mutate the run/artifact.
-7. How much runtime log content is persisted versus streamed from bot workspace?
-   Initial rule: persist event summaries and bounded log tails; keep full logs
-   in the bot workspace while the runtime exists.
-8. What is the CI wall-time budget for the full suite?
-   Initial rule: measure first, then set a budget in team policy before changing
-   CI gates.
+1. Runtime ownership:
+   use the agent that produced the artifact when known; otherwise use the run
+   entry agent. Persist the selected bot/agent on the runtime instance so subsequent
+   stop, health, logs, archive, delete, and proxy actions do not re-infer
+   ownership.
+2. Port allocation:
+   the supervisor allocates from a configurable bot-local range and never trusts
+   a manifest-selected public port. The manifest may declare the placeholder
+   variable it expects, but the assigned value comes from the supervisor.
+3. Proxy scope:
+   standard HTTP UI/API routing is mandatory now. HTML, JS, CSS, images, JSON
+   APIs, common HTTP methods, request bodies, redirects, response headers,
+   health checks, and API errors must work for the risk-engine probe. Streaming
+   HTTP and WebSocket declarations must fail with clear blocked responses
+   because they are not supported transports in this plan; they must not produce
+   broken links.
+4. Runtime timeout:
+   use conservative SDK policy defaults and persist resolved timeout values per
+   instance. The cleanup policy can tune defaults, but runtime instances must
+   always have explicit idle and max-duration limits.
+5. Public URL config:
+   reuse the existing Registry public URL environment variables for Registry and
+   Telegram runtime links. When the resolved base is localhost, label the link as
+   host-local and do not imply remote-device reachability.
+6. Permissions:
+   start and status use the same protocol-run visibility/access path. Stop
+   requires access to the run. Archive and delete require mutation rights for
+   the run/artifact runtime record.
+7. Runtime logs:
+   persist event summaries and bounded log tails. Keep full logs in the bot
+   workspace while the runtime exists, then clean them according to retention
+   policy. Exports include bounded runtime evidence, not unbounded raw logs.
+8. Test budget:
+   measure current timings first, then set the full-suite wall-time budget in
+   team policy before changing CI gates. Focused suites are mandatory for local
+   iteration, but the final gate still includes the full suite once bounded.
 
 ## First Representative Probe
 

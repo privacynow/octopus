@@ -208,11 +208,17 @@ Package artifacts should expose the default open action when the package
 contains a browser entry such as `index.html`, and a contents action when a
 directory browser is useful.
 
-Runnable package artifacts may also show `Start app` and `Running app`. `Start
-app` asks the Registry to start the artifact inside the owning bot runtime;
-`Running app` opens the Registry-routed web UI/API URL. The same package should
-still expose download and contents actions so a user is not forced into the live
-runtime path.
+Runnable package artifacts may also show `Start app`, `Open app`, `Status`, and
+`Stop`. `Start app` asks the Registry to start the artifact inside the owning
+bot runtime; `Open app` opens the Registry-routed web UI/API URL. Runtime cards
+are progressive: stopped runtimes offer start/status/artifact actions, while
+running runtimes offer open/status/stop/artifact actions. The same package
+should still expose download and contents actions so a user is not forced into
+the live runtime path.
+
+Runtime links use the configured Registry public URL. If that URL is local to
+the host, it may not be reachable from a phone; use Telegram Web on the host or
+configure a reachable Registry URL before sharing the runtime path.
 
 If a document is declared but not produced yet, Telegram should say that
 clearly. If an available artifact cannot be opened from the Registry, treat that

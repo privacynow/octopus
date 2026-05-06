@@ -1609,6 +1609,13 @@ async def handle_protocol_callback(runtime: TelegramRuntime, event, query) -> No
                 artifact_key,
                 registry_url=registry_url,
             ),
+            package_link=telegram_protocols.protocol_artifact_url(
+                runtime,
+                detail.run.protocol_run_id,
+                artifact_key,
+                registry_url=registry_url,
+                download=True,
+            ),
             artifact_ref=str(artifact_ref or ""),
         )
         await message.reply_text(rendered.text, **rendered.kwargs())

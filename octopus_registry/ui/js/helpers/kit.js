@@ -2813,7 +2813,7 @@ window.Kit = (() => {
         }
 
         const normalizedRunStatus = String(runStatus || '').trim().toLowerCase();
-        const activeRun = !['completed', 'failed', 'cancelled'].includes(normalizedRunStatus);
+        const activeRun = !['completed', 'failed', 'cancelled', 'blocked', 'archived', 'deleted'].includes(normalizedRunStatus);
         const terminalRun = !activeRun && Boolean(normalizedRunStatus);
         let currentIndex = knownStages.findIndex((stage) => stage.stage_key === String(currentStageKey || ''));
         if (currentIndex < 0) {
@@ -2865,10 +2865,9 @@ window.Kit = (() => {
         const root = document.createElement('span');
         root.className = `kit-run-stage-progress${compact ? ' is-compact' : ''}`;
         root.setAttribute('aria-label', 'Run stage progress');
-        root.setAttribute('role', 'list');
+        root.setAttribute('role', 'group');
         _compressedStageProgressItems(items, currentIndex).forEach((entry) => {
             const li = document.createElement('span');
-            li.setAttribute('role', 'listitem');
             if (entry.kind === 'group') {
                 li.className = 'kit-run-stage-progress-group';
                 li.textContent = entry.label;
@@ -2876,12 +2875,17 @@ window.Kit = (() => {
                 return;
             }
             const item = entry.item;
-            li.className = `kit-run-stage-progress-node is-${item.state}`;
-            li.dataset.stageKey = item.key;
-            if (item.executionId) {
-                li.dataset.stageExecutionId = item.executionId;
+            const selectable = typeof onStageSelect === 'function';
+            const node = selectable ? document.createElement('button') : li;
+            if (selectable) {
+                node.type = 'button';
             }
-            li.dataset.state = item.state;
+            node.className = `kit-run-stage-progress-node is-${item.state}`;
+            node.dataset.stageKey = item.key;
+            if (item.executionId) {
+                node.dataset.stageExecutionId = item.executionId;
+            }
+            node.dataset.state = item.state;
             const selected = (
                 selectedStageExecutionId
                 && item.executionId
@@ -2892,13 +2896,13 @@ window.Kit = (() => {
                 && String(item.key || '') === String(selectedStageKey || '')
             );
             if (selected) {
-                li.classList.add('is-selected');
-                li.setAttribute('aria-current', 'step');
+                node.classList.add('is-selected');
+                node.setAttribute('aria-current', 'step');
             }
             const marker = document.createElement('span');
             marker.className = 'kit-run-stage-progress-marker';
             marker.textContent = String(item.index + 1);
-            li.appendChild(marker);
+            node.appendChild(marker);
             const copy = document.createElement('span');
             copy.className = 'kit-run-stage-progress-copy';
             const label = document.createElement('span');
@@ -2916,12 +2920,11 @@ window.Kit = (() => {
                 ? `${baseStateText} · attempt ${item.attempt || item.attemptCount}`
                 : baseStateText;
             copy.appendChild(state);
-            li.appendChild(copy);
+            node.appendChild(copy);
             const ariaLabel = `${item.index + 1}. ${item.label}: ${state.textContent}`;
-            if (typeof onStageSelect === 'function') {
-                li.classList.add('is-selectable');
-                li.tabIndex = 0;
-                li.setAttribute('aria-label', `${ariaLabel}. Inspect stage evidence.`);
+            if (selectable) {
+                node.classList.add('is-selectable');
+                node.setAttribute('aria-label', `${ariaLabel}. Inspect stage evidence.`);
                 const selectStage = (event) => {
                     if (event && typeof event.stopPropagation === 'function') {
                         event.stopPropagation();
@@ -2934,16 +2937,11 @@ window.Kit = (() => {
                         attempt: item.attempt,
                     });
                 };
-                li.addEventListener('click', selectStage);
-                li.addEventListener('keydown', (event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    selectStage(event);
-                });
+                node.addEventListener('click', selectStage);
             } else {
-                li.setAttribute('aria-label', ariaLabel);
+                node.setAttribute('aria-label', ariaLabel);
             }
-            root.appendChild(li);
+            root.appendChild(node);
         });
         return root;
     }

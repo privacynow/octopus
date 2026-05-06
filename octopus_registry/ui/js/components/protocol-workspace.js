@@ -397,7 +397,11 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     await refresh();
 }
 
-function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
+function _protocolArtifactActionRow(runId, artifact, definition = null, {
+    missing = false,
+    runtimeExpected = false,
+    prominentRuntime = false,
+} = {}) {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
     const available = !missing && artifact?.exists !== false;
     const browsable = available && UI.isLikelyDirectoryArtifactPath(displayPath);
@@ -462,17 +466,18 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
         actionRow.appendChild(snapshotState);
         void refreshSnapshotState();
     }
-    if (browsable) {
+    const runtimeEligible = browsable || Boolean(runtimeExpected);
+    if (runtimeEligible) {
         const runtimeBtn = document.createElement('button');
         runtimeBtn.type = 'button';
-        runtimeBtn.className = 'btn btn-sm btn-primary';
-        runtimeBtn.textContent = 'Start app';
-        runtimeBtn.hidden = true;
+        runtimeBtn.className = prominentRuntime ? 'btn btn-sm btn-primary is-primary-artifact-action' : 'btn btn-sm btn-primary';
+        runtimeBtn.textContent = prominentRuntime ? 'Start primary app' : 'Start app';
+        runtimeBtn.hidden = !runtimeExpected;
         const runtimeStatus = document.createElement('button');
         runtimeStatus.type = 'button';
         runtimeStatus.className = 'btn btn-sm';
         runtimeStatus.textContent = 'Runtime';
-        runtimeStatus.hidden = true;
+        runtimeStatus.hidden = !runtimeExpected;
         const stopRuntime = document.createElement('button');
         stopRuntime.type = 'button';
         stopRuntime.className = 'btn btn-sm';
@@ -489,8 +494,8 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
         const setRuntimeState = (runtime = {}) => {
             const status = String(runtime?.status || '').toLowerCase();
             const configured = status && status !== 'not_configured';
-            runtimeStatus.hidden = !configured;
-            runtimeBtn.hidden = !configured || ['running', 'starting', 'archived', 'deleted'].includes(status);
+            runtimeStatus.hidden = !configured && !runtimeExpected;
+            runtimeBtn.hidden = (!configured && !runtimeExpected) || ['running', 'starting', 'archived', 'deleted'].includes(status);
             openRuntime.hidden = status !== 'running';
             stopRuntime.hidden = !['running', 'starting'].includes(status);
         };
@@ -499,8 +504,8 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
                 const status = await API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key);
                 setRuntimeState(status?.runtime || {});
             } catch (_err) {
-                runtimeBtn.hidden = true;
-                runtimeStatus.hidden = true;
+                runtimeBtn.hidden = !runtimeExpected;
+                runtimeStatus.hidden = !runtimeExpected;
                 openRuntime.hidden = true;
                 stopRuntime.hidden = true;
             }
@@ -522,7 +527,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
                 UI.reportError('Failed to start artifact app', err, { context: 'Artifact runtime start failed' });
             } finally {
                 runtimeBtn.disabled = false;
-                runtimeBtn.textContent = 'Start app';
+                runtimeBtn.textContent = prominentRuntime ? 'Start primary app' : 'Start app';
             }
         });
         actionRow.insertBefore(runtimeBtn, actionRow.firstChild);
@@ -9398,6 +9403,61 @@ function renderProtocolRuns(container) {
         };
         const taskUpdatedLabel = (task) => task?.updated_at ? `Updated ${UI.relativeTime(task.updated_at)}` : '';
         const stageAttemptLabel = (item) => `Attempt ${String(item?.attempt || 1)}`;
+        const stageStatusLabel = (item) => {
+            const status = String(item?.status || '').trim().toLowerCase();
+            const failureCode = String(item?.failure_code || '').trim().toLowerCase();
+            if (status === 'blocked' && failureCode.startsWith('runtime_')) return 'Needs runtime evidence';
+            if (status === 'blocked') return 'Needs attention';
+            return status ? _titleCaseWords(status) : 'Pending';
+        };
+        const runStatusInfo = (run = {}) => {
+            const status = String(run.status || 'queued').trim().toLowerCase();
+            const blockedCode = String(run.blocked_code || '').trim().toLowerCase();
+            if (status === 'blocked' && blockedCode.startsWith('runtime_')) {
+                return {
+                    status,
+                    active: false,
+                    actionable: true,
+                    label: 'Runtime verification required',
+                    kicker: 'Verification required',
+                    detail: run.blocked_detail || 'Start and exercise the primary artifact through the Registry before final acceptance.',
+                };
+            }
+            if (status === 'blocked') {
+                return {
+                    status,
+                    active: false,
+                    actionable: true,
+                    label: 'Needs attention',
+                    kicker: 'Needs attention',
+                    detail: run.blocked_detail || 'The current stage needs operator action before the run can continue.',
+                };
+            }
+            if (['queued', 'running'].includes(status)) {
+                return { status, active: true, actionable: true, label: status || 'running', kicker: 'Run in progress', detail: '' };
+            }
+            return {
+                status,
+                active: false,
+                actionable: !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status),
+                label: status || 'queued',
+                kicker: ['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status) ? 'Run finished' : 'Run status',
+                detail: run.termination_summary || '',
+            };
+        };
+        const primaryRuntimeExpected = (artifact, definition = {}, primary = {}) => {
+            const artifactKey = String(artifact?.artifact_key || primary?.artifact_key || '').trim();
+            const blockedCode = String(currentRun?.run?.blocked_code || '').trim().toLowerCase();
+            if (artifactKey && blockedCode.startsWith('runtime_')) return true;
+            const parts = [
+                primary?.open_behavior,
+                definition?.open_behavior,
+                primary?.runtime_kind,
+                definition?.runtime_kind,
+                ...(Array.isArray(primary?.evidence_requirements) ? primary.evidence_requirements : []),
+            ].map((item) => String(item || '').trim()).filter(Boolean);
+            return parts.some((item) => /(runtime|runnable|app|service|api|ui|browser|playable)/i.test(item));
+        };
 
         const currentRunStageExecution = () => {
             const run = currentRun.run || {};
@@ -9444,8 +9504,9 @@ function renderProtocolRuns(container) {
 
         const buildRunFocusHero = () => {
             const run = currentRun.run || {};
-            const status = String(run.status || 'queued').trim().toLowerCase();
-            const active = !['completed', 'failed', 'cancelled'].includes(status);
+            const statusInfo = runStatusInfo(run);
+            const status = statusInfo.status;
+            const active = statusInfo.active;
             const currentStage = currentRunStageExecution();
             const currentStageOrdinal = currentStage ? stageOrdinalFor(currentStage.stage_key) : 0;
             const totalStages = runStageCount();
@@ -9467,7 +9528,7 @@ function renderProtocolRuns(container) {
             main.className = 'run-focus-main';
             const kicker = document.createElement('div');
             kicker.className = 'run-focus-kicker';
-            kicker.textContent = active ? 'Run in progress' : 'Run finished';
+            kicker.textContent = statusInfo.kicker;
             main.appendChild(kicker);
             const title = document.createElement('h3');
             title.className = 'run-focus-title';
@@ -9476,8 +9537,8 @@ function renderProtocolRuns(container) {
             const stage = document.createElement('div');
             stage.className = 'run-focus-stage';
             stage.textContent = currentStage
-                ? `${currentStageDef.display_name || currentStage.stage_key || 'Stage'} · ${currentStage.status || run.status || 'queued'}`
-                : run.termination_summary || 'Waiting for the first stage';
+                ? `${currentStageDef.display_name || currentStage.stage_key || 'Stage'} · ${stageStatusLabel(currentStage)}`
+                : statusInfo.detail || 'Waiting for the first stage';
             main.appendChild(stage);
             if (run.problem_statement) {
                 const problem = document.createElement('p');
@@ -9531,7 +9592,7 @@ function renderProtocolRuns(container) {
             const live = document.createElement('div');
             live.className = `run-focus-live${active ? ' is-live' : ''}${active && !latestEvent && !currentTaskUpdate ? ' is-quiet' : ''}`;
             const liveLabel = document.createElement('strong');
-            liveLabel.textContent = currentTaskUpdate ? 'Agent update' : (active ? 'Live update' : 'Latest update');
+            liveLabel.textContent = currentTaskUpdate ? 'Agent update' : (active ? 'Live update' : status === 'blocked' ? 'What is needed' : 'Latest update');
             live.appendChild(liveLabel);
             const liveCopy = document.createElement('span');
             liveCopy.textContent = taskProgressText
@@ -9539,14 +9600,14 @@ function renderProtocolRuns(container) {
                 ? _protocolEventText(latestEvent)
                 : active
                     ? quietProgressText
-                    : run.termination_summary || 'Run is no longer active.');
+                    : statusInfo.detail || run.termination_summary || 'Run is no longer active.');
             live.appendChild(liveCopy);
             state.appendChild(live);
 
             const metrics = document.createElement('div');
             metrics.className = 'run-focus-metrics';
             [
-                { label: 'Status', value: run.status || 'queued' },
+                { label: 'Status', value: statusInfo.label },
                 { label: 'Stage', value: totalStages ? `${currentStageOrdinal || 1} / ${totalStages}` : 'n/a' },
                 { label: 'Outputs', value: `${artifactRows.length}${pendingArtifactRows.length ? ` / ${artifactRows.length + pendingArtifactRows.length}` : ''}` },
                 { label: 'Issues', value: String(currentIssues.length) },
@@ -9617,8 +9678,9 @@ function renderProtocolRuns(container) {
 
         const buildRunLivenessCard = () => {
             const run = currentRun.run || {};
-            const status = String(run.status || '').trim().toLowerCase();
-            const active = !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status);
+            const statusInfo = runStatusInfo(run);
+            const status = statusInfo.status;
+            const active = statusInfo.active;
             const currentStage = currentRunStageExecution();
             const currentStageOrdinal = currentStage ? stageOrdinalFor(currentStage.stage_key) : 0;
             const currentStageDef = currentStage
@@ -9636,20 +9698,20 @@ function renderProtocolRuns(container) {
 
             const label = active && currentStage
                 ? `Running stage ${currentStageOrdinal || 1} of ${runStageCount() || 1}: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`
-                : `Run ${status || 'state'}`;
+                : statusInfo.label;
             card.appendChild(UI.renderListRow({
                 label,
                 sublabel: [
-                    active ? 'Work is being dispatched through the protocol runtime' : run.termination_summary || 'Execution is no longer active',
+                    active ? 'Work is being dispatched through the protocol runtime' : statusInfo.detail || run.termination_summary || 'Execution is no longer active',
                     elapsed ? `elapsed ${elapsed}` : '',
                     averageMs ? `typical completed run ${durationLabel(averageMs)}` : 'estimate available after completed run history',
                 ].filter(Boolean).join(' · '),
-                badgeText: active ? 'live' : (run.status || ''),
+                    badgeText: active ? 'live' : (statusInfo.label || run.status || ''),
                 badgeClass: active ? 'badge-running' : '',
             }));
             card.appendChild(UI.renderMetadataGrid([
                 { label: 'Current stage', value: currentStage ? (currentStageDef.display_name || currentStage.stage_key || 'Stage') : '—' },
-                { label: 'Stage state', value: currentStage?.status || run.status || '—' },
+                { label: 'Stage state', value: currentStage ? stageStatusLabel(currentStage) : statusInfo.label || '—' },
                 { label: 'Assigned to', value: currentTaskTarget || '—' },
                 { label: 'Task state', value: taskStateLabel(currentTask) || '—' },
                 { label: 'Available outputs', value: String(artifactRows.length) },
@@ -9717,14 +9779,14 @@ function renderProtocolRuns(container) {
             titleWrap.className = 'protocol-lineage-copy';
             const label = document.createElement('strong');
             label.className = 'protocol-lineage-title';
-            label.textContent = `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'} · ${item.status}`;
+            label.textContent = `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'} · ${stageStatusLabel(item)}`;
             titleWrap.appendChild(label);
             const subtitle = document.createElement('div');
             subtitle.className = 'protocol-lineage-subtitle';
             subtitle.textContent = [
                 participant.display_name || item.participant_key || '',
                 taskTarget,
-                taskState,
+                taskState ? `Task ${taskState}` : '',
                 item.decision_summary || item.failure_detail || '',
             ].filter(Boolean).join(' · ');
             titleWrap.appendChild(subtitle);
@@ -9992,6 +10054,27 @@ function renderProtocolRuns(container) {
                 ? 'Promoted from produced artifacts because this run did not declare a primary outcome.'
                 : 'This is the protocol-declared main outcome for the run.';
             panel.appendChild(note);
+            const runtimeExpected = primaryRuntimeExpected(artifact, definition, primary);
+            if (runtimeExpected && String(currentRun.run?.blocked_code || '').trim().toLowerCase().startsWith('runtime_')) {
+                panel.appendChild(UI.renderListRow({
+                    label: 'Runtime verification required',
+                    sublabel: currentRun.run?.blocked_detail || 'Start and exercise the primary artifact through the Registry, then accept the final stage.',
+                    badgeText: 'verify',
+                    badgeClass: 'badge-blocked',
+                }));
+            }
+            const actions = _protocolArtifactActionRow(
+                currentRun.run.protocol_run_id,
+                artifact,
+                definition,
+                {
+                    missing: !artifact.exists,
+                    runtimeExpected,
+                    prominentRuntime: true,
+                },
+            );
+            actions.classList.add('run-primary-actions');
+            panel.appendChild(actions);
             panel.appendChild(UI.renderMetadataGrid([
                 { label: 'Artifact', value: key },
                 { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },
@@ -9999,12 +10082,6 @@ function renderProtocolRuns(container) {
                 { label: 'Observed path', value: _protocolArtifactDisplayPath(artifact) || '-' },
                 { label: 'Verification', value: artifact.verification_state || artifact.state || '-' },
             ], { compact: true }));
-            panel.appendChild(_protocolArtifactActionRow(
-                currentRun.run.protocol_run_id,
-                artifact,
-                definition,
-                { missing: !artifact.exists },
-            ));
             const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
             if (evidence) {
                 panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence' }));
@@ -10080,7 +10157,8 @@ function renderProtocolRuns(container) {
                 meta.textContent = [
                     stageAttemptLabel(stageItem),
                     previousAttempt ? 'previous attempt' : '',
-                    taskState || stageItem.status || 'pending',
+                    stageStatusLabel(stageItem),
+                    taskState ? `task ${taskState}` : '',
                     taskTarget ? `Agent ${taskTarget}` : '',
                     activeTaskState ? taskUpdate : '',
                     producedArtifacts.length ? `${producedArtifacts.length} output${producedArtifacts.length === 1 ? '' : 's'}` : '',

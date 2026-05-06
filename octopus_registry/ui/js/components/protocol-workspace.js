@@ -80,6 +80,23 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
         runtimeBtn.type = 'button';
         runtimeBtn.className = 'btn btn-sm btn-primary';
         runtimeBtn.textContent = 'Start app';
+        const stopRuntime = document.createElement('button');
+        stopRuntime.type = 'button';
+        stopRuntime.className = 'btn btn-sm';
+        stopRuntime.textContent = 'Stop app';
+        stopRuntime.hidden = true;
+        const setRuntimeState = (runtime = {}) => {
+            const status = String(runtime?.status || '').toLowerCase();
+            stopRuntime.hidden = status !== 'running';
+        };
+        const refreshRuntimeState = async () => {
+            try {
+                const status = await API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key);
+                setRuntimeState(status?.runtime || {});
+            } catch (_err) {
+                stopRuntime.hidden = true;
+            }
+        };
         runtimeBtn.addEventListener('click', async (event) => {
             event.stopPropagation();
             runtimeBtn.disabled = true;
@@ -89,6 +106,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
                 const runtime = result?.runtime || {};
                 const target = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
                 UI.notify(result?.message || 'Artifact runtime started.', result?.ok === false ? 'warning' : 'success');
+                setRuntimeState(runtime);
                 if (String(runtime.status || '').toLowerCase() === 'running' || result?.ok !== false) {
                     window.location.assign(target);
                 }
@@ -108,6 +126,23 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
         openRuntime.textContent = 'Open app';
         openRuntime.addEventListener('click', (event) => event.stopPropagation());
         actionRow.insertBefore(openRuntime, runtimeBtn.nextSibling);
+        stopRuntime.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            stopRuntime.disabled = true;
+            stopRuntime.textContent = 'Stopping...';
+            try {
+                const result = await API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key);
+                UI.notify(result?.message || 'Artifact runtime stopped.', result?.ok === false ? 'warning' : 'success');
+                setRuntimeState(result?.runtime || { status: result?.status || 'stopped' });
+            } catch (err) {
+                UI.reportError('Failed to stop artifact app', err, { context: 'Artifact runtime stop failed' });
+            } finally {
+                stopRuntime.disabled = false;
+                stopRuntime.textContent = 'Stop app';
+            }
+        });
+        actionRow.insertBefore(stopRuntime, openRuntime.nextSibling);
+        void refreshRuntimeState();
     }
     return actionRow;
 }

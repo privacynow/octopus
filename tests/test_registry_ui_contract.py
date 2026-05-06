@@ -1182,6 +1182,9 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "event.preventDefault();" in helper
     assert "const available = !missing && artifact?.exists !== false;" in protocol_workspace
     assert "openHref: available ? API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
+    assert "API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
+    assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace
     assert "unavailableReason: missing ? 'Declared artifact, not produced yet.'" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
     assert "function createTaskArtifactListRow(task, artifact, expectedOutput = null)" in helper

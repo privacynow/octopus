@@ -1688,6 +1688,154 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
     assert run_response.json()["run_result"]["run"]["protocol_run_id"] == "run-auto"
 
 
+def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            mode="revise",
+            surface="registry",
+            requirement_text="Improve the payments and onboarding risk engine so it produces a runnable Java service with a web UI.",
+            target_protocol_id="risk-protocol",
+            target_draft_revision=4,
+            available_agents=[
+                {
+                    "agent_id": "agent-1",
+                    "display_name": "Risk Builder",
+                    "routing_skills": ["implementation", "software engineering", "testing"],
+                }
+            ],
+            model_response=_auto_design_model_response("architecture_and_runtime_design", "implementation"),
+        ),
+        session_id="auto-risk",
+        created_at="2026-04-16T00:00:00+00:00",
+        updated_at="2026-04-16T00:00:00+00:00",
+    )
+
+    class _Store:
+        def __init__(self):
+            self.session = session
+            self.calls: list[str] = []
+
+        def get_protocol_auto_design_session(self, session_id: str, *, access):
+            assert session_id == "auto-risk"
+            return self.session
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind in {"applied", "published", "run_started"}
+            self.calls.append(event_kind)
+            self.session = session
+            return session
+
+        def save_protocol_draft(
+            self,
+            *,
+            access,
+            protocol_id,
+            slug,
+            display_name,
+            description,
+            definition_json,
+            authoring_surface="standard",
+            expected_revision=None,
+        ):
+            assert protocol_id == "risk-protocol"
+            assert expected_revision == 4
+            assert authoring_surface == "standard"
+            self.calls.append("save_draft")
+            return ProtocolMutationRecord(
+                ok=True,
+                status="saved",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="risk-protocol",
+                    slug=slug,
+                    display_name=display_name,
+                    current_version_id="version-old",
+                    draft_revision=5,
+                ),
+                draft_definition_json=definition_json,
+                validation={"ok": True, "errors": [], "issues": [], "next_required_actions": []},
+            )
+
+        def publish_protocol(self, protocol_id: str, *, access):
+            assert protocol_id == "risk-protocol"
+            assert self.calls[-2:] == ["save_draft", "applied"]
+            self.calls.append("publish_protocol")
+            return ProtocolMutationRecord(
+                ok=True,
+                status="published",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="risk-protocol",
+                    slug="risk-engine",
+                    display_name="Risk Engine",
+                    current_version_id="version-new",
+                    draft_revision=5,
+                ),
+            )
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    display_name="Risk Builder",
+                    slug="risk-builder",
+                    provider="codex",
+                    role="worker",
+                    routing_skills=["implementation", "testing"],
+                    connectivity_state="connected",
+                )
+            ]
+
+        def create_protocol_run(self, payload, *, access, idempotency_key=""):
+            assert self.calls[-2:] == ["publish_protocol", "published"]
+            assert payload.protocol_id == "risk-protocol"
+            assert payload.entry_agent_id == "agent-1"
+            assert payload.origin_channel == "registry"
+            return ProtocolRunMutationRecord.model_validate(
+                {
+                    "ok": True,
+                    "status": "created",
+                    "run": {
+                        "protocol_run_id": "risk-run",
+                        "protocol_id": "risk-protocol",
+                        "protocol_definition_version_id": "version-new",
+                        "entry_agent_id": "agent-1",
+                        "root_conversation_id": "",
+                        "origin_channel": "registry",
+                        "workspace_ref": "",
+                        "run_org_id": "local",
+                        "status": "running",
+                        "problem_statement": "Improve the payments and onboarding risk engine.",
+                        "constraints_json": {},
+                        "created_at": "2026-04-16T00:00:00+00:00",
+                        "updated_at": "2026-04-16T00:00:00+00:00",
+                        "current_stage_key": "requirements_planning",
+                        "version": 1,
+                    },
+                }
+            )
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.post("/v1/protocol-auto/sessions/auto-risk/run", json={"origin_channel": "registry"})
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "running"
+    assert payload["run_result"]["run"]["protocol_definition_version_id"] == "version-new"
+    assert store.calls == ["save_draft", "applied", "publish_protocol", "published", "run_started"]
+
+
 def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

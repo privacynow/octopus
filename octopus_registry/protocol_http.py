@@ -481,6 +481,41 @@ def build_protocol_router(
         })
         return store.update_protocol_auto_design_session(updated, access=access, event_kind="applied")
 
+    def _auto_protocol_session_has_applied_draft(session: ProtocolAutoDesignSessionRecord) -> bool:
+        return (
+            str(session.target_protocol_id or "").strip()
+            and session.applied_protocol is not None
+            and str(session.status or "").strip() in {"applied", "published", "running"}
+        )
+
+    def _ensure_auto_protocol_session_applied(
+        store: AbstractRegistryStore,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        if _auto_protocol_session_has_applied_draft(session):
+            return session
+        return _apply_auto_protocol_session(store, session, access=access)
+
+    def _ensure_auto_protocol_session_published(
+        store: AbstractRegistryStore,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        session = _ensure_auto_protocol_session_applied(store, session, access=access)
+        if session.applied_protocol is not None and str(session.status or "").strip() in {"published", "running"}:
+            return session
+        result = store.publish_protocol(session.target_protocol_id, access=access)
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        return store.update_protocol_auto_design_session(
+            session.model_copy(update={"status": "published", "applied_protocol": result}),
+            access=access,
+            event_kind="published",
+        )
+
     def _ensure_auto_protocol_ready(session: ProtocolAutoDesignSessionRecord, *, action: str) -> None:
         unresolved = list(session.unresolved_decisions or [])
         validation = session.validation
@@ -744,16 +779,7 @@ def build_protocol_router(
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
             _ensure_auto_protocol_ready(session, action="publish")
-            if not str(session.target_protocol_id or "").strip():
-                session = _apply_auto_protocol_session(store, session, access=access)
-            result = store.publish_protocol(session.target_protocol_id, access=access)
-            if not result.ok:
-                raise _protocol_result_http_error(result)
-            session = store.update_protocol_auto_design_session(
-                session.model_copy(update={"status": "published", "applied_protocol": result}),
-                access=access,
-                event_kind="published",
-            )
+            session = _ensure_auto_protocol_session_published(store, session, access=access)
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except KeyError as exc:
@@ -773,15 +799,7 @@ def build_protocol_router(
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
             _ensure_auto_protocol_ready(session, action="run")
-            if not str(session.target_protocol_id or "").strip():
-                session = _apply_auto_protocol_session(store, session, access=access)
-            loaded = store.get_protocol(session.target_protocol_id, access=access)
-            if not loaded.ok:
-                raise _protocol_result_http_error(loaded)
-            if not loaded.protocol or not str(loaded.protocol.current_version_id or "").strip():
-                publish_result = store.publish_protocol(session.target_protocol_id, access=access)
-                if not publish_result.ok:
-                    raise _protocol_result_http_error(publish_result)
+            session = _ensure_auto_protocol_session_published(store, session, access=access)
             agents = _connected_agents(store)
             entry_agent_id = str(payload.get("entry_agent_id") or "").strip()
             if not entry_agent_id and auth.is_agent and auth.agent_id:

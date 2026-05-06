@@ -1469,7 +1469,9 @@
                     "submit_conversation_skill_credential": "#/components/schemas/SubmitConversationSkillCredentialResult",
                     "submit_provider_guidance": "#/components/schemas/SubmitProviderGuidanceResult",
                     "uninstall_catalog_skill": "#/components/schemas/UninstallCatalogSkillResult",
-                    "update_catalog_skill": "#/components/schemas/UpdateCatalogSkillResult"
+                    "update_catalog_skill": "#/components/schemas/UpdateCatalogSkillResult",
+                    "workspace_cleanup": "#/components/schemas/WorkspaceCleanupResult",
+                    "workspace_usage": "#/components/schemas/WorkspaceUsageResult"
                   },
                   "propertyName": "operation"
                 },
@@ -1590,6 +1592,12 @@
                   },
                   {
                     "$ref": "#/components/schemas/ArtifactRuntimeFetchResult"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WorkspaceUsageResult"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WorkspaceCleanupResult"
                   }
                 ]
               },
@@ -4209,6 +4217,182 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WorkspaceCleanupEntryRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "default": "unknown",
+            "title": "Category",
+            "type": "string"
+          },
+          "file_count": {
+            "default": 0,
+            "title": "File Count",
+            "type": "integer"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "safe_to_delete": {
+            "default": false,
+            "title": "Safe To Delete",
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "default": 0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "title": "WorkspaceCleanupEntryRecord",
+        "type": "object"
+      },
+      "WorkspaceCleanupPlanRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "default": "",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "deletable_bytes": {
+            "default": 0,
+            "title": "Deletable Bytes",
+            "type": "integer"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceCleanupEntryRecord"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "file_count": {
+            "default": 0,
+            "title": "File Count",
+            "type": "integer"
+          },
+          "inventory_id": {
+            "default": "",
+            "title": "Inventory Id",
+            "type": "string"
+          },
+          "protocol_run_id": {
+            "default": "",
+            "title": "Protocol Run Id",
+            "type": "string"
+          },
+          "retained_bytes": {
+            "default": 0,
+            "title": "Retained Bytes",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "default": 0,
+            "title": "Total Bytes",
+            "type": "integer"
+          },
+          "transient_bytes": {
+            "default": 0,
+            "title": "Transient Bytes",
+            "type": "integer"
+          },
+          "unknown_bytes": {
+            "default": 0,
+            "title": "Unknown Bytes",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "workspace_ref": {
+            "default": "",
+            "title": "Workspace Ref",
+            "type": "string"
+          }
+        },
+        "title": "WorkspaceCleanupPlanRecord",
+        "type": "object"
+      },
+      "WorkspaceCleanupResult": {
+        "additionalProperties": false,
+        "properties": {
+          "failures": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "operation": {
+            "const": "workspace_cleanup",
+            "default": "workspace_cleanup",
+            "title": "Operation",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/WorkspaceCleanupPlanRecord"
+          },
+          "removed_bytes": {
+            "default": 0,
+            "title": "Removed Bytes",
+            "type": "integer"
+          },
+          "removed_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Removed Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "WorkspaceCleanupResult",
+        "type": "object"
+      },
+      "WorkspaceUsageResult": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "workspace_usage",
+            "default": "workspace_usage",
+            "title": "Operation",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/WorkspaceCleanupPlanRecord"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "WorkspaceUsageResult",
+        "type": "object"
       }
     }
   },
@@ -4463,6 +4647,349 @@
           }
         },
         "summary": "Resource Cleanup Workspace Data"
+      }
+    },
+    "/v1/admin/workspaces/cleanup": {
+      "post": {
+        "operationId": "resource_execute_workspace_cleanup_v1_admin_workspaces_cleanup_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Execute Workspace Cleanup V1 Admin Workspaces Cleanup Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Execute Workspace Cleanup"
+      }
+    },
+    "/v1/admin/workspaces/cleanup/dry-run": {
+      "post": {
+        "operationId": "resource_dry_run_workspace_cleanup_v1_admin_workspaces_cleanup_dry_run_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Dry Run Workspace Cleanup V1 Admin Workspaces Cleanup Dry Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Dry Run Workspace Cleanup"
+      }
+    },
+    "/v1/admin/workspaces/cleanup/jobs/{job_id}": {
+      "get": {
+        "operationId": "resource_get_workspace_cleanup_job_v1_admin_workspaces_cleanup_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Get Workspace Cleanup Job V1 Admin Workspaces Cleanup Jobs  Job Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Workspace Cleanup Job"
+      }
+    },
+    "/v1/admin/workspaces/usage": {
+      "get": {
+        "operationId": "resource_get_workspace_usage_v1_admin_workspaces_usage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace_ref",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Workspace Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol_run_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Protocol Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Category",
+              "type": "array"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Get Workspace Usage V1 Admin Workspaces Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Workspace Usage"
       }
     },
     "/v1/agents": {
@@ -10570,6 +11097,95 @@
       }
     },
     "/v1/protocol-runs/{run_id}": {
+      "delete": {
+        "operationId": "resource_delete_protocol_run_v1_protocol_runs__run_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Delete Protocol Run V1 Protocol Runs  Run Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Delete Protocol Run"
+      },
       "get": {
         "operationId": "resource_get_protocol_run_v1_protocol_runs__run_id__get",
         "parameters": [
@@ -10766,6 +11382,97 @@
           }
         },
         "summary": "Resource Act On Protocol Run"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/archive": {
+      "post": {
+        "operationId": "resource_archive_protocol_run_v1_protocol_runs__run_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Archive Protocol Run V1 Protocol Runs  Run Id  Archive Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Archive Protocol Run"
       }
     },
     "/v1/protocol-runs/{run_id}/artifacts": {
@@ -11762,6 +12469,503 @@
         "summary": "Resource Stop Protocol Artifact Runtime"
       }
     },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot": {
+      "delete": {
+        "operationId": "resource_delete_protocol_run_artifact_snapshot_v1_protocol_runs__run_id__artifacts__artifact_key__snapshot_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Delete Protocol Run Artifact Snapshot V1 Protocol Runs  Run Id  Artifacts  Artifact Key  Snapshot Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Delete Protocol Run Artifact Snapshot"
+      },
+      "get": {
+        "operationId": "resource_get_protocol_run_artifact_snapshot_v1_protocol_runs__run_id__artifacts__artifact_key__snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Get Protocol Run Artifact Snapshot V1 Protocol Runs  Run Id  Artifacts  Artifact Key  Snapshot Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Protocol Run Artifact Snapshot"
+      },
+      "post": {
+        "operationId": "resource_create_protocol_run_artifact_snapshot_v1_protocol_runs__run_id__artifacts__artifact_key__snapshot_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Create Protocol Run Artifact Snapshot V1 Protocol Runs  Run Id  Artifacts  Artifact Key  Snapshot Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Create Protocol Run Artifact Snapshot"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot/content": {
+      "get": {
+        "operationId": "resource_get_protocol_run_artifact_snapshot_content_v1_protocol_runs__run_id__artifacts__artifact_key__snapshot_content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "member_path_tail",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Member Path Tail",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Download",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "browse",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Browse",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "preview",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Preview",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Protocol Run Artifact Snapshot Content"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot/content/{member_path_tail}": {
+      "get": {
+        "operationId": "resource_get_protocol_run_artifact_snapshot_content_v1_protocol_runs__run_id__artifacts__artifact_key__snapshot_content__member_path_tail__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_path_tail",
+            "required": true,
+            "schema": {
+              "title": "Member Path Tail",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Download",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "browse",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Browse",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "preview",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Preview",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Protocol Run Artifact Snapshot Content"
+      }
+    },
     "/v1/protocol-runs/{run_id}/export": {
       "get": {
         "operationId": "resource_export_protocol_run_v1_protocol_runs__run_id__export_get",
@@ -12064,6 +13268,97 @@
           }
         },
         "summary": "Resource List Rehearsal Sessions"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/restore": {
+      "post": {
+        "operationId": "resource_restore_protocol_run_v1_protocol_runs__run_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Restore Protocol Run V1 Protocol Runs  Run Id  Restore Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Restore Protocol Run"
       }
     },
     "/v1/protocol-runs/{run_id}/timeline": {

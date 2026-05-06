@@ -36,6 +36,7 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
     ProtocolTransitionRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeActionResultRecord,
     ProtocolArtifactRuntimeHealthRecord,
     ProtocolArtifactRuntimeInstanceRecord,
@@ -751,6 +752,57 @@ class RegistryClient(
         rows = result.get("artifacts", result)
         return [ProtocolArtifactRecord.model_validate(item) for item in rows]
 
+    async def archive_run(self, run_id: str, *, reason: str = "") -> ProtocolRunMutationRecord:
+        result = await self._request("POST", f"/v1/protocol-runs/{run_id}/archive", json={"reason": reason})
+        return ProtocolRunMutationRecord.model_validate(result)
+
+    async def restore_run(self, run_id: str, *, reason: str = "") -> ProtocolRunMutationRecord:
+        result = await self._request("POST", f"/v1/protocol-runs/{run_id}/restore", json={"reason": reason})
+        return ProtocolRunMutationRecord.model_validate(result)
+
+    async def delete_run(self, run_id: str, *, reason: str = "", confirm: str = "DELETE") -> ProtocolRunMutationRecord:
+        result = await self._request(
+            "DELETE",
+            f"/v1/protocol-runs/{run_id}",
+            json={"reason": reason, "confirm": confirm},
+        )
+        return ProtocolRunMutationRecord.model_validate(result)
+
+    async def get_run_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactSnapshotRecord | None:
+        result = await self._request(
+            "GET",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot",
+        )
+        snapshot = result.get("snapshot") if isinstance(result, dict) else None
+        return ProtocolArtifactSnapshotRecord.model_validate(snapshot) if snapshot else None
+
+    async def create_run_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactSnapshotRecord:
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot",
+            json={},
+        )
+        return ProtocolArtifactSnapshotRecord.model_validate(result.get("snapshot", result))
+
+    async def delete_run_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactSnapshotRecord:
+        result = await self._request(
+            "DELETE",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot",
+        )
+        return ProtocolArtifactSnapshotRecord.model_validate(result.get("snapshot", result))
+
     async def get_run_artifact_content(
         self,
         run_id: str,
@@ -831,6 +883,14 @@ class RegistryClient(
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/timeline")
         rows = result.get("transitions", result)
         return [ProtocolTransitionRecord.model_validate(item) for item in rows]
+
+    async def dry_run_workspace_cleanup(self, payload: Mapping[str, object] | None = None) -> dict[str, object]:
+        result = await self._request("POST", "/v1/admin/workspaces/cleanup/dry-run", json=dict(payload or {}))
+        return dict(result)
+
+    async def execute_workspace_cleanup(self, payload: Mapping[str, object]) -> dict[str, object]:
+        result = await self._request("POST", "/v1/admin/workspaces/cleanup", json=dict(payload))
+        return dict(result)
 
     async def export_run(self, run_id: str) -> ProtocolRunExportRecord:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/export")

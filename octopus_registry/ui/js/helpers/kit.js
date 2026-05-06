@@ -2476,7 +2476,7 @@ window.Kit = (() => {
     // serve delegation chains, coordination sessions, and anything else
     // that maps onto the run state machine later.
     // -----------------------------------------------------------------------
-    const RUN_STATUS_STATES = ['queued', 'running', 'blocked', 'completed', 'failed', 'cancelled'];
+    const RUN_STATUS_STATES = ['queued', 'running', 'blocked', 'completed', 'failed', 'cancelled', 'archived', 'deleted'];
 
     function _runStatusChip(status) {
         const value = String(status || '').trim();

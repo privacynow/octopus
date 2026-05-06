@@ -331,6 +331,8 @@ class WorkflowComposer:
             "artifact_runtime_health",
             "artifact_runtime_logs",
             "artifact_runtime_fetch",
+            "workspace_usage",
+            "workspace_cleanup",
         ])
 
         catalog = RuntimeSkillCatalogUseCases(

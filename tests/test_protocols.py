@@ -13,6 +13,7 @@ import pytest
 from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
     ProtocolAccessContextRecord,
+    ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeEventRecord,
     ProtocolArtifactRuntimeInstanceRecord,
     ProtocolArtifactRuntimeManifestRecord,
@@ -1597,6 +1598,92 @@ def test_registry_store_persists_protocol_artifact_runtime(postgres_registry_tru
     assert fetched.manifest.runtime_kind == "static"
     assert event.event_kind == "starting"
     assert [item.runtime_event_id for item in events] == [event.runtime_event_id]
+
+
+def test_registry_store_persists_protocol_artifact_snapshot(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, _created, detail = running_protocol_run(store)
+    snapshot = ProtocolArtifactSnapshotRecord(
+        artifact_snapshot_id="snapshot-store-test",
+        protocol_artifact_id=detail.artifacts[0].protocol_artifact_id,
+        protocol_run_id=detail.run.protocol_run_id,
+        artifact_key=detail.artifacts[0].artifact_key,
+        snapshot_kind="directory",
+        storage_uri="registry-artifact://snapshots/snapshot-store-test",
+        content_hash="sha256:test",
+        size_bytes=42,
+        created_by="operator:test",
+    )
+
+    saved = store.save_protocol_artifact_snapshot(snapshot, access=operator_access())
+    fetched = store.get_protocol_artifact_snapshot(
+        detail.run.protocol_run_id,
+        detail.artifacts[0].artifact_key,
+        access=operator_access(),
+    )
+    exported = store.export_protocol_run(detail.run.protocol_run_id, access=operator_access())
+
+    assert saved.artifact_snapshot_id == "snapshot-store-test"
+    assert fetched is not None
+    assert fetched.content_hash == "sha256:test"
+    assert exported.artifact_snapshots[0].artifact_snapshot_id == "snapshot-store-test"
+
+
+def test_registry_store_protocol_run_archive_delete_lifecycle(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, _created, detail = running_protocol_run(store)
+
+    running_archive = store.archive_protocol_run(detail.run.protocol_run_id, access=operator_access())
+    assert running_archive.ok is False
+    assert "finish" in running_archive.message.lower()
+
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agent_registry.protocol_runs
+                SET status = 'completed', completed_at = updated_at
+                WHERE protocol_run_id = %s
+                """,
+                (detail.run.protocol_run_id,),
+            )
+        conn.commit()
+
+    runtime = store.save_protocol_artifact_runtime(
+        ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id="runtime-run-lifecycle-test",
+            protocol_run_id=detail.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            agent_id=detail.run.entry_agent_id,
+            status="running",
+            manifest=ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/"),
+            artifact_path="/workspace/workspace/protocol/auto/run/output",
+        ),
+        access=operator_access(),
+    )
+    blocked_archive = store.archive_protocol_run(detail.run.protocol_run_id, access=operator_access())
+    assert blocked_archive.ok is False
+    assert "runtimes" in blocked_archive.message.lower()
+
+    store.save_protocol_artifact_runtime(runtime.model_copy(update={"status": "stopped"}), access=operator_access())
+    archived = store.archive_protocol_run(detail.run.protocol_run_id, access=operator_access(), reason="retention test")
+    assert archived.ok is True
+    assert archived.run is not None
+    assert archived.run.status == "archived"
+    assert all(item.protocol_run_id != detail.run.protocol_run_id for item in store.list_protocol_runs(access=operator_access()))
+    archived_runs = store.list_protocol_runs(access=operator_access(), status="archived")
+    assert [item.protocol_run_id for item in archived_runs] == [detail.run.protocol_run_id]
+
+    restored = store.restore_protocol_run(detail.run.protocol_run_id, access=operator_access())
+    assert restored.ok is True
+    assert restored.run is not None
+    assert restored.run.status == "completed"
+
+    deleted = store.delete_protocol_run(detail.run.protocol_run_id, access=operator_access(), reason="retention delete test")
+    assert deleted.ok is True
+    assert deleted.run is not None
+    assert deleted.run.status == "deleted"
+    assert all(item.protocol_run_id != detail.run.protocol_run_id for item in store.list_protocol_runs(access=operator_access()))
 
 
 def test_registry_store_protocol_maintenance_expires_artifact_runtimes(postgres_registry_truncated: str) -> None:

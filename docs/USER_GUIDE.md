@@ -247,8 +247,9 @@ A useful run page should answer:
 The default Runs list is recent-first for meaningful work from Registry and
 Telegram. Use the view filters when you want only runs that need attention,
 running runs, completed runs, runs with outcomes, or runs from a specific
-surface. Use `Show generated/audit runs` for rehearsal, smoke, and internal
-generated work.
+surface. Archived and deleted runs are hidden from the normal recent view; use
+the archive/delete filters when you need retention history. Use `Show
+generated/audit runs` for rehearsal, smoke, and internal generated work.
 
 For active runs, watch the run status and latest agent update before retrying.
 A long-running stage is not automatically stuck. It should show enough progress
@@ -269,6 +270,7 @@ An artifact can be:
 - declared but not produced yet
 - available
 - unavailable from the current host
+- retained as a durable package
 - expired or deleted
 
 Where supported, artifact actions should include preview, open, download, copy
@@ -276,7 +278,10 @@ path, or package browsing. Missing or inconsistent artifact actions are product
 issues, not a normal user burden.
 
 Multi-file artifacts are always still packages. Use `Download` when you need the
-complete zip, and use `Contents` when you need to inspect files in place.
+complete zip, and use `Contents` when you need to inspect files in place. Use
+`Retain package` for important outputs before workspace cleanup; if the live
+workspace path later disappears, the artifact can still open or download from
+the retained package.
 
 Some artifacts are runnable products, such as browser games, analytics apps, or
 backend systems with an operator UI and APIs. When the package contains
@@ -284,6 +289,19 @@ backend systems with an operator UI and APIs. When the package contains
 and `Open app`. Octopus starts the process inside the bot runtime, routes the
 UI/API through the Registry, and keeps package browse/download actions available
 beside the live app. Stop the runtime when you are done testing it.
+
+## Archive, Delete, And Cleanup
+
+Archive hides a run from the normal list while preserving the run, stages,
+artifacts, retained packages, runtime events, and audit trail. Delete is a soft
+delete used for retention and clutter control; it requires explicit
+confirmation and keeps historical audit available to authorized operators.
+
+Workspace cleanup lives under `Operations -> Dashboard`. It is dry-run-first:
+Octopus asks a connected bot to scan its own workspace, shows transient
+logs/caches/scratch directories it can remove, and only then executes the
+approved cleanup. Cleanup should not remove the only copy of an important
+artifact; retain the package first when the artifact matters.
 
 ## Use Telegram
 

@@ -1483,6 +1483,49 @@ async def cmd_protocol(
         )
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
+    if sub in {"archive", "restore", "delete"}:
+        if len(args) < 2:
+            await update.effective_message.reply_text(f"Usage: /protocol {sub} <run> [reason]")
+            return
+        confirmation = len(args) >= 3 and str(args[2] or "").strip().lower() == "confirm"
+        reason_parts = args[3:] if confirmation else args[2:]
+        reason = " ".join(str(part).strip() for part in reason_parts if str(part).strip()).strip()
+        if sub == "delete" and not confirmation:
+            await update.effective_message.reply_text("Usage: /protocol delete <run> confirm [reason]")
+            return
+        try:
+            detail = await telegram_protocols.resolve_protocol_run_ref(protocol_service, str(args[1] or ""))
+            run_id = detail.run.protocol_run_id
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
+            return
+        except KeyError:
+            await update.effective_message.reply_text("Run not found. Use /protocol recent, then repeat the action with a number.")
+            return
+        try:
+            if sub == "archive":
+                result = await protocol_service.archive_run(run_id, reason=reason)
+            elif sub == "restore":
+                result = await protocol_service.restore_run(run_id, reason=reason)
+            else:
+                result = await protocol_service.delete_run(run_id, reason=reason, confirm="DELETE")
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to update the protocol run lifecycle. {exc}")
+            return
+        run = result.run
+        if run is None:
+            await update.effective_message.reply_text("Protocol lifecycle action completed without a refreshed run payload.")
+            return
+        if str(run.status or "") in {"completed", "failed", "cancelled", "archived", "deleted"}:
+            telegram_protocols.discard_protocol_run_watch(runtime, chat_id=event.chat_id, run_id=run.protocol_run_id)
+        rendered = telegram_presenters.protocol_run_updated_message(
+            run_id=run.protocol_run_id,
+            status=str(run.status or ""),
+            current_stage=str(run.current_stage_key or "n/a"),
+            deep_link=telegram_protocols.protocol_run_url(runtime, run.protocol_run_id, registry_url=registry_url),
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
     rendered = telegram_presenters.protocol_usage_message()
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 

@@ -18,7 +18,7 @@ from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel,
 
 ProtocolLifecycleState = Literal["draft", "published", "archived"]
 ProtocolVisibility = Literal["org_private", "org_shared", "registry_template"]
-ProtocolRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "blocked"]
+ProtocolRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "blocked", "archived", "deleted"]
 ProtocolStageKind = Literal["work", "review", "acceptance"]
 ProtocolStageExecutionStatus = Literal["queued", "running", "completed", "failed", "cancelled", "blocked"]
 ProtocolArtifactKind = Literal["workspace_file", "control_plane_text"]
@@ -47,6 +47,8 @@ ProtocolArtifactRuntimeEventKind = Literal[
 ]
 ProtocolResolutionOutcome = Literal["queued", "ok", "error"]
 ProtocolArtifactVerificationState = Literal["declared", "available", "verified", "missing", "waived"]
+ProtocolArtifactRetentionState = Literal["active", "archived", "expired", "deleted", "unavailable"]
+ProtocolArtifactSnapshotKind = Literal["file", "directory", "text", "external"]
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
 ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
@@ -591,6 +593,24 @@ class ProtocolArtifactRecord(RegistryRecordModel):
     created_at: str = ""
 
 
+class ProtocolArtifactSnapshotRecord(RegistryRecordModel):
+    artifact_snapshot_id: str = ""
+    protocol_artifact_id: str = ""
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    snapshot_kind: ProtocolArtifactSnapshotKind | str = "file"
+    storage_uri: str = ""
+    content_hash: str = ""
+    size_bytes: int = 0
+    manifest_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    retention_state: ProtocolArtifactRetentionState | str = "active"
+    retention_until: str = ""
+    created_at: str = ""
+    created_by: str = ""
+    deleted_at: str = ""
+    deleted_by: str = ""
+
+
 class ProtocolArtifactRuntimeEndpointRecord(RegistryRecordModel):
     label: str = ""
     path: str = "/"
@@ -808,6 +828,7 @@ class ProtocolRunDetailRecord(RegistryRecordModel):
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
     tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
+    artifact_snapshots: list[ProtocolArtifactSnapshotRecord] = Field(default_factory=list)
     runtime_instances: list[ProtocolArtifactRuntimeInstanceRecord] = Field(default_factory=list)
     runtime_events: list[ProtocolArtifactRuntimeEventRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
@@ -822,6 +843,7 @@ class ProtocolRunExportRecord(RegistryRecordModel):
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
     tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
+    artifact_snapshots: list[ProtocolArtifactSnapshotRecord] = Field(default_factory=list)
     runtime_instances: list[ProtocolArtifactRuntimeInstanceRecord] = Field(default_factory=list)
     runtime_events: list[ProtocolArtifactRuntimeEventRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)

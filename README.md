@@ -14,6 +14,9 @@ Use Octopus when you want more than a single chat thread:
 - inspect what happened after a run
 - open runnable artifacts as small web-routed apps or APIs when a run produces
   an interactive system, while still downloading the full package
+- retain produced artifact packages so important outputs survive bot workspace
+  cleanup or a lost live path
+- archive or soft-delete completed runs without destroying the audit trail
 - export or import protocol packages
 - use the browser Registry UI, with Telegram-backed local agents over the same
   backend
@@ -52,7 +55,7 @@ Telegram-backed bot setup flow before they appear in the Registry.
 | Protocol | A reusable staged workflow with assignments and decisions. |
 | Auto Protocol | An optional authoring path that proposes a normal protocol draft from a described outcome; same format as manual work. See the protocol guide. |
 | Run | One execution of a published protocol. |
-| Artifact | A declared or produced output from work. Multi-file artifacts can be browsed or downloaded as zip packages; runnable artifacts can also be started and opened through the Registry. |
+| Artifact | A declared or produced output from work. Multi-file artifacts can be browsed, retained, or downloaded as zip packages; runnable artifacts can also be started and opened through the Registry. |
 
 ## The Product Areas
 

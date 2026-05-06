@@ -1475,6 +1475,9 @@ def protocol_usage_message() -> TelegramRenderedMessage:
             "/protocol retry <run> [reason]\n"
             "/protocol accept <run> [reason]\n"
             "/protocol send-back <run> [reason]\n\n"
+            "/protocol archive <run> [reason]\n"
+            "/protocol restore <run> [reason]\n"
+            "/protocol delete <run> confirm [reason]\n\n"
             "Tip: use <code>latest</code> or a number from <code>/protocol recent</code>; you do not need to copy a full run id."
         )
     )
@@ -1740,6 +1743,8 @@ def protocol_run_status_message(
         )
         lines.append(f"Artifacts: <code>{artifacts}</code>")
         lines.append("Artifacts: tap Artifacts below.")
+    if str(run.status or "").strip().lower() in {"completed", "failed", "cancelled", "archived"}:
+        lines.append("Lifecycle: archive/delete controls are available in Registry; Telegram commands use the same Registry API.")
     if detail.stage_executions:
         latest = detail.stage_executions[0]
         lines.append(f"Latest stage: <code>{html.escape(latest.stage_key)} ({html.escape(latest.status)})</code>")

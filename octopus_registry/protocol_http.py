@@ -57,6 +57,11 @@ from octopus_sdk.registry.management import (
     StartArtifactRuntimeResult,
     StopArtifactRuntimeRequest,
     StopArtifactRuntimeResult,
+    WorkspaceCleanupPlanRecord,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResult,
+    WorkspaceUsageRequest,
+    WorkspaceUsageResult,
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
 from octopus_sdk.skill_packages import (
@@ -73,7 +78,9 @@ from .artifact_paths import (
 )
 from .artifact_responses import workspace_artifact_content_response
 from .artifact_responses import rendered_artifact_text_preview_response
+from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_snapshot
 from .auth import AuthContext
+from .config import load_registry_config
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .management_client import ManagementClientError, RegistryManagementClient
 from .ingress import (
@@ -183,6 +190,39 @@ def build_protocol_router(
             _agent_json(agent)
             for agent in store.list_agents(cursor=0, limit=200, connectivity_state="connected")
         ]
+
+    def _management_agent_id_for_operation(
+        store: AbstractRegistryStore,
+        *,
+        requested_agent_id: str = "",
+        operation: str,
+    ) -> str:
+        agents = _connected_agents(store)
+        if requested_agent_id:
+            candidate = next((item for item in agents if str(item.get("agent_id") or "") == requested_agent_id), None)
+            if candidate is None:
+                raise _protocol_http_error(
+                    404,
+                    error_code="AGENT_NOT_CONNECTED",
+                    message="Requested agent is not connected.",
+                )
+            operations = {str(item or "").strip() for item in candidate.get("supported_admin_operations", []) or []}
+            if operation not in operations:
+                raise _protocol_http_error(
+                    409,
+                    error_code="AGENT_OPERATION_UNSUPPORTED",
+                    message=f"Requested agent does not support {operation}.",
+                )
+            return requested_agent_id
+        for agent in agents:
+            operations = {str(item or "").strip() for item in agent.get("supported_admin_operations", []) or []}
+            if operation in operations:
+                return str(agent.get("agent_id") or "").strip()
+        raise _protocol_http_error(
+            409,
+            error_code="AGENT_OPERATION_UNAVAILABLE",
+            message=f"Connect an agent that supports {operation}.",
+        )
 
     def _routing_skill_json(skill) -> dict[str, Any]:
         row = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
@@ -325,6 +365,28 @@ def build_protocol_router(
                 message="Protocol artifact not found.",
             )
         return artifact
+
+    def _artifact_snapshot_path(snapshot) -> Path | None:
+        return artifact_snapshot_storage_path(load_registry_config().artifact_store_dir, snapshot)
+
+    def _artifact_snapshot_payload(snapshot) -> dict[str, Any]:
+        return {
+            "artifact_snapshot_id": snapshot.artifact_snapshot_id,
+            "protocol_artifact_id": snapshot.protocol_artifact_id,
+            "protocol_run_id": snapshot.protocol_run_id,
+            "artifact_key": snapshot.artifact_key,
+            "snapshot_kind": snapshot.snapshot_kind,
+            "storage_uri": snapshot.storage_uri,
+            "content_hash": snapshot.content_hash,
+            "size_bytes": snapshot.size_bytes,
+            "manifest_json": snapshot.manifest_json.as_dict(),
+            "retention_state": snapshot.retention_state,
+            "retention_until": snapshot.retention_until,
+            "created_at": snapshot.created_at,
+            "created_by": snapshot.created_by,
+            "deleted_at": snapshot.deleted_at,
+            "deleted_by": snapshot.deleted_by,
+        }
 
     def _runtime_instance_id(run_id: str, artifact_key: str) -> str:
         return uuid.uuid5(uuid.NAMESPACE_URL, f"octopus-runtime:{run_id}:{artifact_key}").hex
@@ -1630,6 +1692,217 @@ def build_protocol_router(
         await broadcast_invalidations(topics=("protocols",), reason="protocol.archived")
         return _json_payload(result)
 
+    def _workspace_inventory_payload(row: dict[str, object] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        summary = row.get("summary_json") or {}
+        return {
+            "inventory_id": str(row.get("inventory_id") or ""),
+            "agent_id": str(row.get("agent_id") or ""),
+            "workspace_ref": str(row.get("workspace_ref") or ""),
+            "protocol_run_id": str(row.get("protocol_run_id") or ""),
+            "scan_status": str(row.get("scan_status") or ""),
+            "file_count": int(row.get("file_count") or 0),
+            "total_bytes": int(row.get("total_bytes") or 0),
+            "retained_bytes": int(row.get("retained_bytes") or 0),
+            "transient_bytes": int(row.get("transient_bytes") or 0),
+            "unknown_bytes": int(row.get("unknown_bytes") or 0),
+            "summary_json": summary,
+            "created_at": str(row.get("created_at") or ""),
+        }
+
+    def _save_workspace_inventory(
+        store: AbstractRegistryStore,
+        *,
+        access: ProtocolAccessContextRecord,
+        agent_id: str,
+        plan: WorkspaceCleanupPlanRecord,
+        scan_status: str,
+        inventory_id: str = "",
+        result_payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        row_id = str(inventory_id or plan.inventory_id or uuid.uuid4().hex)
+        summary = {
+            "plan": plan.model_copy(update={"inventory_id": row_id, "agent_id": agent_id}).model_dump(mode="json"),
+            "result": result_payload or {},
+        }
+        return store.save_workspace_cleanup_inventory(
+            inventory_id=row_id,
+            agent_id=agent_id,
+            workspace_ref=plan.workspace_ref,
+            protocol_run_id=plan.protocol_run_id,
+            scan_status=scan_status,
+            file_count=plan.file_count,
+            total_bytes=plan.total_bytes,
+            retained_bytes=plan.retained_bytes,
+            transient_bytes=plan.transient_bytes,
+            unknown_bytes=plan.unknown_bytes,
+            summary=summary,
+            access=access,
+        )
+
+    async def _workspace_usage_from_agent(
+        *,
+        store: AbstractRegistryStore,
+        access: ProtocolAccessContextRecord,
+        payload: dict[str, Any],
+    ) -> tuple[str, WorkspaceUsageResult]:
+        agent_id = _management_agent_id_for_operation(
+            store,
+            requested_agent_id=str(payload.get("agent_id") or ""),
+            operation="workspace_usage",
+        )
+        result = await RegistryManagementClient(store).send(
+            agent_id=agent_id,
+            payload=WorkspaceUsageRequest(
+                workspace_ref=str(payload.get("workspace_ref") or ""),
+                protocol_run_id=str(payload.get("protocol_run_id") or ""),
+                categories=[
+                    str(item or "").strip()
+                    for item in payload.get("categories", []) or []
+                    if str(item or "").strip()
+                ],
+                older_than=str(payload.get("older_than") or ""),
+                include_archived=bool(payload.get("include_archived") or False),
+                include_failed=bool(payload.get("include_failed", True)),
+                max_entries=int(payload.get("max_entries") or 250),
+            ),
+            timeout_seconds=45,
+        )
+        if not result.success or not isinstance(result.payload, WorkspaceUsageResult):
+            raise _protocol_http_error(
+                502,
+                error_code="WORKSPACE_USAGE_FAILED",
+                message=result.error_detail or "Workspace usage scan failed.",
+            )
+        plan = result.payload.plan.model_copy(update={"agent_id": agent_id})
+        return agent_id, WorkspaceUsageResult(plan=plan)
+
+    @router.get("/v1/admin/workspaces/usage")
+    async def resource_get_workspace_usage(
+        agent_id: str = Query(default=""),
+        workspace_ref: str = Query(default=""),
+        protocol_run_id: str = Query(default=""),
+        category: list[str] = Query(default_factory=list),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        selected_agent_id, result = await _workspace_usage_from_agent(
+            store=store,
+            access=access,
+            payload={
+                "agent_id": agent_id,
+                "workspace_ref": workspace_ref,
+                "protocol_run_id": protocol_run_id,
+                "categories": category,
+            },
+        )
+        row = _save_workspace_inventory(
+            store,
+            access=access,
+            agent_id=selected_agent_id,
+            plan=result.plan,
+            scan_status="completed",
+        )
+        return _json_payload({
+            "plan": result.plan.model_copy(update={"inventory_id": row["inventory_id"], "agent_id": selected_agent_id}).model_dump(mode="json"),
+            "inventory": _workspace_inventory_payload(row),
+        })
+
+    @router.post("/v1/admin/workspaces/cleanup/dry-run")
+    async def resource_dry_run_workspace_cleanup(
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        selected_agent_id, result = await _workspace_usage_from_agent(
+            store=store,
+            access=access,
+            payload=payload or {},
+        )
+        row = _save_workspace_inventory(
+            store,
+            access=access,
+            agent_id=selected_agent_id,
+            plan=result.plan,
+            scan_status="dry_run",
+        )
+        plan = result.plan.model_copy(update={"inventory_id": row["inventory_id"], "agent_id": selected_agent_id})
+        return _json_payload({"plan": plan.model_dump(mode="json"), "inventory": _workspace_inventory_payload(row)})
+
+    @router.get("/v1/admin/workspaces/cleanup/jobs/{job_id}")
+    def resource_get_workspace_cleanup_job(
+        job_id: str,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            row = store.get_workspace_cleanup_inventory(job_id, access=protocol_access(auth))
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="WORKSPACE_CLEANUP_FORBIDDEN", message=str(exc)) from exc
+        if row is None:
+            raise _protocol_http_error(404, error_code="WORKSPACE_CLEANUP_JOB_NOT_FOUND", message="Workspace cleanup job not found.")
+        return _json_payload({"inventory": _workspace_inventory_payload(row)})
+
+    @router.post("/v1/admin/workspaces/cleanup")
+    async def resource_execute_workspace_cleanup(
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        body = payload or {}
+        confirm = str(body.get("confirm") or "").strip().upper()
+        if confirm != "CLEAN":
+            raise _protocol_http_error(400, error_code="WORKSPACE_CLEANUP_CONFIRMATION_REQUIRED", message="Type CLEAN to confirm workspace cleanup.")
+        plan_payload = body.get("plan") or {}
+        if not plan_payload and str(body.get("job_id") or "").strip():
+            row = store.get_workspace_cleanup_inventory(str(body.get("job_id") or "").strip(), access=access)
+            summary = row.get("summary_json", {}) if row is not None else {}
+            if isinstance(summary, dict):
+                plan_payload = summary.get("plan") or {}
+        plan = WorkspaceCleanupPlanRecord.model_validate(plan_payload)
+        agent_id = _management_agent_id_for_operation(
+            store,
+            requested_agent_id=str(body.get("agent_id") or plan.agent_id or ""),
+            operation="workspace_cleanup",
+        )
+        plan = plan.model_copy(update={"agent_id": agent_id})
+        result = await RegistryManagementClient(store).send(
+            agent_id=agent_id,
+            payload=WorkspaceCleanupRequest(plan=plan, confirm=confirm),
+            timeout_seconds=90,
+        )
+        if not result.success or not isinstance(result.payload, WorkspaceCleanupResult):
+            raise _protocol_http_error(
+                502,
+                error_code="WORKSPACE_CLEANUP_FAILED",
+                message=result.error_detail or "Workspace cleanup failed.",
+            )
+        row = _save_workspace_inventory(
+            store,
+            access=access,
+            agent_id=agent_id,
+            plan=result.payload.plan,
+            scan_status="executed",
+            inventory_id=plan.inventory_id,
+            result_payload={
+                "removed_paths": result.payload.removed_paths,
+                "removed_bytes": result.payload.removed_bytes,
+                "failures": result.payload.failures,
+            },
+        )
+        await broadcast_invalidations(topics=("summary", "protocols"), reason="admin.workspace_cleanup.executed")
+        return _json_payload({
+            "plan": result.payload.plan.model_copy(update={"inventory_id": row["inventory_id"], "agent_id": agent_id}).model_dump(mode="json"),
+            "removed_paths": result.payload.removed_paths,
+            "removed_bytes": result.payload.removed_bytes,
+            "failures": result.payload.failures,
+            "inventory": _workspace_inventory_payload(row),
+        })
+
     @router.get("/v1/protocol-runs")
     def resource_list_protocol_runs(
         cursor: int = Query(default=0, ge=0),
@@ -1791,6 +2064,20 @@ def build_protocol_router(
         )
         media_type = mimetypes.guess_type(preferred_name)[0] or "application/octet-stream"
         if resolved_path is None:
+            snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=protocol_access(auth))
+            snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+            if snapshot_path is not None and snapshot_path.exists():
+                return workspace_artifact_content_response(
+                    resolved_path=snapshot_path,
+                    artifact_key=str(artifact.artifact_key or artifact_key or ""),
+                    preferred_path=str(artifact.workspace_path or artifact.location or ""),
+                    preferred_name=preferred_name,
+                    download=download,
+                    browse=browse,
+                    preview=preview,
+                    member_path=member_path or member_path_tail,
+                    request=request,
+                )
             content_text = resolve_protocol_artifact_rehearsal_text(detail, artifact)
             if content_text:
                 if preview and not download:
@@ -1827,6 +2114,124 @@ def build_protocol_router(
             request=request,
         )
 
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot")
+    def resource_get_protocol_run_artifact_snapshot(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+        snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+        return _json_payload({
+            "snapshot": _artifact_snapshot_payload(snapshot) if snapshot is not None else None,
+            "available": bool(snapshot_path is not None and snapshot_path.exists()),
+            "content_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/snapshot/content" if snapshot is not None else "",
+        })
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot")
+    def resource_create_protocol_run_artifact_snapshot(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        if resolved_path is None or not resolved_path.exists():
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_PATH_UNAVAILABLE",
+                message="Artifact path is not available on this host, so it cannot be snapshotted.",
+                details={"artifact_key": artifact.artifact_key, "workspace_path": artifact.workspace_path, "location": artifact.location},
+            )
+        snapshot = create_artifact_snapshot(
+            artifact_store_dir=load_registry_config().artifact_store_dir,
+            source_path=resolved_path,
+            protocol_artifact_id=artifact.protocol_artifact_id,
+            protocol_run_id=run_id,
+            artifact_key=artifact.artifact_key,
+            created_by=access.actor_ref,
+            retention_until=detail.run.retention_until,
+        )
+        saved = store.save_protocol_artifact_snapshot(snapshot, access=access)
+        return _json_payload({"snapshot": _artifact_snapshot_payload(saved)})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot/content")
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot/content/{member_path_tail:path}")
+    def resource_get_protocol_run_artifact_snapshot_content(
+        request: Request,
+        run_id: str,
+        artifact_key: str,
+        member_path_tail: str = "",
+        download: bool = Query(default=False),
+        browse: bool = Query(default=False),
+        preview: bool = Query(default=False),
+        member_path: str = Query(default="", alias="path"),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> Response:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+        snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+        if snapshot is None or snapshot_path is None or not snapshot_path.exists():
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_SNAPSHOT_NOT_FOUND", message="Artifact snapshot not found.")
+        return workspace_artifact_content_response(
+            resolved_path=snapshot_path,
+            artifact_key=str(artifact.artifact_key or artifact_key or ""),
+            preferred_path=str(artifact.workspace_path or artifact.location or ""),
+            preferred_name=artifact_download_name(
+                artifact_key=str(artifact.artifact_key or ""),
+                preferred_path=str(artifact.workspace_path or artifact.location or ""),
+            ),
+            download=download,
+            browse=browse,
+            preview=preview,
+            member_path=member_path or member_path_tail,
+            request=request,
+        )
+
+    @router.delete("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot")
+    def resource_delete_protocol_run_artifact_snapshot(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            deleted = store.delete_protocol_artifact_snapshot(
+                run_id,
+                artifact_key,
+                access=protocol_access(auth),
+            )
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_SNAPSHOT_FORBIDDEN", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_SNAPSHOT_NOT_FOUND", message="Artifact snapshot not found.") from exc
+        return _json_payload({"snapshot": _artifact_snapshot_payload(deleted)})
+
     @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime")
     def resource_get_protocol_artifact_runtime(
         run_id: str,
@@ -1843,6 +2248,11 @@ def build_protocol_router(
         except KeyError as exc:
             raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
         resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        if resolved_path is None:
+            snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+            snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+            if snapshot_path is not None and snapshot_path.exists():
+                resolved_path = snapshot_path
         manifest, manifest_path = (None, "")
         if resolved_path is not None:
             manifest, manifest_path = _runtime_manifest_from_path(resolved_path)
@@ -1883,6 +2293,11 @@ def build_protocol_router(
         except KeyError as exc:
             raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
         resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        if resolved_path is None:
+            snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+            snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+            if snapshot_path is not None and snapshot_path.exists():
+                resolved_path = snapshot_path
         if resolved_path is None:
             raise _protocol_http_error(
                 409,
@@ -2330,6 +2745,63 @@ def build_protocol_router(
             event_kind="protocol_run.terminal" if str(result.run.status if result.run is not None else "") in {"completed", "failed", "cancelled"} else "protocol_run.updated",
             reason=f"protocol.run.{action}",
         )
+        return _json_payload(result)
+
+    @router.post("/v1/protocol-runs/{run_id}/archive")
+    async def resource_archive_protocol_run(
+        run_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.archive_protocol_run(
+            run_id,
+            access=protocol_access(auth),
+            reason=str((payload or {}).get("reason", "") or ""),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols", "summary", f"protocol-run:{run_id}"), reason="protocol.run.archived")
+        await broadcast_topic_event(run_id=run_id, event_kind="protocol_run.updated", reason="protocol.run.archived")
+        return _json_payload(result)
+
+    @router.post("/v1/protocol-runs/{run_id}/restore")
+    async def resource_restore_protocol_run(
+        run_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.restore_protocol_run(
+            run_id,
+            access=protocol_access(auth),
+            reason=str((payload or {}).get("reason", "") or ""),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols", "summary", f"protocol-run:{run_id}"), reason="protocol.run.restored")
+        await broadcast_topic_event(run_id=run_id, event_kind="protocol_run.updated", reason="protocol.run.restored")
+        return _json_payload(result)
+
+    @router.delete("/v1/protocol-runs/{run_id}")
+    async def resource_delete_protocol_run(
+        run_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        confirm = str((payload or {}).get("confirm", "") or "").strip().upper()
+        if confirm != "DELETE":
+            raise _protocol_http_error(400, error_code="PROTOCOL_RUN_DELETE_CONFIRMATION_REQUIRED", message="Type DELETE to confirm run deletion.")
+        result = store.delete_protocol_run(
+            run_id,
+            access=protocol_access(auth),
+            reason=str((payload or {}).get("reason", "") or ""),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols", "summary", f"protocol-run:{run_id}"), reason="protocol.run.deleted")
+        await broadcast_topic_event(run_id=run_id, event_kind="protocol_run.updated", reason="protocol.run.deleted")
         return _json_payload(result)
 
     @router.get("/v1/protocol-runs/{run_id}/rehearsal/sessions")

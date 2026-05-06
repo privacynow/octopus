@@ -382,8 +382,36 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
         getProtocolRunArtifacts: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts`),
+        archiveProtocolRun: (id, body = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/archive`, { body }),
+        restoreProtocolRun: (id, body = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/restore`, { body }),
+        deleteProtocolRun: (id, body = {}) =>
+            request('DELETE', `/v1/protocol-runs/${encodeURIComponent(id)}`, { body }),
         protocolRunArtifactContentUrl: (id, artifactKey, opts = {}) => {
             const url = new URL(_protocolArtifactContentPath(id, artifactKey), window.location.origin);
+            if (opts.download) {
+                url.searchParams.set('download', '1');
+            }
+            if (opts.browse) {
+                url.searchParams.set('browse', '1');
+            }
+            if (opts.preview) {
+                url.searchParams.set('preview', '1');
+            }
+            if (opts.path) {
+                url.searchParams.set('path', String(opts.path || ''));
+            }
+            return url.toString();
+        },
+        getProtocolRunArtifactSnapshot: (id, artifactKey) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/snapshot`),
+        createProtocolRunArtifactSnapshot: (id, artifactKey) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/snapshot`, { body: {} }),
+        deleteProtocolRunArtifactSnapshot: (id, artifactKey) =>
+            request('DELETE', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/snapshot`),
+        protocolRunArtifactSnapshotContentUrl: (id, artifactKey, opts = {}) => {
+            const url = new URL(`/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/snapshot/content`, window.location.origin);
             if (opts.download) {
                 url.searchParams.set('download', '1');
             }
@@ -428,6 +456,14 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/timeline`),
         exportProtocolRun: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/export`),
+        getWorkspaceUsage: (opts = {}) =>
+            request('GET', '/v1/admin/workspaces/usage', { params: opts }),
+        dryRunWorkspaceCleanup: (body = {}) =>
+            request('POST', '/v1/admin/workspaces/cleanup/dry-run', { body, timeoutMs: 60000 }),
+        executeWorkspaceCleanup: (body = {}) =>
+            request('POST', '/v1/admin/workspaces/cleanup', { body, timeoutMs: 120000 }),
+        getWorkspaceCleanupJob: (id) =>
+            request('GET', `/v1/admin/workspaces/cleanup/jobs/${encodeURIComponent(id)}`),
         actOnProtocolRun: (id, action, body = {}, opts = {}) =>
             request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, {
                 body,

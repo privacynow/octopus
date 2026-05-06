@@ -86,6 +86,8 @@ ManagementOperation = Literal[
     "artifact_runtime_health",
     "artifact_runtime_logs",
     "artifact_runtime_fetch",
+    "workspace_usage",
+    "workspace_cleanup",
 ]
 
 ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
@@ -128,6 +130,8 @@ ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
     "artifact_runtime_health",
     "artifact_runtime_logs",
     "artifact_runtime_fetch",
+    "workspace_usage",
+    "workspace_cleanup",
 )
 
 ManagementErrorCode = Literal[
@@ -1124,6 +1128,49 @@ class ArtifactRuntimeFetchRequest(RegistryRecordModel):
     body_base64: str = ""
 
 
+class WorkspaceCleanupEntryRecord(RegistryRecordModel):
+    path: str = ""
+    category: str = "unknown"
+    size_bytes: int = 0
+    file_count: int = 0
+    safe_to_delete: bool = False
+    reason: str = ""
+
+
+class WorkspaceCleanupPlanRecord(RegistryRecordModel):
+    inventory_id: str = ""
+    agent_id: str = ""
+    workspace_ref: str = ""
+    protocol_run_id: str = ""
+    categories: list[str] = Field(default_factory=list)
+    entries: list[WorkspaceCleanupEntryRecord] = Field(default_factory=list)
+    total_bytes: int = 0
+    retained_bytes: int = 0
+    transient_bytes: int = 0
+    unknown_bytes: int = 0
+    deletable_bytes: int = 0
+    file_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utcnow_iso)
+
+
+class WorkspaceUsageRequest(RegistryRecordModel):
+    operation: Literal["workspace_usage"] = "workspace_usage"
+    workspace_ref: str = ""
+    protocol_run_id: str = ""
+    categories: list[str] = Field(default_factory=list)
+    older_than: str = ""
+    include_archived: bool = False
+    include_failed: bool = True
+    max_entries: int = Field(default=250, ge=1, le=1000)
+
+
+class WorkspaceCleanupRequest(RegistryRecordModel):
+    operation: Literal["workspace_cleanup"] = "workspace_cleanup"
+    plan: WorkspaceCleanupPlanRecord
+    confirm: str = ""
+
+
 ManagementRequestPayload = Annotated[
     ListCatalogSkillsRequest
     | SearchCatalogSkillsRequest
@@ -1163,7 +1210,9 @@ ManagementRequestPayload = Annotated[
     | StopArtifactRuntimeRequest
     | ArtifactRuntimeHealthRequest
     | ArtifactRuntimeLogsRequest
-    | ArtifactRuntimeFetchRequest,
+    | ArtifactRuntimeFetchRequest
+    | WorkspaceUsageRequest
+    | WorkspaceCleanupRequest,
     Field(discriminator="operation"),
 ]
 
@@ -1372,6 +1421,19 @@ class ArtifactRuntimeFetchResult(RegistryRecordModel):
     body_base64: str = ""
 
 
+class WorkspaceUsageResult(RegistryRecordModel):
+    operation: Literal["workspace_usage"] = "workspace_usage"
+    plan: WorkspaceCleanupPlanRecord
+
+
+class WorkspaceCleanupResult(RegistryRecordModel):
+    operation: Literal["workspace_cleanup"] = "workspace_cleanup"
+    plan: WorkspaceCleanupPlanRecord
+    removed_paths: list[str] = Field(default_factory=list)
+    removed_bytes: int = 0
+    failures: list[str] = Field(default_factory=list)
+
+
 ManagementResultPayload = Annotated[
     ListCatalogSkillsResult
     | SearchCatalogSkillsResult
@@ -1411,7 +1473,9 @@ ManagementResultPayload = Annotated[
     | StopArtifactRuntimeResult
     | ArtifactRuntimeHealthResult
     | ArtifactRuntimeLogsResult
-    | ArtifactRuntimeFetchResult,
+    | ArtifactRuntimeFetchResult
+    | WorkspaceUsageResult
+    | WorkspaceCleanupResult,
     Field(discriminator="operation"),
 ]
 

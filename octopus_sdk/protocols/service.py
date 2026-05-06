@@ -18,6 +18,7 @@ from .launch import (
 )
 from .models import (
     ProtocolArtifactRecord,
+    ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeActionResultRecord,
     ProtocolArtifactRuntimeHealthRecord,
     ProtocolArtifactRuntimeInstanceRecord,
@@ -165,6 +166,12 @@ class ProtocolService:
             download=download,
         )
 
+    async def get_run_artifact_snapshot(self, run_id: str, artifact_key: str) -> ProtocolArtifactSnapshotRecord | None:
+        return await self._artifact_access.get_run_artifact_snapshot(run_id, artifact_key)
+
+    async def create_run_artifact_snapshot(self, run_id: str, artifact_key: str) -> ProtocolArtifactSnapshotRecord:
+        return await self._artifact_access.create_run_artifact_snapshot(run_id, artifact_key)
+
     async def get_artifact_runtime(self, run_id: str, artifact_key: str) -> ProtocolArtifactRuntimeInstanceRecord | None:
         return await self._artifact_runtime.get_artifact_runtime(run_id, artifact_key)
 
@@ -202,6 +209,15 @@ class ProtocolService:
             idempotency_key=idempotency_key,
             expected_version=expected_version,
         )
+
+    async def archive_run(self, run_id: str, *, reason: str = "") -> ProtocolRunMutationRecord:
+        return await self._observer.archive_run(run_id, reason=reason)
+
+    async def restore_run(self, run_id: str, *, reason: str = "") -> ProtocolRunMutationRecord:
+        return await self._observer.restore_run(run_id, reason=reason)
+
+    async def delete_run(self, run_id: str, *, reason: str = "", confirm: str = "DELETE") -> ProtocolRunMutationRecord:
+        return await self._observer.delete_run(run_id, reason=reason, confirm=confirm)
 
     async def export_run(self, run_id: str) -> ProtocolRunExportRecord:
         return await self._observer.export_run(run_id)

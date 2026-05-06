@@ -157,6 +157,8 @@ Important indexes and constraints:
 | `agent_registry.protocol_runs` | Updated/status/org/protocol/entry-agent/root-conversation/origin-channel/blocked-code filters. |
 | `agent_registry.protocol_stage_executions` | Run lookup, routed task uniqueness, running lease and timeout sweeps. |
 | `agent_registry.protocol_artifacts` | Latest artifact by run/key. |
+| `agent_registry.protocol_artifact_snapshots` | Durable retained artifact package lookup by run/key and content hash. |
+| `agent_registry.workspace_cleanup_inventory` | Operator dry-run/execution observations for bot workspace cleanup. |
 | `agent_registry.protocol_idempotency` | One response per scoped action and idempotency key. |
 | `bot_content.skill_*` | Skill track/revision/file integrity and approval history. |
 
@@ -183,7 +185,9 @@ Key files:
 | `octopus_registry/ingress.py` | Operator-facing management bridge for skills, guidance, conversation settings, reset. |
 | `octopus_registry/management_client.py` | Registry-internal request/result relay to connected agents. |
 | `octopus_registry/artifact_paths.py` | Safe artifact path resolution for protocol and task artifact content. |
+| `octopus_registry/artifact_snapshots.py` | Registry-owned durable artifact package snapshots for file and directory artifacts. |
 | `app/runtime/artifact_runtime.py` | Bot-side supervisor for runnable protocol artifacts. Registry calls it through management requests; it starts/stops/fetches from processes inside the bot runtime. |
+| `app/runtime/workspace_hygiene.py` | Bot-side dry-run and confirmed cleanup for transient workspace files. |
 | `octopus_registry/ui_http.py` | UI shell routes, login/logout, static asset cache busting. |
 | `octopus_registry/ws.py` | WebSocket client/topic manager. |
 
@@ -199,9 +203,9 @@ Registry API families:
 | Management bridge | `/v1/agents/{agent_id}/catalog/skills...`, `/guidance/{provider}...`, conversation skill/settings/reset routes | Registry UI, future peer channels. |
 | Protocol authoring | `GET /v1/protocols`, `POST /v1/protocols`, `POST /v1/protocol-drafts`, `/v1/protocol-auto/sessions...`, parse/draft export/package export/package import/diff/validate/publish/archive | Registry UI, Telegram Auto Protocol commands. |
 | Protocol templates | `GET/POST /v1/protocol-templates` | Protocols UI. |
-| Protocol runs | `GET/POST /v1/protocol-runs`, issues, participants, artifacts, timeline, export, actions, rehearsal | Registry UI, Telegram protocol commands, SDK client. |
+| Protocol runs | `GET/POST /v1/protocol-runs`, archive/restore/delete, issues, participants, artifacts, snapshots, timeline, export, actions, rehearsal | Registry UI, Telegram protocol commands, SDK client. |
 | Runnable artifacts | `/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime...`, `/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/...` | Registry UI, Telegram links, SDK client. |
-| Usage/summary/approvals | `GET /v1/summary`, `GET /v1/usage`, `GET /v1/approvals` | Operations surfaces. |
+| Usage/summary/approvals/workspace cleanup | `GET /v1/summary`, `GET /v1/usage`, `GET /v1/approvals`, `/v1/admin/workspaces/cleanup...` | Operations surfaces. |
 
 The checked-in OpenAPI artifact is `docs/registry-openapi.json`. When registry
 route contracts change, regenerate and test it.

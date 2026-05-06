@@ -260,6 +260,12 @@ The run page should show declared and produced artifacts clearly. Produced
 artifacts should offer preview, open, download, copy path, or package browsing
 where the host can resolve them.
 
+When a produced workspace artifact is observed, Octopus snapshots the available
+file or directory into Registry-managed artifact storage. Users can also click
+`Retain package` from the run artifact row. Content routes prefer the live
+workspace path, then the retained package, then an honest unavailable state.
+This lets authors clean bot workspaces without breaking important outcomes.
+
 ### Runnable artifacts
 
 If the expected output is an interactive product, the protocol should make that

@@ -642,6 +642,49 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_artifacts (
 CREATE INDEX IF NOT EXISTS idx_protocol_artifacts_run
     ON agent_registry.protocol_artifacts (protocol_run_id, artifact_key, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_artifact_snapshots (
+    artifact_snapshot_id TEXT PRIMARY KEY,
+    protocol_artifact_id TEXT NOT NULL DEFAULT '',
+    protocol_run_id TEXT NOT NULL,
+    artifact_key TEXT NOT NULL,
+    snapshot_kind TEXT NOT NULL DEFAULT 'file',
+    storage_uri TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    size_bytes BIGINT NOT NULL DEFAULT 0,
+    manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    retention_state TEXT NOT NULL DEFAULT 'active',
+    retention_until TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL DEFAULT '',
+    deleted_at TEXT NOT NULL DEFAULT '',
+    deleted_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_run
+    ON agent_registry.protocol_artifact_snapshots (protocol_run_id, artifact_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_hash
+    ON agent_registry.protocol_artifact_snapshots (content_hash, created_at DESC)
+    WHERE retention_state <> 'deleted';
+
+CREATE TABLE IF NOT EXISTS agent_registry.workspace_cleanup_inventory (
+    inventory_id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT '',
+    workspace_ref TEXT NOT NULL DEFAULT '',
+    protocol_run_id TEXT NOT NULL DEFAULT '',
+    scan_status TEXT NOT NULL DEFAULT 'completed',
+    file_count BIGINT NOT NULL DEFAULT 0,
+    total_bytes BIGINT NOT NULL DEFAULT 0,
+    retained_bytes BIGINT NOT NULL DEFAULT 0,
+    transient_bytes BIGINT NOT NULL DEFAULT 0,
+    unknown_bytes BIGINT NOT NULL DEFAULT 0,
+    summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_cleanup_inventory_agent
+    ON agent_registry.workspace_cleanup_inventory (agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_cleanup_inventory_run
+    ON agent_registry.workspace_cleanup_inventory (protocol_run_id, created_at DESC)
+    WHERE protocol_run_id <> '';
+
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_artifact_runtime_instances (
     runtime_instance_id TEXT PRIMARY KEY,
     protocol_run_id TEXT NOT NULL,

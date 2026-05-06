@@ -13,6 +13,8 @@ const PROTOCOL_RUN_VIEW_FILTER_OPTIONS = [
     { value: 'running', label: 'Running' },
     { value: 'completed', label: 'Completed' },
     { value: 'outcomes', label: 'With outcomes' },
+    { value: 'archived', label: 'Archived' },
+    { value: 'deleted', label: 'Deleted' },
     { value: 'telegram', label: 'From Telegram' },
     { value: 'registry', label: 'From Registry' },
 ];
@@ -412,6 +414,54 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
         available,
         unavailableReason: missing ? 'Declared artifact, not produced yet.' : 'Artifact path is not available on this host.',
     });
+    if (!missing && artifact?.artifact_key) {
+        const snapshotBtn = document.createElement('button');
+        snapshotBtn.type = 'button';
+        snapshotBtn.className = 'btn btn-sm';
+        snapshotBtn.textContent = 'Retain package';
+        snapshotBtn.hidden = !available;
+        const retainedLink = document.createElement('a');
+        retainedLink.className = 'btn btn-sm';
+        retainedLink.target = '_blank';
+        retainedLink.rel = 'noreferrer noopener';
+        retainedLink.textContent = 'Download retained';
+        retainedLink.href = API.protocolRunArtifactSnapshotContentUrl(runId, artifact.artifact_key, { download: true });
+        retainedLink.hidden = true;
+        retainedLink.addEventListener('click', (event) => event.stopPropagation());
+        const snapshotState = document.createElement('span');
+        snapshotState.className = 'muted microcopy';
+        snapshotState.textContent = '';
+        const refreshSnapshotState = async () => {
+            try {
+                const snapshot = await API.getProtocolRunArtifactSnapshot(runId, artifact.artifact_key);
+                const hasSnapshot = Boolean(snapshot?.snapshot && snapshot?.available !== false);
+                retainedLink.hidden = !hasSnapshot;
+                snapshotState.textContent = hasSnapshot ? 'retained' : (available ? '' : 'not retained');
+            } catch (_err) {
+                retainedLink.hidden = true;
+                snapshotState.textContent = available ? '' : 'not retained';
+            }
+        };
+        snapshotBtn.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            snapshotBtn.disabled = true;
+            snapshotBtn.textContent = 'Retaining...';
+            try {
+                await API.createProtocolRunArtifactSnapshot(runId, artifact.artifact_key);
+                UI.notify('Artifact package retained.', 'success');
+                await refreshSnapshotState();
+            } catch (err) {
+                UI.reportError('Failed to retain artifact package', err, { context: 'Artifact snapshot failed' });
+            } finally {
+                snapshotBtn.disabled = false;
+                snapshotBtn.textContent = 'Retain package';
+            }
+        });
+        actionRow.appendChild(snapshotBtn);
+        actionRow.appendChild(retainedLink);
+        actionRow.appendChild(snapshotState);
+        void refreshSnapshotState();
+    }
     if (browsable) {
         const runtimeBtn = document.createElement('button');
         runtimeBtn.type = 'button';
@@ -7819,7 +7869,7 @@ function renderProtocolRuns(container) {
 
     function _currentRunIsActive() {
         const status = String(currentRun?.run?.status || '').trim().toLowerCase();
-        return Boolean(currentRunId) && !['completed', 'failed', 'cancelled'].includes(status);
+        return Boolean(currentRunId) && !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status);
     }
 
     function _syncRunRefreshTimer() {
@@ -7974,7 +8024,13 @@ function renderProtocolRuns(container) {
         if (status === 'cancelled') {
             return { key: 'ended', label: 'Ended', rank: 3 };
         }
-        return { key: 'other', label: 'Other runs', rank: 4 };
+        if (status === 'archived') {
+            return { key: 'archived', label: 'Archived', rank: 4 };
+        }
+        if (status === 'deleted') {
+            return { key: 'deleted', label: 'Deleted', rank: 5 };
+        }
+        return { key: 'other', label: 'Other runs', rank: 6 };
     }
 
     function _runHasOutcome(run) {
@@ -7997,6 +8053,10 @@ function renderProtocolRuns(container) {
                 return status === 'completed';
             case 'outcomes':
                 return _runHasOutcome(run);
+            case 'archived':
+                return status === 'archived';
+            case 'deleted':
+                return status === 'deleted';
             case 'telegram':
                 return String(run?.origin_channel || '').trim().toLowerCase() === 'telegram';
             case 'registry':
@@ -8320,7 +8380,7 @@ function renderProtocolRuns(container) {
 
     function _runActionSpecs() {
         const status = String(currentRun?.run.status || '');
-        const active = !['completed', 'failed', 'cancelled'].includes(status);
+        const active = !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status);
         const allowedDecisions = _currentRunAllowedDecisions();
         const currentStageExecutionId = String(currentRun?.run?.current_stage_execution_id || '').trim();
         const currentStageKey = String(currentRun?.run?.current_stage_key || '').trim();
@@ -8383,6 +8443,115 @@ function renderProtocolRuns(container) {
                 enabled: active,
             },
         ];
+    }
+
+    function _runLifecycleSpecs() {
+        const status = String(currentRun?.run?.status || '').trim().toLowerCase();
+        const busy = ['queued', 'running'].includes(status);
+        return [
+            {
+                action: 'restore',
+                label: 'Restore run',
+                visible: status === 'archived',
+                enabled: status === 'archived',
+                danger: false,
+                note: 'Restore makes this archived run visible in normal run views again.',
+            },
+            {
+                action: 'archive',
+                label: 'Archive run',
+                visible: !['archived', 'deleted'].includes(status),
+                enabled: !busy,
+                danger: false,
+                note: 'Archive hides this run from normal views while preserving audit history, artifacts, snapshots, and runtime events.',
+            },
+            {
+                action: 'delete',
+                label: 'Delete run',
+                visible: status !== 'deleted',
+                enabled: !busy,
+                danger: true,
+                note: 'Delete is a soft delete. It hides the run from normal views and preserves audit records for retention policy.',
+            },
+        ];
+    }
+
+    function _openRunLifecycleDialog(spec) {
+        if (!currentRun?.run?.protocol_run_id) return;
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        const runningRuntimes = (currentRun?.runtime_instances || [])
+            .filter((item) => ['starting', 'running', 'stopping'].includes(String(item?.status || '').trim().toLowerCase()));
+        note.textContent = [
+            spec.note || '',
+            spec.action === 'archive' && runningRuntimes.length
+                ? `${runningRuntimes.length} active artifact runtime${runningRuntimes.length === 1 ? '' : 's'} will be stopped before archiving.`
+                : '',
+        ].filter(Boolean).join(' ');
+        form.appendChild(note);
+        const reason = document.createElement('textarea');
+        reason.className = 'guidance-textarea';
+        reason.rows = 4;
+        reason.placeholder = 'Optional reason saved in the run timeline';
+        form.appendChild(reason);
+        let confirmInput = null;
+        if (spec.action === 'delete') {
+            confirmInput = document.createElement('input');
+            confirmInput.className = 'search-input';
+            confirmInput.placeholder = 'Type DELETE to confirm';
+            form.appendChild(confirmInput);
+        }
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = spec.danger ? 'btn btn-danger' : 'btn btn-primary';
+        confirmBtn.textContent = spec.label;
+        const view = UI.showDialog(spec.label, form, {
+            actions: [cancelBtn, confirmBtn],
+            role: spec.danger ? 'alertdialog' : 'dialog',
+            initialFocus: confirmInput || reason,
+            maxWidth: '620px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        confirmBtn.addEventListener('click', async () => {
+            const runId = currentRun?.run?.protocol_run_id;
+            if (!runId) return;
+            const body = { reason: String(reason.value || '').trim() };
+            if (spec.action === 'delete') {
+                const confirmation = String(confirmInput?.value || '').trim().toUpperCase();
+                if (confirmation !== 'DELETE') {
+                    confirmInput?.focus();
+                    return;
+                }
+                body.confirm = 'DELETE';
+            }
+            confirmBtn.disabled = true;
+            try {
+                if (spec.action === 'archive') {
+                    for (const runtime of runningRuntimes) {
+                        await API.stopProtocolRunArtifactRuntime(runId, runtime.artifact_key);
+                    }
+                    await API.archiveProtocolRun(runId, body);
+                } else if (spec.action === 'restore') {
+                    await API.restoreProtocolRun(runId, body);
+                } else {
+                    await API.deleteProtocolRun(runId, body);
+                }
+                UI.notify(`${spec.label} completed.`, 'success');
+                view.close();
+                await Promise.all([loadRunDetail({ soft: true }), loadRuns(), loadIssues({ rerender: false })]);
+                renderRunsRoute();
+            } catch (err) {
+                UI.reportError(`${spec.label} failed`, err, { context: 'Run lifecycle action failed' });
+            } finally {
+                confirmBtn.disabled = false;
+            }
+        });
     }
 
     function _openRunActionDialog(spec) {
@@ -9417,13 +9586,39 @@ function renderProtocolRuns(container) {
                 hero.appendChild(lower);
             }
 
+            const lifecycleSpecs = _runLifecycleSpecs().filter((spec) => spec.visible !== false);
+            if (lifecycleSpecs.length) {
+                const lifecycle = document.createElement('div');
+                lifecycle.className = 'run-focus-lower';
+                const lifecycleActions = document.createElement('div');
+                lifecycleActions.className = 'run-focus-actions';
+                const lifecycleTitle = document.createElement('div');
+                lifecycleTitle.className = 'detail-label';
+                lifecycleTitle.textContent = 'Lifecycle';
+                lifecycleActions.appendChild(lifecycleTitle);
+                const row = document.createElement('div');
+                row.className = 'editor-actions';
+                lifecycleSpecs.forEach((item) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = item.danger ? 'btn btn-danger' : 'btn';
+                    button.textContent = item.label;
+                    button.disabled = !item.enabled;
+                    button.addEventListener('click', () => _openRunLifecycleDialog(item));
+                    row.appendChild(button);
+                });
+                lifecycleActions.appendChild(row);
+                lifecycle.appendChild(lifecycleActions);
+                hero.appendChild(lifecycle);
+            }
+
             return hero;
         };
 
         const buildRunLivenessCard = () => {
             const run = currentRun.run || {};
             const status = String(run.status || '').trim().toLowerCase();
-            const active = !['completed', 'failed', 'cancelled'].includes(status);
+            const active = !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status);
             const currentStage = currentRunStageExecution();
             const currentStageOrdinal = currentStage ? stageOrdinalFor(currentStage.stage_key) : 0;
             const currentStageDef = currentStage
@@ -10009,6 +10204,7 @@ function renderProtocolRuns(container) {
         const response = await API.listProtocolRuns({
             limit,
             cursor: runPaginator ? runPaginator.cursor : 0,
+            status: runStatusFilter || (['completed', 'archived', 'deleted'].includes(runViewFilter) ? runViewFilter : ''),
             include_generated: includeGenerated ? '1' : '0',
         });
         runsListData = response || null;

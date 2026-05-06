@@ -206,7 +206,8 @@ messages promote the primary result before secondary evidence.
 ## Artifacts
 
 If a command reports produced artifacts, users should be able to preview, open,
-or download them through registry artifact routes when available.
+or download them through registry artifact routes when available. Those routes
+fall back to retained artifact packages when the live workspace path is gone.
 
 Package artifacts should expose the default open action when the package
 contains a browser entry such as `index.html`, and a contents action when a
@@ -219,6 +220,11 @@ are progressive: stopped runtimes offer start/status/artifact actions, while
 running runtimes offer open/status/stop/artifact actions. The same package
 should still expose download and contents actions so a user is not forced into
 the live runtime path.
+
+Telegram is not the primary destructive lifecycle surface. It may show run
+archive/delete status or deep links, but high-risk cleanup and deletion flows
+should land in the browser Registry where the user can read consequences and
+confirm deliberately.
 
 Runtime links use the configured Registry public URL. If that URL is local to
 the host, it may not be reachable from a phone; use Telegram Web on the host or

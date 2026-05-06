@@ -29,6 +29,7 @@ from octopus_sdk.protocols import (
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeEventRecord,
     ProtocolArtifactRuntimeInstanceRecord,
     ProtocolArtifactRuntimeManifestRecord,
@@ -74,7 +75,8 @@ from octopus_sdk.protocols.documents import draft_protocol_document_data
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 
-from .config import RegistryConfig
+from .artifact_snapshots import create_artifact_snapshot
+from .config import RegistryConfig, load_registry_config
 from .artifact_paths import resolve_protocol_artifact_path
 from .postgres import get_connection
 from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
@@ -415,6 +417,29 @@ class ProtocolPostgresAdapter:
                 "started_at": row.get("started_at", ""),
                 "stopped_at": row.get("stopped_at", ""),
                 "expires_at": row.get("expires_at", ""),
+            },
+        )
+
+    @staticmethod
+    def _protocol_artifact_snapshot_from_row(row: Mapping[str, object]) -> ProtocolArtifactSnapshotRecord:
+        return record(
+            ProtocolArtifactSnapshotRecord,
+            {
+                "artifact_snapshot_id": row["artifact_snapshot_id"],
+                "protocol_artifact_id": row.get("protocol_artifact_id", ""),
+                "protocol_run_id": row["protocol_run_id"],
+                "artifact_key": row["artifact_key"],
+                "snapshot_kind": row.get("snapshot_kind", "file"),
+                "storage_uri": row.get("storage_uri", ""),
+                "content_hash": row.get("content_hash", ""),
+                "size_bytes": row.get("size_bytes", 0),
+                "manifest_json": row.get("manifest_json") or {},
+                "retention_state": row.get("retention_state", "active"),
+                "retention_until": row.get("retention_until", ""),
+                "created_at": row.get("created_at", ""),
+                "created_by": row.get("created_by", ""),
+                "deleted_at": row.get("deleted_at", ""),
+                "deleted_by": row.get("deleted_by", ""),
             },
         )
 
@@ -787,6 +812,7 @@ class ProtocolPostgresAdapter:
                 routed_task_ids=routed_task_ids,
             ),
             artifacts=self._protocol_artifacts_for_run(conn, run_id),
+            artifact_snapshots=self._protocol_artifact_snapshots_for_run(conn, run_id),
             runtime_instances=self._protocol_artifact_runtimes_for_run(conn, run_id),
             runtime_events=self._protocol_artifact_runtime_events_for_run(conn, run_id),
             transitions=transition_records,
@@ -920,6 +946,112 @@ class ProtocolPostgresAdapter:
             artifact = self._protocol_artifact_from_row(row)
             newest.setdefault(artifact.artifact_key, artifact)
         return list(newest.values())
+
+    def _protocol_artifact_snapshots_for_run(self, conn, run_id: str) -> list[ProtocolArtifactSnapshotRecord]:
+        rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {SCHEMA}.protocol_artifact_snapshots
+            WHERE protocol_run_id = %s
+              AND retention_state <> 'deleted'
+            ORDER BY artifact_key, created_at DESC
+            """,
+            (run_id,),
+        )
+        newest: dict[str, ProtocolArtifactSnapshotRecord] = {}
+        for row in rows:
+            snapshot = self._protocol_artifact_snapshot_from_row(row)
+            newest.setdefault(snapshot.artifact_key, snapshot)
+        return list(newest.values())
+
+    def _protocol_artifact_snapshot_for_key(
+        self,
+        conn,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactSnapshotRecord | None:
+        row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"""
+            SELECT *
+            FROM {SCHEMA}.protocol_artifact_snapshots
+            WHERE protocol_run_id = %s
+              AND artifact_key = %s
+              AND retention_state <> 'deleted'
+            ORDER BY created_at DESC, artifact_snapshot_id DESC
+            LIMIT 1
+            """,
+            (run_id, artifact_key),
+        )
+        return self._protocol_artifact_snapshot_from_row(row) if row is not None else None
+
+    def _insert_protocol_artifact_snapshot_in_tx(
+        self,
+        conn,
+        snapshot: ProtocolArtifactSnapshotRecord,
+        *,
+        actor_ref: str,
+        now: str,
+    ) -> None:
+        with cur(conn) as db_cur:
+            db_cur.execute(
+                f"""
+                INSERT INTO {SCHEMA}.protocol_artifact_snapshots (
+                    artifact_snapshot_id, protocol_artifact_id, protocol_run_id, artifact_key,
+                    snapshot_kind, storage_uri, content_hash, size_bytes, manifest_json,
+                    retention_state, retention_until, created_at, created_by, deleted_at, deleted_by
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (artifact_snapshot_id) DO UPDATE SET
+                    protocol_artifact_id = EXCLUDED.protocol_artifact_id,
+                    storage_uri = EXCLUDED.storage_uri,
+                    content_hash = EXCLUDED.content_hash,
+                    size_bytes = EXCLUDED.size_bytes,
+                    manifest_json = EXCLUDED.manifest_json,
+                    retention_state = EXCLUDED.retention_state,
+                    retention_until = EXCLUDED.retention_until,
+                    deleted_at = EXCLUDED.deleted_at,
+                    deleted_by = EXCLUDED.deleted_by
+                """,
+                (
+                    snapshot.artifact_snapshot_id,
+                    snapshot.protocol_artifact_id,
+                    snapshot.protocol_run_id,
+                    snapshot.artifact_key,
+                    snapshot.snapshot_kind,
+                    snapshot.storage_uri,
+                    snapshot.content_hash,
+                    snapshot.size_bytes,
+                    jsonb(snapshot.manifest_json.as_dict()),
+                    snapshot.retention_state or "active",
+                    snapshot.retention_until,
+                    snapshot.created_at or now,
+                    snapshot.created_by or actor_ref,
+                    snapshot.deleted_at,
+                    snapshot.deleted_by,
+                ),
+            )
+            db_cur.execute(
+                f"""
+                INSERT INTO {SCHEMA}.protocol_transitions (
+                    protocol_transition_id, protocol_run_id, transition_kind,
+                    decision, reason, metadata_json, actor_type, actor_ref, created_at
+                ) VALUES (%s, %s, 'artifact_snapshot', 'snapshotted', %s, %s, 'registry', %s, %s)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    snapshot.protocol_run_id,
+                    f"Artifact {snapshot.artifact_key} snapshotted.",
+                    jsonb({
+                        "artifact_key": snapshot.artifact_key,
+                        "artifact_snapshot_id": snapshot.artifact_snapshot_id,
+                        "content_hash": snapshot.content_hash,
+                        "size_bytes": snapshot.size_bytes,
+                    }),
+                    actor_ref,
+                    now,
+                ),
+            )
 
     def _protocol_artifact_runtimes_for_run(
         self,
@@ -1367,6 +1499,7 @@ class ProtocolPostgresAdapter:
                 candidate = Path(location)
                 if not candidate.is_absolute():
                     location = str((Path(working_dir) / candidate).resolve())
+            artifact_id = uuid.uuid4().hex
             with cur(conn) as db_cur:
                 db_cur.execute(
                     f"""
@@ -1378,7 +1511,7 @@ class ProtocolPostgresAdapter:
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        uuid.uuid4().hex,
+                        artifact_id,
                         run_row["protocol_run_id"],
                         observation.artifact_key,
                         observation.artifact_kind,
@@ -1396,6 +1529,33 @@ class ProtocolPostgresAdapter:
                         now,
                     ),
                 )
+            if observation.exists and location:
+                source_path = Path(location)
+                if source_path.exists():
+                    try:
+                        snapshot = create_artifact_snapshot(
+                            artifact_store_dir=load_registry_config().artifact_store_dir,
+                            source_path=source_path,
+                            protocol_artifact_id=artifact_id,
+                            protocol_run_id=str(run_row["protocol_run_id"] or ""),
+                            artifact_key=observation.artifact_key,
+                            created_by="protocol_engine",
+                            retention_until=str(run_row.get("retention_until", "") or ""),
+                        )
+                        self._insert_protocol_artifact_snapshot_in_tx(
+                            conn,
+                            snapshot,
+                            actor_ref="protocol_engine",
+                            now=now,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "protocol artifact snapshot failed run=%s artifact=%s path=%s error=%s",
+                            run_row["protocol_run_id"],
+                            observation.artifact_key,
+                            location,
+                            exc,
+                        )
 
     def _protocol_stage_task_result_from_task_row(self, task_row: Mapping[str, object]) -> ProtocolStageTaskResultRecord:
         result_json = task_row.get("result_json")
@@ -2965,6 +3125,8 @@ class ProtocolPostgresAdapter:
         if status:
             params.append(status)
             clauses.append("pr.status = %s")
+        else:
+            clauses.append("pr.status NOT IN ('archived', 'deleted')")
         if protocol_id:
             params.append(protocol_id)
             clauses.append("pr.protocol_id = %s")
@@ -3479,6 +3641,221 @@ class ProtocolPostgresAdapter:
                 raise KeyError(run_id)
             return detail.artifacts
 
+    def get_protocol_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactSnapshotRecord | None:
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            return self._protocol_artifact_snapshot_for_key(conn, run_id, artifact_key)
+
+    def save_protocol_artifact_snapshot(
+        self,
+        snapshot: ProtocolArtifactSnapshotRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactSnapshotRecord:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin", "agent")):
+            raise PermissionError("Protocol artifact snapshot mutation requires operator, admin, or agent access.")
+        with self._connect() as conn, write_tx(conn):
+            detail = self._protocol_run_detail_in_tx(conn, snapshot.protocol_run_id, access=access)
+            if detail is None:
+                raise KeyError(snapshot.protocol_run_id)
+            artifact = next(
+                (item for item in detail.artifacts if item.artifact_key == snapshot.artifact_key),
+                None,
+            )
+            if artifact is None:
+                raise KeyError(snapshot.artifact_key)
+            now = utcnow_iso()
+            snapshot_id = snapshot.artifact_snapshot_id or uuid.uuid4().hex
+            created_at = snapshot.created_at or now
+            created_by = snapshot.created_by or self._access_actor_ref(access)
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_artifact_snapshots (
+                        artifact_snapshot_id, protocol_artifact_id, protocol_run_id, artifact_key,
+                        snapshot_kind, storage_uri, content_hash, size_bytes, manifest_json,
+                        retention_state, retention_until, created_at, created_by, deleted_at, deleted_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (artifact_snapshot_id) DO UPDATE SET
+                        protocol_artifact_id = EXCLUDED.protocol_artifact_id,
+                        storage_uri = EXCLUDED.storage_uri,
+                        content_hash = EXCLUDED.content_hash,
+                        size_bytes = EXCLUDED.size_bytes,
+                        manifest_json = EXCLUDED.manifest_json,
+                        retention_state = EXCLUDED.retention_state,
+                        retention_until = EXCLUDED.retention_until,
+                        deleted_at = EXCLUDED.deleted_at,
+                        deleted_by = EXCLUDED.deleted_by
+                    RETURNING *
+                    """,
+                    (
+                        snapshot_id,
+                        snapshot.protocol_artifact_id or artifact.protocol_artifact_id,
+                        snapshot.protocol_run_id,
+                        snapshot.artifact_key,
+                        snapshot.snapshot_kind,
+                        snapshot.storage_uri,
+                        snapshot.content_hash,
+                        snapshot.size_bytes,
+                        jsonb(snapshot.manifest_json.as_dict()),
+                        snapshot.retention_state or "active",
+                        snapshot.retention_until,
+                        created_at,
+                        created_by,
+                        snapshot.deleted_at,
+                        snapshot.deleted_by,
+                    ),
+                )
+                row = db_cur.fetchone()
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_transitions (
+                        protocol_transition_id, protocol_run_id, transition_kind,
+                        decision, reason, metadata_json, actor_type, actor_ref, created_at
+                    ) VALUES (%s, %s, 'artifact_snapshot', 'snapshotted', %s, %s, 'registry', %s, %s)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        snapshot.protocol_run_id,
+                        f"Artifact {snapshot.artifact_key} snapshotted.",
+                        jsonb({
+                            "artifact_key": snapshot.artifact_key,
+                            "artifact_snapshot_id": snapshot_id,
+                            "content_hash": snapshot.content_hash,
+                            "size_bytes": snapshot.size_bytes,
+                        }),
+                        created_by,
+                        now,
+                    ),
+                )
+            if row is None:
+                raise RuntimeError("Failed to persist artifact snapshot.")
+            return self._protocol_artifact_snapshot_from_row(row)
+
+    def delete_protocol_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactSnapshotRecord:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin")):
+            raise PermissionError("Protocol artifact snapshot delete requires operator or admin access.")
+        with self._connect() as conn, write_tx(conn):
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            snapshot = self._protocol_artifact_snapshot_for_key(conn, run_id, artifact_key)
+            if snapshot is None:
+                raise KeyError(artifact_key)
+            now = utcnow_iso()
+            actor = self._access_actor_ref(access)
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    UPDATE {SCHEMA}.protocol_artifact_snapshots
+                    SET retention_state = 'deleted', deleted_at = %s, deleted_by = %s
+                    WHERE artifact_snapshot_id = %s
+                    RETURNING *
+                    """,
+                    (now, actor, snapshot.artifact_snapshot_id),
+                )
+                row = db_cur.fetchone()
+            if row is None:
+                raise RuntimeError("Failed to delete artifact snapshot.")
+            return self._protocol_artifact_snapshot_from_row(row)
+
+    def save_workspace_cleanup_inventory(
+        self,
+        *,
+        inventory_id: str,
+        agent_id: str,
+        workspace_ref: str = "",
+        protocol_run_id: str = "",
+        scan_status: str = "completed",
+        file_count: int = 0,
+        total_bytes: int = 0,
+        retained_bytes: int = 0,
+        transient_bytes: int = 0,
+        unknown_bytes: int = 0,
+        summary: Mapping[str, object] | None = None,
+        access: ProtocolAccessContextRecord,
+    ) -> dict[str, object]:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin")):
+            raise PermissionError("Workspace cleanup inventory requires operator access.")
+        now = utcnow_iso()
+        row_id = str(inventory_id or "").strip() or uuid.uuid4().hex
+        payload = dict(summary or {})
+        with self._connect() as conn, write_tx(conn):
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.workspace_cleanup_inventory (
+                        inventory_id, agent_id, workspace_ref, protocol_run_id, scan_status,
+                        file_count, total_bytes, retained_bytes, transient_bytes, unknown_bytes,
+                        summary_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (inventory_id) DO UPDATE SET
+                        agent_id = EXCLUDED.agent_id,
+                        workspace_ref = EXCLUDED.workspace_ref,
+                        protocol_run_id = EXCLUDED.protocol_run_id,
+                        scan_status = EXCLUDED.scan_status,
+                        file_count = EXCLUDED.file_count,
+                        total_bytes = EXCLUDED.total_bytes,
+                        retained_bytes = EXCLUDED.retained_bytes,
+                        transient_bytes = EXCLUDED.transient_bytes,
+                        unknown_bytes = EXCLUDED.unknown_bytes,
+                        summary_json = EXCLUDED.summary_json
+                    RETURNING *
+                    """,
+                    (
+                        row_id,
+                        agent_id,
+                        workspace_ref,
+                        protocol_run_id,
+                        scan_status,
+                        int(file_count or 0),
+                        int(total_bytes or 0),
+                        int(retained_bytes or 0),
+                        int(transient_bytes or 0),
+                        int(unknown_bytes or 0),
+                        jsonb(payload),
+                        now,
+                    ),
+                )
+                row = db_cur.fetchone()
+            if row is None:
+                raise RuntimeError("Failed to persist workspace cleanup inventory.")
+            return dict(row)
+
+    def get_workspace_cleanup_inventory(
+        self,
+        inventory_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> dict[str, object] | None:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin")):
+            raise PermissionError("Workspace cleanup inventory requires operator access.")
+        with self._connect() as conn:
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.workspace_cleanup_inventory
+                WHERE inventory_id = %s
+                """,
+                (inventory_id,),
+            )
+            return dict(row) if row is not None else None
+
     def get_protocol_run_timeline(self, run_id: str, *, access: ProtocolAccessContextRecord) -> list[ProtocolTransitionRecord]:
         with self._connect() as conn:
             detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
@@ -3693,6 +4070,7 @@ class ProtocolPostgresAdapter:
                 stage_executions=detail.stage_executions,
                 tasks=detail.tasks,
                 artifacts=detail.artifacts,
+                artifact_snapshots=detail.artifact_snapshots,
                 runtime_instances=detail.runtime_instances,
                 runtime_events=detail.runtime_events,
                 transitions=detail.transitions,
@@ -3844,6 +4222,169 @@ class ProtocolPostgresAdapter:
                 now=now,
             )
             return result
+
+    def _running_runtime_count_for_run(self, conn, run_id: str) -> int:
+        row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"""
+            SELECT COUNT(*) AS count
+            FROM {SCHEMA}.protocol_artifact_runtime_instances
+            WHERE protocol_run_id = %s
+              AND status IN ('starting', 'running', 'stopping')
+            """,
+            (run_id,),
+        ) or {"count": 0}
+        return int(row.get("count", 0) or 0)
+
+    def _set_protocol_run_lifecycle_status(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        target_status: str,
+        reason: str,
+    ) -> ProtocolRunMutationRecord:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin")):
+            return ProtocolRunMutationRecord(ok=False, status="forbidden", message="Protocol run lifecycle changes require operator access.")
+        normalized_status = str(target_status or "").strip().lower()
+        if normalized_status not in {"archived", "deleted", "restore"}:
+            return ProtocolRunMutationRecord(ok=False, status="invalid_action", message="Unsupported protocol run lifecycle action.")
+        now = utcnow_iso()
+        actor = self._access_actor_ref(access)
+        with self._connect() as conn, write_tx(conn):
+            raw_run_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+                (run_id,),
+            )
+            visibility = self._protocol_run_visibility_status(raw_run_row, access=access)
+            if visibility == "missing":
+                return ProtocolRunMutationRecord(ok=False, status="not_found", message="Protocol run not found.")
+            if visibility == "not_visible":
+                return ProtocolRunMutationRecord(ok=False, status="not_visible", message="Protocol run is not visible to this actor.")
+            run_row = dict(raw_run_row or {})
+            current_status = str(run_row.get("status", "") or "").strip().lower()
+            running_runtimes = self._running_runtime_count_for_run(conn, run_id)
+            if normalized_status in {"archived", "deleted"} and running_runtimes:
+                return ProtocolRunMutationRecord(
+                    ok=False,
+                    status="invalid_action",
+                    message="Stop artifact runtimes before archiving or deleting this run.",
+                )
+            active_statuses = {"queued", "running"}
+            if normalized_status == "archived":
+                if current_status in active_statuses:
+                    return ProtocolRunMutationRecord(ok=False, status="invalid_action", message="Cancel or finish the run before archiving it.")
+                if current_status == "deleted":
+                    return ProtocolRunMutationRecord(ok=False, status="invalid_action", message="Deleted runs cannot be archived.")
+                next_status = "archived"
+                hidden = True
+                summary = str(reason or "Protocol run archived.").strip()
+                metadata = {"previous_status": current_status}
+            elif normalized_status == "deleted":
+                if current_status in active_statuses:
+                    return ProtocolRunMutationRecord(ok=False, status="invalid_action", message="Cancel or finish the run before deleting it.")
+                next_status = "deleted"
+                hidden = True
+                summary = str(reason or "Protocol run deleted.").strip()
+                metadata = {"previous_status": current_status}
+            else:
+                if current_status != "archived":
+                    return ProtocolRunMutationRecord(ok=False, status="invalid_action", message="Only archived runs can be restored.")
+                previous_status = "completed"
+                latest_transition = POSTGRES_STORE_DIALECT.fetchone(
+                    conn,
+                    f"""
+                    SELECT metadata_json
+                    FROM {SCHEMA}.protocol_transitions
+                    WHERE protocol_run_id = %s
+                      AND transition_kind = 'run_lifecycle'
+                      AND decision = 'archived'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                )
+                metadata_json = latest_transition.get("metadata_json", {}) if latest_transition is not None else {}
+                if isinstance(metadata_json, Mapping):
+                    candidate = str(metadata_json.get("previous_status", "") or "").strip().lower()
+                    if candidate and candidate not in {"archived", "deleted", "queued", "running"}:
+                        previous_status = candidate
+                next_status = previous_status
+                hidden = False
+                summary = str(reason or "Protocol run restored.").strip()
+                metadata = {"previous_status": current_status, "restored_status": previous_status}
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    UPDATE {SCHEMA}.protocol_runs
+                    SET status = %s,
+                        hidden_from_default_views = %s,
+                        termination_summary = CASE WHEN %s <> '' THEN %s ELSE termination_summary END,
+                        updated_at = %s,
+                        version = version + 1
+                    WHERE protocol_run_id = %s
+                    RETURNING *
+                    """,
+                    (next_status, hidden, summary, summary, now, run_id),
+                )
+                updated_row = db_cur.fetchone()
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_transitions (
+                        protocol_transition_id, protocol_run_id, transition_kind, decision,
+                        reason, metadata_json, actor_type, actor_ref, created_at
+                    ) VALUES (%s, %s, 'run_lifecycle', %s, %s, %s, 'operator', %s, %s)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        run_id,
+                        "restored" if normalized_status == "restore" else next_status,
+                        summary,
+                        jsonb(metadata),
+                        actor,
+                        now,
+                    ),
+                )
+            if updated_row is None:
+                raise RuntimeError("Failed to update protocol run lifecycle.")
+            refreshed = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if refreshed is None:
+                raise RuntimeError("Failed to reload protocol run lifecycle.")
+            return ProtocolRunMutationRecord(
+                ok=True,
+                status="updated",
+                message=f"Protocol run {('restored' if normalized_status == 'restore' else next_status)}.",
+                run=refreshed.run,
+                stage_execution=refreshed.stage_executions[0] if refreshed.stage_executions else None,
+            )
+
+    def archive_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ) -> ProtocolRunMutationRecord:
+        return self._set_protocol_run_lifecycle_status(run_id, access=access, target_status="archived", reason=reason)
+
+    def restore_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ) -> ProtocolRunMutationRecord:
+        return self._set_protocol_run_lifecycle_status(run_id, access=access, target_status="restore", reason=reason)
+
+    def delete_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ) -> ProtocolRunMutationRecord:
+        return self._set_protocol_run_lifecycle_status(run_id, access=access, target_status="deleted", reason=reason)
 
     @staticmethod
     def _protocol_scenario_from_row(row: Mapping[str, object]) -> ProtocolScenarioRecord:

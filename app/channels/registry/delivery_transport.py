@@ -56,6 +56,8 @@ from octopus_sdk.registry.management import (
     ManagementResult,
     StartArtifactRuntimeRequest,
     StopArtifactRuntimeRequest,
+    WorkspaceCleanupRequest,
+    WorkspaceUsageRequest,
 )
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
@@ -679,6 +681,8 @@ async def handle_registry_delivery(
                 ArtifactRuntimeHealthRequest,
                 ArtifactRuntimeLogsRequest,
                 ArtifactRuntimeFetchRequest,
+                WorkspaceUsageRequest,
+                WorkspaceCleanupRequest,
             ),
         ):
             from app.runtime import artifact_runtime
@@ -695,6 +699,14 @@ async def handle_registry_delivery(
                     payload = await artifact_runtime.artifact_runtime_health(request.payload)
                 elif isinstance(request.payload, ArtifactRuntimeLogsRequest):
                     payload = await artifact_runtime.artifact_runtime_logs(request.payload)
+                elif isinstance(request.payload, WorkspaceUsageRequest):
+                    from app.runtime import workspace_hygiene
+
+                    payload = await workspace_hygiene.workspace_usage(request.payload, config=config)
+                elif isinstance(request.payload, WorkspaceCleanupRequest):
+                    from app.runtime import workspace_hygiene
+
+                    payload = await workspace_hygiene.workspace_cleanup(request.payload, config=config)
                 else:
                     payload = await artifact_runtime.artifact_runtime_fetch(request.payload)
                 result = ManagementResult(

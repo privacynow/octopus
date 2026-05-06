@@ -26,6 +26,12 @@ from octopus_sdk.registry.management import (
     RuntimeSkillCatalogItemRecord,
     StartArtifactRuntimeRequest,
     StartArtifactRuntimeResult,
+    WorkspaceCleanupEntryRecord,
+    WorkspaceCleanupPlanRecord,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResult,
+    WorkspaceUsageRequest,
+    WorkspaceUsageResult,
 )
 from octopus_sdk.protocols import (
     ProtocolArtifactRuntimeActionResultRecord,
@@ -212,6 +218,62 @@ def test_artifact_runtime_management_payloads_round_trip() -> None:
     )
     decoded_fetch_result = ManagementResult.model_validate(fetch_result.model_dump(mode="json"))
     assert isinstance(decoded_fetch_result.payload, ArtifactRuntimeFetchResult)
+
+
+def test_workspace_cleanup_management_payloads_round_trip() -> None:
+    usage = ManagementRequest(
+        agent_id="agent-1",
+        payload=WorkspaceUsageRequest(categories=["runtime_logs"], max_entries=10),
+    )
+    decoded_usage = ManagementRequest.model_validate(usage.model_dump(mode="json"))
+    assert isinstance(decoded_usage.payload, WorkspaceUsageRequest)
+    assert decoded_usage.payload.operation == "workspace_usage"
+
+    plan = WorkspaceCleanupPlanRecord(
+        agent_id="agent-1",
+        categories=["runtime_logs"],
+        entries=[
+            WorkspaceCleanupEntryRecord(
+                path="/tmp/octopus/artifact-runtimes/run-1",
+                category="runtime_logs",
+                size_bytes=120,
+                file_count=2,
+                safe_to_delete=True,
+            )
+        ],
+        total_bytes=120,
+        deletable_bytes=120,
+        file_count=2,
+    )
+    usage_result = ManagementResult(
+        request_id=usage.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=WorkspaceUsageResult(plan=plan),
+    )
+    decoded_usage_result = ManagementResult.model_validate(usage_result.model_dump(mode="json"))
+    assert isinstance(decoded_usage_result.payload, WorkspaceUsageResult)
+    assert decoded_usage_result.payload.plan.deletable_bytes == 120
+
+    cleanup = ManagementRequest(
+        agent_id="agent-1",
+        payload=WorkspaceCleanupRequest(plan=plan, confirm="CLEAN"),
+    )
+    decoded_cleanup = ManagementRequest.model_validate(cleanup.model_dump(mode="json"))
+    assert isinstance(decoded_cleanup.payload, WorkspaceCleanupRequest)
+    cleanup_result = ManagementResult(
+        request_id=cleanup.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=WorkspaceCleanupResult(
+            plan=plan,
+            removed_paths=["/tmp/octopus/artifact-runtimes/run-1"],
+            removed_bytes=120,
+        ),
+    )
+    decoded_cleanup_result = ManagementResult.model_validate(cleanup_result.model_dump(mode="json"))
+    assert isinstance(decoded_cleanup_result.payload, WorkspaceCleanupResult)
+    assert decoded_cleanup_result.payload.removed_bytes == 120
 
 
 @pytest.mark.asyncio

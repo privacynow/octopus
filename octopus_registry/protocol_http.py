@@ -135,7 +135,15 @@ _RUNTIME_PROXY_REQUEST_HEADER_DENYLIST = {
     "if-none-match",
     "if-range",
     "if-unmodified-since",
+    "origin",
     "range",
+    "referer",
+    "sec-fetch-dest",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "sec-fetch-user",
+    "upgrade-insecure-requests",
+    "x-csrf-token",
 }
 
 
@@ -239,25 +247,82 @@ def _rewrite_runtime_html_content(
     rewrite
   }});
   const originalFetch = window.fetch;
+  let csrfToken = '';
+  let csrfPromise = null;
+  const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  const isRuntimeProxyUrl = (value) => {{
+    try {{
+      const parsed = new URL(typeof value === 'string' ? value : value.url, window.location.href);
+      return parsed.origin === window.location.origin
+        && (parsed.pathname === appBase || parsed.pathname.startsWith(appBase + '/')
+          || parsed.pathname === apiBase || parsed.pathname.startsWith(apiBase + '/'));
+    }} catch (_err) {{
+      return false;
+    }}
+  }};
+  const methodFor = (input, init) => String(
+    (init && init.method)
+    || (input && typeof input === 'object' && input.method)
+    || 'GET'
+  ).toUpperCase();
+  const ensureCsrf = () => {{
+    if (csrfToken) return Promise.resolve(csrfToken);
+    if (!csrfPromise) {{
+      csrfPromise = originalFetch.call(window, '/v1/auth/csrf', {{ credentials: 'same-origin' }})
+        .then((response) => response.ok ? response.json() : {{}})
+        .then((data) => {{
+          csrfToken = String(data && (data.csrf_token || data.token) || '');
+          return csrfToken;
+        }})
+        .catch(() => '')
+        .finally(() => {{ csrfPromise = null; }});
+    }}
+    return csrfPromise;
+  }};
+  ensureCsrf();
   if (originalFetch) {{
     window.fetch = function(input, init) {{
+      let rewritten = input;
       if (typeof input === 'string') {{
-        input = rewrite(input);
+        rewritten = rewrite(input);
       }} else if (input && typeof input.url === 'string') {{
         const parsed = new URL(input.url, window.location.href);
         if (parsed.origin === window.location.origin) {{
           const originalPath = parsed.pathname + parsed.search + parsed.hash;
           const nextUrl = rewrite(originalPath);
-          if (nextUrl !== originalPath) input = new Request(nextUrl, input);
+          if (nextUrl !== originalPath) rewritten = new Request(nextUrl, input);
         }}
       }}
-      return originalFetch.call(this, input, init);
+      const needsCsrf = mutatingMethods.has(methodFor(rewritten, init)) && isRuntimeProxyUrl(rewritten);
+      if (!needsCsrf) return originalFetch.call(this, rewritten, init);
+      return ensureCsrf().then((token) => {{
+        const headers = new Headers((init && init.headers) || (rewritten && typeof rewritten === 'object' && rewritten.headers) || undefined);
+        if (token) headers.set('X-CSRF-Token', token);
+        if (init) {{
+          return originalFetch.call(this, rewritten, {{ ...init, headers, credentials: init.credentials || 'same-origin' }});
+        }}
+        if (rewritten && typeof rewritten === 'object') {{
+          return originalFetch.call(this, new Request(rewritten, {{ headers, credentials: 'same-origin' }}));
+        }}
+        return originalFetch.call(this, rewritten, {{ headers, credentials: 'same-origin' }});
+      }});
     }};
   }}
   const originalOpen = window.XMLHttpRequest && window.XMLHttpRequest.prototype && window.XMLHttpRequest.prototype.open;
+  const originalSend = window.XMLHttpRequest && window.XMLHttpRequest.prototype && window.XMLHttpRequest.prototype.send;
   if (originalOpen) {{
     window.XMLHttpRequest.prototype.open = function(method, url, ...rest) {{
-      return originalOpen.call(this, method, rewrite(url), ...rest);
+      const nextUrl = rewrite(url);
+      this.__octopusRuntimeNeedsCsrf = mutatingMethods.has(String(method || 'GET').toUpperCase()) && isRuntimeProxyUrl(nextUrl);
+      return originalOpen.call(this, method, nextUrl, ...rest);
+    }};
+  }}
+  if (originalSend) {{
+    window.XMLHttpRequest.prototype.send = function(...args) {{
+      if (this.__octopusRuntimeNeedsCsrf && csrfToken) {{
+        this.setRequestHeader('X-CSRF-Token', csrfToken);
+      }}
+      return originalSend.apply(this, args);
     }};
   }}
 }})();

@@ -483,11 +483,12 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
         openHref: showStorageOpen && available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
         browseHref: browsable ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { browse: true }) : '',
         downloadHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }) : '',
-        copyPathText: displayPath,
+        downloadLabel: runtimeExpected ? 'Download zip' : 'Download',
+        copyPathText: prominentRuntime ? '' : displayPath,
         available,
         unavailableReason: missing ? 'Declared artifact, not produced yet.' : 'Artifact path is not available on this host.',
     });
-    if (!missing && artifact?.artifact_key) {
+    if (!missing && artifact?.artifact_key && !prominentRuntime) {
         const snapshotBtn = document.createElement('button');
         snapshotBtn.type = 'button';
         snapshotBtn.className = 'btn btn-sm';
@@ -549,7 +550,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
         runtimeStatus.type = 'button';
         runtimeStatus.className = 'btn btn-sm';
         runtimeStatus.classList.add('artifact-app-detail-action');
-        runtimeStatus.textContent = 'App details';
+        runtimeStatus.textContent = 'Manage app';
         runtimeStatus.hidden = !runtimeExpected;
         const stopRuntime = document.createElement('button');
         stopRuntime.type = 'button';
@@ -600,7 +601,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
             openRuntime.className = prominentRuntime
                 ? 'btn btn-sm btn-primary is-primary-artifact-action artifact-app-primary-action'
                 : 'btn btn-sm btn-primary artifact-app-primary-action';
-            stopRuntime.hidden = !['running', 'starting'].includes(status);
+            stopRuntime.hidden = prominentRuntime || !['running', 'starting'].includes(status);
             scheduleRuntimePoll();
         };
         const refreshRuntimeState = async () => {
@@ -9566,6 +9567,24 @@ function renderProtocolRuns(container) {
 
         const currentRunStageExecution = () => {
             const run = currentRun.run || {};
+            const blockedCode = String(run.blocked_code || '').trim().toLowerCase();
+            if (String(run.status || '').trim().toLowerCase() === 'blocked' && blockedCode.startsWith('runtime_')) {
+                const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+                const primary = autoMeta.primary_artifact || {};
+                const primaryStageKey = String(primary.produced_by_stage_key || '').trim();
+                if (primaryStageKey) {
+                    const matchingAttempts = stageRows.filter((item) => String(item.stage_key || '') === primaryStageKey);
+                    if (matchingAttempts.length) return latestStageExecution(matchingAttempts);
+                }
+                const primaryArtifactKey = String(primary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+                const producedArtifact = primaryArtifactKey
+                    ? artifactRows.find((item) => String(item.artifact_key || '') === primaryArtifactKey)
+                    : null;
+                const producerExecutionId = String(producedArtifact?.produced_by_stage_execution_id || '').trim();
+                if (producerExecutionId && stageById.has(producerExecutionId)) {
+                    return stageById.get(producerExecutionId);
+                }
+            }
             const executionId = String(run.current_stage_execution_id || '').trim();
             if (executionId && stageById.has(executionId)) {
                 return stageById.get(executionId);

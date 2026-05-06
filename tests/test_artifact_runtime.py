@@ -53,6 +53,8 @@ def test_runtime_proxy_rewrites_html_for_registry_route():
     assert "/runtime/protocol-runs/run-1/artifacts/produced_outcome/api/docs" in rewritten
     assert "window.OCTOPUS_RUNTIME" in rewritten
     assert "window.fetch" in rewritten
+    assert "/v1/auth/csrf" in rewritten
+    assert "X-CSRF-Token" in rewritten
 
 
 def test_runtime_proxy_avoids_stale_browser_cache_headers():
@@ -62,6 +64,10 @@ def test_runtime_proxy_avoids_stale_browser_cache_headers():
         "If-Modified-Since": "Wed, 06 May 2026 00:00:00 GMT",
         "Cookie": "session=secret",
         "Authorization": "Bearer secret",
+        "Origin": "http://127.0.0.1:8787",
+        "Referer": "http://127.0.0.1:8787/runtime/app",
+        "X-CSRF-Token": "secret",
+        "Sec-Fetch-Site": "same-origin",
     })
 
     assert headers == {"Accept": "text/html"}

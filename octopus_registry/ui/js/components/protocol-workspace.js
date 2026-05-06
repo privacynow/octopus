@@ -95,9 +95,26 @@ function _runtimeEndpoint(runtime = {}, key = '') {
     if (key === 'api_docs') {
         const docsEndpoint = (Array.isArray(manifest.endpoints) ? manifest.endpoints : [])
             .find((item) => String(item?.endpoint_kind || '').toLowerCase() === 'docs');
-        return docsEndpoint?.path || '';
+        return _runtimeApiProxyPath(runtime, docsEndpoint?.path || '');
     }
     return '';
+}
+
+function _runtimeHttpPath(value = '', fallback = '') {
+    let text = String(value || fallback || '').trim();
+    if (!text) return '';
+    if (!text.startsWith('/')) text = `/${text}`;
+    return text;
+}
+
+function _runtimeApiProxyPath(runtime = {}, path = '') {
+    const manifest = runtime?.manifest || {};
+    const text = _runtimeHttpPath(path);
+    if (!text) return '';
+    const apiBase = _runtimeHttpPath(manifest.api_base_path || '/api', '/api').replace(/\/+$/, '') || '/api';
+    if (text === apiBase) return '';
+    if (text.startsWith(`${apiBase}/`)) return text.slice(apiBase.length).replace(/^\/+/, '');
+    return text.replace(/^\/+/, '');
 }
 
 function _runtimeFact(label, value, { link = false } = {}) {

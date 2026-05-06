@@ -3,7 +3,12 @@ from __future__ import annotations
 import base64
 
 from app.runtime import artifact_runtime, workspace_hygiene
-from octopus_registry.protocol_http import _rewrite_runtime_html_content, _runtime_api_outbound_path
+from octopus_registry.protocol_http import (
+    _rewrite_runtime_html_content,
+    _runtime_api_outbound_path,
+    _runtime_proxy_request_headers,
+    _runtime_proxy_response_headers,
+)
 from octopus_sdk.protocols import ProtocolArtifactRuntimeManifestRecord
 from octopus_sdk.registry.management import (
     ArtifactRuntimeFetchRequest,
@@ -48,6 +53,35 @@ def test_runtime_proxy_rewrites_html_for_registry_route():
     assert "/runtime/protocol-runs/run-1/artifacts/produced_outcome/api/docs" in rewritten
     assert "window.OCTOPUS_RUNTIME" in rewritten
     assert "window.fetch" in rewritten
+
+
+def test_runtime_proxy_avoids_stale_browser_cache_headers():
+    headers = _runtime_proxy_request_headers({
+        "Accept": "text/html",
+        "If-None-Match": '"abc"',
+        "If-Modified-Since": "Wed, 06 May 2026 00:00:00 GMT",
+        "Cookie": "session=secret",
+        "Authorization": "Bearer secret",
+    })
+
+    assert headers == {"Accept": "text/html"}
+
+
+def test_runtime_proxy_rewritten_html_is_not_etag_cached():
+    headers = _runtime_proxy_response_headers(
+        {
+            "content-type": "text/html; charset=utf-8",
+            "etag": '"abc"',
+            "last-modified": "Wed, 06 May 2026 00:00:00 GMT",
+            "cache-control": "public, max-age=3600",
+        },
+        content_type="text/html; charset=utf-8",
+    )
+
+    assert headers == {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+    }
 
 
 def test_artifact_runtime_expands_manifest_port_placeholders():

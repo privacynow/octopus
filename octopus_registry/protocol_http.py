@@ -7,7 +7,7 @@ import base64
 import copy
 import json
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -122,6 +122,44 @@ def _runtime_api_outbound_path(manifest: ProtocolArtifactRuntimeManifestRecord, 
     if base_path == "/":
         return tail_path
     return f"{base_prefix}{tail_path}"
+
+
+_RUNTIME_PROXY_REQUEST_HEADER_DENYLIST = {
+    "authorization",
+    "connection",
+    "content-length",
+    "cookie",
+    "host",
+    "if-match",
+    "if-modified-since",
+    "if-none-match",
+    "if-range",
+    "if-unmodified-since",
+    "range",
+}
+
+
+def _runtime_proxy_request_headers(headers: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in headers.items()
+        if str(key).lower() not in _RUNTIME_PROXY_REQUEST_HEADER_DENYLIST
+    }
+
+
+def _runtime_proxy_response_headers(headers: Mapping[str, Any], *, content_type: str) -> dict[str, str]:
+    is_html = "text/html" in str(content_type or "").lower()
+    allowed = {"content-type", "cache-control", "etag", "last-modified", "location"}
+    if is_html:
+        allowed -= {"etag", "last-modified"}
+    result = {
+        str(key): str(value)
+        for key, value in headers.items()
+        if str(key).lower() in allowed
+    }
+    if is_html:
+        result["cache-control"] = "no-store"
+    return result
 
 
 def _runtime_rewrite_browser_path(
@@ -2780,11 +2818,7 @@ def build_protocol_router(
         else:
             outbound_path = f"/{tail}" if tail else str(manifest.ui_path or "/")
         body = await request.body()
-        headers = {
-            key: value
-            for key, value in request.headers.items()
-            if key.lower() not in {"host", "connection", "content-length", "cookie", "authorization"}
-        }
+        headers = _runtime_proxy_request_headers(request.headers)
         result = await RegistryManagementClient(store).send(
             agent_id=runtime.agent_id,
             payload=ArtifactRuntimeFetchRequest(
@@ -2811,13 +2845,11 @@ def build_protocol_router(
             ),
             access=access,
         )
-        response_headers = {
-            key: str(value)
-            for key, value in result.payload.headers.as_dict().items()
-            if str(key).lower() in {"content-type", "cache-control", "etag", "last-modified", "location"}
-        }
+        raw_response_headers = result.payload.headers.as_dict()
+        media_type = str(raw_response_headers.get("content-type") or raw_response_headers.get("Content-Type") or "")
+        response_headers = _runtime_proxy_response_headers(raw_response_headers, content_type=media_type)
         content = base64.b64decode(str(result.payload.body_base64 or "").encode("ascii"))
-        media_type = response_headers.pop("content-type", None)
+        media_type = response_headers.pop("content-type", None) or response_headers.pop("Content-Type", None)
         if request.method.upper() == "GET":
             content = _rewrite_runtime_html_content(
                 content,

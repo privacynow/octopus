@@ -90,7 +90,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
                 const target = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
                 UI.notify(result?.message || 'Artifact runtime started.', result?.ok === false ? 'warning' : 'success');
                 if (String(runtime.status || '').toLowerCase() === 'running' || result?.ok !== false) {
-                    window.open(target, '_blank', 'noopener,noreferrer');
+                    window.location.assign(target);
                 }
             } catch (err) {
                 UI.reportError('Failed to start artifact app', err, { context: 'Artifact runtime start failed' });

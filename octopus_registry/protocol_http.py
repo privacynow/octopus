@@ -6,9 +6,11 @@ import mimetypes
 import base64
 import copy
 import json
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 import uuid
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
@@ -93,6 +95,142 @@ from .store_base import AbstractRegistryStore
 
 _InvalidationBroadcaster = Callable[..., Awaitable[None]]
 _TopicEventBroadcaster = Callable[..., Awaitable[None]]
+
+
+def _runtime_http_path(value: str, default: str = "/") -> str:
+    text = str(value or default).strip() or default
+    if not text.startswith("/"):
+        text = f"/{text}"
+    return text
+
+
+def _runtime_proxy_base(run_id: str, artifact_key: str, area: str) -> str:
+    safe_run = quote(str(run_id), safe="")
+    safe_artifact = quote(str(artifact_key), safe="")
+    return f"/runtime/protocol-runs/{safe_run}/artifacts/{safe_artifact}/{area.strip('/')}"
+
+
+def _runtime_api_outbound_path(manifest: ProtocolArtifactRuntimeManifestRecord, proxy_tail: str) -> str:
+    base_path = _runtime_http_path(str(manifest.api_base_path or "/api"), "/api")
+    tail = str(proxy_tail or "").strip("/")
+    if not tail:
+        return base_path
+    tail_path = _runtime_http_path(tail)
+    base_prefix = base_path.rstrip("/")
+    if tail_path == base_path or tail_path.startswith(f"{base_prefix}/") or tail_path.startswith(f"{base_prefix}?"):
+        return tail_path
+    if base_path == "/":
+        return tail_path
+    return f"{base_prefix}{tail_path}"
+
+
+def _runtime_rewrite_browser_path(
+    url: str,
+    *,
+    app_base: str,
+    api_base: str,
+    manifest: ProtocolArtifactRuntimeManifestRecord,
+) -> str:
+    text = str(url or "")
+    if not text.startswith("/") or text.startswith("//"):
+        return text
+    if text.startswith(f"{app_base}/") or text == app_base or text.startswith(f"{api_base}/") or text == api_base:
+        return text
+    api_root = _runtime_http_path(str(manifest.api_base_path or "/api"), "/api").rstrip("/") or "/api"
+    health_path = _runtime_http_path(str(manifest.health_path or "/health"), "/health").rstrip("/") or "/health"
+    if text == health_path or text.startswith(f"{health_path}?") or text.startswith(f"{health_path}#"):
+        suffix = text[len(health_path) :]
+        return f"{app_base}{health_path}{suffix}"
+    if text == api_root or text.startswith(f"{api_root}/") or text.startswith(f"{api_root}?") or text.startswith(f"{api_root}#"):
+        suffix = text[len(api_root) :]
+        return f"{api_base}{suffix}"
+    if text == "/api" or text.startswith("/api/") or text.startswith("/api?") or text.startswith("/api#"):
+        suffix = text[len("/api") :]
+        return f"{api_base}{suffix}"
+    return f"{app_base}{text}"
+
+
+_RUNTIME_URL_ATTR_RE = re.compile(r"(?P<prefix>\b(?:src|href|action)=['\"])(?P<url>/(?!/)[^'\"]*)(?P<suffix>['\"])", re.IGNORECASE)
+
+
+def _rewrite_runtime_html_content(
+    content: bytes,
+    *,
+    content_type: str,
+    run_id: str,
+    artifact_key: str,
+    manifest: ProtocolArtifactRuntimeManifestRecord,
+) -> bytes:
+    if "text/html" not in str(content_type or "").lower():
+        return content
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    app_base = _runtime_proxy_base(run_id, artifact_key, "app")
+    api_base = _runtime_proxy_base(run_id, artifact_key, "api")
+
+    def _replace_attr(match: re.Match[str]) -> str:
+        return (
+            match.group("prefix")
+            + _runtime_rewrite_browser_path(match.group("url"), app_base=app_base, api_base=api_base, manifest=manifest)
+            + match.group("suffix")
+        )
+
+    text = _RUNTIME_URL_ATTR_RE.sub(_replace_attr, text)
+    script = f"""
+<script>
+(() => {{
+  const appBase = {json.dumps(app_base)};
+  const apiBase = {json.dumps(api_base)};
+  const apiRoot = {json.dumps(_runtime_http_path(str(manifest.api_base_path or "/api"), "/api").rstrip("/") or "/api")};
+  const healthPath = {json.dumps(_runtime_http_path(str(manifest.health_path or "/health"), "/health").rstrip("/") or "/health")};
+  const rewrite = (value) => {{
+    if (typeof value !== 'string') return value;
+    if (!value.startsWith('/') || value.startsWith('//')) return value;
+    if (value === appBase || value.startsWith(appBase + '/') || value === apiBase || value.startsWith(apiBase + '/')) return value;
+    if (value === healthPath || value.startsWith(healthPath + '?') || value.startsWith(healthPath + '#')) return appBase + value;
+    if (value === apiRoot || value.startsWith(apiRoot + '/') || value.startsWith(apiRoot + '?') || value.startsWith(apiRoot + '#')) return apiBase + value.slice(apiRoot.length);
+    if (value === '/api' || value.startsWith('/api/') || value.startsWith('/api?') || value.startsWith('/api#')) return apiBase + value.slice('/api'.length);
+    return appBase + value;
+  }};
+  window.OCTOPUS_RUNTIME = Object.freeze({{
+    appBase,
+    apiBase,
+    healthPath: appBase + healthPath,
+    rewrite
+  }});
+  const originalFetch = window.fetch;
+  if (originalFetch) {{
+    window.fetch = function(input, init) {{
+      if (typeof input === 'string') {{
+        input = rewrite(input);
+      }} else if (input && typeof input.url === 'string') {{
+        const parsed = new URL(input.url, window.location.href);
+        if (parsed.origin === window.location.origin) {{
+          const originalPath = parsed.pathname + parsed.search + parsed.hash;
+          const nextUrl = rewrite(originalPath);
+          if (nextUrl !== originalPath) input = new Request(nextUrl, input);
+        }}
+      }}
+      return originalFetch.call(this, input, init);
+    }};
+  }}
+  const originalOpen = window.XMLHttpRequest && window.XMLHttpRequest.prototype && window.XMLHttpRequest.prototype.open;
+  if (originalOpen) {{
+    window.XMLHttpRequest.prototype.open = function(method, url, ...rest) {{
+      return originalOpen.call(this, method, rewrite(url), ...rest);
+    }};
+  }}
+}})();
+</script>
+""".strip()
+    head_match = re.search(r"<head\b[^>]*>", text, flags=re.IGNORECASE)
+    if head_match:
+        text = text[: head_match.end()] + script + text[head_match.end() :]
+    else:
+        text = script + text
+    return text.encode("utf-8")
 
 
 def build_protocol_router(
@@ -2638,8 +2776,7 @@ def build_protocol_router(
         is_api = f"/artifacts/{artifact_key}/api" in route_path
         tail = str(proxy_path or "").strip("/")
         if is_api:
-            base_path = str(manifest.api_base_path or "/api").strip() or "/api"
-            outbound_path = f"{base_path.rstrip('/')}/{tail}" if tail else base_path
+            outbound_path = _runtime_api_outbound_path(manifest, tail)
         else:
             outbound_path = f"/{tail}" if tail else str(manifest.ui_path or "/")
         body = await request.body()
@@ -2680,10 +2817,19 @@ def build_protocol_router(
             if str(key).lower() in {"content-type", "cache-control", "etag", "last-modified", "location"}
         }
         content = base64.b64decode(str(result.payload.body_base64 or "").encode("ascii"))
+        media_type = response_headers.pop("content-type", None)
+        if request.method.upper() == "GET":
+            content = _rewrite_runtime_html_content(
+                content,
+                content_type=str(media_type or ""),
+                run_id=run_id,
+                artifact_key=artifact_key,
+                manifest=manifest,
+            )
         return Response(
             content=content,
             status_code=int(result.payload.status_code or 200),
-            media_type=response_headers.pop("content-type", None),
+            media_type=media_type,
             headers=response_headers,
         )
 

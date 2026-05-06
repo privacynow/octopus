@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 
 from app.runtime import artifact_runtime, workspace_hygiene
+from octopus_registry.protocol_http import _rewrite_runtime_html_content, _runtime_api_outbound_path
 from octopus_sdk.protocols import ProtocolArtifactRuntimeManifestRecord
 from octopus_sdk.registry.management import (
     ArtifactRuntimeFetchRequest,
@@ -16,20 +17,50 @@ from octopus_sdk.registry.management import (
 from tests.support.config_support import make_config
 
 
-def test_artifact_runtime_expands_manifest_port_placeholders():
-    manifest = ProtocolArtifactRuntimeManifestRecord(
+def _process_manifest() -> ProtocolArtifactRuntimeManifestRecord:
+    return ProtocolArtifactRuntimeManifestRecord(
         runtime_kind="java",
-        start_command=(
+        start_command="mvn spring-boot:run -Dspring-boot.run.arguments=--server.port=${PORT:8080}",
+        api_base_path="/api/v1",
+        endpoints=[{"endpoint_kind": "docs", "path": "/api/v1/docs", "label": "API docs"}],
+        smoke_test=["GET /health"],
+    )
+
+
+def test_runtime_proxy_normalizes_manifest_api_prefix():
+    manifest = _process_manifest()
+
+    assert _runtime_api_outbound_path(manifest, "") == "/api/v1"
+    assert _runtime_api_outbound_path(manifest, "scenarios") == "/api/v1/scenarios"
+    assert _runtime_api_outbound_path(manifest, "api/v1/scenarios") == "/api/v1/scenarios"
+
+
+def test_runtime_proxy_rewrites_html_for_registry_route():
+    rewritten = _rewrite_runtime_html_content(
+        b'<html><head></head><body><script src="/app.js"></script><a href="/api/v1/docs">Docs</a></body></html>',
+        content_type="text/html; charset=utf-8",
+        run_id="run-1",
+        artifact_key="produced_outcome",
+        manifest=_process_manifest(),
+    ).decode("utf-8")
+
+    assert "/runtime/protocol-runs/run-1/artifacts/produced_outcome/app/app.js" in rewritten
+    assert "/runtime/protocol-runs/run-1/artifacts/produced_outcome/api/docs" in rewritten
+    assert "window.OCTOPUS_RUNTIME" in rewritten
+    assert "window.fetch" in rewritten
+
+
+def test_artifact_runtime_expands_manifest_port_placeholders():
+    manifest = _process_manifest().model_copy(update={
+        "start_command": (
             "mvn spring-boot:run "
             "-Dserver.port=${PORT:8080} "
             "-Dalt.port=${PORT:-8080} "
             "-Dplain=${PORT} "
             "-Dbare=$PORT"
         ),
-        port_env="PORT",
-        endpoints=[{"endpoint_kind": "docs", "path": "/api/docs", "label": "API docs"}],
-        smoke_test=["GET /health returns 200"],
-    )
+        "port_env": "PORT",
+    })
 
     command = artifact_runtime._command_for(manifest, 49152)
 

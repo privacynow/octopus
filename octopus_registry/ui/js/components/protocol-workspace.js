@@ -157,7 +157,7 @@ function _renderArtifactRuntimeDialogBody({
     const intro = document.createElement('p');
     intro.className = 'quiet-note';
     intro.textContent = snapshot?.manifestAvailable
-        ? `Runtime controls for ${artifactLabel || artifactKey}. Use Open app to exercise the product, Health to verify it, and Download zip to keep the package.`
+        ? `App controls for ${artifactLabel || artifactKey}. Octopus updates this panel while the app starts; use Open app when it is ready, and Logs when startup needs diagnosis.`
         : 'This artifact does not declare a runtime. You can still browse files or download the package.';
     body.appendChild(intro);
 
@@ -190,6 +190,13 @@ function _renderArtifactRuntimeDialogBody({
         healthPanel.appendChild(_runtimeFact('HTTP status', health.status_code || 'No response'));
         healthPanel.appendChild(_runtimeFact('Message', health.message || 'No health message'));
         body.appendChild(healthPanel);
+    }
+
+    if (['starting', 'running'].includes(status) && health && !health.ok) {
+        const pending = document.createElement('p');
+        pending.className = 'quiet-note';
+        pending.textContent = 'The app process is running, but the health check has not passed yet. This panel will keep checking automatically.';
+        body.appendChild(pending);
     }
 
     const events = Array.isArray(snapshot?.events) ? snapshot.events : [];
@@ -249,14 +256,10 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     closeBtn.type = 'button';
     closeBtn.className = 'btn';
     closeBtn.textContent = 'Close';
-    const refreshBtn = document.createElement('button');
-    refreshBtn.type = 'button';
-    refreshBtn.className = 'btn';
-    refreshBtn.textContent = 'Refresh';
     const healthBtn = document.createElement('button');
     healthBtn.type = 'button';
     healthBtn.className = 'btn';
-    healthBtn.textContent = 'Health';
+    healthBtn.textContent = 'Check health';
     const logsBtn = document.createElement('button');
     logsBtn.type = 'button';
     logsBtn.className = 'btn';
@@ -285,14 +288,38 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     deleteBtn.textContent = 'Delete';
 
     const view = UI.showDialog(`Runtime: ${artifactLabel || artifactKey}`, body, {
-        actions: [closeBtn, refreshBtn, healthBtn, logsBtn, startBtn, openBtn, stopBtn, archiveBtn, deleteBtn],
+        actions: [startBtn, openBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn, closeBtn],
         maxWidth: '820px',
     });
-    closeBtn.addEventListener('click', () => view.close());
 
     let latestSnapshot = null;
     let latestHealth = null;
     let latestLogs = null;
+    let refreshInFlight = false;
+    let autoPollTimer = null;
+
+    const dialogOpen = () => document.body.contains(view.overlay);
+
+    const runtimeNeedsPolling = () => {
+        const status = String(latestSnapshot?.runtime?.status || '').toLowerCase();
+        if (status === 'starting') return true;
+        if (status === 'running' && (!latestHealth || latestHealth.ok !== true)) return true;
+        return false;
+    };
+
+    const stopAutoPoll = () => {
+        if (autoPollTimer) {
+            window.clearInterval(autoPollTimer);
+            autoPollTimer = null;
+        }
+    };
+
+    const originalClose = view.close;
+    view.close = () => {
+        stopAutoPoll();
+        originalClose();
+    };
+    closeBtn.addEventListener('click', () => view.close());
 
     const render = () => {
         const nextBody = _renderArtifactRuntimeDialogBody({
@@ -316,13 +343,19 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
         logsBtn.hidden = !manifestAvailable;
         archiveBtn.hidden = !manifestAvailable || status === 'running';
         deleteBtn.hidden = !manifestAvailable || status === 'running';
+        if (!runtimeNeedsPolling()) stopAutoPoll();
     };
 
     const refresh = async ({ health = false, logs = false } = {}) => {
-        refreshBtn.disabled = true;
+        if (refreshInFlight || !dialogOpen()) return;
+        refreshInFlight = true;
+        healthBtn.disabled = true;
+        startBtn.disabled = true;
         try {
             latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
-            if (health && latestSnapshot?.runtime) {
+            const status = String(latestSnapshot?.runtime?.status || '').toLowerCase();
+            const shouldCheckHealth = health || status === 'running';
+            if (shouldCheckHealth && latestSnapshot?.runtime) {
                 latestHealth = await API.getProtocolRunArtifactRuntimeHealth(runId, artifactKey);
                 latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
             }
@@ -334,21 +367,23 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
             body.replaceChildren(UI.createErrorCard('Failed to load runtime status.', () => refresh()));
             UI.reportError('Failed to load runtime status', err, { context: 'Artifact runtime status failed' });
         } finally {
-            refreshBtn.disabled = false;
+            refreshInFlight = false;
+            healthBtn.disabled = false;
+            startBtn.disabled = false;
         }
     };
 
-    refreshBtn.addEventListener('click', () => void refresh());
     healthBtn.addEventListener('click', () => void refresh({ health: true }));
     logsBtn.addEventListener('click', () => void refresh({ logs: true }));
     startBtn.addEventListener('click', async () => {
         startBtn.disabled = true;
         try {
             await API.startProtocolRunArtifactRuntime(runId, artifactKey);
-            UI.notify('Runtime started.', 'success');
+            UI.notify('App is starting. Status updates automatically.', 'success');
             latestHealth = null;
             latestLogs = null;
             await refresh();
+            startAutoPoll();
         } catch (err) {
             UI.reportError('Failed to start artifact runtime', err, { context: 'Artifact runtime start failed' });
         } finally {
@@ -394,7 +429,23 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
         }
     });
 
+    const startAutoPoll = () => {
+        if (autoPollTimer || !dialogOpen()) return;
+        autoPollTimer = window.setInterval(() => {
+            if (!dialogOpen()) {
+                stopAutoPoll();
+                return;
+            }
+            if (!runtimeNeedsPolling()) {
+                stopAutoPoll();
+                return;
+            }
+            void refresh({ logs: Boolean(latestLogs?.log_tail) });
+        }, 5000);
+    };
+
     await refresh();
+    startAutoPoll();
 }
 
 function _protocolArtifactActionRow(runId, artifact, definition = null, {
@@ -405,13 +456,14 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
     const available = !missing && artifact?.exists !== false;
     const browsable = available && UI.isLikelyDirectoryArtifactPath(displayPath);
+    const showStorageOpen = !runtimeExpected;
     const actionRow = UI.createArtifactActionRow({
-        previewable: available && _protocolArtifactPreviewable(artifact),
-        previewHref: available && _protocolArtifactPreviewable(artifact)
+        previewable: showStorageOpen && available && _protocolArtifactPreviewable(artifact),
+        previewHref: showStorageOpen && available && _protocolArtifactPreviewable(artifact)
             ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { preview: true })
             : '',
         previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
-        openHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
+        openHref: showStorageOpen && available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
         browseHref: browsable ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { browse: true }) : '',
         downloadHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }) : '',
         copyPathText: displayPath,
@@ -468,38 +520,75 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
     }
     const runtimeEligible = browsable || Boolean(runtimeExpected);
     if (runtimeEligible) {
+        actionRow.classList.add('artifact-action-row-runtime');
+        if (prominentRuntime) actionRow.classList.add('artifact-action-row-primary-runtime');
         const runtimeBtn = document.createElement('button');
         runtimeBtn.type = 'button';
         runtimeBtn.className = prominentRuntime ? 'btn btn-sm btn-primary is-primary-artifact-action' : 'btn btn-sm btn-primary';
-        runtimeBtn.textContent = prominentRuntime ? 'Start primary app' : 'Start app';
+        runtimeBtn.classList.add('artifact-app-primary-action');
+        runtimeBtn.textContent = 'Start app';
         runtimeBtn.hidden = !runtimeExpected;
         const runtimeStatus = document.createElement('button');
         runtimeStatus.type = 'button';
         runtimeStatus.className = 'btn btn-sm';
-        runtimeStatus.textContent = 'Runtime';
+        runtimeStatus.classList.add('artifact-app-detail-action');
+        runtimeStatus.textContent = 'App details';
         runtimeStatus.hidden = !runtimeExpected;
         const stopRuntime = document.createElement('button');
         stopRuntime.type = 'button';
         stopRuntime.className = 'btn btn-sm';
+        stopRuntime.classList.add('artifact-app-stop-action');
         stopRuntime.textContent = 'Stop app';
         stopRuntime.hidden = true;
         const openRuntime = document.createElement('a');
         openRuntime.href = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
         openRuntime.className = 'btn btn-sm';
+        openRuntime.classList.add('artifact-app-primary-action');
         openRuntime.target = '_blank';
         openRuntime.rel = 'noreferrer noopener';
         openRuntime.textContent = 'Open app';
         openRuntime.hidden = true;
         openRuntime.addEventListener('click', (event) => event.stopPropagation());
+        let currentRuntimeStatus = '';
+        let runtimePollTimer = null;
+        let runtimePollInFlight = false;
+        const stopRuntimePoll = () => {
+            if (runtimePollTimer) {
+                window.clearInterval(runtimePollTimer);
+                runtimePollTimer = null;
+            }
+        };
+        const scheduleRuntimePoll = () => {
+            if (!['starting', 'running'].includes(currentRuntimeStatus)) {
+                stopRuntimePoll();
+                return;
+            }
+            if (runtimePollTimer) return;
+            runtimePollTimer = window.setInterval(() => {
+                if (!document.body.contains(actionRow)) {
+                    stopRuntimePoll();
+                    return;
+                }
+                void refreshRuntimeState();
+            }, 5000);
+        };
         const setRuntimeState = (runtime = {}) => {
             const status = String(runtime?.status || '').toLowerCase();
+            currentRuntimeStatus = status;
             const configured = status && status !== 'not_configured';
             runtimeStatus.hidden = !configured && !runtimeExpected;
             runtimeBtn.hidden = (!configured && !runtimeExpected) || ['running', 'starting', 'archived', 'deleted'].includes(status);
+            runtimeBtn.textContent = status === 'failed' ? 'Restart app' : 'Start app';
             openRuntime.hidden = status !== 'running';
+            openRuntime.className = prominentRuntime
+                ? 'btn btn-sm btn-primary is-primary-artifact-action artifact-app-primary-action'
+                : 'btn btn-sm btn-primary artifact-app-primary-action';
             stopRuntime.hidden = !['running', 'starting'].includes(status);
+            scheduleRuntimePoll();
         };
         const refreshRuntimeState = async () => {
+            if (runtimePollInFlight) return;
+            runtimePollInFlight = true;
             try {
                 const status = await API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key);
                 setRuntimeState(status?.runtime || {});
@@ -508,6 +597,9 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
                 runtimeStatus.hidden = !runtimeExpected;
                 openRuntime.hidden = true;
                 stopRuntime.hidden = true;
+                stopRuntimePoll();
+            } finally {
+                runtimePollInFlight = false;
             }
         };
         runtimeBtn.addEventListener('click', async (event) => {
@@ -517,17 +609,13 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
             try {
                 const result = await API.startProtocolRunArtifactRuntime(runId, artifact.artifact_key);
                 const runtime = result?.runtime || {};
-                const target = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
-                UI.notify(result?.message || 'Artifact runtime started.', result?.ok === false ? 'warning' : 'success');
+                UI.notify(result?.message || 'App is starting. Open app appears when it is running.', result?.ok === false ? 'warning' : 'success');
                 setRuntimeState(runtime);
-                if (String(runtime.status || '').toLowerCase() === 'running' || result?.ok !== false) {
-                    window.location.assign(target);
-                }
             } catch (err) {
                 UI.reportError('Failed to start artifact app', err, { context: 'Artifact runtime start failed' });
             } finally {
                 runtimeBtn.disabled = false;
-                runtimeBtn.textContent = prominentRuntime ? 'Start primary app' : 'Start app';
+                runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';
             }
         });
         actionRow.insertBefore(runtimeBtn, actionRow.firstChild);
@@ -556,7 +644,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
                 stopRuntime.textContent = 'Stop app';
             }
         });
-        actionRow.insertBefore(stopRuntime, openRuntime.nextSibling);
+        actionRow.insertBefore(stopRuntime, runtimeStatus.nextSibling);
         void refreshRuntimeState();
     }
     return actionRow;

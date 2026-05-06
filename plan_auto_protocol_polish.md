@@ -2,13 +2,13 @@
 
 ## Status
 
-Execution-ready plan. No implementation has been performed from this document yet.
+Implemented in this branch as the runnable-artifact polish workstream. Keep this
+document as the execution record and QA checklist for future refinement.
 
-Prerequisite before implementation: close the current Auto Protocol work by
-updating the shipped user/developer docs and verifying the Telegram Web flow in
-real Safari. The runnable-artifact work should start only after Registry and
-Telegram both present the existing Auto Protocol lifecycle in a human-usable
-way.
+The prerequisite Auto Protocol closeout was completed before this workstream:
+user/developer docs were updated, Telegram Web was verified in real Safari, and
+the existing Auto Protocol lifecycle remained shared between Registry and
+Telegram.
 
 ## Problem Statement
 
@@ -32,6 +32,21 @@ At the same time, multi-file artifacts must remain available as inspectable and 
 
 The platform also needs faster feedback. We cannot burn ten or more minutes on every local test run, and we cannot lower the quality bar by skipping tests. Octopus must support focused, fast tests during iteration and a full suite that is bounded enough for regular CI.
 
+Baseline clarification from code review:
+
+- Directory artifacts already support inline file serving, browse pages, and
+  zip download through the existing protocol artifact content route.
+- Directory artifacts with a package-root `index.html` already open that file
+  inline when browse mode is not forced.
+- The missing product capability is not basic zip/file serving. The missing
+  capability is first-class runtime lifecycle and routing for artifacts that
+  need a process, an API, a UI, health checks, logs, and user-visible start/stop
+  controls.
+- Telegram links already honor configured public Registry URL environment
+  variables. The remaining requirement is consistent device-reachable runtime
+  links, clear localhost-only warnings, and no new runtime links that bypass the
+  existing public URL configuration path.
+
 ## Context and Lessons Learned
 
 ### Auto Protocol generation can produce serious outputs, but file storage is not enough
@@ -49,6 +64,12 @@ The payments and onboarding risk-engine protocol produced a credible package:
 - Maven tests and release evidence.
 
 The package was valuable, but the default user experience exposed it as a folder. A nontechnical or product evaluator should not have to infer which file starts the app, what command runs the backend, what port is used, or how the UI talks to the API.
+
+Current artifact serving already does the right thing for simple static
+packages when `index.html` is at the artifact package root. This plan preserves
+that behavior. It adds the missing runtime path for packages where the primary
+outcome is not a root static file: API-backed systems, Java/Maven services,
+multi-directory apps, and generated products whose UI must talk to a backend.
 
 ### Primary artifact surfacing improved, but the next click matters
 
@@ -155,6 +176,11 @@ This preserves the architecture:
 
 Registry must not become a second bot runtime. It must not run generated artifact processes. The bot must not invent its own user-facing routing surface.
 
+For runtime traffic, Registry may proxy standard HTTP requests and responses to
+the bot container through the existing management/control relationship. That
+proxy is user-facing routing, not process execution. All artifact processes run
+inside the bot container.
+
 ### Decision 4: Runnable artifacts need a runtime instance record
 
 The existing protocol artifact record describes what was produced. It does not describe a live process. We need a persisted runtime instance record linked to:
@@ -200,6 +226,12 @@ Controls appear according to runtime state and permissions.
 
 Telegram should not receive dead localhost links. It should receive Registry-routed links using the configured public base URL.
 
+Existing Telegram protocol links already prefer `BOT_REGISTRY_PUBLIC_URL`,
+`OCTOPUS_REGISTRY_PUBLIC_URL`, or `REGISTRY_PUBLIC_URL` when configured. Runtime
+links must use the same source of truth instead of adding another link builder.
+In localhost-only mode, Telegram must either label the link as host-local or
+avoid presenting it as remotely usable.
+
 Telegram cards for runnable artifacts should show:
 
 - Open app.
@@ -224,6 +256,11 @@ Minimum acceptance evidence:
 If the runtime cannot start, the reviewer should send back unless the artifact contract explicitly says it is not runnable.
 
 This must be enforced as product state, not only prompt language. If a runnable artifact reaches final acceptance without linked runtime events for start, health, and smoke exercise, the engine should block acceptance or mark the run as needing runtime evidence.
+
+Existing protocol records already retain task `summary`, task `full_text`,
+transition decisions, review rounds, and previous review feedback. This plan
+extends those records in place with runtime evidence references. It must not add
+a separate review-history model that can diverge from protocol transitions.
 
 ### Decision 9: Artifact runtime cleanup is part of platform hygiene
 
@@ -584,6 +621,11 @@ For a static game:
 - `ui_path: "/index.html"` or `/`
 - asset integrity list
 
+The manifest is required for process-backed runtimes and recommended for static
+packages. A static package with a root `index.html` can still open through the
+existing artifact content behavior. Adding a manifest makes its lifecycle,
+Telegram actions, and review evidence explicit.
+
 ### Stage and review guidance
 
 Generated protocols that promise runnable systems should include:
@@ -897,12 +939,13 @@ Set a numeric budget in team policy. The target should be minutes, not tens of m
 
 Actions:
 
+- Measure full-suite wall time before reorganizing fixtures or CI.
 - Identify slow tests with timing output.
 - Remove accidental sleeps.
 - Replace live waits with polling on observed state.
 - Use fake runtime supervisor for most tests.
 - Share immutable fixtures safely.
-- Parallelize with isolated DB schemas or cheaper fixture reset where proven equivalent.
+- Parallelize with isolated DB schemas or cheaper fixture reset where proven equivalent. Current tests use a harness-owned Postgres database and broad autouse truncation, which is a likely bottleneck, but timing data must guide the actual changes.
 - Keep one or two real integration tests for confidence.
 
 ### Acceptance tests for this program
@@ -1231,13 +1274,32 @@ These are not part of this plan:
 These must be answered during Phase 1 before implementation proceeds:
 
 1. Which bot owns a runtime when multiple agents contributed to the artifact?
+   Initial rule: use the agent that produced the artifact when known; otherwise
+   use the run entry agent. Persist the selected bot/agent on the runtime
+   instance so future stop/health/proxy actions do not re-infer ownership.
 2. What port range should the runtime supervisor reserve?
-3. How should Registry proxy streaming responses and websockets for artifacts that declare those transports?
+   Initial rule: supervisor allocates from a configurable bot-local range and
+   never trusts a manifest-selected public port.
+3. How should Registry proxy streaming responses and websockets for artifacts
+   that declare those transports?
+   Initial rule: standard HTTP UI/API is required first. Unsupported streaming
+   or websocket declarations produce a clear blocked response rather than a
+   broken link.
 4. What is the default idle timeout?
+   Initial rule: use conservative runtime policy defaults in the SDK record and
+   persist them per instance.
 5. What public URL config is required for Telegram links in local deployments?
+   Initial rule: reuse the existing Registry public URL environment variables
+   and show localhost-only language when the resolved base is localhost.
 6. Which actors may start, stop, archive, or delete runtime instances?
+   Initial rule: use the same protocol-run visibility/access path for start and
+   status; restrict delete/archive to actors that can mutate the run/artifact.
 7. How much runtime log content is persisted versus streamed from bot workspace?
+   Initial rule: persist event summaries and bounded log tails; keep full logs
+   in the bot workspace while the runtime exists.
 8. What is the CI wall-time budget for the full suite?
+   Initial rule: measure first, then set a budget in team policy before changing
+   CI gates.
 
 ## First Representative Probe
 

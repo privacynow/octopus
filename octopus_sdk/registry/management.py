@@ -13,6 +13,12 @@ from octopus_sdk.protocols.auto_design import (
     ProtocolAutoDesignModelRequestRecord,
     ProtocolAutoDesignModelResponseRecord,
 )
+from octopus_sdk.protocols.models import (
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeHealthRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeManifestRecord,
+)
 from octopus_sdk.registry.models import ExecutionStateRecord, RegistryJsonRecord, RegistryRecordModel, utcnow_iso
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.workflows.conversation import (
@@ -75,6 +81,11 @@ ManagementOperation = Literal[
     "publish_provider_guidance",
     "archive_provider_guidance",
     "design_auto_protocol",
+    "start_artifact_runtime",
+    "stop_artifact_runtime",
+    "artifact_runtime_health",
+    "artifact_runtime_logs",
+    "artifact_runtime_fetch",
 ]
 
 ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
@@ -112,6 +123,11 @@ ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
     "publish_provider_guidance",
     "archive_provider_guidance",
     "design_auto_protocol",
+    "start_artifact_runtime",
+    "stop_artifact_runtime",
+    "artifact_runtime_health",
+    "artifact_runtime_logs",
+    "artifact_runtime_fetch",
 )
 
 ManagementErrorCode = Literal[
@@ -1062,6 +1078,52 @@ class DesignAutoProtocolRequest(RegistryRecordModel):
     request: ProtocolAutoDesignModelRequestRecord
 
 
+class StartArtifactRuntimeRequest(RegistryRecordModel):
+    operation: Literal["start_artifact_runtime"] = "start_artifact_runtime"
+    runtime_instance_id: str
+    protocol_run_id: str
+    artifact_key: str
+    artifact_path: str
+    manifest_path: str = ""
+    manifest: ProtocolArtifactRuntimeManifestRecord
+    actor_ref: str = ""
+
+
+class StopArtifactRuntimeRequest(RegistryRecordModel):
+    operation: Literal["stop_artifact_runtime"] = "stop_artifact_runtime"
+    runtime_instance_id: str
+    protocol_run_id: str
+    artifact_key: str
+    actor_ref: str = ""
+
+
+class ArtifactRuntimeHealthRequest(RegistryRecordModel):
+    operation: Literal["artifact_runtime_health"] = "artifact_runtime_health"
+    runtime_instance_id: str
+    protocol_run_id: str
+    artifact_key: str
+
+
+class ArtifactRuntimeLogsRequest(RegistryRecordModel):
+    operation: Literal["artifact_runtime_logs"] = "artifact_runtime_logs"
+    runtime_instance_id: str
+    protocol_run_id: str
+    artifact_key: str
+    max_bytes: int = Field(default=12000, ge=1000, le=120000)
+
+
+class ArtifactRuntimeFetchRequest(RegistryRecordModel):
+    operation: Literal["artifact_runtime_fetch"] = "artifact_runtime_fetch"
+    runtime_instance_id: str
+    protocol_run_id: str
+    artifact_key: str
+    method: str = "GET"
+    path: str = "/"
+    query_string: str = ""
+    headers: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    body_base64: str = ""
+
+
 ManagementRequestPayload = Annotated[
     ListCatalogSkillsRequest
     | SearchCatalogSkillsRequest
@@ -1096,7 +1158,12 @@ ManagementRequestPayload = Annotated[
     | RejectProviderGuidanceRequest
     | PublishProviderGuidanceRequest
     | ArchiveProviderGuidanceRequest
-    | DesignAutoProtocolRequest,
+    | DesignAutoProtocolRequest
+    | StartArtifactRuntimeRequest
+    | StopArtifactRuntimeRequest
+    | ArtifactRuntimeHealthRequest
+    | ArtifactRuntimeLogsRequest
+    | ArtifactRuntimeFetchRequest,
     Field(discriminator="operation"),
 ]
 
@@ -1276,6 +1343,35 @@ class DesignAutoProtocolResult(RegistryRecordModel):
     response: ProtocolAutoDesignModelResponseRecord
 
 
+class StartArtifactRuntimeResult(RegistryRecordModel):
+    operation: Literal["start_artifact_runtime"] = "start_artifact_runtime"
+    result: ProtocolArtifactRuntimeActionResultRecord
+
+
+class StopArtifactRuntimeResult(RegistryRecordModel):
+    operation: Literal["stop_artifact_runtime"] = "stop_artifact_runtime"
+    result: ProtocolArtifactRuntimeActionResultRecord
+
+
+class ArtifactRuntimeHealthResult(RegistryRecordModel):
+    operation: Literal["artifact_runtime_health"] = "artifact_runtime_health"
+    health: ProtocolArtifactRuntimeHealthRecord
+
+
+class ArtifactRuntimeLogsResult(RegistryRecordModel):
+    operation: Literal["artifact_runtime_logs"] = "artifact_runtime_logs"
+    runtime: ProtocolArtifactRuntimeInstanceRecord
+    log_tail: str = ""
+
+
+class ArtifactRuntimeFetchResult(RegistryRecordModel):
+    operation: Literal["artifact_runtime_fetch"] = "artifact_runtime_fetch"
+    runtime: ProtocolArtifactRuntimeInstanceRecord | None = None
+    status_code: int = 0
+    headers: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    body_base64: str = ""
+
+
 ManagementResultPayload = Annotated[
     ListCatalogSkillsResult
     | SearchCatalogSkillsResult
@@ -1310,7 +1406,12 @@ ManagementResultPayload = Annotated[
     | RejectProviderGuidanceResult
     | PublishProviderGuidanceResult
     | ArchiveProviderGuidanceResult
-    | DesignAutoProtocolResult,
+    | DesignAutoProtocolResult
+    | StartArtifactRuntimeResult
+    | StopArtifactRuntimeResult
+    | ArtifactRuntimeHealthResult
+    | ArtifactRuntimeLogsResult
+    | ArtifactRuntimeFetchResult,
     Field(discriminator="operation"),
 ]
 

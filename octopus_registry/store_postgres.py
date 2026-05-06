@@ -23,6 +23,8 @@ from octopus_sdk.protocols import (
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
@@ -1442,6 +1444,46 @@ class RegistryPostgresStore(AbstractRegistryStore):
         access: ProtocolAccessContextRecord,
     ) -> list[ProtocolTransitionRecord]:
         return self._protocol_store.get_protocol_run_timeline(run_id, access=access)
+
+    def get_protocol_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord | None:
+        return self._protocol_store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+
+    def save_protocol_artifact_runtime(
+        self,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord:
+        return self._protocol_store.save_protocol_artifact_runtime(runtime, access=access)
+
+    def append_protocol_artifact_runtime_event(
+        self,
+        event: ProtocolArtifactRuntimeEventRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeEventRecord:
+        return self._protocol_store.append_protocol_artifact_runtime_event(event, access=access)
+
+    def list_protocol_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        return self._protocol_store.list_protocol_artifact_runtime_events(
+            run_id,
+            artifact_key,
+            access=access,
+            limit=limit,
+        )
 
     def export_protocol_run(
         self,

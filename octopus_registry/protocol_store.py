@@ -29,6 +29,9 @@ from octopus_sdk.protocols import (
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeManifestRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
@@ -370,6 +373,63 @@ class ProtocolPostgresAdapter:
                 "state": row["state"],
                 "supersedes_protocol_artifact_id": row["supersedes_protocol_artifact_id"],
                 "created_at": row["created_at"],
+            },
+        )
+
+    @staticmethod
+    def _protocol_artifact_runtime_from_row(row: Mapping[str, object]) -> ProtocolArtifactRuntimeInstanceRecord:
+        manifest_json = row.get("manifest_json") or {}
+        manifest = None
+        if isinstance(manifest_json, Mapping) and manifest_json:
+            try:
+                manifest = ProtocolArtifactRuntimeManifestRecord.model_validate(manifest_json)
+            except Exception:
+                manifest = None
+        return record(
+            ProtocolArtifactRuntimeInstanceRecord,
+            {
+                "runtime_instance_id": row["runtime_instance_id"],
+                "protocol_run_id": row["protocol_run_id"],
+                "artifact_key": row["artifact_key"],
+                "agent_id": row.get("agent_id", ""),
+                "status": row.get("status", "not_configured"),
+                "manifest": manifest,
+                "manifest_path": row.get("manifest_path", ""),
+                "artifact_path": row.get("artifact_path", ""),
+                "runtime_url": row.get("runtime_url", ""),
+                "ui_url": row.get("ui_url", ""),
+                "api_url": row.get("api_url", ""),
+                "health_url": row.get("health_url", ""),
+                "internal_url": row.get("internal_url", ""),
+                "pid": row.get("pid", 0),
+                "port": row.get("port", 0),
+                "started_by": row.get("started_by", ""),
+                "stopped_by": row.get("stopped_by", ""),
+                "failure_code": row.get("failure_code", ""),
+                "failure_detail": row.get("failure_detail", ""),
+                "log_tail": row.get("log_tail", ""),
+                "created_at": row.get("created_at", ""),
+                "updated_at": row.get("updated_at", ""),
+                "started_at": row.get("started_at", ""),
+                "stopped_at": row.get("stopped_at", ""),
+                "expires_at": row.get("expires_at", ""),
+            },
+        )
+
+    @staticmethod
+    def _protocol_artifact_runtime_event_from_row(row: Mapping[str, object]) -> ProtocolArtifactRuntimeEventRecord:
+        return record(
+            ProtocolArtifactRuntimeEventRecord,
+            {
+                "runtime_event_id": row["runtime_event_id"],
+                "runtime_instance_id": row["runtime_instance_id"],
+                "protocol_run_id": row["protocol_run_id"],
+                "artifact_key": row["artifact_key"],
+                "event_kind": row["event_kind"],
+                "actor_ref": row.get("actor_ref", ""),
+                "summary": row.get("summary", ""),
+                "metadata_json": row.get("metadata_json", {}),
+                "created_at": row.get("created_at", ""),
             },
         )
 
@@ -3102,6 +3162,197 @@ class ProtocolPostgresAdapter:
             if detail is None:
                 raise KeyError(run_id)
             return detail.transitions
+
+    def get_protocol_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord | None:
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_artifact_runtime_instances
+                WHERE protocol_run_id = %s
+                  AND artifact_key = %s
+                  AND status <> 'deleted'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (run_id, artifact_key),
+            )
+            return self._protocol_artifact_runtime_from_row(row) if row is not None else None
+
+    def save_protocol_artifact_runtime(
+        self,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin", "agent")):
+            raise PermissionError("Protocol runtime mutation requires operator, admin, or agent access.")
+        with write_tx(self._connect) as conn:
+            detail = self._protocol_run_detail_in_tx(conn, runtime.protocol_run_id, access=access)
+            if detail is None:
+                raise KeyError(runtime.protocol_run_id)
+            now = utcnow_iso()
+            existing = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT runtime_instance_id, created_at
+                FROM {SCHEMA}.protocol_artifact_runtime_instances
+                WHERE runtime_instance_id = %s
+                """,
+                (runtime.runtime_instance_id,),
+            )
+            created_at = str(existing.get("created_at", "")) if existing is not None else (runtime.created_at or now)
+            manifest_json = runtime.manifest.model_dump(mode="json") if runtime.manifest is not None else {}
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_artifact_runtime_instances (
+                        runtime_instance_id, protocol_run_id, artifact_key, agent_id, status,
+                        manifest_json, manifest_path, artifact_path, runtime_url, ui_url, api_url,
+                        health_url, internal_url, pid, port, started_by, stopped_by,
+                        failure_code, failure_detail, log_tail, created_at, updated_at,
+                        started_at, stopped_at, expires_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (runtime_instance_id) DO UPDATE SET
+                        agent_id = EXCLUDED.agent_id,
+                        status = EXCLUDED.status,
+                        manifest_json = EXCLUDED.manifest_json,
+                        manifest_path = EXCLUDED.manifest_path,
+                        artifact_path = EXCLUDED.artifact_path,
+                        runtime_url = EXCLUDED.runtime_url,
+                        ui_url = EXCLUDED.ui_url,
+                        api_url = EXCLUDED.api_url,
+                        health_url = EXCLUDED.health_url,
+                        internal_url = EXCLUDED.internal_url,
+                        pid = EXCLUDED.pid,
+                        port = EXCLUDED.port,
+                        started_by = EXCLUDED.started_by,
+                        stopped_by = EXCLUDED.stopped_by,
+                        failure_code = EXCLUDED.failure_code,
+                        failure_detail = EXCLUDED.failure_detail,
+                        log_tail = EXCLUDED.log_tail,
+                        updated_at = EXCLUDED.updated_at,
+                        started_at = EXCLUDED.started_at,
+                        stopped_at = EXCLUDED.stopped_at,
+                        expires_at = EXCLUDED.expires_at
+                    """,
+                    (
+                        runtime.runtime_instance_id,
+                        runtime.protocol_run_id,
+                        runtime.artifact_key,
+                        runtime.agent_id,
+                        runtime.status,
+                        jsonb(manifest_json),
+                        runtime.manifest_path,
+                        runtime.artifact_path,
+                        runtime.runtime_url,
+                        runtime.ui_url,
+                        runtime.api_url,
+                        runtime.health_url,
+                        runtime.internal_url,
+                        runtime.pid,
+                        runtime.port,
+                        runtime.started_by,
+                        runtime.stopped_by,
+                        runtime.failure_code,
+                        runtime.failure_detail,
+                        runtime.log_tail,
+                        created_at,
+                        runtime.updated_at or now,
+                        runtime.started_at,
+                        runtime.stopped_at,
+                        runtime.expires_at,
+                    ),
+                )
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {SCHEMA}.protocol_artifact_runtime_instances WHERE runtime_instance_id = %s",
+                (runtime.runtime_instance_id,),
+            )
+            if row is None:
+                raise RuntimeError("Failed to persist artifact runtime.")
+            return self._protocol_artifact_runtime_from_row(row)
+
+    def append_protocol_artifact_runtime_event(
+        self,
+        event: ProtocolArtifactRuntimeEventRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeEventRecord:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin", "agent", "auditor")):
+            raise PermissionError("Protocol runtime event mutation requires protocol access.")
+        with write_tx(self._connect) as conn:
+            detail = self._protocol_run_detail_in_tx(conn, event.protocol_run_id, access=access)
+            if detail is None:
+                raise KeyError(event.protocol_run_id)
+            runtime_event_id = event.runtime_event_id or uuid.uuid4().hex
+            created_at = event.created_at or utcnow_iso()
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_artifact_runtime_events (
+                        runtime_event_id, runtime_instance_id, protocol_run_id, artifact_key,
+                        event_kind, actor_ref, summary, metadata_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        runtime_event_id,
+                        event.runtime_instance_id,
+                        event.protocol_run_id,
+                        event.artifact_key,
+                        event.event_kind,
+                        event.actor_ref,
+                        event.summary,
+                        jsonb(event.metadata_json.as_dict()),
+                        created_at,
+                    ),
+                )
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {SCHEMA}.protocol_artifact_runtime_events WHERE runtime_event_id = %s",
+                (runtime_event_id,),
+            )
+            if row is None:
+                raise RuntimeError("Failed to persist artifact runtime event.")
+            return self._protocol_artifact_runtime_event_from_row(row)
+
+    def list_protocol_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_artifact_runtime_events
+                WHERE protocol_run_id = %s
+                  AND artifact_key = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (run_id, artifact_key, max(1, min(int(limit or 50), 200))),
+            )
+            return [self._protocol_artifact_runtime_event_from_row(row) for row in rows]
 
     def export_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunExportRecord:
         if not any(self._access_has_role(access, role) for role in ("operator", "auditor", "admin", "agent")):

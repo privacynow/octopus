@@ -62,7 +62,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
     const available = !missing && artifact?.exists !== false;
     const browsable = available && UI.isLikelyDirectoryArtifactPath(displayPath);
-    return UI.createArtifactActionRow({
+    const actionRow = UI.createArtifactActionRow({
         previewable: available && _protocolArtifactPreviewable(artifact),
         previewHref: available && _protocolArtifactPreviewable(artifact)
             ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { preview: true })
@@ -75,6 +75,41 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, { missin
         available,
         unavailableReason: missing ? 'Declared artifact, not produced yet.' : 'Artifact path is not available on this host.',
     });
+    if (browsable) {
+        const runtimeBtn = document.createElement('button');
+        runtimeBtn.type = 'button';
+        runtimeBtn.className = 'btn btn-sm btn-primary';
+        runtimeBtn.textContent = 'Start app';
+        runtimeBtn.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            runtimeBtn.disabled = true;
+            runtimeBtn.textContent = 'Starting...';
+            try {
+                const result = await API.startProtocolRunArtifactRuntime(runId, artifact.artifact_key);
+                const runtime = result?.runtime || {};
+                const target = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
+                UI.notify(result?.message || 'Artifact runtime started.', result?.ok === false ? 'warning' : 'success');
+                if (String(runtime.status || '').toLowerCase() === 'running' || result?.ok !== false) {
+                    window.open(target, '_blank', 'noopener,noreferrer');
+                }
+            } catch (err) {
+                UI.reportError('Failed to start artifact app', err, { context: 'Artifact runtime start failed' });
+            } finally {
+                runtimeBtn.disabled = false;
+                runtimeBtn.textContent = 'Start app';
+            }
+        });
+        actionRow.insertBefore(runtimeBtn, actionRow.firstChild);
+        const openRuntime = document.createElement('a');
+        openRuntime.href = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
+        openRuntime.className = 'btn btn-sm';
+        openRuntime.target = '_blank';
+        openRuntime.rel = 'noreferrer noopener';
+        openRuntime.textContent = 'Open app';
+        openRuntime.addEventListener('click', (event) => event.stopPropagation());
+        actionRow.insertBefore(openRuntime, runtimeBtn.nextSibling);
+    }
+    return actionRow;
 }
 
 function _artifactDefinitionPath(item) {

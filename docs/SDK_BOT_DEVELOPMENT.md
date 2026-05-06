@@ -111,6 +111,10 @@ Rules:
 - UI must not invent its own protocol/skill/guidance state machine
 - route changes must update docs and OpenAPI where applicable
 - artifact actions should use shared artifact helpers
+- runnable artifact actions should use the SDK/management runtime contracts:
+  Registry persists lifecycle state and user-facing URLs, while
+  `app/runtime/artifact_runtime.py` starts, stops, health-checks, logs, and
+  proxies HTTP from inside the bot runtime
 
 ## Skills
 

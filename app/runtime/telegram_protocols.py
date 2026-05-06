@@ -124,6 +124,26 @@ def protocol_artifact_url(
     return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content{suffix}"
 
 
+def protocol_artifact_runtime_url(
+    runtime: TelegramRuntime,
+    run_id: str,
+    artifact_key: str,
+    *,
+    registry_url: str = "",
+    path: str = "",
+) -> str:
+    base = _configured_registry_url(runtime, registry_url)
+    if not base:
+        return ""
+    run_token = quote(str(run_id or "").strip())
+    artifact_token = quote(str(artifact_key or "").strip())
+    if not run_token or not artifact_token:
+        return ""
+    tail = quote(str(path or "").strip().lstrip("/"))
+    suffix = f"/{tail}" if tail else "/"
+    return f"{base.rstrip('/')}/runtime/protocol-runs/{run_token}/artifacts/{artifact_token}/app{suffix}"
+
+
 def protocol_run_short_id(run_id: str) -> str:
     token = str(run_id or "").strip()
     return token[:8] if len(token) > 8 else token

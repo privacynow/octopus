@@ -360,6 +360,12 @@ def _protocol_artifact_links(runtime: TelegramRuntime, registry_url: str, run_id
             registry_url=registry_url,
             browse=True,
         ) if telegram_protocols.protocol_artifact_is_package(artifact) else "",
+        "runtime": telegram_protocols.protocol_artifact_runtime_url(
+            runtime,
+            run_id,
+            artifact_key,
+            registry_url=registry_url,
+        ) if telegram_protocols.protocol_artifact_is_package(artifact) else "",
         "download": telegram_protocols.protocol_artifact_url(
             runtime,
             run_id,
@@ -466,6 +472,7 @@ async def _send_protocol_artifact_preview(
         artifact_label=telegram_protocols.protocol_artifact_human_label(artifact),
         preview_link=preview_link,
         open_link=open_link,
+        runtime_link=links.get("runtime", ""),
         download_link=links.get("download", ""),
         artifact_ref=str(artifact_ref or ""),
         open_label=open_label,
@@ -1564,6 +1571,47 @@ async def handle_protocol_callback(runtime: TelegramRuntime, event, query) -> No
         return
     if action == "download":
         await _send_protocol_artifact_download(message, protocol_service, run_ref, artifact_ref)
+        return
+    if action in {"runtime_start", "runtime_stop", "runtime_status"}:
+        if not artifact_ref:
+            await message.reply_text("Choose an artifact first.")
+            return
+        try:
+            detail = await telegram_protocols.resolve_protocol_run_ref(protocol_service, run_ref or "latest")
+            artifact = telegram_protocols.resolve_protocol_artifact_ref(detail, artifact_ref)
+            artifact_key = str(getattr(artifact, "artifact_key", "") or "").strip()
+            if action == "runtime_start":
+                runtime_result = await protocol_service.start_artifact_runtime(detail.run.protocol_run_id, artifact_key)
+                status = str(runtime_result.status or "")
+                result_message = runtime_result.message
+            elif action == "runtime_stop":
+                runtime_result = await protocol_service.stop_artifact_runtime(detail.run.protocol_run_id, artifact_key)
+                status = str(runtime_result.status or "")
+                result_message = runtime_result.message
+            else:
+                health = await protocol_service.get_artifact_runtime_health(detail.run.protocol_run_id, artifact_key)
+                status = str(health.status or "")
+                result_message = health.message
+        except RegistryClientError as exc:
+            await message.reply_text(f"Artifact app action failed. {exc}")
+            return
+        except KeyError:
+            await message.reply_text("Run or artifact not found. Use /protocol recent and choose an artifact.")
+            return
+        rendered = telegram_presenters.protocol_artifact_runtime_message(
+            run_id=detail.run.protocol_run_id,
+            artifact_label=telegram_protocols.protocol_artifact_human_label(artifact),
+            status=status,
+            message=result_message,
+            runtime_link=telegram_protocols.protocol_artifact_runtime_url(
+                runtime,
+                detail.run.protocol_run_id,
+                artifact_key,
+                registry_url=registry_url,
+            ),
+            artifact_ref=str(artifact_ref or ""),
+        )
+        await message.reply_text(rendered.text, **rendered.kwargs())
         return
     if action == "export":
         await _send_protocol_export(message, protocol_service, run_ref)

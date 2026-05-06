@@ -1888,6 +1888,12 @@ def _build_plan(
             package.purpose.strip(),
             f"Quality bar: {package.quality_bar.strip()}",
             "Keep this stage focused on its owned artifact and avoid doing later-stage work early.",
+            (
+                "If the artifact is interactive or API-backed, package it as a runnable product: include a coherent user-facing UI/API, "
+                "tests or smoke steps, and octopus-runtime.json at the package root so Octopus can start it, proxy it, and let users try it."
+                if package.package_key == "implementation"
+                else ""
+            ),
         ]).strip()
         stages.append(_stage(
             work_key,
@@ -1931,6 +1937,7 @@ def _build_plan(
         "outcome_acceptance_reviewer",
         (
             "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
+            "If the primary artifact declares octopus-runtime.json, start or open the Octopus-managed runtime, exercise the UI/API, and record runtime evidence before accepting. "
             "Record final release evidence: what was inspected, what worked, what remains risky, and exact user-facing inspection steps. "
             "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
             "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."

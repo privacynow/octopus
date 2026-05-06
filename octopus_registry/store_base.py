@@ -42,6 +42,8 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
     ProtocolScenarioRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
     ProtocolTransitionRecord,
 )
 
@@ -898,6 +900,41 @@ class AbstractRegistryStore(Protocol):
         access: ProtocolAccessContextRecord,
     ) -> list[ProtocolTransitionRecord]:
         """Return transition history for one run."""
+
+    def get_protocol_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord | None:
+        """Return the current runtime instance for one run artifact."""
+
+    def save_protocol_artifact_runtime(
+        self,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord:
+        """Persist runtime instance state for one run artifact."""
+
+    def append_protocol_artifact_runtime_event(
+        self,
+        event: ProtocolArtifactRuntimeEventRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeEventRecord:
+        """Append a runtime lifecycle/audit event for one artifact."""
+
+    def list_protocol_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        """Return runtime lifecycle/audit events for one artifact."""
 
     def export_protocol_run(
         self,

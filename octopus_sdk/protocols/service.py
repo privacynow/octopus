@@ -18,6 +18,10 @@ from .launch import (
 )
 from .models import (
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeHealthRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeEventRecord,
     ProtocolDefinitionRecord,
     ProtocolRunInputFieldRecord,
     ProtocolRunLaunchFormRecord,
@@ -28,6 +32,7 @@ from .models import (
 )
 from .ports import (
     ProtocolArtifactAccessPort,
+    ProtocolArtifactRuntimePort,
     ProtocolCatalogPort,
     ProtocolInvocationPort,
     ProtocolObservationPort,
@@ -47,12 +52,14 @@ class ProtocolService:
         observer: ProtocolObservationPort | None = None,
         controller: ProtocolRunControlPort | None = None,
         artifact_access: ProtocolArtifactAccessPort | None = None,
+        artifact_runtime: ProtocolArtifactRuntimePort | None = None,
     ) -> None:
         self._catalog = catalog or registry
         self._invoker = invoker or registry
         self._observer = observer or registry
         self._controller = controller or registry
         self._artifact_access = artifact_access or registry
+        self._artifact_runtime = artifact_runtime or registry
 
     async def list_launchable(
         self,
@@ -157,6 +164,27 @@ class ProtocolService:
             artifact_key,
             download=download,
         )
+
+    async def get_artifact_runtime(self, run_id: str, artifact_key: str) -> ProtocolArtifactRuntimeInstanceRecord | None:
+        return await self._artifact_runtime.get_artifact_runtime(run_id, artifact_key)
+
+    async def start_artifact_runtime(self, run_id: str, artifact_key: str) -> ProtocolArtifactRuntimeActionResultRecord:
+        return await self._artifact_runtime.start_artifact_runtime(run_id, artifact_key)
+
+    async def stop_artifact_runtime(self, run_id: str, artifact_key: str) -> ProtocolArtifactRuntimeActionResultRecord:
+        return await self._artifact_runtime.stop_artifact_runtime(run_id, artifact_key)
+
+    async def get_artifact_runtime_health(self, run_id: str, artifact_key: str) -> ProtocolArtifactRuntimeHealthRecord:
+        return await self._artifact_runtime.get_artifact_runtime_health(run_id, artifact_key)
+
+    async def list_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        return await self._artifact_runtime.list_artifact_runtime_events(run_id, artifact_key, limit=limit)
 
     async def act_on_run(
         self,

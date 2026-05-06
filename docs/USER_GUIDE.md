@@ -263,6 +263,16 @@ Where supported, artifact actions should include preview, open, download, copy
 path, or package browsing. Missing or inconsistent artifact actions are product
 issues, not a normal user burden.
 
+Multi-file artifacts are always still packages. Use `Download` when you need the
+complete zip, and use `Contents` when you need to inspect files in place.
+
+Some artifacts are runnable products, such as browser games, analytics apps, or
+backend systems with an operator UI and APIs. When the package contains
+`octopus-runtime.json` or a static `index.html`, the run can show `Start app`
+and `Open app`. Octopus starts the process inside the bot runtime, routes the
+UI/API through the Registry, and keeps package browse/download actions available
+beside the live app. Stop the runtime when you are done testing it.
+
 ## Use Telegram
 
 Telegram has two roles today:

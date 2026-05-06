@@ -36,9 +36,14 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
     ProtocolTransitionRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeHealthRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeEventRecord,
     ProtocolTemplateCreateRecord,
     ProtocolTemplateSummaryRecord,
     ProtocolArtifactAccessPort,
+    ProtocolArtifactRuntimePort,
     ProtocolAuthoringPort,
     ProtocolAutoDesignSessionPort,
     ProtocolInvocationPort,
@@ -183,6 +188,7 @@ class RegistryClient(
     ProtocolInvocationPort,
     ProtocolObservationPort,
     ProtocolArtifactAccessPort,
+    ProtocolArtifactRuntimePort,
 ):
     """Async HTTP client wrapping the registry's /v1/ endpoints."""
 
@@ -758,6 +764,68 @@ class RegistryClient(
             f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/content",
             params=params,
         )
+
+    async def get_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeInstanceRecord | None:
+        result = await self._request(
+            "GET",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime",
+        )
+        runtime = result.get("runtime") if isinstance(result, dict) else None
+        return ProtocolArtifactRuntimeInstanceRecord.model_validate(runtime) if runtime else None
+
+    async def start_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeActionResultRecord:
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/start",
+            json={},
+        )
+        return ProtocolArtifactRuntimeActionResultRecord.model_validate(result)
+
+    async def stop_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeActionResultRecord:
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/stop",
+            json={},
+        )
+        return ProtocolArtifactRuntimeActionResultRecord.model_validate(result)
+
+    async def get_artifact_runtime_health(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeHealthRecord:
+        result = await self._request(
+            "GET",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/health",
+        )
+        return ProtocolArtifactRuntimeHealthRecord.model_validate(result)
+
+    async def list_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        result = await self._request(
+            "GET",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/events",
+            params={"limit": limit},
+        )
+        rows = result.get("items", result)
+        return [ProtocolArtifactRuntimeEventRecord.model_validate(item) for item in rows]
 
     async def list_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}/timeline")

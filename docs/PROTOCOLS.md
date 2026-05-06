@@ -249,6 +249,26 @@ The run page should show declared and produced artifacts clearly. Produced
 artifacts should offer preview, open, download, copy path, or package browsing
 where the host can resolve them.
 
+### Runnable artifacts
+
+If the expected output is an interactive product, the protocol should make that
+explicit. Examples include browser games, analytics SPAs, Java or Python
+services, and risk engines with a UI over public APIs.
+
+Runnable package artifacts should include `octopus-runtime.json` at the package
+root. Static browser packages may also be recognized from a root `index.html`.
+Process-backed packages should declare:
+
+- `runtime_kind`: `node`, `python`, `java`, `binary`, or `process`
+- `start_command`: the command the bot runtime runs inside the package
+- `ui_path`, `health_path`, and `api_base_path`
+- endpoint notes and smoke-test steps for reviewers
+
+Registry owns the user-facing URL, auth, status, and lifecycle. The bot runtime
+owns the process. Users should be able to start/open the app, exercise the UI or
+API, inspect logs/status, stop the runtime, and still download the artifact as a
+zip package.
+
 ## Starting A Run
 
 Runs start from the latest published protocol version, not unsaved draft edits.

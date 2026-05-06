@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import mimetypes
+import base64
 import copy
+import json
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
+import uuid
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -14,6 +18,9 @@ from pydantic import ValidationError
 from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeManifestRecord,
     ProtocolAutoDesignModelRequestRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
@@ -37,7 +44,20 @@ from octopus_sdk.protocols import (
     protocol_package_required_skill_names,
     protocol_package_to_text,
 )
-from octopus_sdk.registry.management import DesignAutoProtocolRequest, DesignAutoProtocolResult
+from octopus_sdk.registry.management import (
+    ArtifactRuntimeFetchRequest,
+    ArtifactRuntimeFetchResult,
+    ArtifactRuntimeHealthRequest,
+    ArtifactRuntimeHealthResult,
+    ArtifactRuntimeLogsRequest,
+    ArtifactRuntimeLogsResult,
+    DesignAutoProtocolRequest,
+    DesignAutoProtocolResult,
+    StartArtifactRuntimeRequest,
+    StartArtifactRuntimeResult,
+    StopArtifactRuntimeRequest,
+    StopArtifactRuntimeResult,
+)
 from octopus_sdk.registry.models import RegistryJsonRecord
 from octopus_sdk.skill_packages import (
     skill_document_from_text,
@@ -292,6 +312,95 @@ def build_protocol_router(
                 message=result.error_detail or "Auto Protocol planner failed.",
             )
         return result.payload.response
+
+    def _artifact_for_detail(detail, artifact_key: str) -> ProtocolArtifactRecord:
+        artifact = next(
+            (item for item in detail.artifacts if str(item.artifact_key or "").strip() == str(artifact_key or "").strip()),
+            None,
+        )
+        if artifact is None:
+            raise _protocol_http_error(
+                404,
+                error_code="PROTOCOL_ARTIFACT_NOT_FOUND",
+                message="Protocol artifact not found.",
+            )
+        return artifact
+
+    def _runtime_instance_id(run_id: str, artifact_key: str) -> str:
+        return uuid.uuid5(uuid.NAMESPACE_URL, f"octopus-runtime:{run_id}:{artifact_key}").hex
+
+    def _runtime_manifest_from_path(path: Path) -> tuple[ProtocolArtifactRuntimeManifestRecord | None, str]:
+        root = path if path.is_dir() else path.parent
+        manifest_path = root / "octopus-runtime.json"
+        if manifest_path.is_file():
+            try:
+                raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+                return ProtocolArtifactRuntimeManifestRecord.model_validate(raw), str(manifest_path)
+            except (OSError, json.JSONDecodeError, ValidationError) as exc:
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_INVALID",
+                    message=f"Artifact runtime manifest is invalid: {exc}",
+                ) from exc
+        index_path = root / "index.html"
+        if index_path.is_file():
+            return ProtocolArtifactRuntimeManifestRecord(
+                runtime_kind="static",
+                display_name=root.name or "Artifact app",
+                description="Static web artifact served from the artifact package.",
+                ui_path="/",
+                health_path="/",
+            ), ""
+        return None, ""
+
+    def _runtime_agent_id(detail, artifact: ProtocolArtifactRecord) -> str:
+        producer_id = str(artifact.produced_by_stage_execution_id or "").strip()
+        participant_key = ""
+        if producer_id:
+            producer = next(
+                (item for item in detail.stage_executions if str(item.protocol_stage_execution_id or "") == producer_id),
+                None,
+            )
+            participant_key = str(getattr(producer, "participant_key", "") or "").strip()
+        if participant_key:
+            participant = next(
+                (item for item in detail.participants if str(item.participant_key or "") == participant_key),
+                None,
+            )
+            if participant is not None and str(participant.resolved_agent_id or "").strip():
+                return str(participant.resolved_agent_id or "").strip()
+        return str(detail.run.entry_agent_id or "").strip()
+
+    def _runtime_event(
+        *,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        event_kind: str,
+        actor_ref: str,
+        summary: str,
+        metadata: dict[str, object] | None = None,
+    ) -> ProtocolArtifactRuntimeEventRecord:
+        return ProtocolArtifactRuntimeEventRecord(
+            runtime_event_id=uuid.uuid4().hex,
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id=runtime.protocol_run_id,
+            artifact_key=runtime.artifact_key,
+            event_kind=event_kind,
+            actor_ref=actor_ref,
+            summary=summary,
+            metadata_json=RegistryJsonRecord(metadata or {}),
+        )
+
+    def _runtime_public_urls(run_id: str, artifact_key: str) -> dict[str, str]:
+        base = f"/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}"
+        return {
+            "runtime_url": f"{base}/app/",
+            "ui_url": f"{base}/app/",
+            "api_url": f"{base}/api/",
+            "health_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/health",
+        }
+
+    def _runtime_record_json(runtime: ProtocolArtifactRuntimeInstanceRecord | None) -> dict[str, object] | None:
+        return _json_payload(runtime) if runtime is not None else None
 
     def _metadata_from_auto_session(session: ProtocolAutoDesignSessionRecord) -> dict[str, str]:
         doc = session.draft_definition_json.as_dict()
@@ -1676,6 +1785,454 @@ def build_protocol_router(
             preview=preview,
             member_path=member_path or member_path_tail,
             request=request,
+        )
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime")
+    def resource_get_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        manifest, manifest_path = (None, "")
+        if resolved_path is not None:
+            manifest, manifest_path = _runtime_manifest_from_path(resolved_path)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact.artifact_key, access=access)
+        if runtime is None:
+            urls = _runtime_public_urls(run_id, artifact.artifact_key)
+            runtime = ProtocolArtifactRuntimeInstanceRecord(
+                runtime_instance_id=_runtime_instance_id(run_id, artifact.artifact_key),
+                protocol_run_id=run_id,
+                artifact_key=artifact.artifact_key,
+                agent_id=_runtime_agent_id(detail, artifact),
+                status="stopped" if manifest is not None else "not_configured",
+                manifest=manifest,
+                manifest_path=manifest_path,
+                artifact_path=str(resolved_path or ""),
+                **urls,
+            )
+        return {
+            "runtime": _runtime_record_json(runtime),
+            "manifest_available": manifest is not None or runtime.manifest is not None,
+            "package_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/content?download=1",
+            "browse_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/content?browse=1",
+        }
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/start")
+    async def resource_start_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        if resolved_path is None:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_PATH_UNAVAILABLE",
+                message="Artifact path is not available on this host.",
+                details={"artifact_key": artifact.artifact_key},
+            )
+        manifest, manifest_path = _runtime_manifest_from_path(resolved_path)
+        if manifest is None:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_MISSING",
+                message="This artifact does not declare a runnable app or API. You can still browse or download the package.",
+            )
+        agent_id = _runtime_agent_id(detail, artifact)
+        if not agent_id:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_AGENT_UNAVAILABLE",
+                message="No connected agent is available to run this artifact.",
+            )
+        runtime_id = _runtime_instance_id(run_id, artifact.artifact_key)
+        urls = _runtime_public_urls(run_id, artifact.artifact_key)
+        starting = ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id=runtime_id,
+            protocol_run_id=run_id,
+            artifact_key=artifact.artifact_key,
+            agent_id=agent_id,
+            status="starting",
+            manifest=manifest,
+            manifest_path=manifest_path,
+            artifact_path=str(resolved_path),
+            started_by=access.actor_ref,
+            **urls,
+        )
+        store.save_protocol_artifact_runtime(starting, access=access)
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=starting,
+                event_kind="start_requested",
+                actor_ref=access.actor_ref,
+                summary="Runtime start requested.",
+                metadata={"agent_id": agent_id},
+            ),
+            access=access,
+        )
+        try:
+            result = await RegistryManagementClient(store).send(
+                agent_id=agent_id,
+                payload=StartArtifactRuntimeRequest(
+                    runtime_instance_id=runtime_id,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact.artifact_key,
+                    artifact_path=str(resolved_path),
+                    manifest_path=manifest_path,
+                    manifest=manifest,
+                    actor_ref=access.actor_ref,
+                ),
+                timeout_seconds=int(manifest.startup_timeout_seconds or 30) + 20,
+            )
+        except ManagementClientError as exc:
+            failed = starting.model_copy(
+                update={
+                    "status": "failed",
+                    "failure_code": exc.error_code,
+                    "failure_detail": exc.detail,
+                }
+            )
+            store.save_protocol_artifact_runtime(failed, access=access)
+            store.append_protocol_artifact_runtime_event(
+                _runtime_event(
+                    runtime=failed,
+                    event_kind="failed",
+                    actor_ref=access.actor_ref,
+                    summary=exc.detail,
+                    metadata={"error_code": exc.error_code},
+                ),
+                access=access,
+            )
+            raise _protocol_http_error(exc.status_code, error_code=exc.error_code, message=exc.detail) from exc
+        if not result.success or not isinstance(result.payload, StartArtifactRuntimeResult):
+            detail_text = result.error_detail or "Bot failed to start artifact runtime."
+            failed = starting.model_copy(update={"status": "failed", "failure_code": result.error_code, "failure_detail": detail_text})
+            store.save_protocol_artifact_runtime(failed, access=access)
+            store.append_protocol_artifact_runtime_event(
+                _runtime_event(
+                    runtime=failed,
+                    event_kind="failed",
+                    actor_ref=access.actor_ref,
+                    summary=detail_text,
+                    metadata={"error_code": result.error_code},
+                ),
+                access=access,
+            )
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_START_FAILED", message=detail_text)
+        runtime = result.payload.result.runtime or starting
+        runtime = runtime.model_copy(
+            update={
+                "agent_id": agent_id,
+                "manifest": manifest,
+                "manifest_path": manifest_path,
+                "artifact_path": str(resolved_path),
+                **urls,
+            }
+        )
+        saved = store.save_protocol_artifact_runtime(runtime, access=access)
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=saved,
+                event_kind="started" if result.payload.result.ok else "failed",
+                actor_ref=access.actor_ref,
+                summary=result.payload.result.message,
+                metadata={"status": result.payload.result.status},
+            ),
+            access=access,
+        )
+        return _json_payload(result.payload.result.model_copy(update={"runtime": saved}))
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/stop")
+    async def resource_stop_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="stop_requested",
+                actor_ref=access.actor_ref,
+                summary="Runtime stop requested.",
+            ),
+            access=access,
+        )
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=StopArtifactRuntimeRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+                actor_ref=access.actor_ref,
+            ),
+            timeout_seconds=30,
+        )
+        if not result.success or not isinstance(result.payload, StopArtifactRuntimeResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_STOP_FAILED", message=result.error_detail or "Bot failed to stop artifact runtime.")
+        stopped = result.payload.result.runtime or runtime
+        saved = store.save_protocol_artifact_runtime(
+            runtime.model_copy(update=stopped.model_dump(mode="json", exclude_none=True)),
+            access=access,
+        )
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=saved,
+                event_kind="stopped",
+                actor_ref=access.actor_ref,
+                summary=result.payload.result.message,
+            ),
+            access=access,
+        )
+        return _json_payload(result.payload.result.model_copy(update={"runtime": saved}))
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/archive")
+    def resource_archive_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        if str(runtime.status or "").lower() == "running":
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_STILL_RUNNING",
+                message="Stop the artifact runtime before archiving it.",
+            )
+        archived = runtime.model_copy(update={"status": "archived", "updated_at": ""})
+        saved = store.save_protocol_artifact_runtime(archived, access=access)
+        event = store.append_protocol_artifact_runtime_event(
+            _runtime_event(runtime=saved, event_kind="archived", actor_ref=access.actor_ref, summary="Runtime archived."),
+            access=access,
+        )
+        return _json_payload({"runtime": saved, "event": event})
+
+    @router.delete("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime")
+    def resource_delete_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        if str(runtime.status or "").lower() == "running":
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_STILL_RUNNING",
+                message="Stop the artifact runtime before deleting it.",
+            )
+        deleted = runtime.model_copy(update={"status": "deleted", "updated_at": ""})
+        saved = store.save_protocol_artifact_runtime(deleted, access=access)
+        event = store.append_protocol_artifact_runtime_event(
+            _runtime_event(runtime=saved, event_kind="deleted", actor_ref=access.actor_ref, summary="Runtime deleted."),
+            access=access,
+        )
+        return _json_payload({"runtime": saved, "event": event})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/events")
+    def resource_list_protocol_artifact_runtime_events(
+        run_id: str,
+        artifact_key: str,
+        limit: int = Query(default=50, ge=1, le=200),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        events = store.list_protocol_artifact_runtime_events(
+            run_id,
+            artifact_key,
+            access=protocol_access(auth),
+            limit=limit,
+        )
+        return _json_payload({"items": events})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/logs")
+    async def resource_get_protocol_artifact_runtime_logs(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=ArtifactRuntimeLogsRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+            ),
+            timeout_seconds=15,
+        )
+        if not result.success or not isinstance(result.payload, ArtifactRuntimeLogsResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_LOGS_FAILED", message=result.error_detail or "Bot failed to read artifact runtime logs.")
+        saved = store.save_protocol_artifact_runtime(
+            runtime.model_copy(update={"log_tail": result.payload.log_tail}),
+            access=access,
+        )
+        return _json_payload({"runtime": saved, "log_tail": result.payload.log_tail})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/health")
+    async def resource_get_protocol_artifact_runtime_health(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=ArtifactRuntimeHealthRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+            ),
+            timeout_seconds=15,
+        )
+        if not result.success or not isinstance(result.payload, ArtifactRuntimeHealthResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_HEALTH_FAILED", message=result.error_detail or "Bot failed to check artifact runtime health.")
+        if result.payload.health.runtime is not None:
+            store.save_protocol_artifact_runtime(
+                runtime.model_copy(update=result.payload.health.runtime.model_dump(mode="json", exclude_none=True)),
+                access=access,
+            )
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="health_checked",
+                actor_ref=access.actor_ref,
+                summary=result.payload.health.message,
+                metadata={"ok": result.payload.health.ok, "status_code": result.payload.health.status_code},
+            ),
+            access=access,
+        )
+        return _json_payload(result.payload.health)
+
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/app",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/app/{proxy_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/api",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/api/{proxy_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def resource_proxy_protocol_artifact_runtime(
+        request: Request,
+        run_id: str,
+        artifact_key: str,
+        proxy_path: str = "",
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> Response:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        if str(runtime.status or "").lower() != "running":
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_RUNNING",
+                message="Start the artifact runtime before opening this app or API.",
+                details={"status": runtime.status},
+            )
+        manifest = runtime.manifest or ProtocolArtifactRuntimeManifestRecord()
+        route_path = str(request.url.path)
+        is_api = f"/artifacts/{artifact_key}/api" in route_path
+        tail = str(proxy_path or "").strip("/")
+        if is_api:
+            base_path = str(manifest.api_base_path or "/api").strip() or "/api"
+            outbound_path = f"{base_path.rstrip('/')}/{tail}" if tail else base_path
+        else:
+            outbound_path = f"/{tail}" if tail else str(manifest.ui_path or "/")
+        body = await request.body()
+        headers = {
+            key: value
+            for key, value in request.headers.items()
+            if key.lower() not in {"host", "connection", "content-length", "cookie", "authorization"}
+        }
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=ArtifactRuntimeFetchRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+                method=request.method,
+                path=outbound_path,
+                query_string=request.url.query,
+                headers=RegistryJsonRecord(headers),
+                body_base64=base64.b64encode(body).decode("ascii") if body else "",
+            ),
+            timeout_seconds=45,
+        )
+        if not result.success or not isinstance(result.payload, ArtifactRuntimeFetchResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_PROXY_FAILED", message=result.error_detail or "Artifact runtime proxy failed.")
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="fetch",
+                actor_ref=access.actor_ref,
+                summary=f"{request.method} {outbound_path} -> {result.payload.status_code}",
+                metadata={"status_code": result.payload.status_code},
+            ),
+            access=access,
+        )
+        response_headers = {
+            key: str(value)
+            for key, value in result.payload.headers.as_dict().items()
+            if str(key).lower() in {"content-type", "cache-control", "etag", "last-modified", "location"}
+        }
+        content = base64.b64decode(str(result.payload.body_base64 or "").encode("ascii"))
+        return Response(
+            content=content,
+            status_code=int(result.payload.status_code or 200),
+            media_type=response_headers.pop("content-type", None),
+            headers=response_headers,
         )
 
     @router.get("/v1/protocol-runs/{run_id}/timeline")

@@ -143,6 +143,9 @@ For every customer-relevant artifact:
 3. Confirm the content matches the declared output.
 4. Confirm missing artifacts are labeled as missing.
 5. Confirm artifact actions appear wherever the artifact is linked.
+6. For runnable artifacts, start the app, open the Registry-routed URL, exercise
+   the primary UI/API path, inspect health/logs if available, and stop the
+   runtime when evaluation is complete.
 
 If a produced artifact cannot be previewed, opened, downloaded, or located from
 the customer-facing surface where it appears, record that as a product issue.

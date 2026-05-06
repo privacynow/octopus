@@ -398,6 +398,21 @@ const API = (() => {
             }
             return url.toString();
         },
+        getProtocolRunArtifactRuntime: (id, artifactKey) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime`),
+        startProtocolRunArtifactRuntime: (id, artifactKey) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/start`, { body: {}, timeoutMs: 120000 }),
+        stopProtocolRunArtifactRuntime: (id, artifactKey) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/stop`, { body: {}, timeoutMs: 60000 }),
+        getProtocolRunArtifactRuntimeHealth: (id, artifactKey) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/health`),
+        getProtocolRunArtifactRuntimeLogs: (id, artifactKey) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/logs`),
+        protocolRunArtifactRuntimeAppUrl: (id, artifactKey, path = '') => {
+            const tail = String(path || '').replace(/^\/+/, '');
+            const base = `/runtime/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/app`;
+            return new URL(tail ? `${base}/${tail}` : `${base}/`, window.location.origin).toString();
+        },
         getProtocolRunTimeline: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/timeline`),
         exportProtocolRun: (id) =>

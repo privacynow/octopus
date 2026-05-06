@@ -12,6 +12,8 @@ import octopus_registry.ingress as registry_ingress
 from octopus_registry.store_postgres import RegistryPostgresStore
 from octopus_sdk.registry.management import (
     ALL_MANAGEMENT_OPERATIONS,
+    ArtifactRuntimeFetchRequest,
+    ArtifactRuntimeFetchResult,
     ConversationSkillListingRecord,
     ConversationSkillStateResult,
     InstallCatalogSkillResult,
@@ -22,6 +24,12 @@ from octopus_sdk.registry.management import (
     ProviderGuidanceDetailResult,
     ProviderGuidanceLifecycleDetailRecord,
     RuntimeSkillCatalogItemRecord,
+    StartArtifactRuntimeRequest,
+    StartArtifactRuntimeResult,
+)
+from octopus_sdk.protocols import (
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeManifestRecord,
 )
 from octopus_sdk.identity import conversation_key_for_ref
 
@@ -137,6 +145,68 @@ def test_management_request_round_trip_polls_delivery_and_persists_result(postgr
     assert loaded.request_id == request.request_id
     assert loaded.payload is not None
     assert loaded.payload.operation == "list_catalog_skills"
+
+
+def test_artifact_runtime_management_payloads_round_trip() -> None:
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="java",
+        start_command="mvn spring-boot:run",
+        ui_path="/",
+        health_path="/health",
+        api_base_path="/api",
+    )
+    request = ManagementRequest(
+        agent_id="agent-1",
+        payload=StartArtifactRuntimeRequest(
+            runtime_instance_id="runtime-1",
+            protocol_run_id="run-1",
+            artifact_key="risk_engine",
+            artifact_path="/workspace/run/risk-engine",
+            manifest=manifest,
+        ),
+    )
+
+    decoded = ManagementRequest.model_validate(request.model_dump(mode="json"))
+
+    assert decoded.payload.operation == "start_artifact_runtime"
+    assert isinstance(decoded.payload, StartArtifactRuntimeRequest)
+    assert decoded.payload.manifest.runtime_kind == "java"
+
+    result = ManagementResult(
+        request_id=request.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=StartArtifactRuntimeResult(
+            result=ProtocolArtifactRuntimeActionResultRecord(
+                ok=True,
+                status="running",
+                message="started",
+            )
+        ),
+    )
+    decoded_result = ManagementResult.model_validate(result.model_dump(mode="json"))
+    assert isinstance(decoded_result.payload, StartArtifactRuntimeResult)
+    assert decoded_result.payload.result.status == "running"
+
+    fetch = ManagementRequest(
+        agent_id="agent-1",
+        payload=ArtifactRuntimeFetchRequest(
+            runtime_instance_id="runtime-1",
+            protocol_run_id="run-1",
+            artifact_key="risk_engine",
+            path="/api/decisions",
+        ),
+    )
+    decoded_fetch = ManagementRequest.model_validate(fetch.model_dump(mode="json"))
+    assert isinstance(decoded_fetch.payload, ArtifactRuntimeFetchRequest)
+    fetch_result = ManagementResult(
+        request_id=fetch.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=ArtifactRuntimeFetchResult(status_code=200, body_base64="e30="),
+    )
+    decoded_fetch_result = ManagementResult.model_validate(fetch_result.model_dump(mode="json"))
+    assert isinstance(decoded_fetch_result.payload, ArtifactRuntimeFetchResult)
 
 
 @pytest.mark.asyncio

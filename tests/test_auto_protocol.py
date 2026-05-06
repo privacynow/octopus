@@ -322,6 +322,7 @@ def test_auto_protocol_revision_compacts_accumulated_run_improvement_context():
     assert auto_meta["requirement"].count("Build a payments and onboarding risk decision engine") == 1
     assert "Run objective:" not in auto_meta["requirement"]
     assert len(auto_meta["revision_requests"]) == 2
+    assert not second.plan.protocol_name.lower().startswith("existing protocol objective")
     assert run_input["key"] == "problem_statement"
     assert run_input["default_value"] == objective
 

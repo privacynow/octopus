@@ -3150,6 +3150,14 @@ def revise_auto_protocol_session(
         *semantic_unresolved,
     ])
     status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
+    compact_plan = session.plan.model_copy(update={
+        "protocol_name": str(regenerated_metadata.get("display_name") or "").strip()
+            or _title_from_requirement(canonical_requirement),
+        "protocol_slug": str(regenerated_metadata.get("slug") or "").strip()
+            or _slugify(canonical_requirement),
+        "description": _sentence(canonical_requirement) or session.plan.description,
+        "run_profile": compact_profile,
+    })
     revised_session = session.model_copy(update={
         "status": status,
         "mode": "revise",
@@ -3160,9 +3168,7 @@ def revise_auto_protocol_session(
         "target_draft_revision": request.target_draft_revision,
         "requirement_text": request.requirement_text,
         "constraints_text": request.constraints_text,
-        "plan": session.plan.model_copy(update={
-            "run_profile": compact_profile,
-        }),
+        "plan": compact_plan,
         "run_profile": compact_profile,
         "draft_definition_json": RegistryJsonRecord.model_validate(regenerated_draft),
         "validation": validation,

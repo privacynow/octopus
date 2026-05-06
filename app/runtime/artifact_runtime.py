@@ -350,12 +350,23 @@ async def artifact_runtime_health(request: ArtifactRuntimeHealthRequest) -> Arti
     await reap_expired_artifact_runtimes()
     entry = _RUNTIMES.get(request.runtime_instance_id)
     if entry is None or entry.process.returncode is not None:
+        runtime = ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id=request.runtime_instance_id,
+            protocol_run_id=request.protocol_run_id,
+            artifact_key=request.artifact_key,
+            status="stopped",
+            failure_code="runtime_not_running",
+            failure_detail="Runtime process is not active in the bot container.",
+            updated_at=_now(),
+            stopped_at=_now(),
+        )
         return ArtifactRuntimeHealthResult(
             health=ProtocolArtifactRuntimeHealthRecord(
                 ok=False,
                 status="stopped",
                 message="Runtime is not running.",
                 checked_at=utcnow_iso(),
+                runtime=runtime,
             )
         )
     health_path = entry.runtime.manifest.health_path if entry.runtime.manifest else "/"

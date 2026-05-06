@@ -74,3 +74,19 @@ async def test_static_artifact_runtime_starts_fetches_and_stops(tmp_path):
             )
         )
         assert stopped.result.status == "stopped"
+
+
+async def test_artifact_runtime_health_marks_missing_process_stopped():
+    health = await artifact_runtime.artifact_runtime_health(
+        ArtifactRuntimeHealthRequest(
+            runtime_instance_id="missing-runtime",
+            protocol_run_id="run-1",
+            artifact_key="package",
+        )
+    )
+
+    assert health.health.ok is False
+    assert health.health.status == "stopped"
+    assert health.health.runtime is not None
+    assert health.health.runtime.status == "stopped"
+    assert health.health.runtime.failure_code == "runtime_not_running"

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import http.client
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
 import socket
@@ -88,6 +89,14 @@ def _local_url(port: int, path: str = "/") -> str:
     return f"http://127.0.0.1:{port}{_safe_runtime_path(path)}"
 
 
+def _expand_port_placeholders(command: str, *, port_env: str, port: int) -> str:
+    variable = str(port_env or "PORT").strip() or "PORT"
+    value = str(int(port))
+    braced = re.compile(r"\$\{" + re.escape(variable) + r"(?::[-=]?[^}]*)?\}")
+    bare = re.compile(r"\$" + re.escape(variable) + r"\b")
+    return bare.sub(value, braced.sub(value, command))
+
+
 def _artifact_root(path: str) -> Path:
     root = Path(str(path or "").strip()).expanduser().resolve()
     if not root.exists():
@@ -114,7 +123,7 @@ def _command_for(manifest: ProtocolArtifactRuntimeManifestRecord, port: int) -> 
     command = str(manifest.start_command or "").strip()
     if not command:
         raise RuntimeError("Runnable artifact manifest is missing start_command.")
-    return command
+    return _expand_port_placeholders(command, port_env=str(manifest.port_env or "PORT"), port=port)
 
 
 def _runtime_record(

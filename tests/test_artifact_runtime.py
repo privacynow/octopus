@@ -16,6 +16,31 @@ from octopus_sdk.registry.management import (
 from tests.support.config_support import make_config
 
 
+def test_artifact_runtime_expands_manifest_port_placeholders():
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="java",
+        start_command=(
+            "mvn spring-boot:run "
+            "-Dserver.port=${PORT:8080} "
+            "-Dalt.port=${PORT:-8080} "
+            "-Dplain=${PORT} "
+            "-Dbare=$PORT"
+        ),
+        port_env="PORT",
+        endpoints=[{"endpoint_kind": "docs", "path": "/api/docs", "label": "API docs"}],
+        smoke_test=["GET /health returns 200"],
+    )
+
+    command = artifact_runtime._command_for(manifest, 49152)
+
+    assert "${PORT" not in command
+    assert "$PORT" not in command
+    assert "-Dserver.port=49152" in command
+    assert "-Dalt.port=49152" in command
+    assert "-Dplain=49152" in command
+    assert "-Dbare=49152" in command
+
+
 async def test_static_artifact_runtime_starts_fetches_and_stops(tmp_path):
     package_dir = tmp_path / "package"
     package_dir.mkdir()

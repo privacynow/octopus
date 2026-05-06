@@ -2474,7 +2474,7 @@ def build_protocol_router(
         return _json_payload({"snapshot": _artifact_snapshot_payload(deleted)})
 
     @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime")
-    def resource_get_protocol_artifact_runtime(
+    async def resource_get_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
         auth: AuthContext = Depends(require_authenticated),
@@ -2511,6 +2511,21 @@ def build_protocol_router(
                 artifact_path=str(resolved_path or ""),
                 **urls,
             )
+        elif str(runtime.status or "").strip().lower() in {"running", "starting"}:
+            result = await RegistryManagementClient(store).send(
+                agent_id=runtime.agent_id,
+                payload=ArtifactRuntimeHealthRequest(
+                    runtime_instance_id=runtime.runtime_instance_id,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact.artifact_key,
+                ),
+                timeout_seconds=15,
+            )
+            if result.success and isinstance(result.payload, ArtifactRuntimeHealthResult) and result.payload.health.runtime is not None:
+                runtime = store.save_protocol_artifact_runtime(
+                    _merge_runtime_record(runtime, result.payload.health.runtime),
+                    access=access,
+                )
         return {
             "runtime": _runtime_record_json(runtime),
             "manifest_available": manifest is not None or runtime.manifest is not None,

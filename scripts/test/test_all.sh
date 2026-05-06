@@ -16,12 +16,12 @@ REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
 if [ $# -eq 0 ]; then
-    workers="${OCTOPUS_TEST_WORKERS:-2}"
+    workers="${OCTOPUS_TEST_WORKERS:-$(.venv/bin/python -c 'import os; print(min(max(os.cpu_count() or 2, 2), 20))')}"
     durations="${OCTOPUS_TEST_DURATIONS:-50}"
     if [ "$workers" = "0" ] || [ "$workers" = "false" ] || [ "$workers" = "off" ]; then
         .venv/bin/python -m pytest -q --tb=short --durations="$durations"
     else
-        .venv/bin/python -m pytest -q -n "$workers" --dist loadscope --tb=short --durations="$durations"
+        .venv/bin/python -m pytest -q -n "$workers" --dist load --tb=short --durations="$durations"
     fi
 else
     .venv/bin/python -m pytest "$@"

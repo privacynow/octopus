@@ -3,9 +3,9 @@
 Priority 4: per-test handler runtime isolation. Every test gets a clean
 handler-global state before and after, so no ambient leakage between cases.
 
-Phase 12: Postgres test harness — one DB per pytest worker, truncate only for
-tests that need Postgres. Use fixture postgres_truncated when a test needs a
-real Postgres backend.
+Phase 12: Postgres test harness — one run-scoped Postgres container, one DB
+per pytest worker, truncate only for tests that need Postgres. Use fixture
+postgres_truncated when a test needs a real Postgres backend.
 """
 
 import os
@@ -247,22 +247,16 @@ def postgres_base_url(request):
     When Docker is available but container start/readiness fails, we fail loudly (P1), not skip.
     Run-scoped container name/port (P2) avoid collisions across parallel pytest invocations.
     """
-    from tests.support.postgres_support import (
-        get_run_id,
-        get_worker_id,
-        start_test_postgres_container,
-        stop_test_postgres_container,
-    )
-    worker_id = get_worker_id(request.config)
+    from tests.support.postgres_support import get_run_id, start_test_postgres_container
+
     run_id = get_run_id()
-    url = start_test_postgres_container(worker_id, run_id)
+    url = start_test_postgres_container(run_id=run_id)
     if not url:
         pytest.skip(
             "Postgres tests require Docker (to run a test-only Postgres container). "
             "We do not use BOT_DATABASE_URL/TEST_POSTGRES_BASE_URL to avoid touching dev/staging/prod."
         )
     yield url
-    stop_test_postgres_container(worker_id, run_id)
 
 
 @pytest.fixture(scope="session")

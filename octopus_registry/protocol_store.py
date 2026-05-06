@@ -2891,7 +2891,17 @@ class ProtocolPostgresAdapter:
             params.append(origin_channel)
             clauses.append("pr.origin_channel = %s")
         if not include_generated:
-            clauses.append("pr.hidden_from_default_views = FALSE")
+            clauses.append(
+                """
+                (
+                    pr.hidden_from_default_views = FALSE
+                    OR (
+                        NULLIF(BTRIM(COALESCE(pr.problem_statement, '')), '') IS NOT NULL
+                        AND pr.origin_channel IN ('registry', 'telegram')
+                    )
+                )
+                """
+            )
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(

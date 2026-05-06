@@ -236,6 +236,12 @@ supporting plans, reviews, and release evidence. The normal generated topology
 keeps the primary outcome stage second-last and uses one final adversarial
 acceptance stage that can send the work back to the outcome stage.
 
+Existing-run improvement is the same Auto Protocol path. Registry and Telegram
+build run-context requirement text from the selected run, then create a
+`revise` Auto Protocol session against that run's protocol id. There is no
+separate artifact patcher, run-specific generator, or Telegram-only protocol
+revision path.
+
 Auto Protocol surface parity is an architecture rule. Registry UI and Telegram
 must render the same session state, warnings, primary artifact contract, and
 available actions from the same Registry API records. Telegram may compress the

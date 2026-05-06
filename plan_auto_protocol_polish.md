@@ -27,11 +27,12 @@ Already implemented and covered by focused tests:
   from Registry and Telegram; the current implementation pass must be verified
   again after deploy.
 
-Remaining work is live product proof, not alternate implementation. Nothing is
-optional or deferred. The next complete bar is the risk-engine class of
-artifact: a Java/Maven backend with a browser UI, meaningful routed APIs,
-runtime manifest, smoke evidence, review evidence, package download, and
-lifecycle cleanup, verified through Registry and Telegram.
+Remaining work is implementation plus live product proof, not alternate
+implementation. Nothing is optional or deferred. The next complete bar is the
+risk-engine class of artifact: a Java/Maven backend with a browser UI,
+meaningful routed APIs, runtime manifest, smoke evidence, review evidence,
+package download, lifecycle cleanup, useful run discovery, and a clear path to
+improve an existing run, verified through Registry and Telegram.
 
 ## Completion Ledger
 
@@ -52,6 +53,8 @@ surface.
 | Runtime evidence in export | Implemented | N/A | N/A | Export payload includes runtime instances/events | Documented | Covered | Pending current Safari proof |
 | Runtime cleanup/retention | Bot reaper and Registry sweep implemented | Operator lifecycle visible through runtime dialog | N/A | Runtime expiry policy enforced | Documented | Covered | Pending current Safari proof |
 | Fast/tiered tests | Focused runner and markers implemented | N/A | N/A | N/A | Documented | Focused tiers covered | N/A |
+| Runs discovery and recency | Default API keeps human-generated runs visible and recency ordered | Default Runs view is recent-first with useful human filters | Recent run references resolve predictably | Store visibility avoids burying real user runs | Documented | Covered | Pending current Safari proof |
+| Improve existing run | Reuses Auto Protocol revise session against the existing run's protocol | Run detail can generate/apply/publish/run an improvement protocol from run context | Telegram command can improve a selected run | No duplicate protocol generator or run model | Documented | Covered | Pending current Safari proof |
 | Risk-engine Java/Maven proof | Toolchain expected and runtime contract enforced | Pending live proof | Pending live proof | Pending live proof | Documented | Covered by contracts; live proof pending | Pending current Safari proof |
 
 Every implementation phase below must update this ledger when the product
@@ -67,7 +70,7 @@ Telegram.
 
 Octopus can now generate, publish, and run serious protocols through Registry and Telegram, and the Auto Protocol work has moved in the right direction: the model-backed planner can produce requirement-specific stage graphs, reviewers can send work back, primary artifacts are surfaced more prominently, and generated runs can produce nontrivial packages such as the payments and onboarding risk engine.
 
-The remaining product gap is that a serious output is still treated too much like stored files. The risk-engine run produced a Java/Maven backend, seed data, tests, docs, and a static operator UI. The final run view correctly showed the primary artifact and a verified output path, but opening the artifact landed the user on a directory listing. That is useful for developers, but it is not the commercial product experience we need.
+The remaining product gap is that a serious output is still treated too much like stored files, and completed work is still too hard to find and improve. The risk-engine run produced a Java/Maven backend, seed data, tests, docs, and a static operator UI. The final run view correctly showed the primary artifact and a verified output path, but opening the artifact landed the user on a directory listing. The default run list also hid that run behind generated/audit filtering and regrouped the page in a way that felt random instead of recent-first. That is useful for developers debugging internals, but it is not the commercial product experience we need.
 
 For artifacts intended to be used, Octopus must expose them as runnable, testable systems:
 
@@ -82,6 +85,9 @@ At the same time, multi-file artifacts must remain available as inspectable and 
 - Open or start the runnable artifact.
 - Browse files.
 - Download the complete package as a zip.
+- Find the most recent meaningful runs without knowing hidden filters.
+- Improve an existing run through Auto Protocol instead of manually rebuilding
+  the protocol or patching the artifact.
 
 The platform also needs faster feedback. We cannot burn ten or more minutes on every local test run, and we cannot lower the quality bar by skipping tests. Octopus must support focused, fast tests during iteration and a full suite that is bounded enough for regular CI.
 
@@ -370,9 +376,49 @@ redirects, and health checks. Streaming HTTP and WebSocket transports are not
 part of this plan's supported runtime transport set; artifacts that declare them
 must receive a clear blocked response instead of a broken link.
 
+### Decision 13: Runs default to human recency, not implementation triage
+
+The default Runs surface is a user history view. It should show meaningful
+human-originated runs in newest-updated order, including Auto Protocol runs
+created from Registry or Telegram. Generated/audit filtering remains available
+for internal rehearsal, smoke, and blank/system runs, but it must not bury a real
+customer-facing run that has a problem statement and a human surface origin.
+
+Triage is still valuable, but it is an explicit focus mode, not the default
+ordering model. A user should not need to memorize "show generated/audit runs"
+or decode grouped sections to find the work they just ran.
+
+### Decision 14: Existing runs can be improved through the same Auto Protocol path
+
+Users must be able to take an existing run, describe what needs to improve, and
+generate a revised protocol from that run context. This is not a new generator,
+artifact patcher, or side-channel. Registry and Telegram both call the existing
+Auto Protocol session lifecycle in `revise` mode against the run's protocol, with
+the run objective, status, primary artifact, artifacts, and user improvement
+request included as planning context.
+
+The feature exists to improve product outcomes. If a risk-engine run lacks a
+root runtime manifest, routed UI/API, smoke evidence, or current quality bar,
+the next action should be "Improve this run" rather than "hunt through files and
+manually rewrite the protocol."
+
 ## Target User Experience
 
 ### Registry Runs UI
+
+The default Runs page should show recently updated meaningful runs first. The
+primary filters should match human tasks:
+
+- Recent.
+- Needs attention.
+- Running.
+- Completed.
+- With outcomes.
+- From Telegram.
+- From Registry.
+
+Operational issue filters remain available for support workflows, but they
+should not dominate the default experience.
 
 When a run finishes with a runnable primary artifact, the run detail should show:
 
@@ -391,6 +437,7 @@ When a run finishes with a runnable primary artifact, the run detail should show
   - Stop.
   - Archive.
   - Delete.
+  - Improve this run.
 
 The directory browser remains available, but it is no longer the default experience for artifacts with runnable entry points.
 
@@ -417,6 +464,11 @@ For runnable artifacts, Telegram messages should include:
 - Compact fallback links for supporting artifacts without turning the message into a button wall.
 
 Telegram should use configured public URLs and should never emit `127.0.0.1` unless the deployment explicitly declares localhost-only use.
+
+Telegram should also support improving an existing run without requiring users
+to memorize protocol ids or recreate context. A user can select `latest`, a
+recent index, or a run id/prefix, provide an improvement request, and receive the
+normal Auto Protocol draft card with apply/publish/run actions.
 
 ### Review and Audit View
 
@@ -798,6 +850,7 @@ Add callbacks using existing Telegram to Registry client patterns:
 - Stop runtime.
 - Runtime status.
 - Download package.
+- Improve run.
 
 Do not implement Telegram-only lifecycle behavior. Telegram calls Registry APIs.
 
@@ -1184,6 +1237,56 @@ Acceptance:
 - Narrow Registry remains readable and has no horizontal overflow or button
   pileup.
 
+### Phase 2A: Fix Runs discovery and existing-run improvement
+
+1. Make the default Runs page recent-first:
+   - use the backend recency order as the default display order
+   - stop grouping the default list by triage state
+   - keep issue/triage mode as an explicit focus
+2. Make default run visibility human-centered:
+   - show normal human-originated Registry and Telegram runs with problem
+     statements even when historical data marked them hidden
+   - keep blank, rehearsal, smoke, and generated/audit runs behind the explicit
+     generated/audit toggle
+3. Replace arbitrary default filters with human filters:
+   - Recent
+   - Needs attention
+   - Running
+   - Completed
+   - With outcomes
+   - From Telegram
+   - From Registry
+4. Add `Improve this run` to run detail:
+   - reuse Auto Protocol create/revise/apply/publish/run APIs
+   - target the selected run's protocol id
+   - include the run objective, status, primary artifact, artifact summary, and
+     user improvement request in the planning context
+   - route Publish & Run to the new run detail
+5. Add Telegram run improvement:
+   - `/protocol improve-run latest <request>`
+   - `/protocol improve-run <run id or recent index> <request>`
+   - persist and render the resulting Auto Protocol session like every other
+     Auto Protocol session
+6. Add focused tests for:
+   - default visibility of human-originated generated runs
+   - hidden rehearsal/system runs staying hidden
+   - Registry UI run filters and improve action wiring
+   - Telegram improve-run payload construction
+7. Verify in real Safari:
+   - default Runs page shows the risk-engine class run without the generated
+     toggle
+   - list order is recent-first
+   - narrow mode remains readable after generation
+   - Improve this run creates an Auto Protocol session
+   - Telegram improve-run creates the same kind of session
+
+Acceptance:
+
+- A user can find the run they just completed, understand the outcome, and ask
+  Octopus to improve it without reconstructing protocol context manually.
+- The improvement flow uses the canonical Auto Protocol session lifecycle from
+  both Registry and Telegram.
+
 ### Phase 3: Complete Telegram runtime and public-link behavior
 
 1. Make Telegram runtime messages progressive:
@@ -1440,26 +1543,30 @@ QA:
 6. Telegram links use configured public base URLs and clearly label localhost
    links as host-local.
 7. Runs UI makes runnable primary artifacts obvious and usable.
-8. Users can start, open, test, check health, inspect logs/events, stop,
+8. Runs UI defaults to recent meaningful runs and exposes clear human filters
+   without burying Registry/Telegram user runs behind generated/audit mode.
+9. Users can improve an existing run from Registry and Telegram through the
+   canonical Auto Protocol revise/apply/publish/run lifecycle.
+10. Users can start, open, test, check health, inspect logs/events, stop,
    archive, and delete runtime instances according to permissions.
-9. Final reviewers exercise runnable artifacts and persist rationale/evidence.
-10. Final acceptance is blocked for runnable artifacts without linked start,
+11. Final reviewers exercise runnable artifacts and persist rationale/evidence.
+12. Final acceptance is blocked for runnable artifacts without linked start,
    health, and smoke evidence.
-11. Review send-back and acceptance reasons are visible in Registry, Telegram,
+13. Review send-back and acceptance reasons are visible in Registry, Telegram,
    and exports.
-12. Directory browse and zip download remain available for every multi-file artifact.
-13. Tests cover SDK, Registry, Bot runtime, Telegram, UI, routing, lifecycle,
+14. Directory browse and zip download remain available for every multi-file artifact.
+15. Tests cover SDK, Registry, Bot runtime, Telegram, UI, routing, lifecycle,
    cleanup, review evidence, and Auto Protocol planner/validation behavior.
-14. Full suite has a defined wall-time budget and focused suites support fast
+16. Full suite has a defined wall-time budget and focused suites support fast
    local iteration.
-15. Documentation explains runtime artifacts, links, lifecycle, cleanup, review
+17. Documentation explains runtime artifacts, links, lifecycle, cleanup, review
    evidence, test tiers, and the Java/Maven risk-engine probe.
-16. The risk-engine class of Java/Maven backend plus browser UI runs inside the
+18. The risk-engine class of Java/Maven backend plus browser UI runs inside the
    bot container and is reachable through Registry and Telegram URLs.
-17. The risk-engine UI submits at least one scenario decision through routed API
+19. The risk-engine UI submits at least one scenario decision through routed API
    paths and exposes audit/explainability evidence.
-18. OpenAPI contract checks fail CI when route behavior and docs drift.
-19. The final deployed `/Users/tinker/octopus` checkout is on the committed
+20. OpenAPI contract checks fail CI when route behavior and docs drift.
+21. The final deployed `/Users/tinker/octopus` checkout is on the committed
    branch, healthy, and verified in real Safari.
 
 ## Non-Goals

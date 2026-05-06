@@ -229,6 +229,71 @@ async def test_protocol_auto_modify_latest_revises_existing_session(monkeypatch)
         assert "Modify:" in reply
 
 
+async def test_protocol_improve_run_creates_auto_protocol_revision_from_run_context(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+        seen: dict[str, str] = {}
+
+        class _Client:
+            async def list_runs(self, **kwargs):
+                assert kwargs["limit"] == 10
+                return [
+                    ProtocolRunRecord(
+                        protocol_run_id="riskrun123456",
+                        protocol_id="risk-protocol",
+                        status="completed",
+                        current_stage_key="release",
+                    )
+                ]
+
+            async def get_run(self, run_id):
+                assert run_id == "riskrun123456"
+                detail = _run_detail(run_id=run_id, status="completed", stage_key="release")
+                detail.run.protocol_id = "risk-protocol"
+                detail.run.problem_statement = "Build a payments and onboarding risk engine."
+                return detail
+
+            async def create_protocol_auto_design_session(self, payload):
+                assert payload["mode"] == "revise"
+                assert payload["surface"] == "telegram"
+                assert payload["target_protocol_id"] == "risk-protocol"
+                assert payload["preferred_design_agent_id"] == "agent-1"
+                seen["requirement"] = payload["requirement_text"]
+                return _auto_session(
+                    requirement=payload["requirement_text"],
+                    target_protocol_id=payload["target_protocol_id"],
+                )
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol improve-run latest Add a routed UI and runtime manifest",
+            args=["improve-run", "latest", "Add", "a", "routed", "UI", "and", "runtime", "manifest"],
+        )
+
+        assert "Designing an improved protocol from that run" in msg.replies[0]["text"]
+        assert "Add a routed UI and runtime manifest" in seen["requirement"]
+        assert "Build a payments and onboarding risk engine" in seen["requirement"]
+        assert "root octopus-runtime.json" in seen["requirement"]
+        reply = last_reply(msg)
+        assert "Auto Protocol" in reply
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
+        assert session["last_auto_protocol_session_id"] == "auto-1"
+
+
 async def test_protocol_auto_stages_callback_renders_generated_stage_view(monkeypatch):
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)

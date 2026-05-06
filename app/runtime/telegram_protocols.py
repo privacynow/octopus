@@ -167,6 +167,58 @@ def protocol_artifact_human_label(artifact) -> str:
     return name or key or "Artifact"
 
 
+def protocol_run_improvement_requirement(detail, change_request: str) -> str:
+    run = getattr(detail, "run", None) or detail
+    version = getattr(detail, "version", None)
+    definition = getattr(version, "definition_json", None) if version is not None else None
+    if not isinstance(definition, dict):
+        definition = {}
+    metadata = definition.get("metadata") if isinstance(definition.get("metadata"), dict) else {}
+    auto_meta = metadata.get("auto_protocol") if isinstance(metadata.get("auto_protocol"), dict) else {}
+    primary = auto_meta.get("primary_artifact") if isinstance(auto_meta.get("primary_artifact"), dict) else {}
+    primary_key = str(primary.get("artifact_key") or auto_meta.get("primary_artifact_key") or "").strip()
+    artifact_lines: list[str] = []
+    for artifact in list(getattr(detail, "artifacts", []) or [])[:12]:
+        artifact_lines.append(
+            " | ".join(
+                item
+                for item in [
+                    str(getattr(artifact, "artifact_key", "") or "artifact").strip(),
+                    str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip(),
+                    str(getattr(artifact, "verification_state", "") or getattr(artifact, "state", "") or "").strip(),
+                ]
+                if item
+            )
+        )
+        if not primary_key and str(getattr(artifact, "artifact_key", "") or "").strip():
+            primary_key = str(getattr(artifact, "artifact_key", "") or "").strip()
+    artifacts_block = (
+        "Existing artifacts:\n" + "\n".join(f"- {item}" for item in artifact_lines)
+        if artifact_lines
+        else "Existing artifacts: none recorded"
+    )
+    return "\n".join(
+        line
+        for line in [
+            "Improve the existing protocol that produced this run. Use the prior run as context, but generate a normal Auto Protocol revision of the protocol rather than patching the old artifact directly.",
+            "",
+            f"User improvement request: {str(change_request or '').strip()}",
+            "",
+            f"Run id: {getattr(run, 'protocol_run_id', '') or ''}",
+            f"Protocol id: {getattr(run, 'protocol_id', '') or ''}",
+            f"Protocol name: {getattr(run, 'protocol_display_name', '') or definition.get('display_name') or definition.get('name') or ''}",
+            f"Run status: {getattr(run, 'status', '') or ''}",
+            f"Run objective: {getattr(run, 'problem_statement', '') or ''}",
+            f"Current stage: {getattr(run, 'current_stage_key', '') or ''}",
+            f"Primary artifact: {primary_key}" if primary_key else "",
+            artifacts_block,
+            "",
+            "Bring the revised protocol up to the current Octopus standard: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.",
+        ]
+        if line != ""
+    )
+
+
 def protocol_artifact_is_package(artifact) -> bool:
     path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
     key = str(getattr(artifact, "artifact_key", "") or "").strip().lower()

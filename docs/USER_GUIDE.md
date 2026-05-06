@@ -244,9 +244,21 @@ A useful run page should answer:
 - what outputs were produced?
 - what is blocked, waiting, failed, canceled, or complete?
 
+The default Runs list is recent-first for meaningful work from Registry and
+Telegram. Use the view filters when you want only runs that need attention,
+running runs, completed runs, runs with outcomes, or runs from a specific
+surface. Use `Show generated/audit runs` for rehearsal, smoke, and internal
+generated work.
+
 For active runs, watch the run status and latest agent update before retrying.
 A long-running stage is not automatically stuck. It should show enough progress
 or state for a user to understand whether work is still moving.
+
+When a completed run needs to be improved, select it and use `Improve this run`.
+Octopus sends the run objective, status, primary artifact, and produced artifact
+summary through Auto Protocol and creates a normal revision of the original
+protocol. The previous artifact remains audit evidence; the improvement creates
+a new draft, publish, and run path.
 
 ## Open Artifacts
 

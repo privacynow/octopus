@@ -22,6 +22,7 @@ os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 from octopus_registry import auth as registry_auth
 from octopus_registry import server as registry_server
 from octopus_registry import protocol_http as registry_protocol_http
+from octopus_registry import protocol_store as protocol_store_mod
 from octopus_registry.server import app
 from octopus_registry import ingress
 from octopus_registry.backend import get_registry_store
@@ -41,6 +42,7 @@ from octopus_sdk.protocols import (
     ProtocolArtifactRuntimeActionResultRecord,
     ProtocolArtifactRuntimeInstanceRecord,
     ProtocolArtifactRuntimeManifestRecord,
+    ProtocolAccessContextRecord,
     ProtocolAutoDesignModelResponseRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignWorkPackageRecord,
@@ -2475,6 +2477,39 @@ def test_default_work_list_routes_pass_generated_visibility_filter(monkeypatch, 
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
 
     assert seen == {"conversations": False, "tasks": False, "runs": False}
+
+
+def test_protocol_run_store_default_visibility_keeps_human_originated_runs(monkeypatch):
+    adapter = protocol_store_mod.ProtocolPostgresAdapter.__new__(protocol_store_mod.ProtocolPostgresAdapter)
+    captured: dict[str, object] = {}
+
+    class _Connection:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _fetchall(conn, sql, params):
+        captured["sql"] = sql
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(adapter, "_connect", lambda: _Connection())
+    monkeypatch.setattr(adapter, "_assert_protocol_run_visible", lambda row, *, access: row)
+    monkeypatch.setattr(adapter, "_decorate_protocol_run_row_with_review_state", lambda conn, row: row)
+    monkeypatch.setattr(adapter, "_protocol_run_from_row", lambda row: row)
+    monkeypatch.setattr(protocol_store_mod.POSTGRES_STORE_DIALECT, "fetchall", _fetchall)
+
+    adapter.list_protocol_runs(
+        access=ProtocolAccessContextRecord(actor_ref="operator:test", org_id="local", roles=["operator"]),
+        include_generated=False,
+    )
+
+    sql = str(captured["sql"])
+    assert "pr.hidden_from_default_views = FALSE" in sql
+    assert "NULLIF(BTRIM(COALESCE(pr.problem_statement, '')), '') IS NOT NULL" in sql
+    assert "pr.origin_channel IN ('registry', 'telegram')" in sql
 
 
 def test_protocol_run_create_route_returns_invalid_for_missing_entry_agent(monkeypatch, tmp_path: Path):

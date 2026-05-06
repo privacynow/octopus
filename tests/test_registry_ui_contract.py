@@ -764,7 +764,11 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
 
     assert "UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog })" in workspace
     assert "label: 'Generated drafts'" in workspace
-    assert "UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated })" in workspace
+    assert "const PROTOCOL_RUN_VIEW_FILTER_OPTIONS = [" in workspace
+    assert "let runViewFilter = _protocolRunViewFilterValue(UI.readQueryParam('view', 'recent'));" in workspace
+    assert "const runSource = [...(runs || [])];" in workspace
+    assert "if (!_runMatchesViewFilter(item, issue)) return false;" in workspace
+    assert "Improve this run" in workspace
     assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs')" in workspace
     assert "No normal runs match this filter." in workspace
     assert "String(item?.conversation_type || 'conversation') !== 'task_thread'" in usage_view

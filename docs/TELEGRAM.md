@@ -125,6 +125,7 @@ Current command shape:
 /protocol auto modify latest|<session_id> <change request>
 /protocol auto status latest|<session_id>
 /protocol improve <slug> <change request>
+/protocol improve-run latest|<run id|recent index> <change request>
 /protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--workspace <ref>]
 /protocol status latest|<number|short_id>
 /protocol artifacts latest|<number|short_id>
@@ -161,6 +162,9 @@ Behavior:
   `--workspace`; each option consumes text until the next option marker.
 - Protocol-authored custom run input keys can be passed with the same
   `--custom-key <text>` shape.
+- `improve-run` uses the selected run as context and creates a normal Auto
+  Protocol revision of that run's protocol. Use it when a completed artifact
+  needs to be brought up to the current runtime, review, or usability standard.
 - `status` reports registry run state and deep links when available.
 - `artifacts` lists declared and produced artifacts compactly.
 - `preview` opens a rendered preview for text and Markdown artifacts when

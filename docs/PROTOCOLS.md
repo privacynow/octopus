@@ -95,6 +95,12 @@ protocol and choose `Improve with Auto Protocol`. Drafts are changed only after
 confirmation. Published versions are immutable; Auto Protocol prepares a draft
 revision that affects only future runs after publish.
 
+Auto Protocol can also improve from an existing run. Open `Work -> Runs`, select
+the run, and choose `Improve this run`. Octopus includes the run objective,
+status, primary artifact, and produced artifacts as context, then creates a
+normal Auto Protocol revision of the underlying protocol. This is the path to
+bring an older run up to the current bar without manually patching the artifact.
+
 The generated result is not a separate format. It is the same canonical
 protocol document used by manual authoring, export/import, publish, and run
 execution.
@@ -116,6 +122,11 @@ Every Auto Protocol declares primary artifact metadata. Runs UI and Telegram
 promote that artifact first, then show supporting plans, reviews, and release
 evidence below it. Users should not have to hunt through intermediate review
 files to find the thing they asked Octopus to produce.
+
+The default Runs page is recent-first for meaningful Registry and Telegram runs.
+Use the view filters for attention, running, completed, outcome-bearing, or
+surface-specific runs; use the generated/audit toggle only when inspecting
+rehearsal, smoke, or internal generated records.
 
 ### Auto Protocol Verification
 

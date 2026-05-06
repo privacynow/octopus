@@ -1222,6 +1222,41 @@ async def cmd_protocol(
         telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=auto_session.session_id)
         await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
         return
+    if sub in {"improve-run", "improve_run"}:
+        if len(args) < 3:
+            await update.effective_message.reply_text("Usage: /protocol improve-run latest|<run id|recent index> <change request>")
+            return
+        run_ref = str(args[1] or "").strip()
+        change_request = " ".join(args[2:]).strip()
+        if not run_ref or not change_request:
+            await update.effective_message.reply_text("Usage: /protocol improve-run latest|<run id|recent index> <change request>")
+            return
+        try:
+            detail = await telegram_protocols.resolve_protocol_run_ref(protocol_service, run_ref)
+            protocol_id = str(getattr(detail.run, "protocol_id", "") or "").strip()
+            if not protocol_id:
+                await update.effective_message.reply_text("That run does not have a protocol id to improve.")
+                return
+            await update.effective_message.reply_text(
+                "Designing an improved protocol from that run. I will post the proposed workflow here when planning finishes."
+            )
+            auto_session = await client.create_protocol_auto_design_session({
+                "mode": "revise",
+                "surface": "telegram",
+                "target_protocol_id": protocol_id,
+                "requirement_text": telegram_protocols.protocol_run_improvement_requirement(detail, change_request),
+                "preferred_design_agent_id": agent_id,
+                "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
+            })
+        except KeyError:
+            await update.effective_message.reply_text(f"Unknown protocol run: {run_ref}")
+            return
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to improve the run. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=auto_session.session_id)
+        await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
+        return
     if sub == "improve":
         if len(args) < 3:
             await update.effective_message.reply_text("Usage: /protocol improve <slug> <change request>")

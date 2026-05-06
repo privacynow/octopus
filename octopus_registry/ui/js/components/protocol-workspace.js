@@ -7,8 +7,32 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'expired_timeout', label: 'Expired timeouts' },
 ];
 
+const PROTOCOL_RUN_VIEW_FILTER_OPTIONS = [
+    { value: 'recent', label: 'Recent' },
+    { value: 'attention', label: 'Needs attention' },
+    { value: 'running', label: 'Running' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'outcomes', label: 'With outcomes' },
+    { value: 'telegram', label: 'From Telegram' },
+    { value: 'registry', label: 'From Registry' },
+];
+
 function _isCompactViewport() {
     return window.innerWidth <= 960;
+}
+
+function _compactProtocolRunViewOptions() {
+    if (!_isCompactViewport()) return PROTOCOL_RUN_VIEW_FILTER_OPTIONS;
+    const compactLabels = {
+        attention: 'Attention',
+        outcomes: 'Outcomes',
+        telegram: 'Telegram',
+        registry: 'Registry',
+    };
+    return PROTOCOL_RUN_VIEW_FILTER_OPTIONS.map((item) => ({
+        ...item,
+        label: compactLabels[item.value] || item.label,
+    }));
 }
 
 function _downloadProtocolText(filename, text, contentType) {
@@ -580,6 +604,14 @@ function _protocolIssueFilterValue(value) {
         return 'all';
     }
     return PROTOCOL_ISSUE_FILTER_OPTIONS.some((item) => item.value === normalized) ? normalized : '';
+}
+
+function _protocolRunViewFilterValue(value) {
+    const normalized = String(value || '').trim();
+    if (!normalized) {
+        return 'recent';
+    }
+    return PROTOCOL_RUN_VIEW_FILTER_OPTIONS.some((item) => item.value === normalized) ? normalized : 'recent';
 }
 
 function _protocolIssueApiValue(value) {
@@ -2690,6 +2722,11 @@ function renderProtocolWorkspace(container) {
             runBtn.disabled = !ready;
             applyBtn.className = ready ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
+            runBtn.style.order = hasSession && ready ? '0' : '3';
+            applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
+            publishBtn.style.order = hasSession ? '2' : '';
+            reviseBtn.style.order = hasSession ? '3' : '';
+            cancelBtn.style.order = hasSession ? '4' : '';
             const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
             publishBtn.title = gateTitle;
             runBtn.title = gateTitle;
@@ -7694,6 +7731,7 @@ function renderProtocolRuns(container) {
     let runDetailLoading = false;
     let runSearch = '';
     let runStatusFilter = UI.readQueryParam('status', '');
+    let runViewFilter = _protocolRunViewFilterValue(UI.readQueryParam('view', 'recent'));
     let issueKindFilter = _protocolIssueFilterValue(UI.readQueryParam('issue_kind', ''));
     let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let activeRunDetailSection = '';
@@ -7732,6 +7770,7 @@ function renderProtocolRuns(container) {
             protocol_id: '',
             run_id: currentRunId || '',
             status: runStatusFilter || '',
+            view: runViewFilter !== 'recent' ? runViewFilter : '',
             issue_kind: issueKindFilter || '',
             include_generated: includeGenerated ? '1' : '',
             entry_agent_id: '',
@@ -7938,6 +7977,36 @@ function renderProtocolRuns(container) {
         return { key: 'other', label: 'Other runs', rank: 4 };
     }
 
+    function _runHasOutcome(run) {
+        if (!run) return false;
+        if (String(run.primary_artifact_key || run.primary_outcome_key || '').trim()) return true;
+        if (Number(run.artifact_count || run.output_count || 0) > 0) return true;
+        const stage = String(run.current_stage_key || '').toLowerCase();
+        const status = _runStatusValue(run);
+        return status === 'completed' && /(artifact|outcome|release|implement|package|deliver)/.test(stage);
+    }
+
+    function _runMatchesViewFilter(run, issue = null) {
+        const status = _runStatusValue(run);
+        switch (runViewFilter) {
+            case 'attention':
+                return Boolean(issue) || ['blocked', 'failed'].includes(status);
+            case 'running':
+                return ['running', 'queued'].includes(status);
+            case 'completed':
+                return status === 'completed';
+            case 'outcomes':
+                return _runHasOutcome(run);
+            case 'telegram':
+                return String(run?.origin_channel || '').trim().toLowerCase() === 'telegram';
+            case 'registry':
+                return String(run?.origin_channel || '').trim().toLowerCase() === 'registry';
+            case 'recent':
+            default:
+                return true;
+        }
+    }
+
     function _compactRunText(value, maxLength = 76) {
         const text = String(value || '').replace(/\s+/g, ' ').trim();
         if (!text || text.length <= maxLength) return text;
@@ -7995,6 +8064,134 @@ function renderProtocolRuns(container) {
             }));
         });
         return list;
+    }
+
+    function _primaryRunArtifactInfo(runDetail) {
+        const detail = runDetail || {};
+        const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
+        const metadata = detail.version?.definition_json?.metadata || {};
+        const autoMeta = metadata.auto_protocol || {};
+        const explicitPrimary = autoMeta.primary_artifact || {};
+        const explicitKey = String(explicitPrimary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+        const byKey = new Map(artifacts.map((item) => [String(item?.artifact_key || '').trim(), item]));
+        if (explicitKey) {
+            return {
+                ...(byKey.get(explicitKey) || {}),
+                ...explicitPrimary,
+                artifact_key: explicitKey,
+                expected_path: explicitPrimary.expected_path || '',
+            };
+        }
+        const evidenceLike = /(^|[_-])(review|audit|evidence|logs?)([_-]|$)/i;
+        return [...artifacts]
+            .filter((item) => String(item?.artifact_key || '').trim())
+            .sort((left, right) => {
+                const leftKey = String(left.artifact_key || '');
+                const rightKey = String(right.artifact_key || '');
+                const leftScore = (left.exists ? 20 : 0)
+                    + (!evidenceLike.test(leftKey) ? 10 : 0)
+                    + (UI.isLikelyDirectoryArtifactPath(_protocolArtifactDisplayPath(left)) ? 8 : 0);
+                const rightScore = (right.exists ? 20 : 0)
+                    + (!evidenceLike.test(rightKey) ? 10 : 0)
+                    + (UI.isLikelyDirectoryArtifactPath(_protocolArtifactDisplayPath(right)) ? 8 : 0);
+                return rightScore - leftScore;
+            })[0] || null;
+    }
+
+    function _runImprovementRequirement(runDetail, changeRequest) {
+        const detail = runDetail || {};
+        const run = detail.run || {};
+        const version = detail.version || {};
+        const definition = version.definition_json || {};
+        const artifacts = (detail.artifacts || [])
+            .filter((item) => item && (item.exists || item.artifact_key || item.workspace_path || item.location))
+            .slice(0, 12)
+            .map((item) => [
+                String(item.artifact_key || 'artifact').trim(),
+                String(item.workspace_path || item.location || '').trim(),
+                String(item.verification_state || item.state || '').trim(),
+            ].filter(Boolean).join(' | '));
+        const primary = _primaryRunArtifactInfo(detail);
+        const userRequest = String(changeRequest || '').trim();
+        return [
+            'Improve the existing protocol that produced this run. Use the prior run as context, but generate a normal Auto Protocol revision of the protocol rather than patching the old artifact directly.',
+            '',
+            `User improvement request: ${userRequest}`,
+            '',
+            `Run id: ${run.protocol_run_id || ''}`,
+            `Protocol id: ${run.protocol_id || ''}`,
+            `Protocol name: ${run.protocol_display_name || definition.display_name || definition.name || ''}`,
+            `Run status: ${run.status || ''}`,
+            `Run objective: ${run.problem_statement || ''}`,
+            `Current stage: ${run.current_stage_key || ''}`,
+            primary?.artifact_key ? `Primary artifact: ${primary.artifact_key}` : '',
+            primary?.expected_path ? `Primary artifact expected path: ${primary.expected_path}` : '',
+            artifacts.length ? `Existing artifacts:\n- ${artifacts.join('\n- ')}` : 'Existing artifacts: none recorded',
+            '',
+            'Bring the revised protocol up to the current Octopus standard: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
+        ].filter((line) => line !== '').join('\n');
+    }
+
+    function _runAutoSessionReady(session) {
+        const validation = session?.validation || {};
+        const unresolved = Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : [];
+        return Boolean(session?.session_id && validation.ok && !unresolved.length);
+    }
+
+    function _runAutoSessionRunId(session) {
+        return String(
+            session?.run_result?.run?.protocol_run_id
+            || session?.run_result?.protocol_run_id
+            || session?.run?.protocol_run_id
+            || '',
+        ).trim();
+    }
+
+    function _runImproveSummaryEl(session) {
+        const plan = session?.plan || {};
+        const analysis = session?.analysis || {};
+        const validation = session?.validation || {};
+        const warnings = Array.isArray(session?.warnings) ? session.warnings : [];
+        const unresolved = Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : [];
+        const stages = Array.isArray(plan.stages) ? plan.stages : [];
+        const artifacts = Array.isArray(plan.artifacts) ? plan.artifacts : [];
+        const primary = plan.primary_artifact || session?.draft_definition_json?.metadata?.auto_protocol?.primary_artifact || {};
+        const panel = document.createElement('div');
+        panel.className = 'protocol-auto-summary protocol-auto-review';
+        const header = document.createElement('div');
+        header.className = 'protocol-auto-review-header';
+        const title = document.createElement('h4');
+        title.textContent = String(plan.protocol_name || 'Improved protocol draft');
+        header.appendChild(title);
+        const summary = document.createElement('p');
+        summary.textContent = String(analysis.goal || plan.description || 'Review the generated improvement before applying it.');
+        header.appendChild(summary);
+        const readiness = document.createElement('span');
+        readiness.className = _runAutoSessionReady(session) ? 'protocol-auto-readiness is-ready' : 'protocol-auto-readiness';
+        readiness.textContent = _runAutoSessionReady(session)
+            ? 'Ready to apply, publish, or run'
+            : 'Needs attention before publishing';
+        header.appendChild(readiness);
+        panel.appendChild(header);
+        panel.appendChild(UI.renderMetadataGrid([
+            { label: 'Stages', value: String(stages.length) },
+            { label: 'Artifacts', value: String(artifacts.length) },
+            { label: 'Validation', value: validation.ok ? 'Ready' : 'Needs attention' },
+            { label: 'Primary outcome', value: primary.display_name || primary.artifact_key || 'Produced outcome' },
+        ], { compact: true }));
+        if (warnings.length || unresolved.length) {
+            const list = document.createElement('div');
+            list.className = 'task-artifact-list';
+            [...unresolved, ...warnings].slice(0, 5).forEach((item) => {
+                list.appendChild(UI.renderListRow({
+                    label: item.message || item.code || 'Auto Protocol warning',
+                    sublabel: item.action || item.detail || '',
+                    badgeText: item.severity || item.code || '',
+                }));
+            });
+            panel.appendChild(list);
+        }
+        return panel;
     }
 
     function _shortRunId(value) {
@@ -8239,6 +8436,190 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _openImproveRunDialog() {
+        if (!currentRun?.run?.protocol_id) {
+            UI.notify('Select a run with a protocol before improving it.', 'warning');
+            return;
+        }
+        const sourceRun = currentRun;
+        const form = document.createElement('div');
+        form.className = 'protocol-package-dialog protocol-auto-dialog';
+        const intro = document.createElement('p');
+        intro.className = 'quiet-note';
+        intro.textContent = 'Auto Protocol will use this run as context and generate a revised normal protocol. It will not patch the old artifact directly.';
+        form.appendChild(intro);
+
+        const requestLabel = document.createElement('label');
+        requestLabel.className = 'protocol-auto-field-label';
+        requestLabel.textContent = 'What should improve?';
+        form.appendChild(requestLabel);
+
+        const request = document.createElement('textarea');
+        request.className = 'input';
+        request.rows = 5;
+        request.placeholder = 'Example: add a root runtime manifest, routed UI/API, smoke evidence, and stricter review.';
+        requestLabel.appendChild(request);
+
+        const status = document.createElement('p');
+        status.className = 'quiet-note';
+        status.textContent = 'The generated improvement becomes a normal protocol draft you can apply, publish, and run.';
+        form.appendChild(status);
+
+        const preview = document.createElement('div');
+        preview.className = 'protocol-auto-preview';
+        form.appendChild(preview);
+
+        let session = null;
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const generateBtn = document.createElement('button');
+        generateBtn.type = 'button';
+        generateBtn.className = 'btn btn-primary';
+        generateBtn.textContent = 'Generate improvement';
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'btn';
+        applyBtn.textContent = 'Apply draft';
+        applyBtn.hidden = true;
+        const publishBtn = document.createElement('button');
+        publishBtn.type = 'button';
+        publishBtn.className = 'btn';
+        publishBtn.textContent = 'Publish';
+        publishBtn.hidden = true;
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'btn btn-primary';
+        runBtn.textContent = 'Publish & Run';
+        runBtn.hidden = true;
+        const view = UI.showDialog('Improve this run', form, {
+            actions: [cancelBtn, generateBtn, applyBtn, publishBtn, runBtn],
+            maxWidth: '760px',
+            initialFocus: request,
+        });
+        view.dialog.classList.add('protocol-auto-modal');
+
+        const syncActions = () => {
+            const hasSession = Boolean(session?.session_id);
+            const ready = _runAutoSessionReady(session);
+            cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
+            generateBtn.hidden = hasSession;
+            applyBtn.hidden = !hasSession;
+            publishBtn.hidden = !hasSession;
+            runBtn.hidden = !hasSession;
+            publishBtn.disabled = !ready;
+            runBtn.disabled = !ready;
+            applyBtn.className = ready ? 'btn' : 'btn btn-primary';
+            runBtn.className = ready ? 'btn btn-primary' : 'btn';
+            runBtn.style.order = hasSession && ready ? '0' : '3';
+            applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
+            publishBtn.style.order = hasSession ? '2' : '';
+            cancelBtn.style.order = hasSession ? '4' : '';
+            const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
+            publishBtn.title = gateTitle;
+            runBtn.title = gateTitle;
+        };
+
+        cancelBtn.addEventListener('click', () => view.close());
+        generateBtn.addEventListener('click', async () => {
+            const changeRequest = request.value.trim();
+            if (!changeRequest) {
+                status.textContent = 'Describe what should improve.';
+                request.focus();
+                return;
+            }
+            generateBtn.disabled = true;
+            intro.hidden = true;
+            requestLabel.hidden = true;
+            status.textContent = 'Designing improved protocol…';
+            UI.reconcileChildren(preview, [UI.renderEmptyState('Planning stages, artifacts, reviewers, and runtime expectations…', true)]);
+            try {
+                session = await API.createProtocolAutoSession({
+                    mode: 'revise',
+                    surface: 'registry',
+                    target_protocol_id: sourceRun.run.protocol_id,
+                    requirement_text: _runImprovementRequirement(sourceRun, changeRequest),
+                    constraints_text: '',
+                    workspace_ref: sourceRun.run.workspace_ref || '',
+                });
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                status.textContent = 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.';
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to generate the run improvement', err, {
+                    context: 'Auto Protocol run improvement failed',
+                });
+                intro.hidden = false;
+                requestLabel.hidden = false;
+                status.textContent = 'Generation failed.';
+            }
+            generateBtn.disabled = false;
+        });
+        applyBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            applyBtn.disabled = true;
+            status.textContent = 'Applying improved draft…';
+            try {
+                session = await API.applyProtocolAutoSession(session.session_id);
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                status.textContent = 'Draft applied. Open the protocol editor to review or continue publishing from here.';
+                UI.notify('Improved protocol draft applied.', 'success');
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to apply improved protocol draft', err, {
+                    context: 'Auto Protocol apply failed',
+                });
+                status.textContent = 'Apply failed.';
+            }
+            applyBtn.disabled = false;
+        });
+        publishBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            publishBtn.disabled = true;
+            status.textContent = 'Publishing improved protocol…';
+            try {
+                session = await API.publishProtocolAutoSession(session.session_id);
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                status.textContent = 'Published. You can start a fresh run now.';
+                UI.notify('Improved protocol published.', 'success');
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to publish improved protocol', err, {
+                    context: 'Auto Protocol publish failed',
+                });
+                status.textContent = 'Publish failed.';
+            }
+            publishBtn.disabled = false;
+            syncActions();
+        });
+        runBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            runBtn.disabled = true;
+            status.textContent = 'Publishing and starting improved run…';
+            try {
+                session = await API.runProtocolAutoSession(session.session_id, { origin_channel: 'registry' });
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                const runId = _runAutoSessionRunId(session);
+                view.close();
+                if (runId) {
+                    UI.notify('Improved run started.', 'success');
+                    Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
+                    return;
+                }
+                UI.notify('Improved run started, but no run id was returned.', 'success');
+            } catch (err) {
+                UI.reportError('Failed to run improved protocol', err, {
+                    context: 'Auto Protocol run failed',
+                });
+                status.textContent = 'Run failed.';
+            }
+            runBtn.disabled = false;
+            syncActions();
+        });
+        syncActions();
+    }
+
     function _buildRunActionBar({ sticky = false, specs = null } = {}) {
         const runActionBar = document.createElement('div');
         runActionBar.className = sticky ? 'editor-actions protocol-sticky-actions' : 'editor-actions';
@@ -8288,6 +8669,14 @@ function renderProtocolRuns(container) {
         });
         runActionBar.appendChild(exportRunButton);
 
+        const improveRunButton = document.createElement('button');
+        improveRunButton.type = 'button';
+        improveRunButton.className = 'btn btn-primary';
+        improveRunButton.textContent = 'Improve this run';
+        improveRunButton.disabled = !currentRun?.run?.protocol_id;
+        improveRunButton.addEventListener('click', _openImproveRunDialog);
+        runActionBar.appendChild(improveRunButton);
+
         return runActionBar;
     }
 
@@ -8302,7 +8691,48 @@ function renderProtocolRuns(container) {
         panel.appendChild(title);
 
         const controls = document.createElement('div');
-        controls.className = 'route-controls';
+        controls.className = 'route-controls run-view-controls';
+        const viewFilterControl = UI.createSegmentedControl(
+            _compactProtocolRunViewOptions(),
+            (value) => {
+                runViewFilter = _protocolRunViewFilterValue(value);
+                if (runPaginator) runPaginator.reset(0);
+                currentRunId = '';
+                currentRun = null;
+                currentIssues = [];
+                lastRunEvent = null;
+                activeRunDetailSection = '';
+                _resetRunStageEvidenceSelection();
+                activeRunArtifactStageExecutionId = '';
+                runDetailLoading = false;
+                runDetailRequestToken += 1;
+                _bindRunSubscription();
+                _writeState({ push: true });
+                renderRunsRoute();
+            },
+            { label: 'Run view', value: runViewFilter },
+        );
+        controls.appendChild(viewFilterControl.element);
+        panel.appendChild(controls);
+
+        const secondaryFilters = document.createElement('details');
+        secondaryFilters.className = 'run-secondary-filters';
+        secondaryFilters.open = Boolean(issueKindFilter || includeGenerated);
+        const secondarySummary = document.createElement('summary');
+        const secondaryTitle = document.createElement('span');
+        secondaryTitle.textContent = 'Issue and audit filters';
+        secondarySummary.appendChild(secondaryTitle);
+        const secondaryState = document.createElement('small');
+        secondaryState.textContent = [
+            issueKindFilter
+                ? (PROTOCOL_ISSUE_FILTER_OPTIONS.find((item) => item.value === issueKindFilter)?.label || 'Issue view')
+                : 'Runs',
+            includeGenerated ? 'generated shown' : 'generated hidden',
+        ].join(' · ');
+        secondarySummary.appendChild(secondaryState);
+        secondaryFilters.appendChild(secondarySummary);
+        const secondaryBody = document.createElement('div');
+        secondaryBody.className = 'run-secondary-filter-body';
         const issueFilterControl = UI.createSegmentedControl(
             PROTOCOL_ISSUE_FILTER_OPTIONS,
             (value) => {
@@ -8317,12 +8747,13 @@ function renderProtocolRuns(container) {
             },
             { label: 'Run triage focus', value: issueKindFilter || '' },
         );
-        controls.appendChild(issueFilterControl.element);
+        secondaryBody.appendChild(issueFilterControl.element);
 
         const generatedToggle = document.createElement('a');
         UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs');
-        controls.appendChild(generatedToggle);
-        panel.appendChild(controls);
+        secondaryBody.appendChild(generatedToggle);
+        secondaryFilters.appendChild(secondaryBody);
+        panel.appendChild(secondaryFilters);
 
         if (issueListActive) {
             if (runPaginator) runPaginator.clear();
@@ -8362,7 +8793,7 @@ function renderProtocolRuns(container) {
             issuesByRunId.set(runId, issue);
         });
 
-        const runSource = UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated });
+        const runSource = [...(runs || [])];
         if (currentRunId && !runSource.some((item) => _runRecordId(item) === String(currentRunId || ''))) {
             const selectedHiddenRun = (runs || []).find((item) => _runRecordId(item) === String(currentRunId || ''));
             if (selectedHiddenRun) {
@@ -8373,6 +8804,9 @@ function renderProtocolRuns(container) {
         }
         panel.appendChild(_buildRunsOverviewStrip(runSource, issuesByRunId));
         const listRuns = runSource.filter((item) => {
+            const runId = _runRecordId(item);
+            const issue = issuesByRunId.get(String(runId || '').trim()) || null;
+            if (!_runMatchesViewFilter(item, issue)) return false;
             if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
             if (!runSearch) return true;
             const haystack = [
@@ -8404,9 +8838,9 @@ function renderProtocolRuns(container) {
                     item.updated_at ? `Updated ${UI.relativeTime(item.updated_at)}` : '',
                     item.origin_channel ? `From ${item.origin_channel}` : '',
                 ],
-                groupKey: group.key,
-                groupLabel: group.label,
-                groupRank: group.rank,
+                groupKey: runViewFilter === 'attention' ? group.key : '',
+                groupLabel: runViewFilter === 'attention' ? group.label : '',
+                groupRank: runViewFilter === 'attention' ? group.rank : 0,
                 groupMeta: group.key === 'attention'
                     ? 'Review blocked or failed work first'
                     : group.key === 'active'
@@ -8940,19 +9374,17 @@ function renderProtocolRuns(container) {
             const actions = document.createElement('div');
             actions.className = 'run-focus-actions';
             const actionSpecs = _runActionSpecs().filter((spec) => spec.visible !== false);
-            if (actionSpecs.length) {
-                const actionTitle = document.createElement('div');
-                actionTitle.className = 'detail-label';
-                actionTitle.textContent = 'Operator controls';
-                actions.appendChild(actionTitle);
-                if (actionSpecs.some((spec) => spec.intervention)) {
-                    const actionNote = document.createElement('p');
-                    actionNote.className = 'quiet-note run-focus-action-note';
-                    actionNote.textContent = 'These controls can intervene in the current stage; use them only when the displayed stage evidence is enough to make that decision.';
-                    actions.appendChild(actionNote);
-                }
-                actions.appendChild(_buildRunActionBar({ specs: actionSpecs }));
+            const actionTitle = document.createElement('div');
+            actionTitle.className = 'detail-label';
+            actionTitle.textContent = actionSpecs.length ? 'Operator controls' : 'Run actions';
+            actions.appendChild(actionTitle);
+            if (actionSpecs.some((spec) => spec.intervention)) {
+                const actionNote = document.createElement('p');
+                actionNote.className = 'quiet-note run-focus-action-note';
+                actionNote.textContent = 'These controls can intervene in the current stage; use them only when the displayed stage evidence is enough to make that decision.';
+                actions.appendChild(actionNote);
             }
+            actions.appendChild(_buildRunActionBar({ specs: actionSpecs }));
             lower.appendChild(actions);
             if (actions.childElementCount) {
                 hero.appendChild(lower);
@@ -9528,6 +9960,7 @@ function renderProtocolRuns(container) {
             currentIssues,
             lastRunEvent,
             issueKindFilter,
+            runViewFilter,
             runStatusFilter,
             runSearch,
             includeGenerated,

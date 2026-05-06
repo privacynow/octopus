@@ -402,6 +402,28 @@ def build_protocol_router(
     def _runtime_record_json(runtime: ProtocolArtifactRuntimeInstanceRecord | None) -> dict[str, object] | None:
         return _json_payload(runtime) if runtime is not None else None
 
+    def _merge_runtime_record(
+        existing: ProtocolArtifactRuntimeInstanceRecord,
+        update: ProtocolArtifactRuntimeInstanceRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord:
+        payload = existing.model_dump(mode="json")
+        update_payload = update.model_dump(mode="json", exclude_none=True)
+        for key in (
+            "agent_id",
+            "manifest",
+            "manifest_path",
+            "artifact_path",
+            "runtime_url",
+            "ui_url",
+            "api_url",
+            "health_url",
+            "internal_url",
+        ):
+            if not update_payload.get(key):
+                update_payload.pop(key, None)
+        payload.update(update_payload)
+        return ProtocolArtifactRuntimeInstanceRecord.model_validate(payload)
+
     def _metadata_from_auto_session(session: ProtocolAutoDesignSessionRecord) -> dict[str, str]:
         doc = session.draft_definition_json.as_dict()
         metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
@@ -1994,10 +2016,7 @@ def build_protocol_router(
         if not result.success or not isinstance(result.payload, StopArtifactRuntimeResult):
             raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_STOP_FAILED", message=result.error_detail or "Bot failed to stop artifact runtime.")
         stopped = result.payload.result.runtime or runtime
-        saved = store.save_protocol_artifact_runtime(
-            runtime.model_copy(update=stopped.model_dump(mode="json", exclude_none=True)),
-            access=access,
-        )
+        saved = store.save_protocol_artifact_runtime(_merge_runtime_record(runtime, stopped), access=access)
         store.append_protocol_artifact_runtime_event(
             _runtime_event(
                 runtime=saved,
@@ -2126,8 +2145,8 @@ def build_protocol_router(
         if not result.success or not isinstance(result.payload, ArtifactRuntimeHealthResult):
             raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_HEALTH_FAILED", message=result.error_detail or "Bot failed to check artifact runtime health.")
         if result.payload.health.runtime is not None:
-            store.save_protocol_artifact_runtime(
-                runtime.model_copy(update=result.payload.health.runtime.model_dump(mode="json", exclude_none=True)),
+            runtime = store.save_protocol_artifact_runtime(
+                _merge_runtime_record(runtime, result.payload.health.runtime),
                 access=access,
             )
         store.append_protocol_artifact_runtime_event(

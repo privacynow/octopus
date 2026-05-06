@@ -38,6 +38,9 @@ from app.storage import default_session, ensure_data_dirs, load_session, save_se
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeManifestRecord,
     ProtocolAutoDesignModelResponseRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignWorkPackageRecord,
@@ -56,6 +59,7 @@ from octopus_sdk.registry.management import (
     ListCatalogSkillsResult,
     ManagementRequest,
     ManagementResult,
+    StopArtifactRuntimeResult,
 )
 from octopus_sdk.registry.models import AgentRecord, RegistryJsonRecord, TaskRecord
 from octopus_sdk.registry.management_executor import (
@@ -5038,6 +5042,92 @@ def test_protocol_artifact_runtime_status_detects_static_package(monkeypatch, tm
     assert payload["runtime"]["manifest"]["runtime_kind"] == "static"
     assert payload["runtime"]["runtime_url"] == "/runtime/protocol-runs/run-1/artifacts/package/app/"
     assert payload["package_url"].endswith("/v1/protocol-runs/run-1/artifacts/package/content?download=1")
+
+
+def test_protocol_artifact_runtime_stop_preserves_typed_manifest(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    manifest = ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/")
+    existing_runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-1",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=manifest,
+        manifest_path="package/octopus-runtime.json",
+        artifact_path=str(tmp_path / "package"),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+        ui_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+        health_url="/v1/protocol-runs/run-1/artifacts/package/runtime/health",
+    )
+    saved_runtime: ProtocolArtifactRuntimeInstanceRecord | None = None
+
+    class _Store:
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del access
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            return existing_runtime
+
+        def save_protocol_artifact_runtime(self, runtime: ProtocolArtifactRuntimeInstanceRecord, *, access):
+            del access
+            nonlocal saved_runtime
+            assert isinstance(runtime.manifest, ProtocolArtifactRuntimeManifestRecord)
+            saved_runtime = runtime
+            return runtime
+
+        def append_protocol_artifact_runtime_event(self, event, *, access):
+            del access
+            return event
+
+    from octopus_registry.management_client import RegistryManagementClient
+
+    async def _send(self, *, agent_id: str, payload, timeout_seconds: int = 30):
+        del self, timeout_seconds
+        assert agent_id == "agent-1"
+        assert payload.operation == "stop_artifact_runtime"
+        stopped = ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id="runtime-1",
+            protocol_run_id="run-1",
+            artifact_key="package",
+            status="stopped",
+            stopped_by="operator",
+            stopped_at="2026-05-06T04:00:00Z",
+        )
+        return ManagementResult(
+            request_id="mgmt-1",
+            agent_id="agent-1",
+            success=True,
+            payload=StopArtifactRuntimeResult(
+                result=ProtocolArtifactRuntimeActionResultRecord(
+                    ok=True,
+                    status="stopped",
+                    message="Runtime stopped.",
+                    runtime=stopped,
+                )
+            ),
+        )
+
+    monkeypatch.setattr(RegistryManagementClient, "send", _send)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/stop")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert saved_runtime is not None
+    assert saved_runtime.status == "stopped"
+    assert saved_runtime.agent_id == "agent-1"
+    assert saved_runtime.manifest == manifest
+    assert saved_runtime.runtime_url == "/runtime/protocol-runs/run-1/artifacts/package/app/"
 
 
 def test_task_artifact_content_route_uses_rehearsal_text_when_file_unavailable(monkeypatch, tmp_path: Path):

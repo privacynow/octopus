@@ -1168,6 +1168,109 @@ class ProtocolPostgresAdapter:
         blockers = [message for pattern, message in blocker_patterns if re.search(pattern, normalized)]
         return list(dict.fromkeys(blockers))
 
+    @staticmethod
+    def _runtime_fetch_counts_as_core_exercise(
+        metadata: Mapping[str, object],
+        manifest: ProtocolArtifactRuntimeManifestRecord | None,
+    ) -> bool:
+        status_code = int(metadata.get("status_code", 0) or 0)
+        if status_code <= 0 or status_code >= 500:
+            return False
+        method = str(metadata.get("method", "GET") or "GET").strip().upper()
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            return True
+        path = str(metadata.get("path", "") or "").strip() or "/"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        path_without_query = path.split("?", 1)[0].split("#", 1)[0] or "/"
+        manifest = manifest or ProtocolArtifactRuntimeManifestRecord()
+        health_path = str(manifest.health_path or "/health").strip() or "/health"
+        if not health_path.startswith("/"):
+            health_path = f"/{health_path}"
+        ui_path = str(manifest.ui_path or "/").strip() or "/"
+        if not ui_path.startswith("/"):
+            ui_path = f"/{ui_path}"
+        if path_without_query == health_path:
+            return False
+        if bool(metadata.get("is_api")):
+            return path_without_query not in {"/", "/docs", "/api-docs", "/openapi.json", health_path}
+        if path_without_query == ui_path or path_without_query == "/":
+            return False
+        if re.search(r"\.(?:css|js|mjs|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$", path_without_query, re.I):
+            return False
+        return True
+
+    @staticmethod
+    def _runtime_acceptance_text_has_visible_result_evidence(text: str) -> bool:
+        normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not normalized:
+            return False
+        negative_patterns = [
+            r"\b(no|not|nothing|never)\s+(visible|shown|displayed|rendered|returned|updated|changed|worked|working|result)",
+            r"\b(did not|does not|cannot|could not|failed to|unable to)\s+(show|display|render|return|update|exercise|run|work)",
+            r"\b(button|control|action|flow)\s+(did not|does not|failed to|cannot|could not)\b",
+        ]
+        if any(re.search(pattern, normalized) for pattern in negative_patterns):
+            return False
+        action_terms = (
+            "clicked",
+            "selected",
+            "submitted",
+            "ran",
+            "called",
+            "posted",
+            "played",
+            "exercised",
+            "tested",
+            "opened",
+            "used",
+            "triggered",
+            "completed",
+        )
+        result_terms = (
+            "visible",
+            "displayed",
+            "shown",
+            "rendered",
+            "returned",
+            "updated",
+            "result",
+            "response",
+            "decision",
+            "score",
+            "chart",
+            "dashboard",
+            "screen",
+            "output",
+            "evidence",
+        )
+        return any(term in normalized for term in action_terms) and any(term in normalized for term in result_terms)
+
+    def _runtime_acceptance_result_text(
+        self,
+        conn,
+        *,
+        stage_execution_row: Mapping[str, object],
+        engine,
+    ) -> str:
+        parts = [
+            str(getattr(engine, "transition_reason", "") or ""),
+        ]
+        routed_task_id = str(stage_execution_row.get("routed_task_id", "") or "").strip()
+        if routed_task_id:
+            task_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT result_json FROM {SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            result_json = task_row.get("result_json") if isinstance(task_row, Mapping) else {}
+            if isinstance(result_json, Mapping):
+                parts.extend([
+                    str(result_json.get("summary", "") or ""),
+                    str(result_json.get("full_text", "") or ""),
+                ])
+        return "\n".join(part for part in parts if part.strip())
+
     def _runtime_acceptance_evidence_gate(
         self,
         conn,
@@ -1307,18 +1410,27 @@ class ProtocolPostgresAdapter:
             and bool(item.metadata_json.as_dict().get("ok"))
             for item in events
         )
+        has_client_interaction = any(str(item.event_kind or "") == "client_interaction" for item in events)
         has_exercised = any(
             str(item.event_kind or "") == "fetch"
-            and int(item.metadata_json.as_dict().get("status_code", 0) or 0) < 500
+            and self._runtime_fetch_counts_as_core_exercise(item.metadata_json.as_dict(), effective_manifest)
             for item in events
         )
+        evidence_text = self._runtime_acceptance_result_text(
+            conn,
+            stage_execution_row=stage_execution_row,
+            engine=engine,
+        )
+        has_visible_result_evidence = self._runtime_acceptance_text_has_visible_result_evidence(evidence_text)
         missing = []
         if not has_started:
             missing.append("runtime start")
         if not has_healthy:
             missing.append("healthy runtime check")
-        if not has_exercised:
-            missing.append("UI/API exercise through Registry routing")
+        if not (has_exercised or has_client_interaction):
+            missing.append("interactive UI/API exercise through Registry routing")
+        if not has_visible_result_evidence:
+            missing.append("written evidence of the visible result from an exercised core action")
         if not missing:
             return engine
 

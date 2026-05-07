@@ -229,6 +229,7 @@ def _rewrite_runtime_html_content(
 (() => {{
   const appBase = {json.dumps(app_base)};
   const apiBase = {json.dumps(api_base)};
+  const eventEndpoint = {json.dumps(f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/client-event")};
   const apiRoot = {json.dumps(_runtime_http_path(str(manifest.api_base_path or "/api"), "/api").rstrip("/") or "/api")};
   const healthPath = {json.dumps(_runtime_http_path(str(manifest.health_path or "/health"), "/health").rstrip("/") or "/health")};
   const rewrite = (value) => {{
@@ -243,6 +244,7 @@ def _rewrite_runtime_html_content(
   window.OCTOPUS_RUNTIME = Object.freeze({{
     appBase,
     apiBase,
+    eventEndpoint,
     healthPath: appBase + healthPath,
     rewrite
   }});
@@ -325,6 +327,43 @@ def _rewrite_runtime_html_content(
       return originalSend.apply(this, args);
     }};
   }}
+  const cleanText = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 160);
+  const describeTarget = (target) => {{
+    if (!target || target === document) return {{}};
+    const element = target.closest && target.closest('button,a,input,select,textarea,[role="button"],[data-action]');
+    const node = element || target;
+    return {{
+      tag: String(node.tagName || '').toLowerCase(),
+      role: String(node.getAttribute && node.getAttribute('role') || ''),
+      text: cleanText(node.getAttribute && (node.getAttribute('aria-label') || node.getAttribute('title')) || node.innerText || node.textContent || ''),
+      href: String(node.getAttribute && node.getAttribute('href') || '').slice(0, 240),
+      action: String(node.getAttribute && (node.getAttribute('data-action') || node.getAttribute('name')) || '').slice(0, 120)
+    }};
+  }};
+  const reportClientEvent = (event) => {{
+    const details = describeTarget(event.target);
+    if (!details.tag && !details.text && !details.action) return;
+    const payload = {{
+      event_type: String(event.type || 'interaction'),
+      page_path: window.location.pathname,
+      page_hash: window.location.hash,
+      ...details
+    }};
+    ensureCsrf().then((token) => {{
+      const headers = {{ 'Content-Type': 'application/json' }};
+      if (token) headers['X-CSRF-Token'] = token;
+      return originalFetch.call(window, eventEndpoint, {{
+        method: 'POST',
+        headers,
+        credentials: 'same-origin',
+        keepalive: true,
+        body: JSON.stringify(payload)
+      }});
+    }}).catch(() => {{}});
+  }};
+  document.addEventListener('click', reportClientEvent, true);
+  document.addEventListener('submit', reportClientEvent, true);
+  document.addEventListener('change', reportClientEvent, true);
 }})();
 </script>
 """.strip()
@@ -2786,6 +2825,56 @@ def build_protocol_router(
         )
         return _json_payload({"items": events})
 
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/client-event")
+    async def resource_record_protocol_artifact_runtime_client_event(
+        request: Request,
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, Mapping):
+            payload = {}
+        event_type = str(payload.get("event_type", "interaction") or "interaction").strip().lower()[:40]
+        tag = str(payload.get("tag", "") or "").strip().lower()[:40]
+        text = re.sub(r"\s+", " ", str(payload.get("text", "") or "").strip())[:160]
+        action = str(payload.get("action", "") or "").strip()[:120]
+        summary_bits = [event_type]
+        if tag:
+            summary_bits.append(tag)
+        if text:
+            summary_bits.append(text)
+        elif action:
+            summary_bits.append(action)
+        event = store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="client_interaction",
+                actor_ref=access.actor_ref,
+                summary=" ".join(summary_bits)[:240],
+                metadata={
+                    "event_type": event_type,
+                    "tag": tag,
+                    "role": str(payload.get("role", "") or "").strip()[:80],
+                    "text": text,
+                    "action": action,
+                    "href": str(payload.get("href", "") or "").strip()[:240],
+                    "page_path": str(payload.get("page_path", "") or "").strip()[:240],
+                    "page_hash": str(payload.get("page_hash", "") or "").strip()[:120],
+                },
+            ),
+            access=access,
+        )
+        return _json_payload({"event": event})
+
     @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/logs")
     async def resource_get_protocol_artifact_runtime_logs(
         run_id: str,
@@ -2924,7 +3013,13 @@ def build_protocol_router(
                 event_kind="fetch",
                 actor_ref=access.actor_ref,
                 summary=f"{request.method} {outbound_path} -> {result.payload.status_code}",
-                metadata={"status_code": result.payload.status_code},
+                metadata={
+                    "status_code": result.payload.status_code,
+                    "method": request.method.upper(),
+                    "path": outbound_path,
+                    "query_string": request.url.query,
+                    "is_api": is_api,
+                },
             ),
             access=access,
         )

@@ -1975,7 +1975,8 @@ def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgr
     for event_kind, metadata in (
         ("started", {}),
         ("health_checked", {"ok": True, "status_code": 200}),
-        ("fetch", {"status_code": 200}),
+        ("fetch", {"status_code": 200, "method": "GET", "path": "/", "is_api": False}),
+        ("client_interaction", {"event_type": "click", "tag": "button", "text": "Run scenario"}),
     ):
         store.append_protocol_artifact_runtime_event(
             ProtocolArtifactRuntimeEventRecord(
@@ -1990,11 +1991,39 @@ def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgr
             access=operator_access(),
         )
 
+    still_blocked = store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="accept",
+        reason="Opened the app and clicked Run scenario, but no visible result was displayed.",
+    )
+    assert still_blocked.ok is True
+    assert still_blocked.run is not None
+    assert still_blocked.run.status == "blocked"
+    assert still_blocked.run.blocked_code == "runtime_evidence_required"
+
+    store.append_protocol_artifact_runtime_event(
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id=created.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            event_kind="fetch",
+            actor_ref="operator-session",
+            summary="POST /decisions -> 200",
+            metadata_json=RegistryJsonRecord.model_validate({
+                "status_code": 200,
+                "method": "POST",
+                "path": "/decisions",
+                "is_api": True,
+            }),
+        ),
+        access=operator_access(),
+    )
     accepted = store.act_on_protocol_run(
         created.run.protocol_run_id,
         access=operator_access(),
         action="accept",
-        reason="Runtime started, health passed, and the UI was exercised.",
+        reason="Clicked Run scenario and the decision result was displayed in the app.",
     )
     exported = store.export_protocol_run(created.run.protocol_run_id, access=operator_access())
 
@@ -2002,7 +2031,12 @@ def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgr
     assert accepted.run is not None
     assert accepted.run.status == "completed"
     assert [item.runtime_instance_id for item in exported.runtime_instances] == [runtime.runtime_instance_id]
-    assert {item.event_kind for item in exported.runtime_events} >= {"started", "health_checked", "fetch"}
+    assert {item.event_kind for item in exported.runtime_events} >= {
+        "started",
+        "health_checked",
+        "fetch",
+        "client_interaction",
+    }
 
 
 def test_registry_store_blocks_final_accept_when_runtime_start_command_is_not_run_ready(postgres_registry_truncated: str, tmp_path: Path) -> None:

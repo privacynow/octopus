@@ -301,6 +301,15 @@ class _StaticAwareness:
         )
 
 
+def test_bot_runtime_worker_execution_runtime_preserves_agent_awareness_service():
+    with fresh_env() as (_data_dir, _cfg, _prov):
+        submitter = current_runtime().submitter
+        worker_runtime = submitter._execution_runtime()
+
+        assert worker_runtime.services.agent_awareness is current_runtime().services.execution_services.agent_awareness
+        assert worker_runtime.services.agent_awareness is not None
+
+
 async def test_execute_request_injects_sdk_agent_awareness_into_telegram_context():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)

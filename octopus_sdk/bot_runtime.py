@@ -716,6 +716,7 @@ class BotRuntime:
             execution_faults=services.execution_faults,
             agent_directory=services.agent_directory,
             conversation_projection=services.conversation_projection,
+            agent_awareness=services.agent_awareness,
         )
         return ExecutionRuntime(
             dispatch=ProviderDispatchRuntime(

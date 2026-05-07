@@ -280,6 +280,9 @@ async def test_execute_request_runs__explicit_execution_runtime():
 
 
 class _StaticAwareness:
+    def __init__(self, protocol_name: str = "Payments Risk Engine") -> None:
+        self.protocol_name = protocol_name
+
     async def build_awareness(self, request):
         return AgentAwarenessRecord(
             origin_channel=request.origin_channel,
@@ -290,7 +293,7 @@ class _StaticAwareness:
                 {
                     "protocol_id": "protocol-risk",
                     "slug": "risk-engine",
-                    "display_name": "Payments Risk Engine",
+                    "display_name": self.protocol_name,
                     "description": "Build and operate a risk decision system.",
                     "lifecycle_state": "published",
                 }
@@ -329,6 +332,58 @@ async def test_execute_request_injects_sdk_agent_awareness_into_telegram_context
         assert "Octopus Agent Awareness" in system_prompt
         assert "Payments Risk Engine" in system_prompt
         assert "Telegram shortcuts" in system_prompt
+
+
+async def test_execute_request_resets_codex_thread_when_agent_awareness_changes():
+    with fresh_env(provider_name="codex") as (_data_dir, _cfg, prov):
+        chat = FakeChat(12345)
+        conversation_key = telegram_conversation_key(chat.id)
+        base_runtime = current_execution_runtime()
+        session = base_runtime.services.sessions.load(
+            conversation_key,
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            approval_mode="off",
+        )
+        resolved = base_runtime.services.sessions.resolve_context(
+            session,
+            config=base_runtime.dispatch.config,
+            provider_name=prov.name,
+            trust_tier="trusted",
+        )
+        session.provider_state["thread_id"] = "stale-thread"
+        session.provider_state["context_hash"] = resolved.context_hash
+        session.provider_state["boot_id"] = base_runtime.dispatch.boot_id
+        session.provider_state["agent_awareness_digest"] = "stale-awareness"
+        base_runtime.services.sessions.save(conversation_key, session)
+
+        message = TelegramExecutionMessage(current_runtime(), FakeMessage(chat=chat, text="what protocols can you run?"))
+        runtime = ExecutionRuntime(
+            dispatch=base_runtime.dispatch,
+            services=replace(base_runtime.services, agent_awareness=_StaticAwareness("Updated Protocol Catalog")),
+            interrupted_exc=base_runtime.interrupted_exc,
+        )
+
+        outcome = await execute_request(
+            build_telegram_transport_identity(
+                current_runtime(),
+                message,
+                chat.id,
+                actor_key=telegram_actor_key(42),
+            ),
+            "what protocols can you run?",
+            [],
+            message,
+            runtime=runtime,
+        )
+
+        assert outcome is not None
+        assert outcome.status == "completed"
+        assert prov.run_calls[0]["provider_state"].get("thread_id") is None
+        stored = load_session_disk(_data_dir, conversation_key, prov)
+        provider_state = stored.get("provider_state", {})
+        assert provider_state.get("agent_awareness_digest")
+        assert provider_state.get("agent_awareness_digest") != "stale-awareness"
 
 
 async def test_execute_request_latches_irrecoverable_provider_failure_and_blocks_retry():

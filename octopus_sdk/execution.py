@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
 import secrets
@@ -338,6 +339,13 @@ def _append_system_prompt_section(system_prompt: str, section: str) -> str:
     return f"{system_prompt}\n\n{section}"
 
 
+def _system_prompt_section_digest(section: str) -> str:
+    section = str(section or "").strip()
+    if not section:
+        return ""
+    return hashlib.sha256(section.encode()).hexdigest()
+
+
 async def _agent_awareness_prompt_block(
     runtime: ExecutionRuntime,
     transport: TransportIdentity,
@@ -507,6 +515,7 @@ async def _execute_request_locked(
         resolved,
         trust_tier=trust_tier,
     )
+    awareness_digest = _system_prompt_section_digest(awareness_block)
     context.system_prompt = _append_system_prompt_section(context.system_prompt, awareness_block)
     context.skip_permissions = skip_permissions or trusted_conversation_bypasses_approvals(
         session,
@@ -520,14 +529,18 @@ async def _execute_request_locked(
     if prov.name == "codex":
         stored_hash = session.provider_state.get("context_hash")
         stored_boot = session.provider_state.get("boot_id")
+        stored_awareness_digest = str(session.provider_state.get("agent_awareness_digest") or "")
+        awareness_changed = (stored_awareness_digest or awareness_digest) and stored_awareness_digest != awareness_digest
         stale_thread = (
             (stored_hash and stored_hash != context_hash)
             or (stored_boot and stored_boot != runtime.dispatch.boot_id)
+            or bool(awareness_changed)
         )
         if stale_thread and session.provider_state.get("thread_id"):
             session.provider_state["thread_id"] = None
         session.provider_state["context_hash"] = context_hash
         session.provider_state["boot_id"] = runtime.dispatch.boot_id
+        session.provider_state["agent_awareness_digest"] = awareness_digest
         _save(runtime, conversation_key, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))

@@ -494,11 +494,11 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
         browseHref: browsable ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { browse: true }) : '',
         downloadHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }) : '',
         downloadLabel: runtimeExpected ? 'Download zip' : 'Download',
-        copyPathText: prominentRuntime ? '' : displayPath,
+        copyPathText: prominentRuntime || runtimeExpected ? '' : displayPath,
         available,
         unavailableReason: missing ? 'Declared artifact, not produced yet.' : 'Artifact path is not available on this host.',
     });
-    if (!missing && artifact?.artifact_key && !prominentRuntime) {
+    if (!missing && artifact?.artifact_key && !prominentRuntime && !runtimeExpected) {
         const snapshotBtn = document.createElement('button');
         snapshotBtn.type = 'button';
         snapshotBtn.className = 'btn btn-sm';
@@ -9391,6 +9391,11 @@ function renderProtocolRuns(container) {
             const identifier = definition && String(definition.display_name || '').trim()
                 ? String(artifact.artifact_key || '').trim()
                 : '';
+            const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+            const explicitPrimary = autoMeta.primary_artifact || {};
+            const explicitPrimaryKey = String(explicitPrimary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            const isPrimaryArtifact = explicitPrimaryKey && String(artifact.artifact_key || '').trim() === explicitPrimaryKey;
+            const runtimeExpected = primaryRuntimeExpected(artifact, definition, isPrimaryArtifact ? explicitPrimary : {});
             return UI.createArtifactListRow({
                 label: _protocolArtifactDisplayLabel(artifact, definition),
                 sublabelParts: [
@@ -9405,7 +9410,10 @@ function renderProtocolRuns(container) {
                     currentRun.run.protocol_run_id,
                     artifact,
                     definition,
-                    { missing: missing || !artifact.exists },
+                    {
+                        missing: missing || !artifact.exists,
+                        runtimeExpected,
+                    },
                 ),
             });
         };
@@ -9580,7 +9588,9 @@ function renderProtocolRuns(container) {
         const primaryRuntimeExpected = (artifact, definition = {}, primary = {}) => {
             const artifactKey = String(artifact?.artifact_key || primary?.artifact_key || '').trim();
             const blockedCode = String(currentRun?.run?.blocked_code || '').trim().toLowerCase();
-            if (artifactKey && blockedCode.startsWith('runtime_')) return true;
+            const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+            const explicitPrimaryKey = String(autoMeta.primary_artifact?.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            if (artifactKey && blockedCode.startsWith('runtime_') && (!explicitPrimaryKey || artifactKey === explicitPrimaryKey)) return true;
             const parts = [
                 primary?.open_behavior,
                 definition?.open_behavior,
@@ -9798,21 +9808,12 @@ function renderProtocolRuns(container) {
                 actions.appendChild(actionNote);
             }
             actions.appendChild(_buildRunActionBar({ specs: actionSpecs }));
-            lower.appendChild(actions);
-            if (actions.childElementCount) {
-                hero.appendChild(lower);
-            }
-
             const lifecycleSpecs = _runLifecycleSpecs().filter((spec) => spec.visible !== false);
             if (lifecycleSpecs.length) {
-                const lifecycle = document.createElement('div');
-                lifecycle.className = 'run-focus-lower';
-                const lifecycleActions = document.createElement('div');
-                lifecycleActions.className = 'run-focus-actions';
                 const lifecycleTitle = document.createElement('div');
                 lifecycleTitle.className = 'detail-label';
                 lifecycleTitle.textContent = 'Lifecycle';
-                lifecycleActions.appendChild(lifecycleTitle);
+                actions.appendChild(lifecycleTitle);
                 const row = document.createElement('div');
                 row.className = 'editor-actions';
                 lifecycleSpecs.forEach((item) => {
@@ -9824,9 +9825,11 @@ function renderProtocolRuns(container) {
                     button.addEventListener('click', () => _openRunLifecycleDialog(item));
                     row.appendChild(button);
                 });
-                lifecycleActions.appendChild(row);
-                lifecycle.appendChild(lifecycleActions);
-                hero.appendChild(lifecycle);
+                actions.appendChild(row);
+            }
+            lower.appendChild(actions);
+            if (actions.childElementCount) {
+                hero.appendChild(lower);
             }
 
             return hero;
@@ -10187,10 +10190,36 @@ function renderProtocolRuns(container) {
             };
         };
 
-        const buildPrimaryArtifactPanel = () => {
+        const buildPrimaryArtifactPanel = ({ includeRunControls = false } = {}) => {
             const inferred = inferPrimaryArtifact();
             if (!inferred) return null;
             const { artifact, definition, primary, key } = inferred;
+            const producerStage = artifactStageFor(artifact);
+            const producerStageDef = producerStage
+                ? stageDefinitionByKey.get(String(producerStage.stage_key || '')) || {}
+                : {};
+            const producerTask = taskForStage(producerStage);
+            const producerUpdate = taskUpdateText(producerTask, 260)
+                || producerStage?.decision_summary
+                || producerStage?.failure_detail
+                || '';
+            const finalStageCandidates = stageRows.filter((item) => {
+                const stageKey = String(item?.stage_key || '').trim();
+                const stageDef = stageDefinitionByKey.get(stageKey) || {};
+                const label = `${stageKey} ${String(stageDef.display_name || '')}`.toLowerCase();
+                return /(accept|final|release|evidence)/i.test(label);
+            });
+            const finalStage = latestStageExecution(finalStageCandidates) || latestStageExecution(stageRows);
+            const finalStageDef = finalStage
+                ? stageDefinitionByKey.get(String(finalStage.stage_key || '')) || {}
+                : {};
+            const finalTask = taskForStage(finalStage);
+            const finalUpdate = finalStage?.decision_summary
+                || taskUpdateText(finalTask, 320)
+                || finalStage?.failure_detail
+                || '';
+            const totalExecutions = stageRows.length;
+            const totalStages = stageAttemptsByKey.size || runStageCount();
             const panel = document.createElement('article');
             panel.className = 'run-primary-artifact-panel';
             const head = document.createElement('div');
@@ -10231,6 +10260,43 @@ function renderProtocolRuns(container) {
             );
             actions.classList.add('run-primary-actions');
             panel.appendChild(actions);
+
+            const story = document.createElement('div');
+            story.className = 'run-primary-story-list';
+            if (producerStage) {
+                story.appendChild(UI.renderListRow({
+                    label: `Built by ${producerStageDef.display_name || producerStage.stage_key || 'producer stage'}`,
+                    sublabel: [
+                        producerUpdate,
+                        stageAttemptLabel(producerStage),
+                        producerStage.completed_at ? `completed ${UI.relativeTime(producerStage.completed_at)}` : '',
+                    ].filter(Boolean).join(' · '),
+                    badgeText: stageStatusLabel(producerStage),
+                    badgeClass: String(producerStage.status || '').toLowerCase() === 'completed' ? 'badge-connected' : '',
+                }));
+            }
+            if (finalStage && finalStage !== producerStage) {
+                story.appendChild(UI.renderListRow({
+                    label: `Verified by ${finalStageDef.display_name || finalStage.stage_key || 'final review'}`,
+                    sublabel: [
+                        finalUpdate,
+                        stageAttemptLabel(finalStage),
+                        finalStage.completed_at ? `completed ${UI.relativeTime(finalStage.completed_at)}` : '',
+                    ].filter(Boolean).join(' · '),
+                    badgeText: stageStatusLabel(finalStage),
+                    badgeClass: String(finalStage.status || '').toLowerCase() === 'completed' ? 'badge-connected' : '',
+                }));
+            }
+            if (totalExecutions || totalStages) {
+                story.appendChild(UI.renderListRow({
+                    label: 'Execution history',
+                    sublabel: `${totalExecutions || totalStages} execution${(totalExecutions || totalStages) === 1 ? '' : 's'} across ${totalStages || totalExecutions} stage${(totalStages || totalExecutions) === 1 ? '' : 's'}. Full handoff and review history is below.`,
+                    badgeText: stageRows.length > stageAttemptsByKey.size ? 'loops' : 'history',
+                }));
+            }
+            if (story.childElementCount) {
+                panel.appendChild(story);
+            }
             panel.appendChild(UI.renderMetadataGrid([
                 { label: 'Artifact', value: key },
                 { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },
@@ -10242,24 +10308,61 @@ function renderProtocolRuns(container) {
             if (evidence) {
                 panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence' }));
             }
+            if (includeRunControls) {
+                const controls = document.createElement('div');
+                controls.className = 'run-primary-control-bar';
+                const actionSpecs = _runActionSpecs().filter((spec) => spec.visible !== false);
+                if (actionSpecs.length) {
+                    const actionLabel = document.createElement('div');
+                    actionLabel.className = 'detail-label';
+                    actionLabel.textContent = 'Run controls';
+                    controls.appendChild(actionLabel);
+                    controls.appendChild(_buildRunActionBar({ specs: actionSpecs }));
+                }
+                const lifecycleSpecs = _runLifecycleSpecs().filter((spec) => spec.visible !== false);
+                if (lifecycleSpecs.length) {
+                    const lifecycleLabel = document.createElement('div');
+                    lifecycleLabel.className = 'detail-label';
+                    lifecycleLabel.textContent = 'Lifecycle';
+                    controls.appendChild(lifecycleLabel);
+                    const row = document.createElement('div');
+                    row.className = 'editor-actions';
+                    lifecycleSpecs.forEach((item) => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = item.danger ? 'btn btn-danger' : 'btn';
+                        button.textContent = item.label;
+                        button.disabled = !item.enabled;
+                        button.addEventListener('click', () => _openRunLifecycleDialog(item));
+                        row.appendChild(button);
+                    });
+                    controls.appendChild(row);
+                }
+                if (controls.childElementCount) {
+                    panel.appendChild(controls);
+                }
+            }
             return panel;
         };
 
-        detailPanel.appendChild(buildRunFocusHero());
-        const primaryArtifactPanel = buildPrimaryArtifactPanel();
+        const normalizedRunStatus = String(currentRun.run?.status || '').trim().toLowerCase();
+        const primaryOwnsRunStory = !['queued', 'running'].includes(normalizedRunStatus);
+        const primaryArtifactPanel = buildPrimaryArtifactPanel({ includeRunControls: primaryOwnsRunStory });
         if (primaryArtifactPanel) {
             detailPanel.appendChild(primaryArtifactPanel);
+        }
+        if (!primaryArtifactPanel || !primaryOwnsRunStory) {
+            detailPanel.appendChild(buildRunFocusHero());
         }
 
         const stagePanel = document.createElement('div');
         stagePanel.className = 'run-stage-timeline';
         appendSectionTitle(stagePanel, 'Stages', 'Click a stage to see the work, outputs, and decisions for that step.');
         if (stageRows.length > stageAttemptsByKey.size) {
-            stagePanel.appendChild(UI.renderListRow({
-                label: 'Loop/attempt history',
-                sublabel: `${stageRows.length} stage executions across ${stageAttemptsByKey.size} declared stages. Send-backs and repeated attempts are shown in chronological handoff order below.`,
-                badgeText: 'attempts',
-            }));
+            const attemptNote = document.createElement('p');
+            attemptNote.className = 'quiet-note run-stage-attempt-note';
+            attemptNote.textContent = `${stageRows.length} executions across ${stageAttemptsByKey.size} stages; repeated attempts are shown in handoff order.`;
+            stagePanel.appendChild(attemptNote);
         }
         if (stageRows.length) {
             const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
@@ -10343,7 +10446,17 @@ function renderProtocolRuns(container) {
                 missing: true,
             }));
         }
-        detailPanel.appendChild(stagePanel);
+        if (primaryArtifactPanel && primaryOwnsRunStory) {
+            const stageHistory = document.createElement('details');
+            stageHistory.className = 'run-stage-history-disclosure';
+            const summary = document.createElement('summary');
+            summary.textContent = `Stage history (${stageRows.length || stageAttemptsByKey.size})`;
+            stageHistory.appendChild(summary);
+            stageHistory.appendChild(stagePanel);
+            detailPanel.appendChild(stageHistory);
+        } else {
+            detailPanel.appendChild(stagePanel);
+        }
 
         const auditDetails = document.createElement('details');
         auditDetails.className = 'run-audit-disclosure';

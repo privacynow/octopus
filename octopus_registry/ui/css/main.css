@@ -5931,8 +5931,9 @@ select {
 
 .run-focus-hero {
     display: grid;
-    gap: var(--space-3);
-    padding: var(--space-4);
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-3);
     border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
     border-radius: var(--radius-md);
     background:
@@ -5974,8 +5975,8 @@ select {
 .run-focus-title {
     margin: 0;
     color: var(--text);
-    font-size: 1.25rem;
-    line-height: 1.15;
+    font-size: 1.12rem;
+    line-height: 1.18;
 }
 
 .run-focus-stage {
@@ -5989,12 +5990,16 @@ select {
     max-width: 70ch;
     color: var(--text-secondary);
     font-size: var(--text-sm);
-    line-height: 1.5;
+    line-height: 1.38;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 .run-focus-state {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-2);
 }
 
 .run-focus-progress {
@@ -6007,7 +6012,7 @@ select {
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-1-5) var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
@@ -6022,7 +6027,7 @@ select {
     min-width: 0;
     color: var(--text-secondary);
     font-size: var(--text-sm);
-    line-height: 1.4;
+    line-height: 1.32;
     overflow-wrap: anywhere;
 }
 
@@ -6036,7 +6041,7 @@ select {
 
 .run-focus-metrics {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: var(--space-2);
 }
 
@@ -6044,7 +6049,7 @@ select {
     display: grid;
     gap: 1px;
     min-width: 0;
-    padding: var(--space-2);
+    padding: var(--space-1-5) var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--bg-primary) 78%, transparent);
@@ -6067,8 +6072,8 @@ select {
 
 .run-focus-lower {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.65fr);
-    gap: var(--space-3);
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
     align-items: start;
 }
 
@@ -6117,12 +6122,32 @@ select {
 
 .run-primary-artifact-panel {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-2);
     min-width: 0;
-    padding: var(--space-4);
+    padding: var(--space-3);
     border: 1px solid color-mix(in srgb, var(--success) 34%, var(--border));
     border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--success) 7%, var(--bg-secondary));
+}
+
+.run-primary-story-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.run-primary-story-list .list-row {
+    min-width: 0;
+    padding: var(--space-2);
+}
+
+.run-primary-control-bar {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+    padding-top: var(--space-1);
+    border-top: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
 }
 
 .run-primary-artifact-head {
@@ -6144,12 +6169,13 @@ select {
 
 .run-stage-timeline {
     display: grid;
-    gap: var(--space-2);
+    gap: var(--space-1-5);
     min-width: 0;
 }
 
 .run-stage-timeline-list {
     display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
     gap: var(--space-2);
     min-width: 0;
 }
@@ -6165,6 +6191,7 @@ select {
 }
 
 .run-stage-timeline-item.is-expanded {
+    grid-column: 1 / -1;
     border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
 }
 
@@ -6193,7 +6220,7 @@ select {
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: var(--space-2);
     align-items: center;
-    padding: var(--space-3);
+    padding: var(--space-2);
     border: 0;
     background: transparent;
     color: inherit;
@@ -6254,6 +6281,27 @@ select {
     border-radius: 0;
     box-shadow: none;
     background: var(--bg-primary);
+}
+
+.run-stage-attempt-note {
+    margin: 0;
+}
+
+.run-stage-history-disclosure {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.run-stage-history-disclosure > summary {
+    cursor: pointer;
+    padding: var(--space-2) var(--space-3);
+    color: var(--text);
+    font-weight: 800;
+}
+
+.run-stage-history-disclosure > .run-stage-timeline {
+    padding: 0 var(--space-3) var(--space-3);
 }
 
 .run-audit-disclosure {

@@ -2498,6 +2498,7 @@ def build_protocol_router(
         if resolved_path is not None:
             manifest, manifest_path = _runtime_manifest_from_path(resolved_path)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact.artifact_key, access=access)
+        health = None
         if runtime is None:
             urls = _runtime_public_urls(run_id, artifact.artifact_key)
             runtime = ProtocolArtifactRuntimeInstanceRecord(
@@ -2522,12 +2523,14 @@ def build_protocol_router(
                 timeout_seconds=15,
             )
             if result.success and isinstance(result.payload, ArtifactRuntimeHealthResult) and result.payload.health.runtime is not None:
+                health = result.payload.health
                 runtime = store.save_protocol_artifact_runtime(
                     _merge_runtime_record(runtime, result.payload.health.runtime),
                     access=access,
                 )
         return {
             "runtime": _runtime_record_json(runtime),
+            "health": _json_payload(health) if health is not None else None,
             "manifest_available": manifest is not None or runtime.manifest is not None,
             "package_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/content?download=1",
             "browse_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/content?browse=1",

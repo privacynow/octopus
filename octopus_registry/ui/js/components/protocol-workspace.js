@@ -145,6 +145,7 @@ async function _artifactRuntimeSnapshot(runId, artifactKey) {
     ]);
     return {
         runtime: status?.runtime || null,
+        health: status?.health || null,
         manifestAvailable: Boolean(status?.manifest_available),
         packageUrl: status?.package_url || '',
         browseUrl: status?.browse_url || '',
@@ -163,6 +164,7 @@ function _renderArtifactRuntimeDialogBody({
     const runtime = snapshot?.runtime || {};
     const manifest = runtime?.manifest || {};
     const status = String(runtime?.status || '').toLowerCase();
+    const healthReady = !health || health.ok === true;
     const appUrl = API.protocolRunArtifactRuntimeAppUrl(runId, artifactKey);
     const apiUrl = API.protocolRunArtifactRuntimeApiUrl(runId, artifactKey);
     const docsPath = _runtimeEndpoint(runtime, 'api_docs');
@@ -174,13 +176,13 @@ function _renderArtifactRuntimeDialogBody({
     const intro = document.createElement('p');
     intro.className = 'quiet-note';
     intro.textContent = snapshot?.manifestAvailable
-        ? `App controls for ${artifactLabel || artifactKey}. Octopus updates this panel while the app starts; use Open app when it is ready, and Logs when startup needs diagnosis.`
+        ? `App controls for ${artifactLabel || artifactKey}. Octopus updates this panel while the app starts; Open app appears after the health check passes.`
         : 'This artifact does not declare a runtime. You can still browse files or download the package.';
     body.appendChild(intro);
 
     const facts = document.createElement('div');
     facts.className = 'kit-details-panel artifact-runtime-facts';
-    facts.appendChild(_runtimeFact('Status', _runtimeStatusLabel(runtime)));
+    facts.appendChild(_runtimeFact('Status', status === 'running' && !healthReady ? 'Starting · health pending' : _runtimeStatusLabel(runtime)));
     facts.appendChild(_runtimeFact('Kind', manifest.runtime_kind || 'Not declared'));
     facts.appendChild(_runtimeFact('Started', runtime.started_at ? UI.formatTime(runtime.started_at) : 'Not started'));
     facts.appendChild(_runtimeFact('Updated', runtime.updated_at ? UI.relativeTime(runtime.updated_at) : 'Not recorded'));
@@ -303,6 +305,10 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     deleteBtn.type = 'button';
     deleteBtn.className = 'btn btn-danger';
     deleteBtn.textContent = 'Delete';
+    for (const action of [startBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn]) {
+        action.hidden = true;
+    }
+    openBtn.hidden = true;
 
     const view = UI.showDialog(`Runtime: ${artifactLabel || artifactKey}`, body, {
         actions: [startBtn, openBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn, closeBtn],
@@ -353,10 +359,11 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
         body.dataset.docsUrl = nextBody.dataset.docsUrl || '';
         const status = body.dataset.runtimeStatus;
         const manifestAvailable = body.dataset.manifestAvailable === 'true';
+        const ready = status === 'running' && latestHealth?.ok === true;
         startBtn.hidden = !manifestAvailable || ['running', 'starting', 'archived', 'deleted'].includes(status);
-        openBtn.hidden = status !== 'running';
+        openBtn.hidden = !ready;
         stopBtn.hidden = !['running', 'starting'].includes(status);
-        healthBtn.hidden = !manifestAvailable || status !== 'running';
+        healthBtn.hidden = !manifestAvailable || !['running', 'starting'].includes(status);
         logsBtn.hidden = !manifestAvailable;
         archiveBtn.hidden = !manifestAvailable || status === 'running';
         deleteBtn.hidden = !manifestAvailable || status === 'running';
@@ -370,8 +377,11 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
         startBtn.disabled = true;
         try {
             latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
+            if (latestSnapshot?.health) {
+                latestHealth = latestSnapshot.health;
+            }
             const status = String(latestSnapshot?.runtime?.status || '').toLowerCase();
-            const shouldCheckHealth = health || status === 'running';
+            const shouldCheckHealth = health || (status === 'running' && !latestHealth);
             if (shouldCheckHealth && latestSnapshot?.runtime) {
                 latestHealth = await API.getProtocolRunArtifactRuntimeHealth(runId, artifactKey);
                 latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
@@ -568,6 +578,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
         openRuntime.hidden = true;
         openRuntime.addEventListener('click', (event) => event.stopPropagation());
         let currentRuntimeStatus = '';
+        let currentRuntimeReady = false;
         let runtimePollTimer = null;
         let runtimePollInFlight = false;
         const stopRuntimePoll = () => {
@@ -581,6 +592,10 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
                 stopRuntimePoll();
                 return;
             }
+            if (currentRuntimeStatus === 'running' && currentRuntimeReady) {
+                stopRuntimePoll();
+                return;
+            }
             if (runtimePollTimer) return;
             runtimePollTimer = window.setInterval(() => {
                 if (!document.body.contains(actionRow)) {
@@ -590,14 +605,22 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
                 void refreshRuntimeState();
             }, 5000);
         };
-        const setRuntimeState = (runtime = {}) => {
+        const setRuntimeState = (runtime = {}, health = null) => {
             const status = String(runtime?.status || '').toLowerCase();
             currentRuntimeStatus = status;
+            currentRuntimeReady = status === 'running' && health?.ok === true;
             const configured = status && status !== 'not_configured';
             runtimeStatus.hidden = !configured && !runtimeExpected;
-            runtimeBtn.hidden = (!configured && !runtimeExpected) || ['running', 'starting', 'archived', 'deleted'].includes(status);
-            runtimeBtn.textContent = status === 'failed' ? 'Restart app' : 'Start app';
-            openRuntime.hidden = status !== 'running';
+            runtimeBtn.hidden = (!configured && !runtimeExpected) || (currentRuntimeReady || ['archived', 'deleted'].includes(status));
+            runtimeBtn.disabled = ['starting', 'running'].includes(status) && !currentRuntimeReady;
+            if (status === 'starting') {
+                runtimeBtn.textContent = 'Starting...';
+            } else if (status === 'running' && !currentRuntimeReady) {
+                runtimeBtn.textContent = 'Checking app...';
+            } else {
+                runtimeBtn.textContent = status === 'failed' ? 'Restart app' : 'Start app';
+            }
+            openRuntime.hidden = !currentRuntimeReady;
             openRuntime.className = prominentRuntime
                 ? 'btn btn-sm btn-primary is-primary-artifact-action artifact-app-primary-action'
                 : 'btn btn-sm btn-primary artifact-app-primary-action';
@@ -609,7 +632,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
             runtimePollInFlight = true;
             try {
                 const status = await API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key);
-                setRuntimeState(status?.runtime || {});
+                setRuntimeState(status?.runtime || {}, status?.health || null);
             } catch (_err) {
                 runtimeBtn.hidden = !runtimeExpected;
                 runtimeStatus.hidden = !runtimeExpected;
@@ -631,7 +654,6 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
                 setRuntimeState(runtime);
             } catch (err) {
                 UI.reportError('Failed to start artifact app', err, { context: 'Artifact runtime start failed' });
-            } finally {
                 runtimeBtn.disabled = false;
                 runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';
             }
@@ -663,6 +685,10 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
             }
         });
         actionRow.insertBefore(stopRuntime, runtimeStatus.nextSibling);
+        if (runtimeExpected) {
+            runtimeBtn.textContent = 'Checking app...';
+            runtimeBtn.disabled = true;
+        }
         void refreshRuntimeState();
     }
     return actionRow;
@@ -9567,8 +9593,7 @@ function renderProtocolRuns(container) {
 
         const currentRunStageExecution = () => {
             const run = currentRun.run || {};
-            const blockedCode = String(run.blocked_code || '').trim().toLowerCase();
-            if (String(run.status || '').trim().toLowerCase() === 'blocked' && blockedCode.startsWith('runtime_')) {
+            const primaryArtifactStageExecution = () => {
                 const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
                 const primary = autoMeta.primary_artifact || {};
                 const primaryStageKey = String(primary.produced_by_stage_key || '').trim();
@@ -9584,6 +9609,13 @@ function renderProtocolRuns(container) {
                 if (producerExecutionId && stageById.has(producerExecutionId)) {
                     return stageById.get(producerExecutionId);
                 }
+                return null;
+            };
+            const runStatus = String(run.status || '').trim().toLowerCase();
+            const blockedCode = String(run.blocked_code || '').trim().toLowerCase();
+            if ((runStatus === 'blocked' && blockedCode.startsWith('runtime_')) || runStatus === 'completed') {
+                const primaryStage = primaryArtifactStageExecution();
+                if (primaryStage) return primaryStage;
             }
             const executionId = String(run.current_stage_execution_id || '').trim();
             if (executionId && stageById.has(executionId)) {

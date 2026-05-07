@@ -404,15 +404,620 @@ only when the protocol declares them as produced outputs.
 These categories share lifecycle policy but must not be collapsed into one
 ambiguous file bucket.
 
+## Detailed Work Inventory
+
+This section preserves the actionable work from the earlier split plans. The
+wording is consolidated, but these items remain part of the plan unless the
+ledger marks them implemented and verified.
+
+### Auto Protocol SDK Records
+
+Use explicit records across major boundaries. Do not pass untyped dictionaries
+between Registry, SDK, bot runtime, Telegram, or future transports.
+
+Required Auto Protocol records:
+
+- `ProtocolAutoDesignRequestRecord`
+- `ProtocolAutoDesignSessionRecord`
+- `ProtocolAutoDesignAnalysisRecord`
+- `ProtocolAutoDesignModelRequestRecord`
+- `ProtocolAutoDesignModelResponseRecord`
+- `ProtocolAutoDesignWorkPackageRecord`
+- `ProtocolAutoDesignArtifactPlanRecord`
+- `ProtocolAutoDesignPrimaryArtifactRecord`
+- `ProtocolAutoDesignRolePlanRecord`
+- `ProtocolAutoDesignStagePlanRecord`
+- `ProtocolAutoDesignReviewPolicyRecord`
+- `ProtocolAutoDesignRunProfileRecord`
+- `ProtocolAutoDesignWarningRecord`
+- `ProtocolAutoDesignEventSummaryRecord`
+- `ProtocolAutoDesignChangeSummaryRecord`
+
+Required Auto Protocol request fields:
+
+- `mode`: `create` or `revise`
+- `surface`: `registry`, `telegram`, or `api`
+- `requirement_text`
+- `constraints_text`
+- `target_protocol_id`
+- `target_version_id`
+- `target_draft_revision`
+- `source_document`
+- `available_agents`
+- `available_skills`
+- `workspace_ref`
+- `actor_ref`
+- `chat_ref`
+- `resource_refs`
+- `idempotency_key`
+
+Required model response fields:
+
+- normalized requirement summary
+- domain and risk assessment
+- assumptions
+- open questions that block generation
+- work packages with stable keys and rationale
+- roles and required skills
+- artifact contracts
+- primary artifact contract
+- review rubrics
+- stage topology hints
+- run input recommendations
+- acceptance criteria
+- evidence requirements
+- resource requirements
+- warnings
+
+The model response is structured input to the SDK compiler. It is not a
+protocol document and it is not accepted directly.
+
+### Resource Records
+
+Add SDK and Registry records for user-provided input resources. The exact table
+names may follow existing Registry conventions, but the product needs these
+fields:
+
+- `resource_id`
+- owner or actor reference
+- source surface and source message/conversation/run/session reference
+- original filename
+- content type and detected mime type
+- size in bytes
+- content hash
+- storage URI
+- retention state
+- created/updated/deleted timestamps
+- metadata JSON
+- security scan or validation summary when available
+
+Attachment references must be attachable to:
+
+- Auto Protocol create sessions
+- Auto Protocol revise sessions
+- manual protocol design
+- protocol run launch inputs
+- improve-run requests
+- Registry conversations
+- Telegram conversations
+- future bot transport conversations
+
+### Runtime Records
+
+Runtime metadata stays under the existing protocol/artifact SDK area:
+
+- `ProtocolArtifactRuntimeManifestRecord`
+- `ProtocolArtifactRuntimeEndpointRecord`
+- `ProtocolArtifactRuntimeCommandRecord`
+- `ProtocolArtifactRuntimeInstanceRecord`
+- `ProtocolArtifactRuntimeEventRecord`
+- `ProtocolArtifactRuntimeHealthRecord`
+- `ProtocolArtifactRuntimeActionRequestRecord`
+- `ProtocolArtifactRuntimeActionResultRecord`
+
+Manifest fields include:
+
+- `runtime_kind`: `static`, `node`, `python`, `java`, `binary`, or `process`
+- `working_directory`
+- `start_command`
+- `environment`
+- `internal_port`
+- `health_path`
+- `ui_path`
+- `api_base_path`
+- `api_docs_path`
+- `openapi_path`
+- `readiness_timeout_seconds`
+- `idle_timeout_seconds`
+- `max_runtime_seconds`
+- `resource_limits`
+- `required_files`
+- `package_entry_label`
+- `description`
+- `transport_requirements`
+
+Do not add UI-only synthetic runtime fields. If the UI needs runtime state,
+persist it.
+
+### Runtime Persistence
+
+Persist runtime instances and events. Minimum instance fields:
+
+- `runtime_instance_id`
+- `protocol_run_id`
+- `artifact_key`
+- `workspace_ref`
+- `artifact_content_hash`
+- `status`
+- `manifest_json`
+- `public_base_path`
+- `ui_url_path`
+- `api_base_path`
+- `health_url_path`
+- `bot_id`
+- `agent_id`
+- `process_ref`
+- `started_at`
+- `updated_at`
+- `stopped_at`
+- `archived_at`
+- `deleted_at`
+- `last_health_json`
+- `metadata_json`
+
+Minimum event fields:
+
+- `runtime_event_id`
+- `runtime_instance_id`
+- `protocol_run_id`
+- `artifact_key`
+- `event_kind`
+- `actor_ref`
+- `message`
+- `payload_json`
+- `created_at`
+
+### Artifact Snapshot Records
+
+Produced workspace artifacts need durable snapshots outside Postgres. Minimum
+snapshot fields:
+
+- `artifact_snapshot_id`
+- `protocol_artifact_id`
+- `protocol_run_id`
+- `artifact_key`
+- `snapshot_kind`: `file`, `directory_zip`, `text`, or `external`
+- `storage_uri`
+- `content_hash`
+- `size_bytes`
+- `manifest_json`
+- `created_at`
+- `created_by`
+- `retention_state`
+- `retention_until`
+- `deleted_at`
+- `deleted_by`
+
+For v1, `storage_uri` can point at a Registry-owned filesystem root. API code
+must treat it as opaque so the durable store can move later.
+
+### Workspace Inventory And Lifecycle Events
+
+Workspace cleanup needs inventory records, not ad hoc filesystem deletion.
+Minimum inventory fields:
+
+- `inventory_id`
+- `agent_id`
+- `workspace_ref`
+- `protocol_run_id`
+- `scan_status`
+- `file_count`
+- `total_bytes`
+- `retained_bytes`
+- `transient_bytes`
+- `unknown_bytes`
+- `summary_json`
+- `created_at`
+
+Lifecycle events must cover:
+
+- `run_archived`
+- `run_delete_requested`
+- `run_deleted`
+- `artifact_snapshotted`
+- `artifact_snapshot_deleted`
+- `resource_uploaded`
+- `resource_attached`
+- `resource_detached`
+- `resource_deleted`
+- `workspace_cleanup_dry_run`
+- `workspace_cleanup_executed`
+- `agent_disabled`
+- `agent_soft_deleted`
+- `skill_archived`
+- `skill_deleted`
+
+Use existing event and audit infrastructure where possible.
+
+### Requirement Analysis
+
+The semantic planner infers work from the user's requirement and attached
+resources, not from a closed keyword table.
+
+For a game requirement, it may infer game design, art direction, animation,
+sound, playable implementation, playtesting, release evidence, and attached
+asset/mechanics integration.
+
+For manufacturing analytics, it may infer data readiness, synthetic data,
+quality checks, dashboard design, analytics dimensions, drilldowns,
+recommendations, usability review, browser implementation, and evidence.
+
+For a risk decision engine, it may infer streaming architecture, Java service
+structure, DSL grammar, rule execution, feature lifecycle, model catalog
+governance, risk-domain scenarios, audit/explainability, UI authoring,
+performance testing, and operational controls.
+
+These examples are acceptance probes, not product branches.
+
+### Work Package Policy
+
+Every work package has:
+
+- stable `package_key`
+- human display name
+- rationale
+- owned role
+- required skills
+- artifact key and artifact description
+- resource needs
+- dependencies on prior artifacts and resources
+- quality bar
+- review role
+- review rubric
+- allowed revise target
+
+Required rules:
+
+- Include requirements/planning work.
+- Include exactly one primary outcome package unless the user explicitly
+  requests multiple primary deliverables.
+- Include final adversarial outcome acceptance that inspects or exercises the
+  primary artifact and records release evidence.
+- Review or acceptance gates are required for material artifacts.
+- Core outcome and acceptance packages cannot be removed by shaping or revision.
+- If a reshape would remove the primary outcome, verification, or acceptance
+  path, SDK policy blocks it.
+- Consolidate related subproblems when a separate package would create shallow
+  stages or duplicate reviews.
+- Include stage-count rationale when the planner proposes more than the
+  standard budget.
+
+### Stage Topology
+
+Generated workflows should be easy to inspect:
+
+1. Requirements/planning work.
+2. Requirements review.
+3. Domain, architecture, data, UX, content, asset, risk, or other inferred work
+   packages, each with review when they produce material artifacts.
+4. Primary outcome generation or integration.
+5. Final adversarial outcome acceptance.
+
+Stage budgets:
+
+- Small focused outcome: 5 to 7 stages.
+- Standard serious outcome: 8 to 12 stages.
+- Complex commercial outcome: 13 to 16 stages.
+- Hard cap: 18 stages, including review and acceptance stages.
+
+Plans above the cap are invalid. The compiler must consolidate adjacent
+packages, scope to a coherent first delivery tranche, or block with a clear
+narrowing request.
+
+The primary outcome stage should normally be second-last. The last stage
+reviews or exercises that outcome, sends it back with concrete feedback when
+needed, and records final release evidence when accepted.
+
+### Review Policy
+
+Reviewers must:
+
+- inspect artifacts directly
+- compare against the original requirement
+- compare against accepted upstream artifacts
+- consider attached resources and whether they were used correctly
+- check evidence
+- identify missing depth, polish, tests, and weak assumptions
+- revise when material doubt remains
+- provide concrete revision instructions
+
+Each review domain gets a distinct participant key. Repeated attempts of the
+same stage reuse that stage participant for continuity. Server-side review loop
+limits are authoritative and cannot be bypassed by UI, Telegram, or API
+callers.
+
+### Primary Artifact Policy
+
+Generated protocols declare:
+
+- `primary_artifact_key`
+- display name
+- producing stage
+- artifact kind
+- expected path
+- open, preview, browse, and download behavior
+- evidence requirements
+- supporting artifact keys
+
+Run detail uses this metadata for a primary outcome panel with status, actions,
+production time, verification state, release evidence, runtime readiness, and
+blockers. Supporting artifacts are grouped by purpose: planning, domain/data/UX
+or content, implementation support, reviews, release evidence, and resources.
+
+### Session Events And Status UX
+
+Product surfaces need safe status events instead of raw bot logs.
+
+Auto Protocol events include:
+
+- session created
+- design job queued
+- design job running
+- resource attached or removed
+- model analysis received
+- compiled
+- blocked
+- revised
+- applied
+- published
+- run started
+- run linked
+
+Event summaries include target protocol, source protocol, run id, current
+status, warnings, blockers, unresolved assignment count, stage count, package
+count, primary artifact key, attached resource count, change summary, actor,
+and timestamp.
+
+Run status shows current stage, completed count, active review loop, last
+decision, last failure, blocked reason, artifact progress, primary artifact
+availability, runtime state, and release evidence.
+
+### Registry APIs
+
+Auto Protocol APIs:
+
+- create session
+- revise session
+- attach and detach resource
+- get session
+- list events
+- apply draft to editor
+- publish
+- run
+- link run back to session
+
+Runtime APIs:
+
+- `GET /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime`
+- `POST /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/start`
+- `POST /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/stop`
+- `POST /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/archive`
+- `DELETE /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime`
+- `GET /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/events`
+- `GET /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/logs`
+- `GET /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/health`
+
+Runtime routed access:
+
+- `/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/app/...`
+- `/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/api/...`
+
+Resource APIs:
+
+- upload resource
+- list resources by owner/context
+- get metadata
+- download content when authorized
+- attach resource to session/run/conversation
+- detach resource
+- archive or delete resource
+
+Artifact snapshot APIs:
+
+- `GET /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot`
+- `POST /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot`
+- `GET /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot/content`
+- `DELETE /v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot`
+
+Run lifecycle APIs:
+
+- `POST /v1/protocol-runs/{run_id}/archive`
+- `DELETE /v1/protocol-runs/{run_id}`
+- `POST /v1/protocol-runs/{run_id}/restore`
+
+Workspace cleanup APIs:
+
+- `POST /v1/admin/workspaces/cleanup/dry-run`
+- `POST /v1/admin/workspaces/cleanup`
+- `GET /v1/admin/workspaces/cleanup/jobs/{job_id}`
+- `GET /v1/admin/workspaces/usage`
+
+Blocked/error responses include stable error code, human message, validation
+summary, blocker list, warning codes, and explicit next-step guidance.
+
+### Registry UI Surfaces
+
+Protocols workspace:
+
+- Auto Protocol create/revise form with attachment controls.
+- Clear draft preview with outcome summary, work packages, rationale, stage map,
+  review loops, roles, primary artifact, supporting artifacts, resource usage,
+  warnings, and blockers.
+- Normal apply/publish/run flow after gates pass.
+
+Run launch:
+
+- Protocol inputs rendered by type.
+- Resource attachment and existing-resource selection.
+- Validation before launch when required resources are missing.
+
+Run detail:
+
+- Primary outcome card at top.
+- Start/open/API docs/health/logs/stop/archive/delete actions by runtime state.
+- Browse and download package remain available.
+- Release evidence and review rationale are visible.
+- Improve-run action uses the run context and attached resources.
+- Runtime, resource, artifact, and lifecycle blockers are clear.
+
+Artifact browser:
+
+- File preview for supported files.
+- Directory browse for multi-file packages.
+- Download zip/package.
+- Runtime manifest visibility for runnable artifacts.
+- Snapshot/fallback/unavailable state.
+
+Dashboard cleanup:
+
+- Dry-run first.
+- Category selection.
+- Size estimates.
+- Retained/transient/unknown classification.
+- Clear warning when artifact access would break.
+
+### Telegram And Future Bot Surfaces
+
+Telegram supports natural conversation and command shortcuts over the same
+Registry APIs:
+
+- create or revise protocol
+- attach native uploads as SDK resources
+- list protocols and runs
+- show primary artifact and package links
+- start/open/status/stop runtime through Registry
+- improve a selected run
+- report blockers and acceptance/revise reasons
+
+Future Slack, WhatsApp, or other bots implement the same SDK ports. Transport
+capabilities such as max file size or supported media are exposed as capability
+metadata, not new product logic.
+
+### Bot Runtime Responsibilities
+
+The bot runtime:
+
+- executes provider/model work
+- downloads or stages authorized resources into allowed roots
+- injects SDK awareness and resource paths into execution context
+- observes produced artifacts
+- validates runtime manifests
+- starts supervised runtime processes inside the bot container
+- assigns ports through policy
+- captures logs
+- reports health/events/state to Registry
+- stops process groups cleanly
+- scans workspace usage for cleanup dry runs
+
+The bot runtime must not invent user-facing Registry links, artifact models, or
+Telegram-only state.
+
+### Runtime Start, Stop, And Delete Flow
+
+Runtime start:
+
+1. Registry validates permission and artifact visibility.
+2. Registry resolves artifact path, durable snapshot, and manifest.
+3. Registry validates run-ready policy before bot dispatch.
+4. Registry records `starting`.
+5. Registry sends a typed runtime start request through bot management.
+6. Bot validates local workspace, policy, required files, resources, and
+   transport support.
+7. Bot starts a supervised process group.
+8. Bot reports process reference, internal port, log path, and health.
+9. Registry records state and exposes routed URLs.
+
+Runtime stop:
+
+1. Registry validates permission.
+2. Registry sends a typed stop request.
+3. Bot terminates the process group.
+4. Registry records stopped state and event evidence.
+
+Runtime delete:
+
+1. Stop if running.
+2. Remove runtime process metadata and ephemeral runtime files according to
+   policy.
+3. Preserve protocol artifacts and audit unless delete policy explicitly
+   includes them.
+
+### Lifecycle Rules
+
+- Snapshot uses the same artifact resolution code as content serving.
+- Directory artifacts snapshot as zip packages.
+- Snapshot creation is idempotent by artifact hash.
+- Artifact content routes prefer live workspace path, then snapshot, then
+  rehearsal/control-plane text, then unavailable error.
+- Running runs cannot be deleted.
+- Runs with running runtimes cannot be archived or deleted until runtimes stop.
+- Archive preserves audit, artifacts, snapshots, transitions, tasks, and
+  runtime events.
+- Delete requires terminal or archived state, explicit confirmation, and role
+  permission.
+- Delete is soft by default. Hard purge is an admin retention operation.
+- Draft protocols can be deleted only when unpublished and unused.
+- Published protocols are archived, not deleted in place.
+- Published or referenced skills are archived/disabled/superseded, not silently
+  deleted.
+- Agents support disable, disconnect, and soft delete while preserving audit.
+- Cleanup refuses to remove the only copy of a verified artifact unless a
+  snapshot exists or the user explicitly chooses artifact deletion.
+- Cleanup must not remove active run workspaces, credentials, tokens, agents,
+  skills, guidance, or Registry database content.
+
+### Public URL Configuration
+
+Use one source of truth for Registry and Telegram links:
+
+- Registry bind host.
+- Registry bind port.
+- Public Registry base URL.
+- Runtime public base URL when different.
+- Telegram link base URL.
+- Local-only mode flag.
+
+Docs explain localhost-only, LAN/private network, public tunnel/reverse proxy,
+and server deployments, including security tradeoffs for binding to all
+interfaces.
+
 ## Implementation Sequence
 
-### Phase 1: Keep One Plan And One Contract
+### Phase 0: Preserve The Canonical Plan
 
 - Maintain this file as the single plan.
-- Delete obsolete split plan files.
+- Keep obsolete split plan files deleted.
 - Keep status and ledger updates factual and tied to product proof.
+- Do not create new plan files for adjacent work in this product area.
 
-### Phase 2: SDK File Resource Contract
+### Phase 1: Contract And Records
+
+- Keep Auto Protocol request/response/session records explicit.
+- Add resource records and attachment references.
+- Keep runtime records under protocol/artifact SDK namespaces.
+- Keep artifact snapshot and lifecycle records in Registry state.
+- Add serialization tests and contract fixtures.
+
+### Phase 2: Semantic Planner And Compiler
+
+- Include attached resource summaries in planning input.
+- Preserve create/revise as one pipeline.
+- Enforce requirement analysis, work package rules, stage topology, review
+  policy, primary artifact metadata, and evidence requirements.
+- Block invalid topology, missing primary outcome, missing acceptance path,
+  excessive stages, and unsafe reshape operations.
+
+### Phase 3: SDK File Resource Contract
 
 - Add shared resource models, metadata, access policy, retention state, and
   materialization interfaces.
@@ -422,7 +1027,7 @@ ambiguous file bucket.
 - Add focused tests for model serialization, materialization policy, and
   transport normalization.
 
-### Phase 3: Registry Resource APIs And UI
+### Phase 4: Registry Resource APIs And UI
 
 - Add upload/list/select/attach/remove resource APIs.
 - Add user-friendly attach controls to Auto Protocol create/revise, manual
@@ -431,7 +1036,7 @@ ambiguous file bucket.
 - Prevent uploads from becoming artifact outputs unless a run explicitly
   produces them.
 
-### Phase 4: Channel Adapter Parity
+### Phase 5: Channel Adapter Parity
 
 - Keep Telegram native uploads working through the same resource path.
 - Make future bot implementations depend on SDK resource interfaces, not
@@ -439,7 +1044,7 @@ ambiguous file bucket.
 - Ensure channel limitations are surfaced as capability metadata, not new
   product branches.
 
-### Phase 5: Auto Protocol Uses Resources
+### Phase 6: Auto Protocol Uses Resources
 
 - Include resource summaries in semantic planning context.
 - Let generated protocols request, validate, and consume attached resources as
@@ -447,22 +1052,115 @@ ambiguous file bucket.
 - Ensure improve-run can use new files to improve existing outcomes, such as
   updated game mechanics, sound assets, datasets, docs, or code bundles.
 
-### Phase 6: Runtime, Review, And Lifecycle Hardening
+### Phase 7: Runtime Manifest And Routing Hardening
 
 - Preserve prepared-artifact runtime policy.
-- Keep review acceptance tied to runtime/evidence, not launch alone.
-- Complete cleanup dry-run proof and workspace-wipe recovery proof.
+- Keep `octopus-runtime.json` as the runnable artifact manifest.
+- Validate command policy before bot dispatch.
+- Keep Registry as the user-facing router and bot runtime as executor.
+- Maintain standard HTTP UI/API routing for static assets, APIs, redirects,
+  request bodies, response headers, health checks, and API errors.
+- Block unsupported transports clearly.
+
+### Phase 8: Review Evidence Enforcement
+
+- Ensure final reviewers exercise runtime/UI/API when declared.
+- Persist start, health, smoke, logs/events, limitations, and rationale.
+- Block acceptance or revise when evidence is missing.
+- Surface send-back and acceptance reasons in Registry, Telegram where useful,
+  and exports.
+
+### Phase 9: Lifecycle, Retention, And Cleanup
+
+- Preserve package browse/download for every multi-file artifact.
+- Snapshot produced artifacts into durable storage.
+- Add run archive/delete/restore semantics.
+- Add workspace inventory and cleanup dry runs.
 - Keep archive/delete behavior separate for runs, runtimes, input resources,
   output artifacts, agents, skills, and protocols.
+- Prove workspace-wipe recovery for snapshotted artifacts and honest failure
+  for workspace-only files.
 
-### Phase 7: Tests, Docs, Deployment, Proof
+### Phase 10: Registry And Telegram UX Closure
+
+- Keep run detail focused on primary outcome readiness.
+- Keep runtime controls stateful and clear.
+- Keep attached resources visible and manageable.
+- Keep Telegram cards concise and action-oriented.
+- Make localhost/public-link behavior explicit.
+- Verify narrow/mobile UI does not hide primary actions.
+
+### Phase 11: Tests, Docs, Deployment, Proof
 
 - Add focused tests for every regression touched.
+- Maintain fast local test targets and a full-suite wall-time budget.
+- Add OpenAPI checks for route/doc drift.
+- Document actual behavior for Auto Protocol, resources, runtime artifacts,
+  review evidence, lifecycle, cleanup, public links, and representative probes.
 - Use logs to verify progress instead of arbitrary sleeps.
 - Use real Safari for release-critical Registry UI proof.
 - Verify Telegram Web or equivalent real bot surface for channel behavior.
 - Deploy to `/Users/tinker/octopus` after commit/push when implementation work
   is complete.
+
+## Testing Plan
+
+Required test coverage:
+
+- SDK record serialization and validation.
+- Auto Protocol create/revise compiler behavior.
+- Requirement analysis and stage topology policy.
+- Primary artifact metadata and surfacing.
+- Review loop caps and acceptance/revise enforcement.
+- Resource upload, metadata, attach/detach, delete/archive, and materialization.
+- Telegram attachment normalization into shared resources.
+- Registry conversation attachments.
+- Manual run launch resource inputs.
+- Improve-run resource context.
+- Runtime manifest parsing and run-ready command policy.
+- Runtime start/stop/health/logs/events through management contracts.
+- Registry runtime proxy routing for HTML, JS, CSS, images, JSON, methods,
+  bodies, redirects, response headers, health, and API errors.
+- Unsupported transport blocking.
+- Artifact browse, preview, package download, snapshot fallback, and
+  unavailable states.
+- Run archive/delete/restore and runtime stop-before-archive/delete.
+- Workspace cleanup dry run and path safety.
+- Protocol, skill, and agent lifecycle controls.
+- Registry UI contract tests for visible actions and wording.
+- Telegram command/card tests.
+- OpenAPI contract drift checks.
+- Real Safari proof for release-critical Registry UI behavior.
+
+Test tiers:
+
+- Unit and policy tests for SDK/compiler/storage behavior.
+- Registry API tests for sessions, resources, artifacts, runtimes, lifecycle,
+  cleanup, and exports.
+- Bot runtime tests with fake supervisors for fast paths.
+- Minimal real HTTP runtime tests for representative routing.
+- UI contract tests for Registry components.
+- Telegram integration tests where bot surface behavior is user-facing.
+- Live proof only for release-critical flows, not as a substitute for focused
+  automated tests.
+
+## Documentation Plan
+
+Docs must explain actual behavior for:
+
+- Auto Protocol create/revise/improve.
+- Manual protocol design and run launch.
+- Shared file/resource upload and channel attachment behavior.
+- Resource retention, archive, delete, and materialization.
+- Primary artifacts, supporting artifacts, browse, preview, and package
+  download.
+- Runnable artifact manifests and run-ready command policy.
+- Registry runtime routing and public URL configuration.
+- Telegram runtime/resource behavior and localhost limitations.
+- Review evidence, send-back, acceptance, and exports.
+- Run, runtime, artifact, resource, protocol, skill, and agent lifecycle.
+- Workspace cleanup dry runs and recovery limits.
+- Test tiers and representative probes.
 
 ## Acceptance Criteria
 

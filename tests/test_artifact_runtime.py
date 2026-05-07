@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import sys
 
 from app.runtime import artifact_runtime, workspace_hygiene
 from octopus_registry.protocol_http import (
@@ -172,6 +173,57 @@ async def test_static_artifact_runtime_starts_fetches_and_stops(tmp_path):
             )
         )
         assert stopped.result.status == "stopped"
+
+
+async def test_process_artifact_runtime_returns_while_health_is_pending(tmp_path):
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    config = make_config(data_dir=tmp_path / "data")
+    runtime_id = "runtime-test-pending"
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="process",
+        start_command=f"{sys.executable} -c \"import time; time.sleep(60)\"",
+        startup_timeout_seconds=1,
+        endpoints=[{"endpoint_kind": "docs", "path": "/docs", "label": "API docs"}],
+        smoke_test=["GET /health"],
+    )
+    start = StartArtifactRuntimeRequest(
+        runtime_instance_id=runtime_id,
+        protocol_run_id="run-1",
+        artifact_key="package",
+        artifact_path=str(package_dir),
+        manifest=manifest,
+        actor_ref="operator",
+    )
+
+    started = await artifact_runtime.start_artifact_runtime(start, config=config)
+    try:
+        assert started.result.ok is True
+        assert started.result.status == "starting"
+        assert started.result.runtime is not None
+        assert started.result.runtime.status == "starting"
+        assert "health path" in started.result.message
+
+        health = await artifact_runtime.artifact_runtime_health(
+            ArtifactRuntimeHealthRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+            )
+        )
+        assert health.health.ok is False
+        assert health.health.status == "starting"
+        assert health.health.runtime is not None
+        assert health.health.runtime.status == "starting"
+    finally:
+        await artifact_runtime.stop_artifact_runtime(
+            StopArtifactRuntimeRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+                actor_ref="operator",
+            )
+        )
 
 
 async def test_artifact_runtime_health_marks_missing_process_stopped():

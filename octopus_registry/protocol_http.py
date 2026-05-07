@@ -2615,7 +2615,7 @@ def build_protocol_router(
                     manifest=manifest,
                     actor_ref=access.actor_ref,
                 ),
-                timeout_seconds=int(manifest.startup_timeout_seconds or 30) + 20,
+                timeout_seconds=min(20, max(5, int(manifest.startup_timeout_seconds or 30) + 5)),
             )
         except ManagementClientError as exc:
             failed = starting.model_copy(

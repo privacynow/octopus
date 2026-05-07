@@ -429,7 +429,7 @@ const API = (() => {
         getProtocolRunArtifactRuntime: (id, artifactKey) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime`),
         startProtocolRunArtifactRuntime: (id, artifactKey) =>
-            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/start`, { body: {}, timeoutMs: 120000 }),
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/start`, { body: {}, timeoutMs: 30000 }),
         stopProtocolRunArtifactRuntime: (id, artifactKey) =>
             request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/stop`, { body: {}, timeoutMs: 60000 }),
         getProtocolRunArtifactRuntimeHealth: (id, artifactKey) =>

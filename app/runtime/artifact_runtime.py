@@ -163,7 +163,7 @@ def _runtime_record(
         log_tail=log_tail,
         created_at=_now(),
         updated_at=_now(),
-        started_at=_now() if status == "running" else "",
+        started_at=_now() if status in {"running", "starting"} else "",
         expires_at=_expires_at(manifest.max_runtime_seconds),
     )
 
@@ -202,11 +202,16 @@ async def start_artifact_runtime(
     await reap_expired_artifact_runtimes()
     existing = _RUNTIMES.get(request.runtime_instance_id)
     if existing is not None and existing.process.returncode is None:
+        existing_status = str(existing.runtime.status or "").strip().lower()
         return StartArtifactRuntimeResult(
             result=ProtocolArtifactRuntimeActionResultRecord(
                 ok=True,
-                status="running",
-                message="Runtime is already running.",
+                status=existing.runtime.status,
+                message=(
+                    "Runtime is already running."
+                    if existing_status == "running"
+                    else "Runtime process is already active; health check is still pending."
+                ),
                 runtime=existing.runtime,
             )
         )
@@ -235,11 +240,12 @@ async def start_artifact_runtime(
         runtime = _runtime_record(
             request,
             port=port,
-            status="running",
+            status="starting",
             pid=int(process.pid or 0),
         )
         _RUNTIMES[request.runtime_instance_id] = _RuntimeProcess(process=process, runtime=runtime, log_path=log_path)
-        deadline = asyncio.get_running_loop().time() + min(30, int(request.manifest.startup_timeout_seconds or 30))
+        probe_seconds = min(3.0, max(0.5, float(request.manifest.startup_timeout_seconds or 30)))
+        deadline = asyncio.get_running_loop().time() + probe_seconds
         last_status = 0
         while asyncio.get_running_loop().time() < deadline:
             if process.returncode is not None:
@@ -247,20 +253,22 @@ async def start_artifact_runtime(
             ok, status_code, _body = await _http_probe(port, request.manifest.health_path)
             last_status = status_code
             if ok:
+                runtime = runtime.model_copy(update={"status": "running", "updated_at": _now()})
+                _RUNTIMES[request.runtime_instance_id] = _RuntimeProcess(process=process, runtime=runtime, log_path=log_path)
                 return StartArtifactRuntimeResult(
                     result=ProtocolArtifactRuntimeActionResultRecord(
                         ok=True,
                         status="running",
                         message=f"Runtime started on bot port {port}.",
-                        runtime=runtime.model_copy(update={"updated_at": _now()}),
+                        runtime=runtime,
                     )
                 )
             await asyncio.sleep(0.5)
         return StartArtifactRuntimeResult(
             result=ProtocolArtifactRuntimeActionResultRecord(
                 ok=True,
-                status="running",
-                message=f"Runtime started, but health path has not responded yet (last status {last_status}).",
+                status="starting",
+                message=f"Runtime process started; waiting for health path to respond (last status {last_status}).",
                 runtime=runtime.model_copy(update={"updated_at": _now(), "log_tail": _tail(log_path)}),
             )
         )
@@ -358,7 +366,29 @@ async def stop_artifact_runtime(request: StopArtifactRuntimeRequest) -> StopArti
 async def artifact_runtime_health(request: ArtifactRuntimeHealthRequest) -> ArtifactRuntimeHealthResult:
     await reap_expired_artifact_runtimes()
     entry = _RUNTIMES.get(request.runtime_instance_id)
-    if entry is None or entry.process.returncode is not None:
+    if entry is not None and entry.process.returncode is not None:
+        runtime = entry.runtime.model_copy(
+            update={
+                "status": "failed",
+                "failure_code": "runtime_exited",
+                "failure_detail": f"Runtime process exited with code {entry.process.returncode}.",
+                "updated_at": _now(),
+                "stopped_at": _now(),
+                "log_tail": _tail(entry.log_path),
+            }
+        )
+        _RUNTIMES.pop(request.runtime_instance_id, None)
+        return ArtifactRuntimeHealthResult(
+            health=ProtocolArtifactRuntimeHealthRecord(
+                ok=False,
+                status="failed",
+                status_code=0,
+                message=runtime.failure_detail,
+                checked_at=utcnow_iso(),
+                runtime=runtime,
+            )
+        )
+    if entry is None:
         runtime = ProtocolArtifactRuntimeInstanceRecord(
             runtime_instance_id=request.runtime_instance_id,
             protocol_run_id=request.protocol_run_id,
@@ -380,11 +410,18 @@ async def artifact_runtime_health(request: ArtifactRuntimeHealthRequest) -> Arti
         )
     health_path = entry.runtime.manifest.health_path if entry.runtime.manifest else "/"
     ok, status_code, body = await _http_probe(entry.runtime.port, health_path)
-    runtime = entry.runtime.model_copy(update={"updated_at": _now(), "log_tail": _tail(entry.log_path)})
+    runtime = entry.runtime.model_copy(
+        update={
+            "status": "running" if ok else "starting",
+            "updated_at": _now(),
+            "log_tail": _tail(entry.log_path),
+        }
+    )
+    _RUNTIMES[request.runtime_instance_id] = _RuntimeProcess(process=entry.process, runtime=runtime, log_path=entry.log_path)
     return ArtifactRuntimeHealthResult(
         health=ProtocolArtifactRuntimeHealthRecord(
             ok=ok,
-            status="running" if ok else "failed",
+            status="running" if ok else "starting",
             status_code=status_code,
             message=body[:500] or ("Runtime is healthy." if ok else "Runtime health check failed."),
             checked_at=utcnow_iso(),

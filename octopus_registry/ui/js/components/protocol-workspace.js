@@ -577,6 +577,9 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
         openRuntime.textContent = 'Open app';
         openRuntime.hidden = true;
         openRuntime.addEventListener('click', (event) => event.stopPropagation());
+        const runtimeHint = document.createElement('span');
+        runtimeHint.className = 'artifact-runtime-inline-status muted microcopy';
+        runtimeHint.hidden = !runtimeExpected;
         let currentRuntimeStatus = '';
         let currentRuntimeReady = false;
         let runtimePollTimer = null;
@@ -619,6 +622,24 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
                 runtimeBtn.textContent = 'Checking app...';
             } else {
                 runtimeBtn.textContent = status === 'failed' ? 'Restart app' : 'Start app';
+            }
+            runtimeHint.hidden = !runtimeExpected && !configured;
+            if (currentRuntimeReady) {
+                runtimeHint.textContent = 'Ready. Open the app to exercise the outcome.';
+            } else if (status === 'starting') {
+                runtimeHint.textContent = 'Starting. Health check pending; Manage app shows status and logs.';
+            } else if (status === 'running') {
+                runtimeHint.textContent = health?.message
+                    ? `Health pending: ${String(health.message).slice(0, 140)}`
+                    : 'Process is running; waiting for health to pass.';
+            } else if (status === 'failed') {
+                runtimeHint.textContent = runtime?.failure_detail
+                    ? `Start failed: ${String(runtime.failure_detail).slice(0, 160)}`
+                    : 'Start failed. Manage app shows the failure and logs.';
+            } else if (status === 'stopped') {
+                runtimeHint.textContent = runtimeExpected ? 'Stopped. Start the app to exercise this outcome.' : '';
+            } else {
+                runtimeHint.textContent = runtimeExpected ? 'Runtime declared. Start the app to exercise this outcome.' : '';
             }
             openRuntime.hidden = !currentRuntimeReady;
             openRuntime.className = prominentRuntime
@@ -669,6 +690,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
             );
         });
         actionRow.insertBefore(runtimeStatus, openRuntime.nextSibling);
+        actionRow.insertBefore(runtimeHint, runtimeStatus.nextSibling);
         stopRuntime.addEventListener('click', async (event) => {
             event.stopPropagation();
             stopRuntime.disabled = true;
@@ -688,6 +710,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
         if (runtimeExpected) {
             runtimeBtn.textContent = 'Checking app...';
             runtimeBtn.disabled = true;
+            runtimeHint.textContent = 'Checking current app status.';
         }
         void refreshRuntimeState();
     }

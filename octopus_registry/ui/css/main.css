@@ -1081,6 +1081,12 @@ select {
     color: var(--text-secondary);
 }
 
+.artifact-runtime-inline-status {
+    flex: 1 1 260px;
+    min-width: 180px;
+    line-height: 1.35;
+}
+
 .artifact-action-unavailable {
     color: var(--muted);
     font-size: var(--font-size-xs);

@@ -178,6 +178,7 @@ def test_bot_dockerfile_installs_common_stage_toolchain() -> None:
         "openjdk-21-jdk-headless",
         "pkg-config",
         "ripgrep",
+        "sudo",
         "unzip",
         "xvfb",
         "zip",
@@ -187,6 +188,7 @@ def test_bot_dockerfile_installs_common_stage_toolchain() -> None:
         assert package in dockerfile
 
     assert dockerfile.count("apt-get install") == 1
+    assert "bot ALL=(root) NOPASSWD:ALL" in dockerfile
 
 
 def test_install_provider_claude_defaults_to_npm(tmp_path: Path) -> None:

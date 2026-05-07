@@ -55,6 +55,7 @@ surface.
 | Fast/tiered tests | Focused runner and markers implemented | N/A | N/A | N/A | Documented | Focused tiers covered | N/A |
 | Runs discovery and recency | Default API keeps human-generated runs visible and recency ordered | Default Runs view is recent-first with useful human filters | Recent run references resolve predictably | Store visibility avoids burying real user runs | Documented | Covered | Pending current Safari proof |
 | Improve existing run | Reuses Auto Protocol revise session against the existing run's protocol | Run detail can generate/apply/publish/run an improvement protocol from run context | Telegram command can improve a selected run | No duplicate protocol generator or run model | Documented | Covered | Pending current Safari proof |
+| SDK-backed agent awareness | SDK owns protocol/run/artifact/capability awareness records and prompt rendering | Registry conversations receive the awareness brief | Telegram conversations receive the same awareness brief; `/protocol` remains a shortcut | Registry is authority implementation, not a bot-specific side channel | Documented | Covered | Pending current Safari proof |
 | Risk-engine Java/Maven proof | Toolchain expected and runtime contract enforced | Pending live proof | Pending live proof | Pending live proof | Documented | Covered by contracts; live proof pending | Pending current Safari proof |
 
 Every implementation phase below must update this ledger when the product
@@ -202,6 +203,7 @@ That means the risk-engine class of artifact is not a later stretch goal. It is 
 9. Fast tests protect quality. We reduce runtime through architecture, parallelism, fixtures, and focused suites, not by deleting meaningful coverage.
 10. Documentation follows behavior. User docs and architecture docs must describe the actual surfaces, runtime lifecycle, link configuration, and testing model.
 11. Capability is not sacrificed as a security shortcut. The platform secures runnable artifacts with bot-container execution, workspace scoping, runtime policy, resource limits, lifecycle controls, logs, and audit, not by reducing the product to static demos.
+12. Bot capabilities are SDK capabilities. Anything that makes an agent aware of Octopus protocols, runs, stages, artifacts, skills, tools, or workspace state must live behind SDK contracts so future bot implementations can implement the same behavior without copying Registry or Telegram code.
 
 ## Product Decisions
 
@@ -401,6 +403,37 @@ The feature exists to improve product outcomes. If a risk-engine run lacks a
 root runtime manifest, routed UI/API, smoke evidence, or current quality bar,
 the next action should be "Improve this run" rather than "hunt through files and
 manually rewrite the protocol."
+
+### Decision 15: Agents receive SDK-backed Octopus awareness
+
+Agents should be able to reason about Octopus itself: available protocols,
+recent runs, stage status, primary artifacts, runnable outcomes, workspace
+mounts, active skills, installed tools, and their high-trust container
+capabilities. This must not be implemented as a Telegram-only help command,
+a Registry-only prompt string, or a local shadow catalog inside each bot.
+
+The SDK owns the awareness contract:
+
+- typed records for agent capability, protocol catalog, run, stage, artifact,
+  runtime, and action guidance summaries
+- a port that future bot runtimes can implement without importing Registry
+  internals
+- a renderer that produces a compact provider-facing awareness brief
+- clear guidance about what the agent knows, what it can do directly, and what
+  actions are mediated by the current surface
+
+The current implementation sources awareness from Registry through existing
+SDK/RegistryClient ports. Registry remains the authority for persisted protocol
+state. The bot runtime consumes SDK awareness and injects it into the shared
+execution context, so Registry conversations, Telegram conversations, and future
+bot transports receive the same product behavior.
+
+Telegram is a required surface for this behavior. A human in Telegram should be
+able to ask natural questions such as "what protocols are available?", "what did
+the latest run produce?", "how do I improve that run?", or "what can this bot
+install?" without memorizing a dense command protocol. The existing
+`/protocol ...` commands and buttons remain useful shortcuts, but they are not
+the only source of understanding.
 
 ## Target User Experience
 
@@ -830,6 +863,21 @@ user action is available.
 
 ## Telegram Implementation Plan
 
+### SDK-backed awareness in normal conversation
+
+Normal Telegram messages should receive the same SDK-backed Octopus awareness
+brief as Registry conversations. A user should be able to ask about available
+protocols, recent runs, run outcomes, artifacts, runtime links, installed tools,
+sudo/container access, and improvement paths in plain language.
+
+Telegram-specific behavior remains thin:
+
+- The shared execution context supplies awareness.
+- Telegram presenters and `/protocol ...` commands remain action shortcuts.
+- Telegram does not maintain a separate protocol catalog or run memory.
+- The awareness brief should mention the shortest useful Telegram command only
+  when an action needs the surface to mediate it.
+
 ### Runtime cards
 
 Telegram protocol/run messages should include runtime-aware primary artifact actions:
@@ -855,6 +903,37 @@ Add callbacks using existing Telegram to Registry client patterns:
 Do not implement Telegram-only lifecycle behavior. Telegram calls Registry APIs.
 
 ## Bot Runtime Implementation Plan
+
+### SDK-backed awareness service
+
+Add an SDK-owned awareness service and bot runtime port.
+
+Responsibilities:
+
+- Summarize the current agent/container capability state without exposing
+  secrets.
+- Summarize configured workspace mounts and active project policy.
+- Summarize available and active runtime skills through SDK skill catalog
+  interfaces.
+- Summarize launchable protocols and recent meaningful runs through SDK
+  protocol ports.
+- Include primary artifact and runtime hints for recent runs when available.
+- Render a compact provider-facing brief that can be prepended to every normal
+  execution request.
+- Fail closed to a short "awareness unavailable" note rather than blocking user
+  work when Registry is temporarily unavailable.
+
+Implementation boundaries:
+
+- SDK defines records, ports, and rendering.
+- The current app implementation wires the port to `RegistryClient` and
+  `ProtocolService`.
+- Registry is only the authority implementation; no bot should import Registry
+  store internals or read Registry database tables directly for awareness.
+- The provider process does not receive raw Registry tokens or secret
+  environment variables. The bot runtime fetches awareness before invoking the
+  provider and passes only safe summaries.
+- The same awareness path is used by Registry and Telegram conversation turns.
 
 ### Runtime supervisor
 
@@ -1315,6 +1394,41 @@ Acceptance:
 - Telegram users can execute the same runtime lifecycle as Registry users
   through Registry APIs, not Telegram-only behavior.
 
+### Phase 3A: Add SDK-backed agent awareness to Registry and Telegram conversations
+
+1. Add SDK records and ports for agent awareness:
+   - agent identity and execution capability summary
+   - workspace/project summary
+   - toolchain and sudo availability
+   - available and active skill summary
+   - launchable protocol summary
+   - recent run/stage/artifact/runtime summary
+   - action guidance for run, improve, artifact, and runtime operations
+2. Implement an SDK service that builds and renders the awareness brief from
+   protocol and skill ports.
+3. Implement the current bot runtime adapter using `RegistryClient`,
+   `ProtocolService`, and runtime skill catalog interfaces.
+4. Inject the rendered brief through the shared execution context before
+   provider invocation, not through Telegram-only or Registry-only handlers.
+5. Keep tokens and secrets out of provider context.
+6. Ensure the brief is compact, fresh enough to reflect newly added protocols,
+   and resilient to temporary Registry failures.
+7. Verify both Registry and Telegram ordinary conversation turns can answer
+   protocol/run/artifact/capability questions without the user memorizing
+   command syntax.
+
+Acceptance:
+
+- Future bot implementations can implement the same awareness behavior by
+  satisfying SDK ports.
+- Current Registry and Telegram conversations receive the same awareness brief.
+- The awareness brief mentions `/protocol` shortcuts in Telegram as shortcuts,
+  not as the only knowledge path.
+- New published protocols appear in subsequent agent awareness without copying
+  files into the bot or maintaining a shadow catalog.
+- Focused tests prove SDK summary rendering and shared execution-context
+  injection.
+
 ### Phase 4: Make Auto Protocol runtime-aware in generation, revision, and validation
 
 1. Extend the model planner contract so it must classify runnable outcomes and
@@ -1566,7 +1680,12 @@ QA:
 19. The risk-engine UI submits at least one scenario decision through routed API
    paths and exposes audit/explainability evidence.
 20. OpenAPI contract checks fail CI when route behavior and docs drift.
-21. The final deployed `/Users/tinker/octopus` checkout is on the committed
+21. Agents receive SDK-backed awareness of protocols, recent runs, primary
+   artifacts, runtime outcomes, workspace/tool capabilities, and relevant
+   actions in both Registry and Telegram conversation turns.
+22. Future bot implementations can implement the awareness behavior through SDK
+   interfaces without copying Registry store code or Telegram command handlers.
+23. The final deployed `/Users/tinker/octopus` checkout is on the committed
    branch, healthy, and verified in real Safari.
 
 ## Non-Goals

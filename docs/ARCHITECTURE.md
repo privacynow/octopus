@@ -99,6 +99,16 @@ flowchart TB
     BotService <--> RegistryService
 ```
 
+Bot containers are execution environments, not locked-down SaaS sandboxes. The
+supported bot image includes the common build/runtime toolchain needed by
+serious protocol stages: Python, Node/npm, Java 21 JDK, Maven, C/C++ build
+tools, `rg`, `jq`, network inspection utilities, archive tools, and browser
+runtime libraries. The process normally runs as the `bot` user, but that user
+has passwordless `sudo` inside the container so operator-controlled agents can
+install additional package dependencies when a run genuinely needs them. This is
+intentional power in the bot container and should be paired with workspace
+cleanup, review evidence, and deployment trust boundaries.
+
 Registry addressing has three separate values:
 
 | Address | Purpose |

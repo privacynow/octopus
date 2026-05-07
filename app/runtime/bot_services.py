@@ -15,6 +15,7 @@ from app.control_plane.directory import ControlPlaneDirectory
 from app.config import BotConfig
 from app.execution_faults import LocalExecutionFaultState
 from app.provider_guidance_service import get_provider_guidance_service
+from app.runtime.agent_awareness import RuntimeAgentAwarenessService
 from app.runtime.artifacts import RuntimeArtifactStore
 from app.runtime.composition import compose_workflows
 from app.skill_inspection_service import SkillInspectionService
@@ -139,6 +140,10 @@ def build_bus_bot_services(
         execution_faults=LocalExecutionFaultState(config.data_dir),
         agent_directory=control_plane.agent_directory,
         conversation_projection=control_plane.conversation_projection,
+        agent_awareness=RuntimeAgentAwarenessService(
+            config=config,
+            runtime_skill_catalog=workflow_graph.runtime_skills.catalog,
+        ),
     )
     return BotServices(
         control_plane=control_plane,

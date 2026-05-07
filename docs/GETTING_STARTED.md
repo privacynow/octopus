@@ -281,6 +281,14 @@ Use a small, non-sensitive request first:
 After that works, continue to [USER_GUIDE.md](USER_GUIDE.md) for the product
 walkthrough.
 
+The local agent container includes a practical build/runtime toolchain. It can
+compile C/C++ work, run Java 21/Maven projects, use Node/npm and Python, inspect
+networking, and create/download archives. The agent normally runs as `bot`, but
+the default local image grants passwordless `sudo` inside the container so the
+agent can install additional package dependencies when a real workflow needs
+them. This power applies inside the bot container; use trusted agents and clean
+up workspaces when runs finish.
+
 ## Stop Or Restart
 
 To stop the local stack:

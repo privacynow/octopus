@@ -1173,16 +1173,26 @@ class ProtocolPostgresAdapter:
         metadata: Mapping[str, object],
         manifest: ProtocolArtifactRuntimeManifestRecord | None,
     ) -> bool:
+        return bool(RegistryPostgresStore._runtime_fetch_core_exercise_key(metadata, manifest))
+
+    @staticmethod
+    def _runtime_fetch_core_exercise_key(
+        metadata: Mapping[str, object],
+        manifest: ProtocolArtifactRuntimeManifestRecord | None,
+    ) -> str:
         status_code = int(metadata.get("status_code", 0) or 0)
         if status_code <= 0 or status_code >= 500:
-            return False
+            return ""
         method = str(metadata.get("method", "GET") or "GET").strip().upper()
-        if method in {"POST", "PUT", "PATCH", "DELETE"}:
-            return True
         path = str(metadata.get("path", "") or "").strip() or "/"
         if not path.startswith("/"):
             path = f"/{path}"
+        query = str(metadata.get("query_string", "") or "").strip()
+        if query and not query.startswith("?"):
+            query = f"?{query}"
         path_without_query = path.split("?", 1)[0].split("#", 1)[0] or "/"
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            return f"{method} {path_without_query}{query}"
         manifest = manifest or ProtocolArtifactRuntimeManifestRecord()
         health_path = str(manifest.health_path or "/health").strip() or "/health"
         if not health_path.startswith("/"):
@@ -1191,14 +1201,43 @@ class ProtocolPostgresAdapter:
         if not ui_path.startswith("/"):
             ui_path = f"/{ui_path}"
         if path_without_query == health_path:
-            return False
+            return ""
         if bool(metadata.get("is_api")):
-            return path_without_query not in {"/", "/docs", "/api-docs", "/openapi.json", health_path}
+            if path_without_query in {"/", "/docs", "/api-docs", "/openapi.json", health_path}:
+                return ""
+            return f"{method} {path_without_query}{query}"
         if path_without_query == ui_path or path_without_query == "/":
-            return False
+            return ""
         if re.search(r"\.(?:css|js|mjs|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$", path_without_query, re.I):
-            return False
-        return True
+            return ""
+        return f"{method} {path_without_query}{query}"
+
+    @staticmethod
+    def _runtime_client_interaction_key(metadata: Mapping[str, object]) -> str:
+        event_type = str(metadata.get("event_type", "") or "").strip().lower()
+        tag = str(metadata.get("tag", "") or "").strip().lower()
+        text = re.sub(r"\s+", " ", str(metadata.get("text", "") or "").strip().lower())[:80]
+        action = re.sub(r"\s+", " ", str(metadata.get("action", "") or "").strip().lower())[:80]
+        page_path = str(metadata.get("page_path", "") or "").strip().lower()
+        key = "|".join(part for part in [event_type, tag, text or action, page_path] if part)
+        return key
+
+    @staticmethod
+    def _runtime_manifest_minimum_core_journeys(manifest: ProtocolArtifactRuntimeManifestRecord | None) -> int:
+        if manifest is None:
+            return 1
+        metadata = manifest.metadata.as_dict() if manifest.metadata else {}
+        raw = metadata.get("minimum_core_journeys") if isinstance(metadata, Mapping) else None
+        try:
+            value = int(raw or 0)
+        except (TypeError, ValueError):
+            value = 0
+        checks = metadata.get("outcome_readiness_checks") if isinstance(metadata, Mapping) else None
+        if value <= 0 and isinstance(checks, Sequence) and not isinstance(checks, (str, bytes)):
+            value = min(4, max(0, len([item for item in checks if str(item or "").strip()])))
+        if value <= 0:
+            value = 1 if str(manifest.runtime_kind or "").strip().lower() == "static" else 2
+        return max(1, min(6, value))
 
     @staticmethod
     def _runtime_acceptance_text_has_visible_result_evidence(text: str) -> bool:
@@ -1245,6 +1284,57 @@ class ProtocolPostgresAdapter:
             "evidence",
         )
         return any(term in normalized for term in action_terms) and any(term in normalized for term in result_terms)
+
+    @staticmethod
+    def _runtime_acceptance_text_has_outcome_readiness_matrix(text: str, *, minimum_core_journeys: int) -> bool:
+        normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not normalized:
+            return False
+        if not any(term in normalized for term in ("outcome-readiness", "outcome readiness", "readiness matrix", "journey matrix", "scenario matrix", "workflow matrix", "qa matrix")):
+            return False
+        negative_patterns = (
+            r"\bplaceholder\b",
+            r"\bskipped\b",
+            r"\buntested\b",
+            r"\bnot\s+(covered|working|implemented|visible|usable)\b",
+            r"\bfailed\b",
+            r"\bonly\s+the\s+first\b",
+        )
+        if any(re.search(pattern, normalized) for pattern in negative_patterns):
+            return False
+        pass_count = len(re.findall(r"\b(pass(?:ed)?|verified|succeeded|works|working|ok)\b", normalized))
+        return pass_count >= max(1, minimum_core_journeys)
+
+    @staticmethod
+    def _runtime_acceptance_text_has_customer_branding_evidence(text: str) -> bool:
+        normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not normalized:
+            return False
+        if "octopus" not in normalized or "brand" not in normalized:
+            return False
+        branding_patterns = (
+            r"\b(no|not|without|none|absent|avoids?|removed)\b.{0,100}\boctopus\b.{0,80}\b(brand|branding|title|copy|ui|api|customer-facing)\b",
+            r"\boctopus\b.{0,100}\b(no|not|without|none|absent|only internal|internal only|manifest|release evidence|registry)\b",
+            r"\bbranding check\b.{0,140}\boctopus\b",
+        )
+        return any(re.search(pattern, normalized) for pattern in branding_patterns)
+
+    @staticmethod
+    def _runtime_document_explicitly_allows_octopus_branding(document: ProtocolDefinitionDocumentRecord) -> bool:
+        metadata = document.metadata.as_dict()
+        auto_protocol = metadata.get("auto_protocol") if isinstance(metadata, Mapping) else {}
+        parts = [
+            metadata.get("display_name", ""),
+            metadata.get("description", ""),
+        ]
+        if isinstance(auto_protocol, Mapping):
+            parts.extend([
+                auto_protocol.get("requirement", ""),
+                auto_protocol.get("constraints", ""),
+                auto_protocol.get("description", ""),
+            ])
+        normalized = re.sub(r"\s+", " ", " ".join(str(part or "") for part in parts).lower())
+        return bool(re.search(r"\b(use|include|apply|keep|show|brand(?:ed)? as)\s+octopus\s+brand", normalized))
 
     def _runtime_acceptance_result_text(
         self,
@@ -1410,40 +1500,72 @@ class ProtocolPostgresAdapter:
             and bool(item.metadata_json.as_dict().get("ok"))
             for item in events
         )
-        has_client_interaction = any(str(item.event_kind or "") == "client_interaction" for item in events)
-        has_exercised = any(
-            str(item.event_kind or "") == "fetch"
-            and self._runtime_fetch_counts_as_core_exercise(item.metadata_json.as_dict(), effective_manifest)
+        client_interaction_keys = {
+            self._runtime_client_interaction_key(item.metadata_json.as_dict())
             for item in events
-        )
+            if str(item.event_kind or "") == "client_interaction"
+        }
+        client_interaction_keys.discard("")
+        core_fetch_keys = {
+            self._runtime_fetch_core_exercise_key(item.metadata_json.as_dict(), effective_manifest)
+            for item in events
+            if str(item.event_kind or "") == "fetch"
+        }
+        core_fetch_keys.discard("")
+        has_client_interaction = bool(client_interaction_keys)
+        has_exercised = bool(core_fetch_keys)
+        minimum_core_journeys = self._runtime_manifest_minimum_core_journeys(effective_manifest)
+        distinct_core_journeys = len(core_fetch_keys | client_interaction_keys)
         evidence_text = self._runtime_acceptance_result_text(
             conn,
             stage_execution_row=stage_execution_row,
             engine=engine,
         )
         has_visible_result_evidence = self._runtime_acceptance_text_has_visible_result_evidence(evidence_text)
+        has_outcome_readiness_matrix = self._runtime_acceptance_text_has_outcome_readiness_matrix(
+            evidence_text,
+            minimum_core_journeys=minimum_core_journeys,
+        )
+        branding_check_required = not self._runtime_document_explicitly_allows_octopus_branding(document)
+        has_customer_branding_evidence = (
+            not branding_check_required
+            or self._runtime_acceptance_text_has_customer_branding_evidence(evidence_text)
+        )
         missing = []
         if not has_started:
             missing.append("runtime start")
         if not has_healthy:
             missing.append("healthy runtime check")
-        if not (has_exercised or has_client_interaction):
-            missing.append("interactive UI/API exercise through Registry routing")
+        if not has_client_interaction:
+            missing.append("user interaction through Registry routing")
+        if not has_exercised:
+            missing.append("routed UI/API fetch for a core action")
+        if distinct_core_journeys < minimum_core_journeys and not has_outcome_readiness_matrix:
+            journey_label = "journey" if minimum_core_journeys == 1 else "journeys"
+            missing.append(f"evidence for at least {minimum_core_journeys} representative core {journey_label}")
         if not has_visible_result_evidence:
             missing.append("written evidence of the visible result from an exercised core action")
+        if not has_outcome_readiness_matrix:
+            missing.append("pass/fail outcome-readiness matrix")
+        if not has_customer_branding_evidence:
+            missing.append("customer-facing branding check confirming Octopus is not used as the artifact brand")
         if not missing:
             return engine
 
         detail_text = (
-            "Final acceptance for this runnable primary artifact requires Octopus runtime evidence before completion: "
+            "Final acceptance for this runnable primary artifact requires runtime and outcome-readiness evidence before completion: "
             + ", ".join(missing)
-            + ". Start or open the artifact runtime, run Health, exercise the UI/API through the Registry URL, then accept again."
+            + ". Start or open the artifact runtime, run Health, exercise representative UI/API journeys through the Registry URL, record visible outcomes, verify customer-facing branding, then accept again."
         )
         metadata = engine.transition_metadata.as_dict()
         metadata.update({
             "runtime_evidence_required": True,
             "primary_artifact_key": primary_key,
             "missing_runtime_evidence": missing,
+            "runtime_core_exercise_count": distinct_core_journeys,
+            "runtime_minimum_core_journeys": minimum_core_journeys,
+            "runtime_core_fetch_keys": sorted(core_fetch_keys),
+            "runtime_client_interaction_keys": sorted(client_interaction_keys),
         })
         return engine.model_copy(update={
             "run_status": "blocked",

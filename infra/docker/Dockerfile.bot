@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-21-jdk-headless \
     pkg-config \
     ripgrep \
+    sudo \
     unzip \
     xvfb \
     zip \
@@ -88,6 +89,8 @@ LABEL org.octopus-agent.provider="${BOT_PROVIDER}"
 
 # bot user: persistent home for provider auth (Claude/Codex store state in home)
 RUN useradd -m -d /home/bot -u 1000 bot
+RUN printf 'bot ALL=(root) NOPASSWD:ALL\n' > /etc/sudoers.d/octopus-bot \
+    && chmod 0440 /etc/sudoers.d/octopus-bot
 ENV HOME=/home/bot
 WORKDIR /home/bot
 ENV PYTHONPATH=/app

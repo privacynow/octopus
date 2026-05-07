@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
 import secrets
@@ -17,6 +18,7 @@ from octopus_sdk.bot_runtime import ExecutionServices
 from octopus_sdk.bot_runtime import ProviderDispatchRuntime
 from octopus_sdk.bot_runtime import run_provider_preflight
 from octopus_sdk.bot_runtime import run_provider_request
+from octopus_sdk.agent_awareness import AgentAwarenessRequestRecord
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.execution_events import ExecutionEventSink
 from octopus_sdk.formatting import extract_send_directives
@@ -327,6 +329,56 @@ def _resolve_context(
     )
 
 
+def _append_system_prompt_section(system_prompt: str, section: str) -> str:
+    section = str(section or "").strip()
+    if not section:
+        return system_prompt
+    system_prompt = str(system_prompt or "").strip()
+    if not system_prompt:
+        return section
+    return f"{system_prompt}\n\n{section}"
+
+
+def _system_prompt_section_digest(section: str) -> str:
+    section = str(section or "").strip()
+    if not section:
+        return ""
+    return hashlib.sha256(section.encode()).hexdigest()
+
+
+async def _agent_awareness_prompt_block(
+    runtime: ExecutionRuntime,
+    transport: TransportIdentity,
+    prompt: str,
+    resolved: ResolvedExecutionContext,
+    *,
+    trust_tier: str,
+) -> str:
+    if trust_tier == "public" or runtime.services.agent_awareness is None:
+        return ""
+    cfg = runtime.dispatch.config
+    try:
+        awareness = await runtime.services.agent_awareness.build_awareness(
+            AgentAwarenessRequestRecord(
+                origin_channel=str(transport.origin_channel or ""),
+                conversation_key=transport.conversation_key,
+                user_prompt=prompt,
+                agent_slug=str(cfg.agent_slug or cfg.instance or ""),
+                agent_display_name=str(cfg.agent_display_name or cfg.instance or ""),
+                provider_name=runtime.dispatch.provider.name,
+                model=resolved.effective_model or cfg.model,
+                working_dir=str(resolved.working_dir or cfg.working_dir or ""),
+                workspace_ref=str(resolved.project_id or ""),
+                file_policy=str(resolved.file_policy or "edit"),
+                active_skills=list(resolved.active_skills),
+            )
+        )
+    except Exception:
+        _log.debug("Agent awareness build failed; continuing without awareness", exc_info=True)
+        return ""
+    return awareness.to_prompt_block()
+
+
 def check_prompt_size_cross_chat(
     data_dir: Path,
     skill_name: str,
@@ -456,6 +508,15 @@ async def _execute_request_locked(
         effective_model=resolved.effective_model,
         available_agents=available_agents,
     )
+    awareness_block = await _agent_awareness_prompt_block(
+        runtime,
+        transport,
+        prompt,
+        resolved,
+        trust_tier=trust_tier,
+    )
+    awareness_digest = _system_prompt_section_digest(awareness_block)
+    context.system_prompt = _append_system_prompt_section(context.system_prompt, awareness_block)
     context.skip_permissions = skip_permissions or trusted_conversation_bypasses_approvals(
         session,
         trust_tier=trust_tier,
@@ -468,14 +529,18 @@ async def _execute_request_locked(
     if prov.name == "codex":
         stored_hash = session.provider_state.get("context_hash")
         stored_boot = session.provider_state.get("boot_id")
+        stored_awareness_digest = str(session.provider_state.get("agent_awareness_digest") or "")
+        awareness_changed = (stored_awareness_digest or awareness_digest) and stored_awareness_digest != awareness_digest
         stale_thread = (
             (stored_hash and stored_hash != context_hash)
             or (stored_boot and stored_boot != runtime.dispatch.boot_id)
+            or bool(awareness_changed)
         )
         if stale_thread and session.provider_state.get("thread_id"):
             session.provider_state["thread_id"] = None
         session.provider_state["context_hash"] = context_hash
         session.provider_state["boot_id"] = runtime.dispatch.boot_id
+        session.provider_state["agent_awareness_digest"] = awareness_digest
         _save(runtime, conversation_key, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
@@ -836,6 +901,14 @@ async def request_approval(
         file_policy=resolved.file_policy,
         effective_model=resolved.effective_model,
     )
+    awareness_block = await _agent_awareness_prompt_block(
+        runtime,
+        transport,
+        prompt,
+        resolved,
+        trust_tier=trust_tier,
+    )
+    preflight_context.system_prompt = _append_system_prompt_section(preflight_context.system_prompt, awareness_block)
     context_hash = resolved.context_hash
 
     dispatched = await run_provider_preflight(

@@ -8375,7 +8375,7 @@ function renderProtocolRuns(container) {
             primary?.expected_path ? `Primary artifact expected path: ${primary.expected_path}` : '',
             artifacts.length ? `Existing artifacts:\n- ${artifacts.join('\n- ')}` : 'Existing artifacts: none recorded',
             '',
-            'Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
+            'Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, outcome-readiness matrix, customer-facing branding check, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
         ].filter((line) => line !== '').join('\n');
     }
 
@@ -8813,8 +8813,13 @@ function renderProtocolRuns(container) {
         const request = document.createElement('textarea');
         request.className = 'input';
         request.rows = 5;
-        request.placeholder = 'Example: add a root runtime manifest, routed UI/API, smoke evidence, and stricter review.';
+        request.placeholder = 'Example: make the runtime start without build/install work, exercise multiple routed journeys, record visible results, and add outcome-readiness plus branding evidence.';
         requestLabel.appendChild(request);
+
+        const qualityHint = document.createElement('p');
+        qualityHint.className = 'quiet-note';
+        qualityHint.textContent = 'Good improvements should produce a prepared runtime package, a routed UI/API users can actually exercise, a pass/fail outcome-readiness matrix, and customer-facing copy that uses the requested product/domain brand rather than Octopus.';
+        form.appendChild(qualityHint);
 
         const status = document.createElement('p');
         status.className = 'quiet-note';

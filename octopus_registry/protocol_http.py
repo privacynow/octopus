@@ -348,6 +348,7 @@ def _rewrite_runtime_html_content(
       event_type: String(event.type || 'interaction'),
       page_path: window.location.pathname,
       page_hash: window.location.hash,
+      page_title: cleanText(document.title),
       ...details
     }};
     ensureCsrf().then((token) => {{
@@ -2926,6 +2927,7 @@ def build_protocol_router(
                     "href": str(payload.get("href", "") or "").strip()[:240],
                     "page_path": str(payload.get("page_path", "") or "").strip()[:240],
                     "page_hash": str(payload.get("page_hash", "") or "").strip()[:120],
+                    "page_title": re.sub(r"\s+", " ", str(payload.get("page_title", "") or "").strip())[:160],
                 },
             ),
             access=access,

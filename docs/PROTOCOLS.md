@@ -281,17 +281,27 @@ Process-backed packages should declare:
 - `ui_path`, `health_path`, and `api_base_path`
 - a docs endpoint
 - smoke-test steps for reviewers
+- an outcome-readiness matrix in release evidence, and preferably
+  `metadata.outcome_readiness_checks` in the manifest for representative
+  journeys or scenarios
 
 Registry owns the user-facing URL, auth, status, and lifecycle. The bot runtime
 owns the process. Users should be able to start/open the app, exercise the UI or
 API, inspect logs/status, stop the runtime, and still download the artifact as a
 zip package.
 
+Generated artifacts should not use Octopus as their customer-facing brand unless
+the user explicitly requested that. Octopus is the platform and runtime owner;
+the customer-facing app title, dashboard, API name, examples, and help text
+should use the user's brand or neutral domain-specific language.
+
 Final acceptance for a runnable primary artifact is evidence-gated. If the
 primary artifact declares `octopus-runtime.json`, Octopus expects runtime start
-evidence, a healthy runtime check, and at least one routed UI/API exercise event
-before the acceptance stage can complete successfully. This keeps a reviewer
-from accepting a runnable system only because files exist.
+evidence, a healthy runtime check, user interaction through Registry routing, a
+routed UI/API core-action fetch, visible-result evidence, an outcome-readiness
+matrix, and a customer-facing branding check before the acceptance stage can
+complete successfully. This keeps a reviewer from accepting a runnable system
+only because files exist or one happy-path click worked.
 
 ## Starting A Run
 

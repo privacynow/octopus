@@ -290,6 +290,12 @@ and `Open app`. Octopus starts the process inside the bot runtime, routes the
 UI/API through the Registry, and keeps package browse/download actions available
 beside the live app. Stop the runtime when you are done testing it.
 
+For runnable primary outcomes, final acceptance requires more than "it opens."
+The reviewer must exercise representative user journeys through the Registry,
+record visible results, complete an outcome-readiness matrix, and confirm that
+the artifact's customer-facing UI/API does not use Octopus as the product brand
+unless that branding was requested.
+
 ## Archive, Delete, And Cleanup
 
 Archive hides a run from the normal list while preserving the run, stages,

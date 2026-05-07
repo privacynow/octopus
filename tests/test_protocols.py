@@ -2048,11 +2048,27 @@ def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgr
         ),
         access=operator_access(),
     )
-    accepted = store.act_on_protocol_run(
+    matrix_blocked = store.act_on_protocol_run(
         created.run.protocol_run_id,
         access=operator_access(),
         action="accept",
         reason="Clicked Run scenario and the decision result was displayed in the app.",
+    )
+    assert matrix_blocked.ok is True
+    assert matrix_blocked.run is not None
+    assert matrix_blocked.run.status == "blocked"
+    assert matrix_blocked.run.blocked_code == "runtime_evidence_required"
+    assert "outcome-readiness matrix" in matrix_blocked.run.blocked_detail
+
+    accepted = store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="accept",
+        reason=(
+            "Outcome-readiness matrix:\n"
+            "PASS journey 1: clicked Run scenario and the decision result was displayed in the app.\n"
+            "Branding check: no Octopus branding appears in customer-facing UI/API copy; Octopus is only internal runtime evidence."
+        ),
     )
     exported = store.export_protocol_run(created.run.protocol_run_id, access=operator_access())
 

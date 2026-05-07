@@ -113,6 +113,9 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "direct localhost or container-only smoke checks" in acceptance_stage["instructions"]
     assert "start command performs build" in acceptance_stage["instructions"]
     assert "visible and understandable" in acceptance_stage["instructions"]
+    assert "outcome-readiness matrix" in acceptance_stage["instructions"]
+    assert "Octopus branding" in acceptance_stage["instructions"]
+    assert "Registry-managed runtime" in acceptance_stage["instructions"]
     assert "choose revise" in acceptance_stage["instructions"].lower()
     assert document["metadata"]["auto_protocol"]["primary_artifact"]["open_behavior"] == "runtime"
     assert any(
@@ -121,6 +124,14 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     )
     assert any(
         "does not install, build, package, or test" in item
+        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+    )
+    assert any(
+        "outcome-readiness matrix" in item
+        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+    )
+    assert any(
+        "Octopus branding" in item
         for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
     )
     assert session.analysis.work_packages

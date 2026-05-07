@@ -34,6 +34,7 @@ from octopus_sdk.protocols import (
     protocol_review_edge_key,
     render_protocol_stage_prompt,
     resolve_launchable_protocol,
+    runtime_manifest_run_ready_blockers,
     validate_protocol_document,
 )
 from octopus_sdk.protocols.engine import ProtocolRunEngine
@@ -116,6 +117,36 @@ def _launchable_definition(**overrides) -> ProtocolDefinitionRecord:
     }
     base.update(overrides)
     return ProtocolDefinitionRecord.model_validate(base)
+
+
+def test_runtime_manifest_run_ready_policy_is_generic() -> None:
+    assert runtime_manifest_run_ready_blockers(None) == []
+    assert runtime_manifest_run_ready_blockers(
+        ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/health")
+    ) == []
+    assert runtime_manifest_run_ready_blockers(
+        ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="java",
+            start_command="java -jar target/risk-engine.jar --server.port=${PORT}",
+            ui_path="/",
+            health_path="/health",
+            endpoints=[{"label": "Docs", "path": "/api/docs", "endpoint_kind": "docs", "method": "GET"}],
+            smoke_test=["GET /health"],
+        )
+    ) == []
+
+    node_blockers = runtime_manifest_run_ready_blockers(
+        ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="node",
+            start_command="npm run build && node dist/server.js",
+            ui_path="/",
+            health_path="/health",
+            endpoints=[{"label": "Docs", "path": "/api/docs", "endpoint_kind": "docs", "method": "GET"}],
+            smoke_test=["GET /health"],
+        )
+    )
+
+    assert node_blockers == ["Node dependency, build, or test commands must run before acceptance"]
 
 
 @pytest.mark.asyncio

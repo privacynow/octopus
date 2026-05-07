@@ -66,6 +66,7 @@ from octopus_sdk.protocols import (
     protocol_participant_session_key,
     protocol_retention_until,
     protocol_review_edge_counts,
+    runtime_manifest_run_ready_blockers,
     auto_protocol_event_summary,
     auto_protocol_runtime_expected_from_text,
     generate_auto_protocol_session,
@@ -1149,24 +1150,7 @@ class ProtocolPostgresAdapter:
 
     @staticmethod
     def _runtime_manifest_run_ready_blockers(manifest: ProtocolArtifactRuntimeManifestRecord | None) -> list[str]:
-        if manifest is None:
-            return []
-        if str(manifest.runtime_kind or "").strip().lower() == "static":
-            return []
-        command = str(manifest.start_command or "").strip()
-        if not command:
-            return ["start_command is missing"]
-        normalized = re.sub(r"\s+", " ", command.lower())
-        blocker_patterns = [
-            (r"(^|[;&|]\s*|\s)(\.\/mvnw|mvn)(\s|$)", "Maven commands build or resolve dependencies at user start"),
-            (r"(^|[;&|]\s*|\s)(\.\/gradlew|gradle)(\s|$)", "Gradle commands build or resolve dependencies at user start"),
-            (r"(^|[;&|]\s*|\s)(npm|pnpm|yarn)\s+(install|ci|add|build|test|run\s+build|run\s+test)(\s|$)", "Node dependency, build, or test commands must run before acceptance"),
-            (r"(^|[;&|]\s*|\s)(pip|pip3|python\s+-m\s+pip|poetry|uv)\s+(install|sync|add)(\s|$)", "Python dependency installation must run before acceptance"),
-            (r"(^|[;&|]\s*|\s)(cargo|go|dotnet)\s+(build|test|run)(\s|$)", "Build, test, or developer run commands must not be the user start command"),
-            (r"(^|[;&|]\s*|\s)(pytest|tox|nox|make\s+(test|build|package)|cmake|meson|bazel)(\s|$)", "Test or build commands must run before acceptance"),
-        ]
-        blockers = [message for pattern, message in blocker_patterns if re.search(pattern, normalized)]
-        return list(dict.fromkeys(blockers))
+        return runtime_manifest_run_ready_blockers(manifest)
 
     @staticmethod
     def _runtime_fetch_counts_as_core_exercise(

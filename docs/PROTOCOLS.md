@@ -285,6 +285,13 @@ Process-backed packages should declare:
   `metadata.outcome_readiness_checks` in the manifest for representative
   journeys or scenarios
 
+The `start_command` must launch an already prepared artifact. Registry rejects
+process-backed runtime starts that try to install dependencies, build, package,
+test, or use developer-mode commands such as `mvn spring-boot:run`. Build and
+smoke-test during the protocol work stage, then launch with a cheap command such
+as `java -jar target/app.jar`, a prebuilt binary, or an equivalent prepared app
+entry point.
+
 Registry owns the user-facing URL, auth, status, and lifecycle. The bot runtime
 owns the process. Users should be able to start/open the app, exercise the UI or
 API, inspect logs/status, stop the runtime, and still download the artifact as a

@@ -35,6 +35,14 @@ Every row must be completed against the same Registry and SDK contracts. Do not
 create a second artifact browser, Telegram-only cleanup path, or bot-local
 cleanup command that bypasses Registry state.
 
+Runtime proof note, 2026-05-07: a live Registry risk-engine run proved artifact
+runtime start/stop, routing, runtime events, and snapshot/package availability,
+but it also exposed that Registry start still dispatched a process-backed
+manifest whose `start_command` used Maven developer mode. That path is now
+blocked before bot dispatch using the shared runtime manifest policy. The
+remaining live proof must use a regenerated or revised prepared artifact, not a
+developer-mode start command.
+
 ## Problem Statement
 
 Bot container workspaces can become messy. Protocol runs create source files,

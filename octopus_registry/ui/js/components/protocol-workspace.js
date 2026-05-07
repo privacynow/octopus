@@ -8813,8 +8813,13 @@ function renderProtocolRuns(container) {
         const request = document.createElement('textarea');
         request.className = 'input';
         request.rows = 5;
-        request.placeholder = 'Example: add a root runtime manifest, routed UI/API, smoke evidence, and stricter review.';
+        request.placeholder = 'Example: make the runtime start without build/install work, exercise multiple routed journeys, record visible results, and add outcome-readiness plus branding evidence.';
         requestLabel.appendChild(request);
+
+        const qualityHint = document.createElement('p');
+        qualityHint.className = 'quiet-note';
+        qualityHint.textContent = 'Good improvements should produce a prepared runtime package, a routed UI/API users can actually exercise, a pass/fail outcome-readiness matrix, and customer-facing copy that uses the requested product/domain brand rather than Octopus.';
+        form.appendChild(qualityHint);
 
         const status = document.createElement('p');
         status.className = 'quiet-note';

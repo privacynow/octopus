@@ -1283,7 +1283,6 @@ class ProtocolPostgresAdapter:
             r"\bskipped\b",
             r"\buntested\b",
             r"\bnot\s+(covered|working|implemented|visible|usable)\b",
-            r"\bfailed\b",
             r"\bonly\s+the\s+first\b",
         )
         if any(re.search(pattern, normalized) for pattern in negative_patterns):

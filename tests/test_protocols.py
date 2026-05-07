@@ -2196,6 +2196,7 @@ def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_
         "Clicked Run scenario through the Registry route and the decision result was displayed in the app.\n"
         "Outcome-readiness matrix:\n"
         "PASS journey 1: Registry-routed scenario run displayed the decision result and audit id.\n"
+        "A post-stop health check failed as expected, proving the temporary runtime was stopped.\n"
         "Branding check: no Octopus branding appears in customer-facing UI/API copy; "
         "Octopus is only internal runtime evidence.\n",
         encoding="utf-8",

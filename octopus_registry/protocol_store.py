@@ -1285,7 +1285,8 @@ class ProtocolPostgresAdapter:
             r"\bnot\s+(covered|working|implemented|visible|usable)\b",
             r"\bonly\s+the\s+first\b",
         )
-        if any(re.search(pattern, normalized) for pattern in negative_patterns):
+        negative_scan = re.sub(r"\b(?:0|zero|no)\s+skipped\b", "clean skip count", normalized)
+        if any(re.search(pattern, negative_scan) for pattern in negative_patterns):
             return False
         pass_count = len(re.findall(r"\b(pass(?:ed)?|verified|succeeded|works|working|ok)\b", normalized))
         return pass_count >= max(1, minimum_core_journeys)

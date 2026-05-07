@@ -42,6 +42,7 @@ from octopus_sdk.protocols.launch import ProtocolConversationLaunchRequestRecord
 from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
 from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
 from octopus_registry.protocol_runtime import evaluate_protocol_dispatch, runtime_protocol_selector
+from octopus_registry.protocol_store import ProtocolPostgresAdapter
 from octopus_registry.postgres import get_connection
 from octopus_registry.store_postgres import RegistryPostgresStore
 from psycopg.types.json import Jsonb
@@ -2194,6 +2195,7 @@ def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_
     release_evidence = tmp_path / "release.md"
     release_evidence.write_text(
         "Clicked Run scenario through the Registry route and the decision result was displayed in the app.\n"
+        "Automated tests: 5 run, 0 failures, 0 errors, and 0 skipped.\n"
         "Outcome-readiness matrix:\n"
         "PASS journey 1: Registry-routed scenario run displayed the decision result and audit id.\n"
         "A post-stop health check failed as expected, proving the temporary runtime was stopped.\n"
@@ -2370,6 +2372,24 @@ def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_
     assert completed.run.blocked_code == ""
     assert final_stage.status == "completed"
     assert final_stage.failure_code == ""
+
+
+def test_runtime_acceptance_matrix_allows_clean_skipped_test_counts() -> None:
+    evidence = (
+        "Automated test evidence: 5 tests ran with 0 failures, 0 errors, and 0 skipped.\n"
+        "Outcome-readiness matrix:\n"
+        "PASS journey 1: health and UI load returned the visible dashboard.\n"
+        "PASS journey 2: API docs listed service-backed workflows.\n"
+        "PASS journey 3: scenarios returned six domains.\n"
+        "PASS journey 4: policy DSL validation returned valid true.\n"
+        "PASS journey 5: model curation approved and activated a version.\n"
+        "PASS journey 6: replay provenance produced an audit id.\n"
+    )
+
+    assert ProtocolPostgresAdapter._runtime_acceptance_text_has_outcome_readiness_matrix(
+        evidence,
+        minimum_core_journeys=6,
+    )
 
 
 def test_registry_store_revises_final_accept_when_runtime_start_command_is_not_run_ready(postgres_registry_truncated: str, tmp_path: Path) -> None:

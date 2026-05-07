@@ -119,6 +119,7 @@ async def test_agent_awareness_renders_protocols_runs_artifacts_and_telegram_act
 
     assert "Octopus Agent Awareness" in prompt
     assert "Payments Risk Engine" in prompt
+    assert "Do not confuse them with skills" in prompt
     assert "run-risk" in prompt
     assert "primary_outcome" in prompt
     assert "final_review" in prompt

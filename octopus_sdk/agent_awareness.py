@@ -182,18 +182,37 @@ class AgentAwarenessRecord(RegistryRecordModel):
                 policy = f", {workspace.file_policy}" if workspace.file_policy else ""
                 lines.append(f"- {workspace.name or 'workspace'}: {workspace.root_dir}{policy} ({active})")
 
-        if self.available_skills or self.active_skills:
-            available = ", ".join(self.available_skills[:16]) or "none"
-            active = ", ".join(self.active_skills[:16]) or "none"
-            lines.extend(["", f"Skills: available on this bot: {available}. Active in this conversation: {active}."])
-
         if self.protocols:
-            lines.extend(["", "Launchable protocols:"])
+            lines.extend(
+                [
+                    "",
+                    "Launchable protocols:",
+                    "These are Octopus protocols the user can run. Do not confuse them with skills.",
+                ]
+            )
             for protocol in self.protocols[:10]:
                 label = protocol.display_name or protocol.slug or protocol.protocol_id
                 token = protocol.slug or protocol.protocol_id
                 description = f" - {_compact(protocol.description, limit=120)}" if protocol.description else ""
                 lines.append(f"- {label} (`{token}`): {protocol.lifecycle_state or 'available'}{description}")
+        else:
+            lines.extend(
+                [
+                    "",
+                    "Launchable protocols: none visible in the current Octopus awareness snapshot.",
+                ]
+            )
+
+        if self.available_skills or self.active_skills:
+            available = ", ".join(self.available_skills[:16]) or "none"
+            active = ", ".join(self.active_skills[:16]) or "none"
+            lines.extend(
+                [
+                    "",
+                    "Skills are reusable instructions/capabilities, not runnable protocols.",
+                    f"Skills: available on this bot: {available}. Active in this conversation: {active}.",
+                ]
+            )
 
         if self.recent_runs:
             lines.extend(["", "Recent protocol runs:"])

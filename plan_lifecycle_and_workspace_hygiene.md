@@ -44,6 +44,14 @@ acceptance auto-revises manifest contract defects instead of relying on a manual
 operator return. The remaining live proof must use a regenerated or revised
 prepared artifact, not a developer-mode start command.
 
+Follow-up proof note, 2026-05-07: real Safari was used against the deployed
+Registry run detail for risk-engine run `2d44384b9cce4bebae814e2616fdd934`.
+Registry logs showed the Safari runtime-start POST returning `409 Conflict`
+before bot dispatch, and the UI stayed on an enabled `Start app` action with the
+Maven blocker visible inline. This proves the non-run-ready start is now a
+product-visible lifecycle decision; prepared-artifact start/open/stop proof is
+still pending.
+
 ## Problem Statement
 
 Bot container workspaces can become messy. Protocol runs create source files,

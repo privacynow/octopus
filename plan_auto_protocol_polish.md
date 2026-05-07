@@ -45,7 +45,7 @@ surface.
 | Outcome | Backend Contract | Registry UI | Telegram | Engine/Store Enforcement | Docs | Focused Tests | Real Safari Proof |
 |---------|------------------|-------------|----------|--------------------------|------|---------------|-------------------|
 | Runtime manifest detection | Implemented | Implemented | Implemented through artifact cards | Implemented via manifest validation | Documented | Covered | Pending current Safari proof |
-| Start/open/stop runtime | Implemented | Implemented | Implemented | Implemented for lifecycle state | Documented | Covered | Pending current Safari proof |
+| Start/open/stop runtime | Implemented | Implemented | Implemented | Implemented for lifecycle state | Documented | Covered | Real Safari verified stopped -> start attempt and non-run-ready 409 recovery; open/stop still need prepared artifact proof |
 | Health/logs/events visibility | Implemented | Implemented in runtime dialog | Status card implemented; detailed logs remain Registry-owned | Events persisted | Documented | Covered | Pending current Safari proof |
 | Archive/delete runtime | Implemented HTTP | Implemented in runtime dialog | Registry-owned destructive lifecycle; Telegram links back to artifacts | Stop-before-archive/delete enforced | Documented | Covered | Pending current Safari proof |
 | Package browse/download zip | Implemented | Implemented | Implemented fallback package link | Existing artifact path | Documented | Covered | Pending current Safari proof |
@@ -56,7 +56,7 @@ surface.
 | Runs discovery and recency | Default API keeps human-generated runs visible and recency ordered | Default Runs view is recent-first with useful human filters | Recent run references resolve predictably | Store visibility avoids burying real user runs | Documented | Covered | Pending current Safari proof |
 | Improve existing run | Reuses Auto Protocol revise session against the existing run's protocol | Run detail can generate/apply/publish/run an improvement protocol from run context | Telegram command can improve a selected run | No duplicate protocol generator or run model | Documented | Covered | Pending current Safari proof |
 | SDK-backed agent awareness | SDK owns protocol/run/artifact/capability awareness records and prompt rendering | Registry conversations receive the awareness brief | Telegram conversations receive the same awareness brief; `/protocol` remains a shortcut | Registry is authority implementation, not a bot-specific side channel | Documented | Covered | Pending current Safari proof |
-| Risk-engine Java/Maven proof | Toolchain expected; runtime start now rejects non-run-ready process commands before bot dispatch | Registry live proof exposed non-run-ready `mvn spring-boot:run`; prepared-artifact rerun pending | Telegram live proof still pending after prepared-artifact rerun | Acceptance gate and Registry start share the same run-ready manifest policy and auto-revise runtime contract defects | Documented | Focused start/acceptance regressions covered | Pending current Safari proof after prepared artifact |
+| Risk-engine Java/Maven proof | Toolchain expected; runtime start now rejects non-run-ready process commands before bot dispatch | Registry/Safari proof exposes non-run-ready `mvn spring-boot:run` as a product-visible blocker; prepared-artifact rerun pending | Telegram live proof still pending after prepared-artifact rerun | Acceptance gate and Registry start share the same run-ready manifest policy and auto-revise runtime contract defects | Documented | Focused start/acceptance/UI recovery regressions covered | Real Safari + Registry logs prove current Maven artifact is blocked before bot dispatch and the UI remains actionable; prepared artifact + Telegram proof pending |
 
 Every implementation phase below must update this ledger when the product
 state changes. The ledger favors user outcomes over internal implementation
@@ -74,6 +74,19 @@ runtime manifests become an in-product revise transition with the blocker
 details in the next stage input. The next risk-engine proof must regenerate or
 revise the artifact through the real protocol path so its `start_command`
 launches a prepared package such as `java -jar target/app.jar`.
+
+Follow-up proof note, 2026-05-07: the deployed Registry UI was tested in real
+Safari on the live risk-engine run
+`2d44384b9cce4bebae814e2616fdd934`. Registry logs showed Safari loading the
+current UI asset, making runtime status GETs, and issuing
+`POST /v1/protocol-runs/2d44384b9cce4bebae814e2616fdd934/artifacts/produced_outcome/runtime/start`,
+which returned `409 Conflict` before bot dispatch. The run detail kept `Start
+app` enabled and surfaced the product blocker inline: Maven developer-mode
+commands build or resolve dependencies at user start, so the artifact package
+must be revised first. This proves the current non-run-ready artifact is handled
+by product policy and UI, not by an operator manually sending work back. It does
+not prove the regenerated prepared Java package, Registry-routed UI/API health,
+or Telegram runtime lifecycle yet.
 
 The prerequisite Auto Protocol closeout was completed before this workstream:
 user/developer docs were updated, Telegram Web was verified in real Safari, and

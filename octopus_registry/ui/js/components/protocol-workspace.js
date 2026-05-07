@@ -731,9 +731,9 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
         });
         actionRow.insertBefore(stopRuntime, runtimeStatus.nextSibling);
         if (runtimeExpected) {
-            runtimeBtn.textContent = 'Checking app...';
-            runtimeBtn.disabled = true;
-            runtimeHint.textContent = 'Checking current app status.';
+            runtimeBtn.textContent = 'Start app';
+            runtimeBtn.disabled = false;
+            runtimeHint.textContent = 'Runtime declared. Start the app to exercise this outcome.';
         }
         void refreshRuntimeState();
     }

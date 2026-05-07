@@ -356,6 +356,8 @@ def test_protocol_artifact_runtime_controls_recover_after_status_or_start_failur
     assert "runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';" in workspace
     assert "Could not check current app status:" in workspace
     assert "setRuntimeActionableFailure(`Start failed: ${runtimeActionErrorMessage" in workspace
+    assert "Checking current app status." not in workspace
+    assert "Runtime declared. Start the app to exercise this outcome." in workspace
 
 
 def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:

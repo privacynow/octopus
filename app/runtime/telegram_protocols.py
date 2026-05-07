@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,6 +125,26 @@ def protocol_artifact_url(
     return f"{base.rstrip('/')}/v1/protocol-runs/{run_token}/artifacts/{artifact_token}/content{suffix}"
 
 
+def protocol_artifact_runtime_url(
+    runtime: TelegramRuntime,
+    run_id: str,
+    artifact_key: str,
+    *,
+    registry_url: str = "",
+    path: str = "",
+) -> str:
+    base = _configured_registry_url(runtime, registry_url)
+    if not base:
+        return ""
+    run_token = quote(str(run_id or "").strip())
+    artifact_token = quote(str(artifact_key or "").strip())
+    if not run_token or not artifact_token:
+        return ""
+    tail = quote(str(path or "").strip().lstrip("/"))
+    suffix = f"/{tail}" if tail else "/"
+    return f"{base.rstrip('/')}/runtime/protocol-runs/{run_token}/artifacts/{artifact_token}/app{suffix}"
+
+
 def protocol_run_short_id(run_id: str) -> str:
     token = str(run_id or "").strip()
     return token[:8] if len(token) > 8 else token
@@ -145,6 +166,104 @@ def protocol_artifact_human_label(artifact) -> str:
     path = str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip()
     name = Path(path).name.strip() if path else ""
     return name or key or "Artifact"
+
+
+def _strip_run_improvement_boilerplate(value: object, *, max_chars: int = 1200) -> str:
+    context_labels = {
+        "current stage",
+        "existing artifacts",
+        "primary artifact",
+        "primary artifact expected path",
+        "protocol id",
+        "protocol name",
+        "run id",
+        "run objective",
+        "run status",
+    }
+    revision_labels = {"requested improvement", "revision request", "user improvement request"}
+    noise_prefixes = (
+        "bring the revised protocol up to the current octopus standard",
+        "improve the existing protocol that produced this run",
+        "use the prior run as context",
+    )
+    parts: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(value or "").replace("\r", "\n").splitlines():
+        line = raw_line.strip().lstrip("-*").strip()
+        if not line:
+            continue
+        if ":" in line:
+            raw_label, payload = line.split(":", 1)
+            label = raw_label.strip().lower()
+            if label in context_labels:
+                continue
+            if label in revision_labels:
+                line = payload.strip()
+                if not line:
+                    continue
+        key = re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()
+        if not key or key in seen or any(key.startswith(prefix) for prefix in noise_prefixes):
+            continue
+        seen.add(key)
+        parts.append(line)
+    text = " ".join(parts).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rsplit(" ", 1)[0].strip()
+
+
+def protocol_run_improvement_requirement(detail, change_request: str) -> str:
+    return _strip_run_improvement_boilerplate(change_request, max_chars=1400) or "Improve this protocol from the selected run."
+
+
+def protocol_run_improvement_constraints(detail) -> str:
+    run = getattr(detail, "run", None) or detail
+    version = getattr(detail, "version", None)
+    definition = getattr(version, "definition_json", None) if version is not None else None
+    if not isinstance(definition, dict):
+        definition = {}
+    metadata = definition.get("metadata") if isinstance(definition.get("metadata"), dict) else {}
+    auto_meta = metadata.get("auto_protocol") if isinstance(metadata.get("auto_protocol"), dict) else {}
+    primary = auto_meta.get("primary_artifact") if isinstance(auto_meta.get("primary_artifact"), dict) else {}
+    primary_key = str(primary.get("artifact_key") or auto_meta.get("primary_artifact_key") or "").strip()
+    artifact_lines: list[str] = []
+    for artifact in list(getattr(detail, "artifacts", []) or [])[:6]:
+        artifact_lines.append(
+            " | ".join(
+                item
+                for item in [
+                    str(getattr(artifact, "artifact_key", "") or "artifact").strip(),
+                    str(getattr(artifact, "workspace_path", "") or getattr(artifact, "location", "") or "").strip(),
+                    str(getattr(artifact, "verification_state", "") or getattr(artifact, "state", "") or "").strip(),
+                ]
+                if item
+            )
+        )
+        if not primary_key and str(getattr(artifact, "artifact_key", "") or "").strip():
+            primary_key = str(getattr(artifact, "artifact_key", "") or "").strip()
+    artifacts_block = (
+        "Existing artifacts:\n" + "\n".join(f"- {item}" for item in artifact_lines)
+        if artifact_lines
+        else "Existing artifacts: none recorded"
+    )
+    run_objective = _strip_run_improvement_boilerplate(getattr(run, "problem_statement", "") or "", max_chars=520)
+    return "\n".join(
+        line
+        for line in [
+            "Prior run context for this protocol improvement. Use this as evidence and orientation, not as text to copy into the new run objective.",
+            f"Run id: {getattr(run, 'protocol_run_id', '') or ''}",
+            f"Protocol id: {getattr(run, 'protocol_id', '') or ''}",
+            f"Protocol name: {getattr(run, 'protocol_display_name', '') or definition.get('display_name') or definition.get('name') or ''}",
+            f"Run status: {getattr(run, 'status', '') or ''}",
+            f"Prior run objective: {run_objective}" if run_objective else "",
+            f"Current stage: {getattr(run, 'current_stage_key', '') or ''}",
+            f"Primary artifact: {primary_key}" if primary_key else "",
+            artifacts_block,
+            "",
+            "Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.",
+        ]
+        if line != ""
+    )
 
 
 def protocol_artifact_is_package(artifact) -> bool:

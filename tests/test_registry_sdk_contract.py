@@ -1189,6 +1189,9 @@ _OBSERVATION_METHODS = (
     "list_run_artifacts",
     "list_run_timeline",
     "export_run",
+    "archive_run",
+    "restore_run",
+    "delete_run",
 )
 _AUTHORING_METHODS = (
     "get_protocol_authoring_options",
@@ -1207,7 +1210,11 @@ _AUTHORING_METHODS = (
     "export_protocol_draft",
     "diff_protocol_draft",
 )
-_ARTIFACT_ACCESS_METHODS = ("get_run_artifact_content",)
+_ARTIFACT_ACCESS_METHODS = (
+    "get_run_artifact_content",
+    "get_run_artifact_snapshot",
+    "create_run_artifact_snapshot",
+)
 
 
 def test_registry_client_satisfies_invocation_port():

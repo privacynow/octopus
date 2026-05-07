@@ -13,6 +13,11 @@ from .auto_design import (
 )
 from .models import (
     ProtocolArtifactRecord,
+    ProtocolArtifactSnapshotRecord,
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeHealthRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeEventRecord,
     ProtocolAuthoringOptionsRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
@@ -173,6 +178,12 @@ class ProtocolObservationPort(Protocol):
 
     async def export_run(self, run_id: str) -> ProtocolRunExportRecord: ...
 
+    async def archive_run(self, run_id: str, *, reason: str = "") -> ProtocolRunMutationRecord: ...
+
+    async def restore_run(self, run_id: str, *, reason: str = "") -> ProtocolRunMutationRecord: ...
+
+    async def delete_run(self, run_id: str, *, reason: str = "", confirm: str = "DELETE") -> ProtocolRunMutationRecord: ...
+
 
 @runtime_checkable
 class ProtocolArtifactAccessPort(Protocol):
@@ -183,6 +194,53 @@ class ProtocolArtifactAccessPort(Protocol):
         *,
         download: bool = False,
     ) -> bytes: ...
+
+    async def get_run_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactSnapshotRecord | None: ...
+
+    async def create_run_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactSnapshotRecord: ...
+
+
+@runtime_checkable
+class ProtocolArtifactRuntimePort(Protocol):
+    async def get_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeInstanceRecord | None: ...
+
+    async def start_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeActionResultRecord: ...
+
+    async def stop_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeActionResultRecord: ...
+
+    async def get_artifact_runtime_health(
+        self,
+        run_id: str,
+        artifact_key: str,
+    ) -> ProtocolArtifactRuntimeHealthRecord: ...
+
+    async def list_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]: ...
 
 
 @runtime_checkable

@@ -22,6 +22,7 @@ class RegistryConfig:
     operator_org_id: str
     operator_roles: tuple[str, ...]
     protocol_registry_templates_enabled: bool
+    artifact_store_dir: str = "/tmp/octopus-registry-artifacts"
 
 
 def registry_operator_roles() -> tuple[str, ...]:
@@ -63,6 +64,8 @@ def load_registry_config() -> RegistryConfig:
         operator_org_id=os.environ.get("REGISTRY_OPERATOR_ORG_ID", "local").strip() or "local",
         operator_roles=registry_operator_roles(),
         protocol_registry_templates_enabled=registry_protocol_templates_enabled(),
+        artifact_store_dir=os.environ.get("REGISTRY_ARTIFACT_STORE_DIR", "/tmp/octopus-registry-artifacts").strip()
+        or "/tmp/octopus-registry-artifacts",
     )
 
 

@@ -47,10 +47,17 @@ from octopus_sdk.providers import Provider
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.registry.management import (
+    ArtifactRuntimeFetchRequest,
+    ArtifactRuntimeHealthRequest,
+    ArtifactRuntimeLogsRequest,
     DesignAutoProtocolRequest,
     DesignAutoProtocolResult,
     ManagementRequest,
     ManagementResult,
+    StartArtifactRuntimeRequest,
+    StopArtifactRuntimeRequest,
+    WorkspaceCleanupRequest,
+    WorkspaceUsageRequest,
 )
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
@@ -657,6 +664,56 @@ async def handle_registry_delivery(
                     agent_id=request.agent_id,
                     success=True,
                     payload=DesignAutoProtocolResult(response=response),
+                )
+            except Exception as exc:
+                result = ManagementResult(
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    success=False,
+                    error_code="request_failed",
+                    error_detail=str(exc),
+                )
+        elif isinstance(
+            request.payload,
+            (
+                StartArtifactRuntimeRequest,
+                StopArtifactRuntimeRequest,
+                ArtifactRuntimeHealthRequest,
+                ArtifactRuntimeLogsRequest,
+                ArtifactRuntimeFetchRequest,
+                WorkspaceUsageRequest,
+                WorkspaceCleanupRequest,
+            ),
+        ):
+            from app.runtime import artifact_runtime
+
+            try:
+                if isinstance(request.payload, StartArtifactRuntimeRequest):
+                    payload = await artifact_runtime.start_artifact_runtime(
+                        request.payload,
+                        config=config,
+                    )
+                elif isinstance(request.payload, StopArtifactRuntimeRequest):
+                    payload = await artifact_runtime.stop_artifact_runtime(request.payload)
+                elif isinstance(request.payload, ArtifactRuntimeHealthRequest):
+                    payload = await artifact_runtime.artifact_runtime_health(request.payload)
+                elif isinstance(request.payload, ArtifactRuntimeLogsRequest):
+                    payload = await artifact_runtime.artifact_runtime_logs(request.payload)
+                elif isinstance(request.payload, WorkspaceUsageRequest):
+                    from app.runtime import workspace_hygiene
+
+                    payload = await workspace_hygiene.workspace_usage(request.payload, config=config)
+                elif isinstance(request.payload, WorkspaceCleanupRequest):
+                    from app.runtime import workspace_hygiene
+
+                    payload = await workspace_hygiene.workspace_cleanup(request.payload, config=config)
+                else:
+                    payload = await artifact_runtime.artifact_runtime_fetch(request.payload)
+                result = ManagementResult(
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    success=True,
+                    payload=payload,
                 )
             except Exception as exc:
                 result = ManagementResult(

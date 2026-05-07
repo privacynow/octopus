@@ -98,10 +98,31 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     produce_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_outcome")
     assert "only valid protocol decision is completed" in produce_stage["instructions"]
     assert "Do not leave foreground servers" in produce_stage["instructions"]
+    assert "runtime_kind 'java'" in produce_stage["instructions"]
+    assert "endpoints as an array of objects" in produce_stage["instructions"]
+    assert "endpoint_kind 'docs'" in produce_stage["instructions"]
+    assert "java -jar target/risk-engine.jar" in produce_stage["instructions"]
+    assert "mvn spring-boot:run" in produce_stage["instructions"]
+    assert "must not run dependency installation" in produce_stage["instructions"]
     acceptance_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "final_evidence")
     assert acceptance_stage["transitions"]["revise"] == "produce_outcome"
-    assert "Adversarially inspect or exercise" in acceptance_stage["instructions"]
+    assert "Adversarially" in acceptance_stage["instructions"]
+    assert "exercise" in acceptance_stage["instructions"]
+    assert "octopus-runtime.json" in acceptance_stage["instructions"]
+    assert "invalid" in acceptance_stage["instructions"]
+    assert "direct localhost or container-only smoke checks" in acceptance_stage["instructions"]
+    assert "start command performs build" in acceptance_stage["instructions"]
+    assert "visible and understandable" in acceptance_stage["instructions"]
     assert "choose revise" in acceptance_stage["instructions"].lower()
+    assert document["metadata"]["auto_protocol"]["primary_artifact"]["open_behavior"] == "runtime"
+    assert any(
+        "root octopus-runtime.json" in item
+        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+    )
+    assert any(
+        "does not install, build, package, or test" in item
+        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+    )
     assert session.analysis.work_packages
     assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
 
@@ -247,6 +268,72 @@ def test_auto_protocol_revision_preserves_planner_blockers_after_second_validati
     blocker_codes = {item.code for item in revised.unresolved_decisions}
     assert "planner.open_questions" in blocker_codes
     assert revised.status == "blocked"
+
+
+def test_auto_protocol_revision_compacts_accumulated_run_improvement_context():
+    original_requirement = "Build a payments and onboarding risk decision engine with a routed operator UI."
+    original = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            requirement_text=original_requirement,
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("requirements", "architecture", "implementation"),
+        )
+    )
+    bloated_change = "\n".join([
+        "Improve the existing protocol that produced this run. Use the prior run as context, but generate a normal Auto Protocol revision of the protocol rather than patching the old artifact directly.",
+        "User improvement request: Add a Java 21 backend, versioned APIs, runtime manifest, and smoke evidence.",
+        "Run id: run-risk",
+        "Protocol id: risk-protocol",
+        f"Run objective: {original.run_profile.problem_statement}",
+        "Existing artifacts:",
+        "- produced_outcome | workspaces/run-risk/outcome | verified",
+        "Bring the revised protocol up to the current Octopus standard: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts.",
+    ])
+
+    revised = revise_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            mode="revise",
+            requirement_text=bloated_change,
+            source_document=original.draft_definition_json,
+            target_protocol_id="risk-protocol",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("requirements", "architecture", "implementation"),
+        )
+    )
+    second_bloated_change = "\n".join([
+        "User improvement request: Add human-readable API docs and a replay scenario catalog.",
+        f"Run objective: {revised.run_profile.problem_statement}",
+        f"Run objective: {revised.run_profile.problem_statement}",
+        "Existing artifacts:",
+        "- produced_outcome | workspaces/run-risk/outcome | verified",
+    ])
+    second = revise_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            mode="revise",
+            requirement_text=second_bloated_change,
+            source_document=revised.draft_definition_json,
+            target_protocol_id="risk-protocol",
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("requirements", "architecture", "implementation"),
+        )
+    )
+
+    objective = second.run_profile.problem_statement
+    auto_meta = second.draft_definition_json.as_dict()["metadata"]["auto_protocol"]
+    run_input = second.draft_definition_json.as_dict()["metadata"]["run_inputs"][0]
+
+    assert objective.count("Build a payments and onboarding risk decision engine") == 1
+    assert "Run objective:" not in objective
+    assert "Existing artifacts" not in objective
+    assert "Revision request:" not in objective
+    assert "add human-readable API docs" in objective
+    assert len(objective) < 1000
+    assert auto_meta["requirement"].count("Build a payments and onboarding risk decision engine") == 1
+    assert "Run objective:" not in auto_meta["requirement"]
+    assert len(auto_meta["revision_requests"]) == 2
+    assert not second.plan.protocol_name.lower().startswith("existing protocol objective")
+    assert run_input["key"] == "problem_statement"
+    assert run_input["default_value"] == objective
 
 
 def test_auto_protocol_session_preserves_raw_planner_response_for_audit():

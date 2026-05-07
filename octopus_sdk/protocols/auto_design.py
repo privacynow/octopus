@@ -37,6 +37,68 @@ _AUTO_STAGE_BUDGET_COMPLEX_MAX = 16
 _AUTO_STAGE_HARD_CAP = 18
 _AUTO_STANDARD_WORK_PACKAGE_BUDGET = 6
 _AUTO_REVIEW_ROUND_MAX = 6
+_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS = 1800
+_AUTO_RUN_OBJECTIVE_MAX_CHARS = 1000
+_AUTO_REVISION_HISTORY_MAX = 20
+_AUTO_RUNTIME_OPEN_BEHAVIORS = {"runtime", "app", "service", "api", "playable"}
+_AUTO_RUNTIME_WORDS = {
+    "app",
+    "application",
+    "api",
+    "backend",
+    "browser",
+    "dashboard",
+    "frontend",
+    "game",
+    "html",
+    "interface",
+    "playable",
+    "portal",
+    "service",
+    "server",
+    "spa",
+    "ui",
+    "web",
+    "website",
+}
+_AUTO_RUNTIME_PHRASES = (
+    "api service",
+    "back end",
+    "browser based",
+    "browser-runnable",
+    "front end",
+    "health endpoint",
+    "operator console",
+    "operator ui",
+    "public api",
+    "running system",
+    "runnable artifact",
+    "runnable product",
+    "start command",
+    "user interface",
+    "user-facing api",
+    "user-facing ui",
+    "web app",
+    "web application",
+    "web browser",
+)
+
+AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE = (
+    "Runtime manifest contract: runnable primary artifacts must place octopus-runtime.json at the artifact package root "
+    "and it must validate as ProtocolArtifactRuntimeManifestRecord. Use runtime_kind exactly one of static, node, python, "
+    "java, binary, or process. For a Java/Maven service use runtime_kind 'java', not a descriptive phrase. For process-backed "
+    "runtimes include start_command, ui_path, health_path, api_base_path, smoke_test steps, and endpoints as an array of objects. "
+    "The package must be built and smoke-tested before final acceptance; start_command is only for launching the already prepared "
+    "runtime and must not run dependency installation, build, test, package, or developer server commands such as mvn spring-boot:run. "
+    "Each endpoint object uses label, path, endpoint_kind, method, and description; endpoint_kind must be one of ui, api, health, "
+    "docs, or other, and every process-backed runtime must include at least one endpoint with endpoint_kind 'docs'. "
+    "Example for Java: {\"runtime_kind\":\"java\",\"start_command\":\"java -jar target/risk-engine.jar\",\"ui_path\":\"/\","
+    "\"health_path\":\"/health\",\"api_base_path\":\"/api\",\"endpoints\":[{\"label\":\"Operator UI\",\"path\":\"/\","
+    "\"endpoint_kind\":\"ui\",\"method\":\"GET\",\"description\":\"Service-backed operator console\"},{\"label\":\"Health\","
+    "\"path\":\"/health\",\"endpoint_kind\":\"health\",\"method\":\"GET\",\"description\":\"Runtime readiness\"},"
+    "{\"label\":\"API docs\",\"path\":\"/api/docs\",\"endpoint_kind\":\"docs\",\"method\":\"GET\","
+    "\"description\":\"Human-readable API documentation\"}],\"smoke_test\":[\"GET /health\",\"GET /\",\"GET /api/docs\"]}."
+)
 
 
 def _slugify(value: str, *, fallback: str = "auto-protocol") -> str:
@@ -74,8 +136,244 @@ def _sentence(text: str) -> str:
     return value if value[-1] in ".!?" else f"{value}."
 
 
+_AUTO_CONTEXT_LABELS = (
+    "current stage",
+    "existing objective",
+    "existing artifacts",
+    "existing protocol objective",
+    "original objective",
+    "primary artifact expected path",
+    "primary artifact",
+    "protocol id",
+    "protocol name",
+    "requested improvement",
+    "revision request",
+    "run id",
+    "run objective",
+    "run status",
+    "source objective",
+    "user improvement request",
+)
+_AUTO_REVISION_LABELS = {"requested improvement", "revision request", "user improvement request"}
+_AUTO_SOURCE_LABELS = {"existing objective", "existing protocol objective", "original objective", "run objective", "source objective"}
+_AUTO_CONTEXT_NOISE_PREFIXES = {
+    "bring the revised protocol up to the current octopus standard",
+    "existing artifacts",
+    "improve the existing protocol that produced this run",
+    "use the prior run as context",
+}
+_AUTO_GENERIC_REQUIREMENTS = {
+    "auto protocol",
+    "auto-generated requirement-specific protocol",
+    "create requested outcome",
+    "create the requested outcome",
+    "create the requested outcome.",
+    "revise the selected protocol",
+    "run the generated workflow",
+}
+
+
+def _text_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _bounded_text(value: str, *, max_chars: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return clipped or text[:max_chars].strip()
+
+
+def _auto_context_lines(value: object) -> list[str]:
+    text = str(value or "").replace("\r", "\n").strip()
+    if not text:
+        return []
+    label_pattern = "|".join(re.escape(label) for label in sorted(_AUTO_CONTEXT_LABELS, key=len, reverse=True))
+    text = re.sub(rf"(?i)(?<!^)\b({label_pattern})\s*:", r"\n\1:", text)
+    return [re.sub(r"^\s*[-*]\s*", "", line).strip() for line in text.splitlines()]
+
+
+def _labeled_auto_context_values(value: object, labels: set[str]) -> list[str]:
+    values: list[str] = []
+    for line in _auto_context_lines(value):
+        if ":" not in line:
+            continue
+        raw_label, payload = line.split(":", 1)
+        label = _text_key(raw_label)
+        if label in labels and payload.strip():
+            values.append(payload.strip())
+    return values
+
+
+def _dedupe_text_items(values: Sequence[object], *, max_items: int = 20, max_chars: int = 1000) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _compact_auto_protocol_context_text(value, max_chars=max_chars)
+        key = _text_key(text)
+        if not text or key in seen or key in _AUTO_GENERIC_REQUIREMENTS:
+            continue
+        seen.add(key)
+        items.append(text)
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def _compact_auto_protocol_context_text(value: object, *, max_chars: int = _AUTO_REQUIREMENT_CONTEXT_MAX_CHARS) -> str:
+    pieces: list[str] = []
+    seen: set[str] = set()
+    for line in _auto_context_lines(value):
+        if not line:
+            continue
+        if ":" in line:
+            raw_label, payload = line.split(":", 1)
+            label = _text_key(raw_label)
+            if label in _AUTO_REVISION_LABELS or label in _AUTO_CONTEXT_LABELS:
+                continue
+            line = payload.strip() if label in _AUTO_SOURCE_LABELS else line
+        key = _text_key(line)
+        if not key or key in _AUTO_GENERIC_REQUIREMENTS:
+            continue
+        if any(key.startswith(prefix) for prefix in _AUTO_CONTEXT_NOISE_PREFIXES):
+            continue
+        for chunk in re.split(r"(?<=[.!?])\s+|\n+", line):
+            text = re.sub(r"\s+", " ", chunk).strip()
+            chunk_key = _text_key(text)
+            if not text or chunk_key in seen or chunk_key in _AUTO_GENERIC_REQUIREMENTS:
+                continue
+            if any(chunk_key.startswith(prefix) for prefix in _AUTO_CONTEXT_NOISE_PREFIXES):
+                continue
+            seen.add(chunk_key)
+            pieces.append(text)
+    return _bounded_text(" ".join(pieces), max_chars=max_chars)
+
+
+def _source_requirement_from_auto_metadata(metadata: Mapping[str, object], auto_meta: Mapping[str, object]) -> str:
+    source_labeled_values: list[str] = []
+    for value in [auto_meta.get("requirement"), metadata.get("description")]:
+        source_labeled_values.extend(_labeled_auto_context_values(value, _AUTO_SOURCE_LABELS))
+    candidates = [
+        *source_labeled_values,
+        auto_meta.get("requirement"),
+        metadata.get("description"),
+        metadata.get("display_name") or metadata.get("slug"),
+    ]
+    base_candidates = [
+        re.sub(
+            r"(?i)[,;]?\s+(with this requested improvement:|including the requested improvement to)\s+.*$",
+            "",
+            _compact_auto_protocol_context_text(candidate, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS),
+        ).strip()
+        for candidate in candidates
+    ]
+    for candidate in _dedupe_text_items(base_candidates, max_items=1, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS):
+        return candidate
+    return ""
+
+
+def _revision_request_from_text(value: object) -> str:
+    labeled = _labeled_auto_context_values(value, _AUTO_REVISION_LABELS)
+    if labeled:
+        values = _dedupe_text_items(labeled, max_items=1, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS)
+        if values:
+            return values[0]
+    return _compact_auto_protocol_context_text(value, max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS)
+
+
+def _model_requirement_summary(model_response: ProtocolAutoDesignModelResponseRecord | None) -> str:
+    if model_response is None:
+        return ""
+    summary = _compact_auto_protocol_context_text(
+        model_response.requirement_summary,
+        max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS,
+    )
+    return "" if _text_key(summary) in _AUTO_GENERIC_REQUIREMENTS else summary
+
+
+def _revision_planner_requirement(source_requirement: str, change_request: str) -> str:
+    parts = []
+    if source_requirement:
+        parts.append(f"Existing protocol objective: {source_requirement}")
+    if change_request:
+        parts.append(f"Requested improvement: {change_request}")
+    return "\n".join(parts) or change_request or source_requirement or "Revise the selected protocol."
+
+
+def _revision_run_objective(
+    source_requirement: str,
+    change_request: str,
+    model_response: ProtocolAutoDesignModelResponseRecord | None,
+) -> str:
+    summary = _model_requirement_summary(model_response)
+    if summary:
+        return _sentence(_bounded_text(summary, max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS))
+    if source_requirement and change_request:
+        change_fragment = change_request[:1].lower() + change_request[1:] if change_request else ""
+        return _sentence(_bounded_text(
+            f"{source_requirement.rstrip('.!?')}, including the requested improvement to {change_fragment}",
+            max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS,
+        ))
+    return _sentence(_bounded_text(change_request or source_requirement, max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS))
+
+
+def _run_objective_sentence(value: object) -> str:
+    return _sentence(_compact_auto_protocol_context_text(value, max_chars=_AUTO_RUN_OBJECTIVE_MAX_CHARS))
+
+
+def _run_profile_with_problem_statement(
+    profile: ProtocolAutoDesignRunProfileRecord,
+    problem_statement: str,
+) -> ProtocolAutoDesignRunProfileRecord:
+    objective = _run_objective_sentence(problem_statement) or profile.problem_statement
+    fields: list[dict[str, object]] = []
+    found = False
+    for field in profile.run_inputs:
+        item = dict(field)
+        if str(item.get("key") or "").strip() == "problem_statement":
+            item["default_value"] = objective
+            item["required"] = True
+            found = True
+        fields.append(item)
+    if not found:
+        fields.insert(0, {
+            "key": "problem_statement",
+            "label": "Run objective",
+            "kind": "textarea",
+            "required": True,
+            "default_value": objective,
+            "help": "The run-specific outcome this protocol should accomplish.",
+        })
+    return profile.model_copy(update={
+        "problem_statement": objective,
+        "run_inputs": fields,
+    })
+
+
 def _normalized_words(*values: object) -> str:
     return " ".join(str(value or "").lower() for value in values if str(value or "").strip())
+
+
+def auto_protocol_runtime_expected_from_text(*values: object) -> bool:
+    """Return whether an Auto Protocol outcome should be exposed as a runtime."""
+    text = _normalized_words(*values)
+    if not text:
+        return False
+    if "octopus-runtime.json" in text or "runtime manifest" in text:
+        return True
+    if any(phrase in text for phrase in _AUTO_RUNTIME_PHRASES):
+        return True
+    words = {
+        token
+        for token in re.split(r"[^a-z0-9]+", text)
+        if token
+    }
+    if words & _AUTO_RUNTIME_WORDS:
+        return True
+    if "engine" in words and words & {"api", "backend", "service", "server", "ui", "web"}:
+        return True
+    return False
 
 
 def _dict(value: object) -> dict[str, object]:
@@ -1127,11 +1425,14 @@ def _infer_work_packages(
         (
             f"Produce the final integrated outcome from the accepted plan, reviews, and production-layer artifacts. "
             f"The result must visibly satisfy the requirement coverage terms: {terms}. "
-            "Do not discard upstream production work; reconcile it into one usable deliverable."
+            "Do not discard upstream production work; reconcile it into one usable deliverable. "
+            "For runnable outcomes, make the package run-ready before completion and make the main user action visibly display its result."
         ),
         (
             "The deliverable is usable by the intended human, implements the accepted plan, integrates accepted production layers, "
-            "and leaves clear inspection evidence. Placeholder-level outcomes are not acceptable when the request asks for polish, variety, or commercial quality."
+            "and leaves clear inspection evidence. Runnable deliverables are not complete until they are built, smoke-tested, "
+            "launchable through a cheap start command, and show clear user-facing outcomes from their core actions. "
+            "Placeholder-level outcomes are not acceptable when the request asks for polish, variety, or commercial quality."
         ),
         "produced_outcome",
         "Produced Outcome",
@@ -1142,7 +1443,8 @@ def _infer_work_packages(
         review_display_name="Outcome Acceptance Reviewer",
         review_rubric=(
             "Inspect the produced outcome directly, exercise it where practical, compare it to the accepted plan and upstream artifacts, "
-            "and choose revise if the outcome is low-detail, not usable, untested by inspection, or below the stated quality bar."
+            "and choose revise if the outcome is low-detail, not usable, untested by inspection, hides core action results, "
+            "requires build/install work at user start, or falls below the stated quality bar."
         ),
         rationale="The primary outcome package owns the artifact the user actually asked Octopus to produce.",
         required_skills=("implementation", "verification", "acceptance evidence"),
@@ -1648,8 +1950,9 @@ def _review_round_limit(policy: ProtocolAutoDesignReviewPolicyRecord | None = No
 
 
 def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) -> ProtocolAutoDesignRunProfileRecord:
+    objective = _run_objective_sentence(requirement)
     return ProtocolAutoDesignRunProfileRecord(
-        problem_statement=_sentence(requirement) or "Run the generated workflow.",
+        problem_statement=objective or "Run the generated workflow.",
         context="Use the protocol stages as the work contract. Add only run-specific facts here.",
         constraints=_sentence(constraints),
         acceptance_criteria=(
@@ -1663,7 +1966,7 @@ def _base_run_profile(requirement: str, constraints: str, workspace_ref: str) ->
                 "label": "Run objective",
                 "kind": "textarea",
                 "required": True,
-                "default_value": _sentence(requirement),
+                "default_value": objective,
                 "help": "The run-specific outcome this protocol should accomplish.",
             },
             {
@@ -1764,6 +2067,27 @@ def _build_plan(
         constraints,
         analysis.skills,
         analysis.requirement_terms,
+    )
+    implementation_package = next((package for package in work_packages if package.package_key == "implementation"), None)
+    proposed_primary = model_response.primary_artifact if model_response is not None else None
+    proposed_open_behavior = str((proposed_primary.open_behavior if proposed_primary is not None else "") or "").strip().lower()
+    runtime_expected = (
+        proposed_open_behavior in _AUTO_RUNTIME_OPEN_BEHAVIORS
+        or auto_protocol_runtime_expected_from_text(
+            proposed_open_behavior,
+            requirement,
+            constraints,
+            analysis.goal,
+            analysis.focus,
+            *(analysis.deliverables or []),
+            *((implementation_package.required_skills if implementation_package is not None else []) or []),
+            implementation_package.display_name if implementation_package is not None else "",
+            implementation_package.purpose if implementation_package is not None else "",
+            implementation_package.quality_bar if implementation_package is not None else "",
+            implementation_package.artifact_description if implementation_package is not None else "",
+            model_response.requirement_summary if model_response is not None else "",
+            model_response.domain if model_response is not None else "",
+        )
     )
 
     roles_by_key: dict[str, ProtocolAutoDesignRolePlanRecord] = {}
@@ -1888,6 +2212,20 @@ def _build_plan(
             package.purpose.strip(),
             f"Quality bar: {package.quality_bar.strip()}",
             "Keep this stage focused on its owned artifact and avoid doing later-stage work early.",
+            (
+                "This protocol expects a runnable primary artifact. Package it as a user-facing product: include a coherent UI/API, "
+                "tests or smoke steps, a root octopus-runtime.json manifest, and enough start/health/smoke metadata for Octopus to start it, proxy it, and let users try it. "
+                "Build and smoke-test the package during this stage so the manifest start_command launches a prepared artifact quickly instead of installing dependencies, compiling, testing, or packaging on user start. "
+                "Any user-triggered action in the UI must surface a clear result/outcome in the app itself, not require log inspection or raw JSON archaeology. "
+                f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE}"
+                if package.package_key == "implementation" and runtime_expected
+                else ""
+            ),
+            (
+                "If this outcome unexpectedly becomes interactive or API-backed, include octopus-runtime.json at the package root so Octopus can start it, proxy it, and let users try it."
+                if package.package_key == "implementation" and not runtime_expected
+                else ""
+            ),
         ]).strip()
         stages.append(_stage(
             work_key,
@@ -1930,9 +2268,28 @@ def _build_plan(
         "acceptance",
         "outcome_acceptance_reviewer",
         (
-            "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
-            "Record final release evidence: what was inspected, what worked, what remains risky, and exact user-facing inspection steps. "
-            "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
+            (
+                "Adversarially exercise the runnable primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
+                "The produced outcome must include octopus-runtime.json at the package root. "
+                f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE} "
+                "Start or open the Octopus-managed runtime, exercise the UI/API through the Registry URL, "
+                "and record runtime evidence before accepting. Do not accept based on direct localhost or container-only smoke checks when the Registry-managed runtime cannot parse, start, route, or fetch the app. "
+                "Do not accept if the runtime start command performs build, dependency installation, packaging, tests, or developer-mode bootstrapping; the implementation stage must prepare the package first and the start command must only launch it. "
+                "For UI/API systems, run at least one core user action and verify the result is visible and understandable in the app itself. "
+                "Choose revise if the manifest is missing or invalid, the runtime cannot start, health fails, the UI/API cannot be exercised, "
+                "the primary artifact is hard to find, low-detail, not usable, missing required behavior, hides the result of core actions, unsupported by evidence, or below the stated quality bar. "
+            )
+            if runtime_expected
+            else (
+                "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
+                "If the primary artifact declares octopus-runtime.json, it must follow the Octopus runtime manifest contract, then start or open the Octopus-managed runtime, exercise the UI/API, and record runtime evidence before accepting. "
+                "If the runtime start command performs build, dependency installation, packaging, tests, or developer-mode bootstrapping, choose revise. "
+                "For UI/API systems, run at least one core user action and verify the result is visible and understandable in the app itself. "
+                "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, hides the result of core actions, unsupported by evidence, has an invalid runtime manifest, or falls below the stated quality bar. "
+            )
+        )
+        + (
+            "Record final release evidence: what was inspected, what worked, what remains risky, exact user-facing inspection steps, and the visible outcome/result from at least one exercised core action when applicable. "
             "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
         ),
         inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
@@ -1955,11 +2312,21 @@ def _build_plan(
         produced_by_stage_key="produce_outcome",
         artifact_kind="workspace_file",
         expected_path=_auto_artifact_path("output", extension=""),
-        open_behavior="browse",
+        open_behavior="runtime" if runtime_expected else "browse",
         evidence_requirements=[
             "Primary artifact exists and is inspectable.",
             "Final acceptance records what was exercised or inspected.",
             "Release evidence links the artifact to the original requirement.",
+            *(
+                [
+                    "A root octopus-runtime.json manifest exists for the primary artifact.",
+                    "The Octopus-managed runtime starts, passes health, and is exercised through Registry routing.",
+                    "The runtime start command launches a prebuilt/prepared package and does not install, build, package, or test on user start.",
+                    "A core user action visibly surfaces its result in the runtime UI/API.",
+                ]
+                if runtime_expected
+                else []
+            ),
         ],
         supporting_artifact_keys=[
             artifact.artifact_key
@@ -2733,22 +3100,22 @@ def revise_auto_protocol_session(
     draft = draft_protocol_document_data(source)
     metadata = dict(draft.get("metadata") or {})
     auto_meta = dict(metadata.get("auto_protocol") or {})
-    change_request = str(request.requirement_text or "").strip()
-    previous_requirement = str(auto_meta.get("requirement") or "").strip()
-    base_parts = [
-        str(metadata.get("display_name") or metadata.get("slug") or "").strip(),
-        str(metadata.get("description") or "").strip(),
-        previous_requirement,
-    ]
-    combined_requirement = "\n".join(part for part in base_parts if part)
-    if change_request:
-        combined_requirement = "\n".join(part for part in [combined_requirement, f"Revision request: {change_request}"] if part)
-    if not combined_requirement:
-        combined_requirement = change_request or "Revise the selected protocol."
+    change_request = _revision_request_from_text(request.requirement_text)
+    previous_requirement = _source_requirement_from_auto_metadata(metadata, auto_meta)
+    combined_requirement = _revision_planner_requirement(previous_requirement, change_request)
+    canonical_requirement = _revision_run_objective(previous_requirement, change_request, request.model_response)
 
-    revisions = [str(item or "").strip() for item in _list(auto_meta.get("revision_requests")) if str(item or "").strip()]
-    if change_request:
-        revisions.append(change_request)
+    existing_revisions = [str(item or "").strip() for item in _list(auto_meta.get("revision_requests")) if str(item or "").strip()]
+    revisions = _dedupe_text_items(
+        [
+            *existing_revisions,
+            *_labeled_auto_context_values(auto_meta.get("requirement"), _AUTO_REVISION_LABELS),
+            *_labeled_auto_context_values(request.requirement_text, _AUTO_REVISION_LABELS),
+            change_request,
+        ],
+        max_items=_AUTO_REVISION_HISTORY_MAX,
+        max_chars=_AUTO_REQUIREMENT_CONTEXT_MAX_CHARS,
+    )
     regenerate_request = request.model_copy(update={
         "mode": "revise",
         "requirement_text": combined_requirement,
@@ -2766,16 +3133,22 @@ def revise_auto_protocol_session(
         regenerated_metadata["slug"] = str(metadata.get("slug") or "")
     if metadata.get("display_name"):
         regenerated_metadata["display_name"] = str(metadata.get("display_name") or "")
-    if metadata.get("description"):
-        regenerated_metadata["description"] = str(metadata.get("description") or "")
+    source_description = _compact_auto_protocol_context_text(metadata.get("description"), max_chars=420)
+    if source_description:
+        regenerated_metadata["description"] = source_description
+    elif canonical_requirement:
+        regenerated_metadata["description"] = _sentence(canonical_requirement)
     regenerated_auto_meta = dict(regenerated_metadata.get("auto_protocol") or {})
     regenerated_auto_meta.update({
         "generated": True,
+        "requirement": canonical_requirement,
         "revision_of_protocol_id": str(request.target_protocol_id or ""),
         "revision_of_version_id": str(request.target_version_id or ""),
-        "revision_requests": revisions[-20:],
+        "revision_requests": revisions[-_AUTO_REVISION_HISTORY_MAX:],
     })
     regenerated_metadata["auto_protocol"] = regenerated_auto_meta
+    compact_profile = _run_profile_with_problem_statement(session.run_profile, canonical_requirement)
+    regenerated_metadata["run_inputs"] = compact_profile.run_inputs
     regenerated_draft["metadata"] = regenerated_metadata
     regenerated_draft, validation, repair_notes = _validate_and_repair_protocol_document(regenerated_draft, regenerate_request)
     warnings, unresolved = _warnings_for_session(regenerate_request, validation)
@@ -2791,6 +3164,14 @@ def revise_auto_protocol_session(
         *semantic_unresolved,
     ])
     status: ProtocolAutoDesignStatus = "ready" if validation.ok and not unresolved else ("blocked" if validation.ok else "failed")
+    compact_plan = session.plan.model_copy(update={
+        "protocol_name": str(regenerated_metadata.get("display_name") or "").strip()
+            or _title_from_requirement(canonical_requirement),
+        "protocol_slug": str(regenerated_metadata.get("slug") or "").strip()
+            or _slugify(canonical_requirement),
+        "description": _sentence(canonical_requirement) or session.plan.description,
+        "run_profile": compact_profile,
+    })
     revised_session = session.model_copy(update={
         "status": status,
         "mode": "revise",
@@ -2801,6 +3182,8 @@ def revise_auto_protocol_session(
         "target_draft_revision": request.target_draft_revision,
         "requirement_text": request.requirement_text,
         "constraints_text": request.constraints_text,
+        "plan": compact_plan,
+        "run_profile": compact_profile,
         "draft_definition_json": RegistryJsonRecord.model_validate(regenerated_draft),
         "validation": validation,
         "warnings": warnings,
@@ -2910,6 +3293,7 @@ __all__ = [
     "ProtocolAutoDesignRequestRecord",
     "ProtocolAutoDesignSessionRecord",
     "ProtocolAutoDesignRenderCardRecord",
+    "auto_protocol_runtime_expected_from_text",
     "auto_protocol_event_summary",
     "compile_auto_protocol_plan",
     "generate_auto_protocol_session",

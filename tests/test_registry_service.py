@@ -22,6 +22,7 @@ os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 from octopus_registry import auth as registry_auth
 from octopus_registry import server as registry_server
 from octopus_registry import protocol_http as registry_protocol_http
+from octopus_registry import protocol_store as protocol_store_mod
 from octopus_registry.server import app
 from octopus_registry import ingress
 from octopus_registry.backend import get_registry_store
@@ -38,6 +39,11 @@ from app.storage import default_session, ensure_data_dirs, load_session, save_se
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeHealthRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeManifestRecord,
+    ProtocolAccessContextRecord,
     ProtocolAutoDesignModelResponseRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignWorkPackageRecord,
@@ -51,11 +57,13 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.registry.management import (
     ALL_MANAGEMENT_OPERATIONS,
+    ArtifactRuntimeHealthResult,
     DesignAutoProtocolResult,
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
     ManagementRequest,
     ManagementResult,
+    StopArtifactRuntimeResult,
 )
 from octopus_sdk.registry.models import AgentRecord, RegistryJsonRecord, TaskRecord
 from octopus_sdk.registry.management_executor import (
@@ -1682,6 +1690,154 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
     assert run_response.json()["run_result"]["run"]["protocol_run_id"] == "run-auto"
 
 
+def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            mode="revise",
+            surface="registry",
+            requirement_text="Improve the payments and onboarding risk engine so it produces a runnable Java service with a web UI.",
+            target_protocol_id="risk-protocol",
+            target_draft_revision=4,
+            available_agents=[
+                {
+                    "agent_id": "agent-1",
+                    "display_name": "Risk Builder",
+                    "routing_skills": ["implementation", "software engineering", "testing"],
+                }
+            ],
+            model_response=_auto_design_model_response("architecture_and_runtime_design", "implementation"),
+        ),
+        session_id="auto-risk",
+        created_at="2026-04-16T00:00:00+00:00",
+        updated_at="2026-04-16T00:00:00+00:00",
+    )
+
+    class _Store:
+        def __init__(self):
+            self.session = session
+            self.calls: list[str] = []
+
+        def get_protocol_auto_design_session(self, session_id: str, *, access):
+            assert session_id == "auto-risk"
+            return self.session
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind in {"applied", "published", "run_started"}
+            self.calls.append(event_kind)
+            self.session = session
+            return session
+
+        def save_protocol_draft(
+            self,
+            *,
+            access,
+            protocol_id,
+            slug,
+            display_name,
+            description,
+            definition_json,
+            authoring_surface="standard",
+            expected_revision=None,
+        ):
+            assert protocol_id == "risk-protocol"
+            assert expected_revision == 4
+            assert authoring_surface == "standard"
+            self.calls.append("save_draft")
+            return ProtocolMutationRecord(
+                ok=True,
+                status="saved",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="risk-protocol",
+                    slug=slug,
+                    display_name=display_name,
+                    current_version_id="version-old",
+                    draft_revision=5,
+                ),
+                draft_definition_json=definition_json,
+                validation={"ok": True, "errors": [], "issues": [], "next_required_actions": []},
+            )
+
+        def publish_protocol(self, protocol_id: str, *, access):
+            assert protocol_id == "risk-protocol"
+            assert self.calls[-2:] == ["save_draft", "applied"]
+            self.calls.append("publish_protocol")
+            return ProtocolMutationRecord(
+                ok=True,
+                status="published",
+                protocol=ProtocolDefinitionRecord(
+                    protocol_id="risk-protocol",
+                    slug="risk-engine",
+                    display_name="Risk Engine",
+                    current_version_id="version-new",
+                    draft_revision=5,
+                ),
+            )
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    display_name="Risk Builder",
+                    slug="risk-builder",
+                    provider="codex",
+                    role="worker",
+                    routing_skills=["implementation", "testing"],
+                    connectivity_state="connected",
+                )
+            ]
+
+        def create_protocol_run(self, payload, *, access, idempotency_key=""):
+            assert self.calls[-2:] == ["publish_protocol", "published"]
+            assert payload.protocol_id == "risk-protocol"
+            assert payload.entry_agent_id == "agent-1"
+            assert payload.origin_channel == "registry"
+            return ProtocolRunMutationRecord.model_validate(
+                {
+                    "ok": True,
+                    "status": "created",
+                    "run": {
+                        "protocol_run_id": "risk-run",
+                        "protocol_id": "risk-protocol",
+                        "protocol_definition_version_id": "version-new",
+                        "entry_agent_id": "agent-1",
+                        "root_conversation_id": "",
+                        "origin_channel": "registry",
+                        "workspace_ref": "",
+                        "run_org_id": "local",
+                        "status": "running",
+                        "problem_statement": "Improve the payments and onboarding risk engine.",
+                        "constraints_json": {},
+                        "created_at": "2026-04-16T00:00:00+00:00",
+                        "updated_at": "2026-04-16T00:00:00+00:00",
+                        "current_stage_key": "requirements_planning",
+                        "version": 1,
+                    },
+                }
+            )
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.post("/v1/protocol-auto/sessions/auto-risk/run", json={"origin_channel": "registry"})
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "running"
+    assert payload["run_result"]["run"]["protocol_definition_version_id"] == "version-new"
+    assert store.calls == ["save_draft", "applied", "publish_protocol", "published", "run_started"]
+
+
 def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -2471,6 +2627,39 @@ def test_default_work_list_routes_pass_generated_visibility_filter(monkeypatch, 
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
 
     assert seen == {"conversations": False, "tasks": False, "runs": False}
+
+
+def test_protocol_run_store_default_visibility_keeps_human_originated_runs(monkeypatch):
+    adapter = protocol_store_mod.ProtocolPostgresAdapter.__new__(protocol_store_mod.ProtocolPostgresAdapter)
+    captured: dict[str, object] = {}
+
+    class _Connection:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _fetchall(conn, sql, params):
+        captured["sql"] = sql
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(adapter, "_connect", lambda: _Connection())
+    monkeypatch.setattr(adapter, "_assert_protocol_run_visible", lambda row, *, access: row)
+    monkeypatch.setattr(adapter, "_decorate_protocol_run_row_with_review_state", lambda conn, row: row)
+    monkeypatch.setattr(adapter, "_protocol_run_from_row", lambda row: row)
+    monkeypatch.setattr(protocol_store_mod.POSTGRES_STORE_DIALECT, "fetchall", _fetchall)
+
+    adapter.list_protocol_runs(
+        access=ProtocolAccessContextRecord(actor_ref="operator:test", org_id="local", roles=["operator"]),
+        include_generated=False,
+    )
+
+    sql = str(captured["sql"])
+    assert "pr.hidden_from_default_views = FALSE" in sql
+    assert "NULLIF(BTRIM(COALESCE(pr.problem_statement, '')), '') IS NOT NULL" in sql
+    assert "pr.origin_channel IN ('registry', 'telegram')" in sql
 
 
 def test_protocol_run_create_route_returns_invalid_for_missing_entry_agent(monkeypatch, tmp_path: Path):
@@ -4983,6 +5172,244 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
     assert 'filename="offline-package.zip"' in download_response.headers.get("content-disposition", "")
     with zipfile.ZipFile(io.BytesIO(download_response.content)) as archive:
         assert sorted(archive.namelist()) == ["app.js", "index.html", "samples/panels.csv"]
+
+
+def test_protocol_artifact_runtime_status_detects_static_package(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    package_dir = tmp_path / "offline-package"
+    package_dir.mkdir()
+    (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(package_dir),
+                        workspace_path="offline-package",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                        verification_state="verified",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1/artifacts/package/runtime")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["manifest_available"] is True
+    assert payload["runtime"]["status"] == "stopped"
+    assert payload["runtime"]["manifest"]["runtime_kind"] == "static"
+    assert payload["runtime"]["runtime_url"] == "/runtime/protocol-runs/run-1/artifacts/package/app/"
+    assert payload["package_url"].endswith("/v1/protocol-runs/run-1/artifacts/package/content?download=1")
+
+
+def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_field(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
+    manifest = ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/")
+    existing_runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-1",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=manifest,
+        artifact_path=str(package_dir),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+    )
+    saved_runtime: ProtocolArtifactRuntimeInstanceRecord | None = None
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(package_dir),
+                        workspace_path="package",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del access
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            return existing_runtime
+
+        def save_protocol_artifact_runtime(self, runtime: ProtocolArtifactRuntimeInstanceRecord, *, access):
+            del access
+            nonlocal saved_runtime
+            saved_runtime = runtime
+            return runtime
+
+    from octopus_registry.management_client import RegistryManagementClient
+
+    async def _send(self, *, agent_id: str, payload, timeout_seconds: int = 30):
+        del self, timeout_seconds
+        assert agent_id == "agent-1"
+        assert payload.operation == "artifact_runtime_health"
+        refreshed_runtime = existing_runtime.model_copy(update={"updated_at": "2026-05-06T04:00:00Z"})
+        return ManagementResult(
+            request_id="mgmt-1",
+            agent_id="agent-1",
+            success=True,
+            payload=ArtifactRuntimeHealthResult(
+                health=ProtocolArtifactRuntimeHealthRecord(
+                    ok=False,
+                    status="failed",
+                    status_code=0,
+                    message="Connection refused",
+                    runtime=refreshed_runtime,
+                )
+            ),
+        )
+
+    monkeypatch.setattr(RegistryManagementClient, "send", _send)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1/artifacts/package/runtime")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runtime"]["status"] == "running"
+    assert payload["health"]["ok"] is False
+    assert payload["health"]["message"] == "Connection refused"
+    assert saved_runtime is not None
+    assert saved_runtime.updated_at == "2026-05-06T04:00:00Z"
+
+
+def test_protocol_artifact_runtime_stop_preserves_typed_manifest(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    manifest = ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/")
+    existing_runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-1",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=manifest,
+        manifest_path="package/octopus-runtime.json",
+        artifact_path=str(tmp_path / "package"),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+        ui_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+        health_url="/v1/protocol-runs/run-1/artifacts/package/runtime/health",
+    )
+    saved_runtime: ProtocolArtifactRuntimeInstanceRecord | None = None
+
+    class _Store:
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del access
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            return existing_runtime
+
+        def save_protocol_artifact_runtime(self, runtime: ProtocolArtifactRuntimeInstanceRecord, *, access):
+            del access
+            nonlocal saved_runtime
+            assert isinstance(runtime.manifest, ProtocolArtifactRuntimeManifestRecord)
+            saved_runtime = runtime
+            return runtime
+
+        def append_protocol_artifact_runtime_event(self, event, *, access):
+            del access
+            return event
+
+    from octopus_registry.management_client import RegistryManagementClient
+
+    async def _send(self, *, agent_id: str, payload, timeout_seconds: int = 30):
+        del self, timeout_seconds
+        assert agent_id == "agent-1"
+        assert payload.operation == "stop_artifact_runtime"
+        stopped = ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id="runtime-1",
+            protocol_run_id="run-1",
+            artifact_key="package",
+            status="stopped",
+            stopped_by="operator",
+            stopped_at="2026-05-06T04:00:00Z",
+        )
+        return ManagementResult(
+            request_id="mgmt-1",
+            agent_id="agent-1",
+            success=True,
+            payload=StopArtifactRuntimeResult(
+                result=ProtocolArtifactRuntimeActionResultRecord(
+                    ok=True,
+                    status="stopped",
+                    message="Runtime stopped.",
+                    runtime=stopped,
+                )
+            ),
+        )
+
+    monkeypatch.setattr(RegistryManagementClient, "send", _send)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/stop")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200
+    assert saved_runtime is not None
+    assert saved_runtime.status == "stopped"
+    assert saved_runtime.agent_id == "agent-1"
+    assert saved_runtime.manifest == manifest
+    assert saved_runtime.runtime_url == "/runtime/protocol-runs/run-1/artifacts/package/app/"
 
 
 def test_task_artifact_content_route_uses_rehearsal_text_when_file_unavailable(monkeypatch, tmp_path: Path):

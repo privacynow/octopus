@@ -764,7 +764,13 @@ def test_default_work_surfaces_use_shared_generated_record_visibility() -> None:
 
     assert "UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog })" in workspace
     assert "label: 'Generated drafts'" in workspace
-    assert "UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated })" in workspace
+    assert "const PROTOCOL_RUN_VIEW_FILTER_OPTIONS = [" in workspace
+    assert "let runViewFilter = _protocolRunViewFilterValue(UI.readQueryParam('view', 'recent'));" in workspace
+    assert "const runSource = [...(runs || [])];" in workspace
+    assert "if (!_runMatchesViewFilter(item, issue)) return false;" in workspace
+    assert "Improve this run" in workspace
+    assert "function _runImprovementContext(runDetail)" in workspace
+    assert "constraints_text: _runImprovementContext(sourceRun)" in workspace
     assert "UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs')" in workspace
     assert "No normal runs match this filter." in workspace
     assert "String(item?.conversation_type || 'conversation') !== 'task_thread'" in usage_view
@@ -1182,6 +1188,11 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "event.preventDefault();" in helper
     assert "const available = !missing && artifact?.exists !== false;" in protocol_workspace
     assert "openHref: available ? API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
+    assert "API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
+    assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace
+    assert "const inferPrimaryArtifact = () => {" in protocol_workspace
+    assert "Promoted from produced artifacts because this run did not declare a primary outcome." in protocol_workspace
     assert "unavailableReason: missing ? 'Declared artifact, not produced yet.'" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
     assert "function createTaskArtifactListRow(task, artifact, expectedOutput = null)" in helper

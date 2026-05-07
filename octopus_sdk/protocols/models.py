@@ -18,12 +18,37 @@ from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel,
 
 ProtocolLifecycleState = Literal["draft", "published", "archived"]
 ProtocolVisibility = Literal["org_private", "org_shared", "registry_template"]
-ProtocolRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "blocked"]
+ProtocolRunStatus = Literal["queued", "running", "completed", "failed", "cancelled", "blocked", "archived", "deleted"]
 ProtocolStageKind = Literal["work", "review", "acceptance"]
 ProtocolStageExecutionStatus = Literal["queued", "running", "completed", "failed", "cancelled", "blocked"]
 ProtocolArtifactKind = Literal["workspace_file", "control_plane_text"]
+ProtocolArtifactRuntimeKind = Literal["static", "node", "python", "java", "binary", "process"]
+ProtocolArtifactRuntimeStatus = Literal[
+    "not_configured",
+    "starting",
+    "running",
+    "stopping",
+    "stopped",
+    "failed",
+    "archived",
+    "deleted",
+]
+ProtocolArtifactRuntimeEventKind = Literal[
+    "detected",
+    "start_requested",
+    "started",
+    "health_checked",
+    "fetch",
+    "stop_requested",
+    "stopped",
+    "archived",
+    "deleted",
+    "failed",
+]
 ProtocolResolutionOutcome = Literal["queued", "ok", "error"]
 ProtocolArtifactVerificationState = Literal["declared", "available", "verified", "missing", "waived"]
+ProtocolArtifactRetentionState = Literal["active", "archived", "expired", "deleted", "unavailable"]
+ProtocolArtifactSnapshotKind = Literal["file", "directory", "text", "external"]
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
 ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
@@ -568,6 +593,167 @@ class ProtocolArtifactRecord(RegistryRecordModel):
     created_at: str = ""
 
 
+class ProtocolArtifactSnapshotRecord(RegistryRecordModel):
+    artifact_snapshot_id: str = ""
+    protocol_artifact_id: str = ""
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    snapshot_kind: ProtocolArtifactSnapshotKind | str = "file"
+    storage_uri: str = ""
+    content_hash: str = ""
+    size_bytes: int = 0
+    manifest_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    retention_state: ProtocolArtifactRetentionState | str = "active"
+    retention_until: str = ""
+    created_at: str = ""
+    created_by: str = ""
+    deleted_at: str = ""
+    deleted_by: str = ""
+
+
+class ProtocolArtifactRuntimeEndpointRecord(RegistryRecordModel):
+    label: str = ""
+    path: str = "/"
+    endpoint_kind: Literal["ui", "api", "health", "docs", "other"] = "other"
+    method: str = "GET"
+    description: str = ""
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def _runtime_path(cls, value: object) -> str:
+        text = str(value or "/").strip() or "/"
+        if not text.startswith("/"):
+            text = f"/{text}"
+        if "\\" in text or ".." in PurePosixPath(text).parts:
+            raise ValueError("runtime endpoint paths must not escape the artifact root")
+        return text
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _method(cls, value: object) -> str:
+        text = str(value or "GET").strip().upper()
+        return text or "GET"
+
+
+class ProtocolArtifactRuntimeManifestRecord(RegistryRecordModel):
+    runtime_kind: ProtocolArtifactRuntimeKind = "static"
+    display_name: str = ""
+    description: str = ""
+    working_directory: str = ""
+    start_command: str = ""
+    ui_path: str = "/"
+    health_path: str = "/"
+    api_base_path: str = "/api"
+    port_env: str = "PORT"
+    startup_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    max_runtime_seconds: int = Field(default=3600, ge=60, le=86400)
+    endpoints: list[ProtocolArtifactRuntimeEndpointRecord] = Field(default_factory=list)
+    smoke_test: list[str] = Field(default_factory=list)
+    metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+    @field_validator("working_directory", mode="before")
+    @classmethod
+    def _working_directory(cls, value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return _validate_relative_workspace_path(text, field_name="working_directory")
+
+    @field_validator("ui_path", "health_path", "api_base_path", mode="before")
+    @classmethod
+    def _url_path(cls, value: object) -> str:
+        text = str(value or "/").strip() or "/"
+        if not text.startswith("/"):
+            text = f"/{text}"
+        if "\\" in text or ".." in PurePosixPath(text).parts:
+            raise ValueError("runtime paths must not escape the artifact root")
+        return text
+
+    @field_validator("port_env", mode="before")
+    @classmethod
+    def _port_env(cls, value: object) -> str:
+        text = str(value or "PORT").strip()
+        return text or "PORT"
+
+    @field_validator("smoke_test", mode="before")
+    @classmethod
+    def _smoke_test(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value.strip()] if value.strip() else []
+        return [str(item or "").strip() for item in value if str(item or "").strip()]
+
+    @model_validator(mode="after")
+    def _validate_runtime_contract(self) -> "ProtocolArtifactRuntimeManifestRecord":
+        if self.runtime_kind != "static" and not str(self.start_command or "").strip():
+            raise ValueError("process-backed runtime artifacts require start_command")
+        if self.runtime_kind != "static" and not self.smoke_test:
+            raise ValueError("process-backed runtime artifacts require smoke_test steps")
+        if self.runtime_kind != "static":
+            endpoint_kinds = {str(item.endpoint_kind or "").strip().lower() for item in self.endpoints}
+            if "docs" not in endpoint_kinds:
+                raise ValueError("process-backed runtime artifacts require a docs endpoint")
+        return self
+
+
+class ProtocolArtifactRuntimeInstanceRecord(RegistryRecordModel):
+    runtime_instance_id: str = ""
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    agent_id: str = ""
+    status: ProtocolArtifactRuntimeStatus = "not_configured"
+    manifest: ProtocolArtifactRuntimeManifestRecord | None = None
+    manifest_path: str = ""
+    artifact_path: str = ""
+    runtime_url: str = ""
+    ui_url: str = ""
+    api_url: str = ""
+    health_url: str = ""
+    internal_url: str = ""
+    pid: int = 0
+    port: int = 0
+    started_by: str = ""
+    stopped_by: str = ""
+    failure_code: str = ""
+    failure_detail: str = ""
+    log_tail: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    started_at: str = ""
+    stopped_at: str = ""
+    expires_at: str = ""
+
+
+class ProtocolArtifactRuntimeEventRecord(RegistryRecordModel):
+    runtime_event_id: str = ""
+    runtime_instance_id: str = ""
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    event_kind: ProtocolArtifactRuntimeEventKind | str = "detected"
+    actor_ref: str = ""
+    summary: str = ""
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    created_at: str = ""
+
+
+class ProtocolArtifactRuntimeHealthRecord(RegistryRecordModel):
+    ok: bool = False
+    status: ProtocolArtifactRuntimeStatus | str = "not_configured"
+    status_code: int = 0
+    message: str = ""
+    checked_at: str = ""
+    runtime: ProtocolArtifactRuntimeInstanceRecord | None = None
+
+
+class ProtocolArtifactRuntimeActionResultRecord(RegistryRecordModel):
+    ok: bool = False
+    status: ProtocolArtifactRuntimeStatus | str = "not_configured"
+    message: str = ""
+    runtime: ProtocolArtifactRuntimeInstanceRecord | None = None
+    event: ProtocolArtifactRuntimeEventRecord | None = None
+
+
 class ProtocolTransitionRecord(RegistryRecordModel):
     protocol_transition_id: str = ""
     protocol_run_id: str = ""
@@ -642,6 +828,9 @@ class ProtocolRunDetailRecord(RegistryRecordModel):
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
     tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
+    artifact_snapshots: list[ProtocolArtifactSnapshotRecord] = Field(default_factory=list)
+    runtime_instances: list[ProtocolArtifactRuntimeInstanceRecord] = Field(default_factory=list)
+    runtime_events: list[ProtocolArtifactRuntimeEventRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
 
@@ -654,6 +843,9 @@ class ProtocolRunExportRecord(RegistryRecordModel):
     stage_executions: list[ProtocolStageExecutionRecord] = Field(default_factory=list)
     tasks: list[TaskRecord] = Field(default_factory=list)
     artifacts: list[ProtocolArtifactRecord] = Field(default_factory=list)
+    artifact_snapshots: list[ProtocolArtifactSnapshotRecord] = Field(default_factory=list)
+    runtime_instances: list[ProtocolArtifactRuntimeInstanceRecord] = Field(default_factory=list)
+    runtime_events: list[ProtocolArtifactRuntimeEventRecord] = Field(default_factory=list)
     transitions: list[ProtocolTransitionRecord] = Field(default_factory=list)
 
 

@@ -430,6 +430,12 @@ class AgentRuntime:
         max_backoff = min(300.0, base * 32)
         current_backoff = base
         while not stop_event.is_set():
+            try:
+                from app.runtime.artifact_runtime import reap_expired_artifact_runtimes
+
+                await reap_expired_artifact_runtimes()
+            except Exception:
+                log.exception("Artifact runtime expiry sweep failed for %s", self.config.instance)
             state = await self.sync_once()
             if state == "connected":
                 try:

@@ -7,8 +7,34 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'expired_timeout', label: 'Expired timeouts' },
 ];
 
+const PROTOCOL_RUN_VIEW_FILTER_OPTIONS = [
+    { value: 'recent', label: 'Recent' },
+    { value: 'attention', label: 'Needs attention' },
+    { value: 'running', label: 'Running' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'outcomes', label: 'With outcomes' },
+    { value: 'archived', label: 'Archived' },
+    { value: 'deleted', label: 'Deleted' },
+    { value: 'telegram', label: 'From Telegram' },
+    { value: 'registry', label: 'From Registry' },
+];
+
 function _isCompactViewport() {
     return window.innerWidth <= 960;
+}
+
+function _compactProtocolRunViewOptions() {
+    if (!_isCompactViewport()) return PROTOCOL_RUN_VIEW_FILTER_OPTIONS;
+    const compactLabels = {
+        attention: 'Attention',
+        outcomes: 'Outcomes',
+        telegram: 'Telegram',
+        registry: 'Registry',
+    };
+    return PROTOCOL_RUN_VIEW_FILTER_OPTIONS.map((item) => ({
+        ...item,
+        label: compactLabels[item.value] || item.label,
+    }));
 }
 
 function _downloadProtocolText(filename, text, contentType) {
@@ -58,23 +84,637 @@ function _protocolArtifactPreviewable(item) {
     return UI.isPreviewableFilePath(_protocolArtifactDisplayPath(item));
 }
 
-function _protocolArtifactActionRow(runId, artifact, definition = null, { missing = false } = {}) {
+function _runtimeStatusLabel(runtime = {}) {
+    const status = String(runtime?.status || '').trim().toLowerCase();
+    if (!status) return 'Unknown';
+    return _titleCaseWords(status.replace(/_/g, ' '));
+}
+
+function _runtimeEndpoint(runtime = {}, key = '') {
+    const manifest = runtime?.manifest || {};
+    if (key === 'api_docs') {
+        const docsEndpoint = (Array.isArray(manifest.endpoints) ? manifest.endpoints : [])
+            .find((item) => String(item?.endpoint_kind || '').toLowerCase() === 'docs');
+        return _runtimeApiProxyPath(runtime, docsEndpoint?.path || '');
+    }
+    return '';
+}
+
+function _runtimeHttpPath(value = '', fallback = '') {
+    let text = String(value || fallback || '').trim();
+    if (!text) return '';
+    if (!text.startsWith('/')) text = `/${text}`;
+    return text;
+}
+
+function _runtimeApiProxyPath(runtime = {}, path = '') {
+    const manifest = runtime?.manifest || {};
+    const text = _runtimeHttpPath(path);
+    if (!text) return '';
+    const apiBase = _runtimeHttpPath(manifest.api_base_path || '/api', '/api').replace(/\/+$/, '') || '/api';
+    if (text === apiBase) return '';
+    if (text.startsWith(`${apiBase}/`)) return text.slice(apiBase.length).replace(/^\/+/, '');
+    return text.replace(/^\/+/, '');
+}
+
+function _runtimeFact(label, value, { link = false } = {}) {
+    const row = document.createElement('div');
+    row.className = 'kit-details-row';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'kit-details-label';
+    labelEl.textContent = label;
+    row.appendChild(labelEl);
+    const valueEl = link && value ? document.createElement('a') : document.createElement('div');
+    valueEl.className = 'kit-artifact-guide-fact-value';
+    if (link && value) {
+        valueEl.href = String(value);
+        valueEl.target = '_blank';
+        valueEl.rel = 'noreferrer noopener';
+        valueEl.textContent = String(value);
+    } else {
+        valueEl.textContent = String(value || 'Not available');
+    }
+    row.appendChild(valueEl);
+    return row;
+}
+
+async function _artifactRuntimeSnapshot(runId, artifactKey) {
+    const [status, events] = await Promise.all([
+        API.getProtocolRunArtifactRuntime(runId, artifactKey),
+        API.getProtocolRunArtifactRuntimeEvents(runId, artifactKey, 12).catch(() => ({ items: [] })),
+    ]);
+    return {
+        runtime: status?.runtime || null,
+        health: status?.health || null,
+        manifestAvailable: Boolean(status?.manifest_available),
+        packageUrl: status?.package_url || '',
+        browseUrl: status?.browse_url || '',
+        events: Array.isArray(events?.items) ? events.items : [],
+    };
+}
+
+function _renderArtifactRuntimeDialogBody({
+    runId,
+    artifactKey,
+    artifactLabel,
+    snapshot,
+    health = null,
+    logs = null,
+} = {}) {
+    const runtime = snapshot?.runtime || {};
+    const manifest = runtime?.manifest || {};
+    const status = String(runtime?.status || '').toLowerCase();
+    const healthReady = !health || health.ok === true;
+    const appUrl = API.protocolRunArtifactRuntimeAppUrl(runId, artifactKey);
+    const apiUrl = API.protocolRunArtifactRuntimeApiUrl(runId, artifactKey);
+    const docsPath = _runtimeEndpoint(runtime, 'api_docs');
+    const docsUrl = docsPath ? API.protocolRunArtifactRuntimeApiUrl(runId, artifactKey, docsPath) : '';
+
+    const body = document.createElement('div');
+    body.className = 'artifact-runtime-dialog';
+
+    const intro = document.createElement('p');
+    intro.className = 'quiet-note';
+    intro.textContent = snapshot?.manifestAvailable
+        ? `App controls for ${artifactLabel || artifactKey}. Octopus updates this panel while the app starts; Open app appears after the health check passes.`
+        : 'This artifact does not declare a runtime. You can still browse files or download the package.';
+    body.appendChild(intro);
+
+    const facts = document.createElement('div');
+    facts.className = 'kit-details-panel artifact-runtime-facts';
+    facts.appendChild(_runtimeFact('Status', status === 'running' && !healthReady ? 'Starting · health pending' : _runtimeStatusLabel(runtime)));
+    facts.appendChild(_runtimeFact('Kind', manifest.runtime_kind || 'Not declared'));
+    facts.appendChild(_runtimeFact('Started', runtime.started_at ? UI.formatTime(runtime.started_at) : 'Not started'));
+    facts.appendChild(_runtimeFact('Updated', runtime.updated_at ? UI.relativeTime(runtime.updated_at) : 'Not recorded'));
+    facts.appendChild(_runtimeFact('Owning agent', runtime.agent_id || 'Not resolved'));
+    if (runtime.ui_url || snapshot?.manifestAvailable) {
+        facts.appendChild(_runtimeFact('App URL', appUrl, { link: true }));
+    }
+    if (manifest.api_base_path || String(manifest.runtime_kind || '') !== 'static') {
+        facts.appendChild(_runtimeFact('API URL', apiUrl, { link: true }));
+    }
+    if (docsUrl) {
+        facts.appendChild(_runtimeFact('API docs', docsUrl, { link: true }));
+    }
+    body.appendChild(facts);
+
+    if (health) {
+        const healthPanel = document.createElement('div');
+        healthPanel.className = 'kit-details-panel artifact-runtime-section';
+        const title = document.createElement('div');
+        title.className = 'detail-label';
+        title.textContent = 'Latest health check';
+        healthPanel.appendChild(title);
+        healthPanel.appendChild(_runtimeFact('Result', health.ok ? 'Healthy' : 'Not healthy'));
+        healthPanel.appendChild(_runtimeFact('HTTP status', health.status_code || 'No response'));
+        healthPanel.appendChild(_runtimeFact('Message', health.message || 'No health message'));
+        body.appendChild(healthPanel);
+    }
+
+    if (['starting', 'running'].includes(status) && health && !health.ok) {
+        const pending = document.createElement('p');
+        pending.className = 'quiet-note';
+        pending.textContent = 'The app process is running, but the health check has not passed yet. This panel will keep checking automatically.';
+        body.appendChild(pending);
+    }
+
+    const events = Array.isArray(snapshot?.events) ? snapshot.events : [];
+    const eventPanel = document.createElement('details');
+    eventPanel.className = 'kit-stage-editor-section is-collapsible artifact-runtime-section';
+    eventPanel.open = events.length > 0;
+    const eventSummary = document.createElement('summary');
+    eventSummary.className = 'kit-stage-editor-summary';
+    eventSummary.textContent = `Runtime events (${events.length})`;
+    eventPanel.appendChild(eventSummary);
+    const eventList = document.createElement('div');
+    eventList.className = 'task-artifact-list';
+    UI.reconcileChildren(eventList, events.length
+        ? events.map((event) => UI.renderListRow({
+            label: _titleCaseWords(String(event.event_kind || 'event').replace(/_/g, ' ')),
+            sublabel: [
+                event.summary || '',
+                event.created_at ? UI.relativeTime(event.created_at) : '',
+            ].filter(Boolean).join(' · '),
+            badgeText: event.actor_ref || '',
+        }))
+        : [UI.renderEmptyState('No runtime events have been recorded yet.', true)]);
+    eventPanel.appendChild(eventList);
+    body.appendChild(eventPanel);
+
+    const logPanel = document.createElement('details');
+    logPanel.className = 'kit-stage-editor-section is-collapsible artifact-runtime-section';
+    logPanel.open = Boolean(logs?.log_tail);
+    const logSummary = document.createElement('summary');
+    logSummary.className = 'kit-stage-editor-summary';
+    logSummary.textContent = 'Runtime logs';
+    logPanel.appendChild(logSummary);
+    const logPre = document.createElement('pre');
+    logPre.className = 'event-pre artifact-runtime-log';
+    logPre.textContent = String(logs?.log_tail || runtime.log_tail || 'Logs are not available for this runtime state.').trim();
+    logPanel.appendChild(logPre);
+    body.appendChild(logPanel);
+
+    if (runtime.failure_detail) {
+        const failure = document.createElement('p');
+        failure.className = 'error-card';
+        failure.textContent = runtime.failure_detail;
+        body.appendChild(failure);
+    }
+
+    body.dataset.runtimeStatus = status;
+    body.dataset.manifestAvailable = snapshot?.manifestAvailable ? 'true' : 'false';
+    body.dataset.docsUrl = docsUrl;
+    return body;
+}
+
+async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = '') {
+    const body = document.createElement('div');
+    body.appendChild(UI.renderEmptyState('Loading runtime status…', true));
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn';
+    closeBtn.textContent = 'Close';
+    const healthBtn = document.createElement('button');
+    healthBtn.type = 'button';
+    healthBtn.className = 'btn';
+    healthBtn.textContent = 'Check health';
+    const logsBtn = document.createElement('button');
+    logsBtn.type = 'button';
+    logsBtn.className = 'btn';
+    logsBtn.textContent = 'Logs';
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.className = 'btn btn-primary';
+    startBtn.textContent = 'Start app';
+    const stopBtn = document.createElement('button');
+    stopBtn.type = 'button';
+    stopBtn.className = 'btn';
+    stopBtn.textContent = 'Stop app';
+    const openBtn = document.createElement('a');
+    openBtn.className = 'btn btn-primary';
+    openBtn.textContent = 'Open app';
+    openBtn.target = '_blank';
+    openBtn.rel = 'noreferrer noopener';
+    openBtn.href = API.protocolRunArtifactRuntimeAppUrl(runId, artifactKey);
+    const archiveBtn = document.createElement('button');
+    archiveBtn.type = 'button';
+    archiveBtn.className = 'btn';
+    archiveBtn.textContent = 'Archive';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn btn-danger';
+    deleteBtn.textContent = 'Delete';
+    for (const action of [startBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn]) {
+        action.hidden = true;
+    }
+    openBtn.hidden = true;
+
+    const view = UI.showDialog(`Runtime: ${artifactLabel || artifactKey}`, body, {
+        actions: [startBtn, openBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn, closeBtn],
+        maxWidth: '820px',
+    });
+
+    let latestSnapshot = null;
+    let latestHealth = null;
+    let latestLogs = null;
+    let refreshInFlight = false;
+    let autoPollTimer = null;
+
+    const dialogOpen = () => document.body.contains(view.overlay);
+
+    const runtimeNeedsPolling = () => {
+        const status = String(latestSnapshot?.runtime?.status || '').toLowerCase();
+        if (status === 'starting') return true;
+        if (status === 'running' && (!latestHealth || latestHealth.ok !== true)) return true;
+        return false;
+    };
+
+    const stopAutoPoll = () => {
+        if (autoPollTimer) {
+            window.clearInterval(autoPollTimer);
+            autoPollTimer = null;
+        }
+    };
+
+    const originalClose = view.close;
+    view.close = () => {
+        stopAutoPoll();
+        originalClose();
+    };
+    closeBtn.addEventListener('click', () => view.close());
+
+    const render = () => {
+        const nextBody = _renderArtifactRuntimeDialogBody({
+            runId,
+            artifactKey,
+            artifactLabel,
+            snapshot: latestSnapshot || {},
+            health: latestHealth,
+            logs: latestLogs,
+        });
+        body.replaceChildren(...Array.from(nextBody.childNodes));
+        body.dataset.runtimeStatus = nextBody.dataset.runtimeStatus || '';
+        body.dataset.manifestAvailable = nextBody.dataset.manifestAvailable || '';
+        body.dataset.docsUrl = nextBody.dataset.docsUrl || '';
+        const status = body.dataset.runtimeStatus;
+        const manifestAvailable = body.dataset.manifestAvailable === 'true';
+        const ready = status === 'running' && latestHealth?.ok === true;
+        startBtn.hidden = !manifestAvailable || ['running', 'starting', 'archived', 'deleted'].includes(status);
+        openBtn.hidden = !ready;
+        stopBtn.hidden = !['running', 'starting'].includes(status);
+        healthBtn.hidden = !manifestAvailable || !['running', 'starting'].includes(status);
+        logsBtn.hidden = !manifestAvailable;
+        archiveBtn.hidden = !manifestAvailable || status === 'running';
+        deleteBtn.hidden = !manifestAvailable || status === 'running';
+        if (!runtimeNeedsPolling()) stopAutoPoll();
+    };
+
+    const refresh = async ({ health = false, logs = false } = {}) => {
+        if (refreshInFlight || !dialogOpen()) return;
+        refreshInFlight = true;
+        healthBtn.disabled = true;
+        startBtn.disabled = true;
+        try {
+            latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
+            if (latestSnapshot?.health) {
+                latestHealth = latestSnapshot.health;
+            }
+            const status = String(latestSnapshot?.runtime?.status || '').toLowerCase();
+            const shouldCheckHealth = health || (status === 'running' && !latestHealth);
+            if (shouldCheckHealth && latestSnapshot?.runtime) {
+                latestHealth = await API.getProtocolRunArtifactRuntimeHealth(runId, artifactKey);
+                latestSnapshot = await _artifactRuntimeSnapshot(runId, artifactKey);
+            }
+            if (logs && latestSnapshot?.runtime) {
+                latestLogs = await API.getProtocolRunArtifactRuntimeLogs(runId, artifactKey);
+            }
+            render();
+        } catch (err) {
+            body.replaceChildren(UI.createErrorCard('Failed to load runtime status.', () => refresh()));
+            UI.reportError('Failed to load runtime status', err, { context: 'Artifact runtime status failed' });
+        } finally {
+            refreshInFlight = false;
+            healthBtn.disabled = false;
+            startBtn.disabled = false;
+        }
+    };
+
+    healthBtn.addEventListener('click', () => void refresh({ health: true }));
+    logsBtn.addEventListener('click', () => void refresh({ logs: true }));
+    startBtn.addEventListener('click', async () => {
+        startBtn.disabled = true;
+        try {
+            await API.startProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('App is starting. Status updates automatically.', 'success');
+            latestHealth = null;
+            latestLogs = null;
+            await refresh();
+            startAutoPoll();
+        } catch (err) {
+            UI.reportError('Failed to start artifact runtime', err, { context: 'Artifact runtime start failed' });
+        } finally {
+            startBtn.disabled = false;
+        }
+    });
+    stopBtn.addEventListener('click', async () => {
+        stopBtn.disabled = true;
+        try {
+            await API.stopProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('Runtime stopped.', 'success');
+            await refresh();
+        } catch (err) {
+            UI.reportError('Failed to stop artifact runtime', err, { context: 'Artifact runtime stop failed' });
+        } finally {
+            stopBtn.disabled = false;
+        }
+    });
+    archiveBtn.addEventListener('click', async () => {
+        archiveBtn.disabled = true;
+        try {
+            await API.archiveProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('Runtime archived.', 'success');
+            await refresh();
+        } catch (err) {
+            UI.reportError('Failed to archive artifact runtime', err, { context: 'Artifact runtime archive failed' });
+        } finally {
+            archiveBtn.disabled = false;
+        }
+    });
+    deleteBtn.addEventListener('click', async () => {
+        const confirmed = window.confirm('Delete this runtime instance record? The artifact package remains available.');
+        if (!confirmed) return;
+        deleteBtn.disabled = true;
+        try {
+            await API.deleteProtocolRunArtifactRuntime(runId, artifactKey);
+            UI.notify('Runtime deleted.', 'success');
+            view.close();
+        } catch (err) {
+            UI.reportError('Failed to delete artifact runtime', err, { context: 'Artifact runtime delete failed' });
+        } finally {
+            deleteBtn.disabled = false;
+        }
+    });
+
+    const startAutoPoll = () => {
+        if (autoPollTimer || !dialogOpen()) return;
+        autoPollTimer = window.setInterval(() => {
+            if (!dialogOpen()) {
+                stopAutoPoll();
+                return;
+            }
+            if (!runtimeNeedsPolling()) {
+                stopAutoPoll();
+                return;
+            }
+            void refresh({ logs: Boolean(latestLogs?.log_tail) });
+        }, 5000);
+    };
+
+    await refresh();
+    startAutoPoll();
+}
+
+function _protocolArtifactActionRow(runId, artifact, definition = null, {
+    missing = false,
+    runtimeExpected = false,
+    prominentRuntime = false,
+} = {}) {
     const displayPath = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
     const available = !missing && artifact?.exists !== false;
     const browsable = available && UI.isLikelyDirectoryArtifactPath(displayPath);
-    return UI.createArtifactActionRow({
-        previewable: available && _protocolArtifactPreviewable(artifact),
-        previewHref: available && _protocolArtifactPreviewable(artifact)
+    const showStorageOpen = !runtimeExpected;
+    const actionRow = UI.createArtifactActionRow({
+        previewable: showStorageOpen && available && _protocolArtifactPreviewable(artifact),
+        previewHref: showStorageOpen && available && _protocolArtifactPreviewable(artifact)
             ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { preview: true })
             : '',
         previewTitle: `${artifact.artifact_key || 'artifact'} preview`,
-        openHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
+        openHref: showStorageOpen && available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key) : '',
         browseHref: browsable ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { browse: true }) : '',
         downloadHref: available ? API.protocolRunArtifactContentUrl(runId, artifact.artifact_key, { download: true }) : '',
-        copyPathText: displayPath,
+        downloadLabel: runtimeExpected ? 'Download zip' : 'Download',
+        copyPathText: prominentRuntime || runtimeExpected ? '' : displayPath,
         available,
         unavailableReason: missing ? 'Declared artifact, not produced yet.' : 'Artifact path is not available on this host.',
     });
+    if (!missing && artifact?.artifact_key && !prominentRuntime && !runtimeExpected) {
+        const snapshotBtn = document.createElement('button');
+        snapshotBtn.type = 'button';
+        snapshotBtn.className = 'btn btn-sm';
+        snapshotBtn.textContent = 'Retain package';
+        snapshotBtn.hidden = !available;
+        const retainedLink = document.createElement('a');
+        retainedLink.className = 'btn btn-sm';
+        retainedLink.target = '_blank';
+        retainedLink.rel = 'noreferrer noopener';
+        retainedLink.textContent = 'Download retained';
+        retainedLink.href = API.protocolRunArtifactSnapshotContentUrl(runId, artifact.artifact_key, { download: true });
+        retainedLink.hidden = true;
+        retainedLink.addEventListener('click', (event) => event.stopPropagation());
+        const snapshotState = document.createElement('span');
+        snapshotState.className = 'muted microcopy';
+        snapshotState.textContent = '';
+        const refreshSnapshotState = async () => {
+            try {
+                const snapshot = await API.getProtocolRunArtifactSnapshot(runId, artifact.artifact_key);
+                const hasSnapshot = Boolean(snapshot?.snapshot && snapshot?.available !== false);
+                retainedLink.hidden = !hasSnapshot;
+                snapshotState.textContent = hasSnapshot ? 'retained' : (available ? '' : 'not retained');
+            } catch (_err) {
+                retainedLink.hidden = true;
+                snapshotState.textContent = available ? '' : 'not retained';
+            }
+        };
+        snapshotBtn.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            snapshotBtn.disabled = true;
+            snapshotBtn.textContent = 'Retaining...';
+            try {
+                await API.createProtocolRunArtifactSnapshot(runId, artifact.artifact_key);
+                UI.notify('Artifact package retained.', 'success');
+                await refreshSnapshotState();
+            } catch (err) {
+                UI.reportError('Failed to retain artifact package', err, { context: 'Artifact snapshot failed' });
+            } finally {
+                snapshotBtn.disabled = false;
+                snapshotBtn.textContent = 'Retain package';
+            }
+        });
+        actionRow.appendChild(snapshotBtn);
+        actionRow.appendChild(retainedLink);
+        actionRow.appendChild(snapshotState);
+        void refreshSnapshotState();
+    }
+    const runtimeEligible = browsable || Boolean(runtimeExpected);
+    if (runtimeEligible) {
+        actionRow.classList.add('artifact-action-row-runtime');
+        if (prominentRuntime) actionRow.classList.add('artifact-action-row-primary-runtime');
+        const runtimeBtn = document.createElement('button');
+        runtimeBtn.type = 'button';
+        runtimeBtn.className = prominentRuntime ? 'btn btn-sm btn-primary is-primary-artifact-action' : 'btn btn-sm btn-primary';
+        runtimeBtn.classList.add('artifact-app-primary-action');
+        runtimeBtn.textContent = 'Start app';
+        runtimeBtn.hidden = !runtimeExpected;
+        const runtimeStatus = document.createElement('button');
+        runtimeStatus.type = 'button';
+        runtimeStatus.className = 'btn btn-sm';
+        runtimeStatus.classList.add('artifact-app-detail-action');
+        runtimeStatus.textContent = 'Manage app';
+        runtimeStatus.hidden = !runtimeExpected;
+        const stopRuntime = document.createElement('button');
+        stopRuntime.type = 'button';
+        stopRuntime.className = 'btn btn-sm';
+        stopRuntime.classList.add('artifact-app-stop-action');
+        stopRuntime.textContent = 'Stop app';
+        stopRuntime.hidden = true;
+        const openRuntime = document.createElement('a');
+        openRuntime.href = API.protocolRunArtifactRuntimeAppUrl(runId, artifact.artifact_key);
+        openRuntime.className = 'btn btn-sm';
+        openRuntime.classList.add('artifact-app-primary-action');
+        openRuntime.target = '_blank';
+        openRuntime.rel = 'noreferrer noopener';
+        openRuntime.textContent = 'Open app';
+        openRuntime.hidden = true;
+        openRuntime.addEventListener('click', (event) => event.stopPropagation());
+        const runtimeHint = document.createElement('span');
+        runtimeHint.className = 'artifact-runtime-inline-status muted microcopy';
+        runtimeHint.hidden = !runtimeExpected;
+        let currentRuntimeStatus = '';
+        let currentRuntimeReady = false;
+        let runtimePollTimer = null;
+        let runtimePollInFlight = false;
+        const stopRuntimePoll = () => {
+            if (runtimePollTimer) {
+                window.clearInterval(runtimePollTimer);
+                runtimePollTimer = null;
+            }
+        };
+        const scheduleRuntimePoll = () => {
+            if (!['starting', 'running'].includes(currentRuntimeStatus)) {
+                stopRuntimePoll();
+                return;
+            }
+            if (currentRuntimeStatus === 'running' && currentRuntimeReady) {
+                stopRuntimePoll();
+                return;
+            }
+            if (runtimePollTimer) return;
+            runtimePollTimer = window.setInterval(() => {
+                if (!document.body.contains(actionRow)) {
+                    stopRuntimePoll();
+                    return;
+                }
+                void refreshRuntimeState();
+            }, 5000);
+        };
+        const setRuntimeState = (runtime = {}, health = null) => {
+            const status = String(runtime?.status || '').toLowerCase();
+            currentRuntimeStatus = status;
+            currentRuntimeReady = status === 'running' && health?.ok === true;
+            const configured = status && status !== 'not_configured';
+            runtimeStatus.hidden = !configured && !runtimeExpected;
+            runtimeBtn.hidden = (!configured && !runtimeExpected) || (currentRuntimeReady || ['archived', 'deleted'].includes(status));
+            runtimeBtn.disabled = ['starting', 'running'].includes(status) && !currentRuntimeReady;
+            if (status === 'starting') {
+                runtimeBtn.textContent = 'Starting...';
+            } else if (status === 'running' && !currentRuntimeReady) {
+                runtimeBtn.textContent = 'Checking app...';
+            } else {
+                runtimeBtn.textContent = status === 'failed' ? 'Restart app' : 'Start app';
+            }
+            runtimeHint.hidden = !runtimeExpected && !configured;
+            if (currentRuntimeReady) {
+                runtimeHint.textContent = 'Ready. Open the app to exercise the outcome.';
+            } else if (status === 'starting') {
+                runtimeHint.textContent = 'Starting. Health check pending; Manage app shows status and logs.';
+            } else if (status === 'running') {
+                runtimeHint.textContent = health?.message
+                    ? `Health pending: ${String(health.message).slice(0, 140)}`
+                    : 'Process is running; waiting for health to pass.';
+            } else if (status === 'failed') {
+                runtimeHint.textContent = runtime?.failure_detail
+                    ? `Start failed: ${String(runtime.failure_detail).slice(0, 160)}`
+                    : 'Start failed. Manage app shows the failure and logs.';
+            } else if (status === 'stopped') {
+                runtimeHint.textContent = runtimeExpected ? 'Stopped. Start the app to exercise this outcome.' : '';
+            } else {
+                runtimeHint.textContent = runtimeExpected ? 'Runtime declared. Start the app to exercise this outcome.' : '';
+            }
+            openRuntime.hidden = !currentRuntimeReady;
+            openRuntime.className = prominentRuntime
+                ? 'btn btn-sm btn-primary is-primary-artifact-action artifact-app-primary-action'
+                : 'btn btn-sm btn-primary artifact-app-primary-action';
+            stopRuntime.hidden = prominentRuntime || !['running', 'starting'].includes(status);
+            scheduleRuntimePoll();
+        };
+        const refreshRuntimeState = async () => {
+            if (runtimePollInFlight) return;
+            runtimePollInFlight = true;
+            try {
+                const status = await API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key);
+                setRuntimeState(status?.runtime || {}, status?.health || null);
+            } catch (_err) {
+                runtimeBtn.hidden = !runtimeExpected;
+                runtimeStatus.hidden = !runtimeExpected;
+                openRuntime.hidden = true;
+                stopRuntime.hidden = true;
+                stopRuntimePoll();
+            } finally {
+                runtimePollInFlight = false;
+            }
+        };
+        runtimeBtn.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            runtimeBtn.disabled = true;
+            runtimeBtn.textContent = 'Starting...';
+            try {
+                const result = await API.startProtocolRunArtifactRuntime(runId, artifact.artifact_key);
+                const runtime = result?.runtime || {};
+                UI.notify(result?.message || 'App is starting. Open app appears when it is running.', result?.ok === false ? 'warning' : 'success');
+                setRuntimeState(runtime);
+            } catch (err) {
+                UI.reportError('Failed to start artifact app', err, { context: 'Artifact runtime start failed' });
+                runtimeBtn.disabled = false;
+                runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';
+            }
+        });
+        actionRow.insertBefore(runtimeBtn, actionRow.firstChild);
+        actionRow.insertBefore(openRuntime, runtimeBtn.nextSibling);
+        runtimeStatus.addEventListener('click', (event) => {
+            event.stopPropagation();
+            void _openArtifactRuntimeDialog(
+                runId,
+                artifact.artifact_key,
+                _protocolArtifactDisplayLabel(artifact, definition),
+            );
+        });
+        actionRow.insertBefore(runtimeStatus, openRuntime.nextSibling);
+        actionRow.insertBefore(runtimeHint, runtimeStatus.nextSibling);
+        stopRuntime.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            stopRuntime.disabled = true;
+            stopRuntime.textContent = 'Stopping...';
+            try {
+                const result = await API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key);
+                UI.notify(result?.message || 'Artifact runtime stopped.', result?.ok === false ? 'warning' : 'success');
+                setRuntimeState(result?.runtime || { status: result?.status || 'stopped' });
+            } catch (err) {
+                UI.reportError('Failed to stop artifact app', err, { context: 'Artifact runtime stop failed' });
+            } finally {
+                stopRuntime.disabled = false;
+                stopRuntime.textContent = 'Stop app';
+            }
+        });
+        actionRow.insertBefore(stopRuntime, runtimeStatus.nextSibling);
+        if (runtimeExpected) {
+            runtimeBtn.textContent = 'Checking app...';
+            runtimeBtn.disabled = true;
+            runtimeHint.textContent = 'Checking current app status.';
+        }
+        void refreshRuntimeState();
+    }
+    return actionRow;
 }
 
 function _artifactDefinitionPath(item) {
@@ -174,6 +814,14 @@ function _protocolIssueFilterValue(value) {
         return 'all';
     }
     return PROTOCOL_ISSUE_FILTER_OPTIONS.some((item) => item.value === normalized) ? normalized : '';
+}
+
+function _protocolRunViewFilterValue(value) {
+    const normalized = String(value || '').trim();
+    if (!normalized) {
+        return 'recent';
+    }
+    return PROTOCOL_RUN_VIEW_FILTER_OPTIONS.some((item) => item.value === normalized) ? normalized : 'recent';
 }
 
 function _protocolIssueApiValue(value) {
@@ -2284,6 +2932,11 @@ function renderProtocolWorkspace(container) {
             runBtn.disabled = !ready;
             applyBtn.className = ready ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
+            runBtn.style.order = hasSession && ready ? '0' : '3';
+            applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
+            publishBtn.style.order = hasSession ? '2' : '';
+            reviseBtn.style.order = hasSession ? '3' : '';
+            cancelBtn.style.order = hasSession ? '4' : '';
             const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
             publishBtn.title = gateTitle;
             runBtn.title = gateTitle;
@@ -7288,6 +7941,7 @@ function renderProtocolRuns(container) {
     let runDetailLoading = false;
     let runSearch = '';
     let runStatusFilter = UI.readQueryParam('status', '');
+    let runViewFilter = _protocolRunViewFilterValue(UI.readQueryParam('view', 'recent'));
     let issueKindFilter = _protocolIssueFilterValue(UI.readQueryParam('issue_kind', ''));
     let includeGenerated = UI.readQueryParam('include_generated', '') === '1';
     let activeRunDetailSection = '';
@@ -7326,6 +7980,7 @@ function renderProtocolRuns(container) {
             protocol_id: '',
             run_id: currentRunId || '',
             status: runStatusFilter || '',
+            view: runViewFilter !== 'recent' ? runViewFilter : '',
             issue_kind: issueKindFilter || '',
             include_generated: includeGenerated ? '1' : '',
             entry_agent_id: '',
@@ -7374,7 +8029,7 @@ function renderProtocolRuns(container) {
 
     function _currentRunIsActive() {
         const status = String(currentRun?.run?.status || '').trim().toLowerCase();
-        return Boolean(currentRunId) && !['completed', 'failed', 'cancelled'].includes(status);
+        return Boolean(currentRunId) && !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status);
     }
 
     function _syncRunRefreshTimer() {
@@ -7529,13 +8184,79 @@ function renderProtocolRuns(container) {
         if (status === 'cancelled') {
             return { key: 'ended', label: 'Ended', rank: 3 };
         }
-        return { key: 'other', label: 'Other runs', rank: 4 };
+        if (status === 'archived') {
+            return { key: 'archived', label: 'Archived', rank: 4 };
+        }
+        if (status === 'deleted') {
+            return { key: 'deleted', label: 'Deleted', rank: 5 };
+        }
+        return { key: 'other', label: 'Other runs', rank: 6 };
+    }
+
+    function _runHasOutcome(run) {
+        if (!run) return false;
+        if (String(run.primary_artifact_key || run.primary_outcome_key || '').trim()) return true;
+        if (Number(run.artifact_count || run.output_count || 0) > 0) return true;
+        const stage = String(run.current_stage_key || '').toLowerCase();
+        const status = _runStatusValue(run);
+        return status === 'completed' && /(artifact|outcome|release|implement|package|deliver)/.test(stage);
+    }
+
+    function _runMatchesViewFilter(run, issue = null) {
+        const status = _runStatusValue(run);
+        switch (runViewFilter) {
+            case 'attention':
+                return Boolean(issue) || ['blocked', 'failed'].includes(status);
+            case 'running':
+                return ['running', 'queued'].includes(status);
+            case 'completed':
+                return status === 'completed';
+            case 'outcomes':
+                return _runHasOutcome(run);
+            case 'archived':
+                return status === 'archived';
+            case 'deleted':
+                return status === 'deleted';
+            case 'telegram':
+                return String(run?.origin_channel || '').trim().toLowerCase() === 'telegram';
+            case 'registry':
+                return String(run?.origin_channel || '').trim().toLowerCase() === 'registry';
+            case 'recent':
+            default:
+                return true;
+        }
     }
 
     function _compactRunText(value, maxLength = 76) {
         const text = String(value || '').replace(/\s+/g, ' ').trim();
         if (!text || text.length <= maxLength) return text;
         return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+    }
+
+    function _stripRunImprovementBoilerplate(value, maxLength = 1200) {
+        const contextLabels = /^(run id|protocol id|protocol name|run status|run objective|current stage|primary artifact|primary artifact expected path|existing artifacts)\s*:/i;
+        const revisionLabel = /^(user improvement request|requested improvement|revision request)\s*:\s*(.*)$/i;
+        const noise = /^(improve the existing protocol that produced this run|use the prior run as context|bring the revised protocol up to the current octopus standard)/i;
+        const parts = String(value || '')
+            .replace(/\r/g, '\n')
+            .split('\n')
+            .map((line) => {
+                const cleaned = line.replace(/^\s*[-*]\s*/, '').trim();
+                const revisionMatch = cleaned.match(revisionLabel);
+                return revisionMatch ? revisionMatch[2].trim() : cleaned;
+            })
+            .filter((line) => line && !contextLabels.test(line) && !noise.test(line));
+        const seen = new Set();
+        const compact = [];
+        parts.forEach((part) => {
+            const key = part.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            compact.push(part);
+        });
+        const text = compact.join(' ').replace(/\s+/g, ' ').trim();
+        if (text.length <= maxLength) return text;
+        return text.slice(0, maxLength).replace(/\s+\S*$/, '').trim();
     }
 
     function _runLaunchContextEntries(run) {
@@ -7589,6 +8310,135 @@ function renderProtocolRuns(container) {
             }));
         });
         return list;
+    }
+
+    function _primaryRunArtifactInfo(runDetail) {
+        const detail = runDetail || {};
+        const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
+        const metadata = detail.version?.definition_json?.metadata || {};
+        const autoMeta = metadata.auto_protocol || {};
+        const explicitPrimary = autoMeta.primary_artifact || {};
+        const explicitKey = String(explicitPrimary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+        const byKey = new Map(artifacts.map((item) => [String(item?.artifact_key || '').trim(), item]));
+        if (explicitKey) {
+            return {
+                ...(byKey.get(explicitKey) || {}),
+                ...explicitPrimary,
+                artifact_key: explicitKey,
+                expected_path: explicitPrimary.expected_path || '',
+            };
+        }
+        const evidenceLike = /(^|[_-])(review|audit|evidence|logs?)([_-]|$)/i;
+        return [...artifacts]
+            .filter((item) => String(item?.artifact_key || '').trim())
+            .sort((left, right) => {
+                const leftKey = String(left.artifact_key || '');
+                const rightKey = String(right.artifact_key || '');
+                const leftScore = (left.exists ? 20 : 0)
+                    + (!evidenceLike.test(leftKey) ? 10 : 0)
+                    + (UI.isLikelyDirectoryArtifactPath(_protocolArtifactDisplayPath(left)) ? 8 : 0);
+                const rightScore = (right.exists ? 20 : 0)
+                    + (!evidenceLike.test(rightKey) ? 10 : 0)
+                    + (UI.isLikelyDirectoryArtifactPath(_protocolArtifactDisplayPath(right)) ? 8 : 0);
+                return rightScore - leftScore;
+            })[0] || null;
+    }
+
+    function _runImprovementRequirement(runDetail, changeRequest) {
+        return _stripRunImprovementBoilerplate(changeRequest, 1400) || 'Improve this protocol from the selected run.';
+    }
+
+    function _runImprovementContext(runDetail) {
+        const detail = runDetail || {};
+        const run = detail.run || {};
+        const version = detail.version || {};
+        const definition = version.definition_json || {};
+        const artifacts = (detail.artifacts || [])
+            .filter((item) => item && (item.exists || item.artifact_key || item.workspace_path || item.location))
+            .slice(0, 6)
+            .map((item) => [
+                String(item.artifact_key || 'artifact').trim(),
+                String(item.workspace_path || item.location || '').trim(),
+                String(item.verification_state || item.state || '').trim(),
+            ].filter(Boolean).join(' | '));
+        const primary = _primaryRunArtifactInfo(detail);
+        const runObjective = _stripRunImprovementBoilerplate(run.problem_statement || '', 520);
+        return [
+            'Prior run context for this protocol improvement. Use this as evidence and orientation, not as text to copy into the new run objective.',
+            `Run id: ${run.protocol_run_id || ''}`,
+            `Protocol id: ${run.protocol_id || ''}`,
+            `Protocol name: ${run.protocol_display_name || definition.display_name || definition.name || ''}`,
+            `Run status: ${run.status || ''}`,
+            runObjective ? `Prior run objective: ${runObjective}` : '',
+            `Current stage: ${run.current_stage_key || ''}`,
+            primary?.artifact_key ? `Primary artifact: ${primary.artifact_key}` : '',
+            primary?.expected_path ? `Primary artifact expected path: ${primary.expected_path}` : '',
+            artifacts.length ? `Existing artifacts:\n- ${artifacts.join('\n- ')}` : 'Existing artifacts: none recorded',
+            '',
+            'Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
+        ].filter((line) => line !== '').join('\n');
+    }
+
+    function _runAutoSessionReady(session) {
+        const validation = session?.validation || {};
+        const unresolved = Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : [];
+        return Boolean(session?.session_id && validation.ok && !unresolved.length);
+    }
+
+    function _runAutoSessionRunId(session) {
+        return String(
+            session?.run_result?.run?.protocol_run_id
+            || session?.run_result?.protocol_run_id
+            || session?.run?.protocol_run_id
+            || '',
+        ).trim();
+    }
+
+    function _runImproveSummaryEl(session) {
+        const plan = session?.plan || {};
+        const analysis = session?.analysis || {};
+        const validation = session?.validation || {};
+        const warnings = Array.isArray(session?.warnings) ? session.warnings : [];
+        const unresolved = Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : [];
+        const stages = Array.isArray(plan.stages) ? plan.stages : [];
+        const artifacts = Array.isArray(plan.artifacts) ? plan.artifacts : [];
+        const primary = plan.primary_artifact || session?.draft_definition_json?.metadata?.auto_protocol?.primary_artifact || {};
+        const panel = document.createElement('div');
+        panel.className = 'protocol-auto-summary protocol-auto-review';
+        const header = document.createElement('div');
+        header.className = 'protocol-auto-review-header';
+        const title = document.createElement('h4');
+        title.textContent = String(plan.protocol_name || 'Improved protocol draft');
+        header.appendChild(title);
+        const summary = document.createElement('p');
+        summary.textContent = String(analysis.goal || plan.description || 'Review the generated improvement before applying it.');
+        header.appendChild(summary);
+        const readiness = document.createElement('span');
+        readiness.className = _runAutoSessionReady(session) ? 'protocol-auto-readiness is-ready' : 'protocol-auto-readiness';
+        readiness.textContent = _runAutoSessionReady(session)
+            ? 'Ready to apply, publish, or run'
+            : 'Needs attention before publishing';
+        header.appendChild(readiness);
+        panel.appendChild(header);
+        panel.appendChild(UI.renderMetadataGrid([
+            { label: 'Stages', value: String(stages.length) },
+            { label: 'Artifacts', value: String(artifacts.length) },
+            { label: 'Validation', value: validation.ok ? 'Ready' : 'Needs attention' },
+            { label: 'Primary outcome', value: primary.display_name || primary.artifact_key || 'Produced outcome' },
+        ], { compact: true }));
+        if (warnings.length || unresolved.length) {
+            const list = document.createElement('div');
+            list.className = 'task-artifact-list';
+            [...unresolved, ...warnings].slice(0, 5).forEach((item) => {
+                list.appendChild(UI.renderListRow({
+                    label: item.message || item.code || 'Auto Protocol warning',
+                    sublabel: item.action || item.detail || '',
+                    badgeText: item.severity || item.code || '',
+                }));
+            });
+            panel.appendChild(list);
+        }
+        return panel;
     }
 
     function _shortRunId(value) {
@@ -7690,7 +8540,7 @@ function renderProtocolRuns(container) {
 
     function _runActionSpecs() {
         const status = String(currentRun?.run.status || '');
-        const active = !['completed', 'failed', 'cancelled'].includes(status);
+        const active = !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status);
         const allowedDecisions = _currentRunAllowedDecisions();
         const currentStageExecutionId = String(currentRun?.run?.current_stage_execution_id || '').trim();
         const currentStageKey = String(currentRun?.run?.current_stage_key || '').trim();
@@ -7753,6 +8603,115 @@ function renderProtocolRuns(container) {
                 enabled: active,
             },
         ];
+    }
+
+    function _runLifecycleSpecs() {
+        const status = String(currentRun?.run?.status || '').trim().toLowerCase();
+        const busy = ['queued', 'running'].includes(status);
+        return [
+            {
+                action: 'restore',
+                label: 'Restore run',
+                visible: status === 'archived',
+                enabled: status === 'archived',
+                danger: false,
+                note: 'Restore makes this archived run visible in normal run views again.',
+            },
+            {
+                action: 'archive',
+                label: 'Archive run',
+                visible: !['archived', 'deleted'].includes(status),
+                enabled: !busy,
+                danger: false,
+                note: 'Archive hides this run from normal views while preserving audit history, artifacts, snapshots, and runtime events.',
+            },
+            {
+                action: 'delete',
+                label: 'Delete run',
+                visible: status !== 'deleted',
+                enabled: !busy,
+                danger: true,
+                note: 'Delete is a soft delete. It hides the run from normal views and preserves audit records for retention policy.',
+            },
+        ];
+    }
+
+    function _openRunLifecycleDialog(spec) {
+        if (!currentRun?.run?.protocol_run_id) return;
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        const runningRuntimes = (currentRun?.runtime_instances || [])
+            .filter((item) => ['starting', 'running', 'stopping'].includes(String(item?.status || '').trim().toLowerCase()));
+        note.textContent = [
+            spec.note || '',
+            spec.action === 'archive' && runningRuntimes.length
+                ? `${runningRuntimes.length} active artifact runtime${runningRuntimes.length === 1 ? '' : 's'} will be stopped before archiving.`
+                : '',
+        ].filter(Boolean).join(' ');
+        form.appendChild(note);
+        const reason = document.createElement('textarea');
+        reason.className = 'guidance-textarea';
+        reason.rows = 4;
+        reason.placeholder = 'Optional reason saved in the run timeline';
+        form.appendChild(reason);
+        let confirmInput = null;
+        if (spec.action === 'delete') {
+            confirmInput = document.createElement('input');
+            confirmInput.className = 'search-input';
+            confirmInput.placeholder = 'Type DELETE to confirm';
+            form.appendChild(confirmInput);
+        }
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = spec.danger ? 'btn btn-danger' : 'btn btn-primary';
+        confirmBtn.textContent = spec.label;
+        const view = UI.showDialog(spec.label, form, {
+            actions: [cancelBtn, confirmBtn],
+            role: spec.danger ? 'alertdialog' : 'dialog',
+            initialFocus: confirmInput || reason,
+            maxWidth: '620px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        confirmBtn.addEventListener('click', async () => {
+            const runId = currentRun?.run?.protocol_run_id;
+            if (!runId) return;
+            const body = { reason: String(reason.value || '').trim() };
+            if (spec.action === 'delete') {
+                const confirmation = String(confirmInput?.value || '').trim().toUpperCase();
+                if (confirmation !== 'DELETE') {
+                    confirmInput?.focus();
+                    return;
+                }
+                body.confirm = 'DELETE';
+            }
+            confirmBtn.disabled = true;
+            try {
+                if (spec.action === 'archive') {
+                    for (const runtime of runningRuntimes) {
+                        await API.stopProtocolRunArtifactRuntime(runId, runtime.artifact_key);
+                    }
+                    await API.archiveProtocolRun(runId, body);
+                } else if (spec.action === 'restore') {
+                    await API.restoreProtocolRun(runId, body);
+                } else {
+                    await API.deleteProtocolRun(runId, body);
+                }
+                UI.notify(`${spec.label} completed.`, 'success');
+                view.close();
+                await Promise.all([loadRunDetail({ soft: true }), loadRuns(), loadIssues({ rerender: false })]);
+                renderRunsRoute();
+            } catch (err) {
+                UI.reportError(`${spec.label} failed`, err, { context: 'Run lifecycle action failed' });
+            } finally {
+                confirmBtn.disabled = false;
+            }
+        });
     }
 
     function _openRunActionDialog(spec) {
@@ -7833,6 +8792,190 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _openImproveRunDialog() {
+        if (!currentRun?.run?.protocol_id) {
+            UI.notify('Select a run with a protocol before improving it.', 'warning');
+            return;
+        }
+        const sourceRun = currentRun;
+        const form = document.createElement('div');
+        form.className = 'protocol-package-dialog protocol-auto-dialog';
+        const intro = document.createElement('p');
+        intro.className = 'quiet-note';
+        intro.textContent = 'Auto Protocol will use this run as context and generate a revised normal protocol. It will not patch the old artifact directly.';
+        form.appendChild(intro);
+
+        const requestLabel = document.createElement('label');
+        requestLabel.className = 'protocol-auto-field-label';
+        requestLabel.textContent = 'What should improve?';
+        form.appendChild(requestLabel);
+
+        const request = document.createElement('textarea');
+        request.className = 'input';
+        request.rows = 5;
+        request.placeholder = 'Example: add a root runtime manifest, routed UI/API, smoke evidence, and stricter review.';
+        requestLabel.appendChild(request);
+
+        const status = document.createElement('p');
+        status.className = 'quiet-note';
+        status.textContent = 'The generated improvement becomes a normal protocol draft you can apply, publish, and run.';
+        form.appendChild(status);
+
+        const preview = document.createElement('div');
+        preview.className = 'protocol-auto-preview';
+        form.appendChild(preview);
+
+        let session = null;
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const generateBtn = document.createElement('button');
+        generateBtn.type = 'button';
+        generateBtn.className = 'btn btn-primary';
+        generateBtn.textContent = 'Generate improvement';
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'btn';
+        applyBtn.textContent = 'Apply draft';
+        applyBtn.hidden = true;
+        const publishBtn = document.createElement('button');
+        publishBtn.type = 'button';
+        publishBtn.className = 'btn';
+        publishBtn.textContent = 'Publish';
+        publishBtn.hidden = true;
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'btn btn-primary';
+        runBtn.textContent = 'Publish & Run';
+        runBtn.hidden = true;
+        const view = UI.showDialog('Improve this run', form, {
+            actions: [cancelBtn, generateBtn, applyBtn, publishBtn, runBtn],
+            maxWidth: '760px',
+            initialFocus: request,
+        });
+        view.dialog.classList.add('protocol-auto-modal');
+
+        const syncActions = () => {
+            const hasSession = Boolean(session?.session_id);
+            const ready = _runAutoSessionReady(session);
+            cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
+            generateBtn.hidden = hasSession;
+            applyBtn.hidden = !hasSession;
+            publishBtn.hidden = !hasSession;
+            runBtn.hidden = !hasSession;
+            publishBtn.disabled = !ready;
+            runBtn.disabled = !ready;
+            applyBtn.className = ready ? 'btn' : 'btn btn-primary';
+            runBtn.className = ready ? 'btn btn-primary' : 'btn';
+            runBtn.style.order = hasSession && ready ? '0' : '3';
+            applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
+            publishBtn.style.order = hasSession ? '2' : '';
+            cancelBtn.style.order = hasSession ? '4' : '';
+            const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
+            publishBtn.title = gateTitle;
+            runBtn.title = gateTitle;
+        };
+
+        cancelBtn.addEventListener('click', () => view.close());
+        generateBtn.addEventListener('click', async () => {
+            const changeRequest = request.value.trim();
+            if (!changeRequest) {
+                status.textContent = 'Describe what should improve.';
+                request.focus();
+                return;
+            }
+            generateBtn.disabled = true;
+            intro.hidden = true;
+            requestLabel.hidden = true;
+            status.textContent = 'Designing improved protocol…';
+            UI.reconcileChildren(preview, [UI.renderEmptyState('Planning stages, artifacts, reviewers, and runtime expectations…', true)]);
+            try {
+                session = await API.createProtocolAutoSession({
+                    mode: 'revise',
+                    surface: 'registry',
+                    target_protocol_id: sourceRun.run.protocol_id,
+                    requirement_text: _runImprovementRequirement(sourceRun, changeRequest),
+                    constraints_text: _runImprovementContext(sourceRun),
+                    workspace_ref: sourceRun.run.workspace_ref || '',
+                });
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                status.textContent = 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.';
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to generate the run improvement', err, {
+                    context: 'Auto Protocol run improvement failed',
+                });
+                intro.hidden = false;
+                requestLabel.hidden = false;
+                status.textContent = 'Generation failed.';
+            }
+            generateBtn.disabled = false;
+        });
+        applyBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            applyBtn.disabled = true;
+            status.textContent = 'Applying improved draft…';
+            try {
+                session = await API.applyProtocolAutoSession(session.session_id);
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                status.textContent = 'Draft applied. Open the protocol editor to review or continue publishing from here.';
+                UI.notify('Improved protocol draft applied.', 'success');
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to apply improved protocol draft', err, {
+                    context: 'Auto Protocol apply failed',
+                });
+                status.textContent = 'Apply failed.';
+            }
+            applyBtn.disabled = false;
+        });
+        publishBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            publishBtn.disabled = true;
+            status.textContent = 'Publishing improved protocol…';
+            try {
+                session = await API.publishProtocolAutoSession(session.session_id);
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                status.textContent = 'Published. You can start a fresh run now.';
+                UI.notify('Improved protocol published.', 'success');
+                syncActions();
+            } catch (err) {
+                UI.reportError('Failed to publish improved protocol', err, {
+                    context: 'Auto Protocol publish failed',
+                });
+                status.textContent = 'Publish failed.';
+            }
+            publishBtn.disabled = false;
+            syncActions();
+        });
+        runBtn.addEventListener('click', async () => {
+            if (!session?.session_id) return;
+            runBtn.disabled = true;
+            status.textContent = 'Publishing and starting improved run…';
+            try {
+                session = await API.runProtocolAutoSession(session.session_id, { origin_channel: 'registry' });
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                const runId = _runAutoSessionRunId(session);
+                view.close();
+                if (runId) {
+                    UI.notify('Improved run started.', 'success');
+                    Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
+                    return;
+                }
+                UI.notify('Improved run started, but no run id was returned.', 'success');
+            } catch (err) {
+                UI.reportError('Failed to run improved protocol', err, {
+                    context: 'Auto Protocol run failed',
+                });
+                status.textContent = 'Run failed.';
+            }
+            runBtn.disabled = false;
+            syncActions();
+        });
+        syncActions();
+    }
+
     function _buildRunActionBar({ sticky = false, specs = null } = {}) {
         const runActionBar = document.createElement('div');
         runActionBar.className = sticky ? 'editor-actions protocol-sticky-actions' : 'editor-actions';
@@ -7882,6 +9025,14 @@ function renderProtocolRuns(container) {
         });
         runActionBar.appendChild(exportRunButton);
 
+        const improveRunButton = document.createElement('button');
+        improveRunButton.type = 'button';
+        improveRunButton.className = 'btn btn-primary';
+        improveRunButton.textContent = 'Improve this run';
+        improveRunButton.disabled = !currentRun?.run?.protocol_id;
+        improveRunButton.addEventListener('click', _openImproveRunDialog);
+        runActionBar.appendChild(improveRunButton);
+
         return runActionBar;
     }
 
@@ -7896,7 +9047,48 @@ function renderProtocolRuns(container) {
         panel.appendChild(title);
 
         const controls = document.createElement('div');
-        controls.className = 'route-controls';
+        controls.className = 'route-controls run-view-controls';
+        const viewFilterControl = UI.createSegmentedControl(
+            _compactProtocolRunViewOptions(),
+            (value) => {
+                runViewFilter = _protocolRunViewFilterValue(value);
+                if (runPaginator) runPaginator.reset(0);
+                currentRunId = '';
+                currentRun = null;
+                currentIssues = [];
+                lastRunEvent = null;
+                activeRunDetailSection = '';
+                _resetRunStageEvidenceSelection();
+                activeRunArtifactStageExecutionId = '';
+                runDetailLoading = false;
+                runDetailRequestToken += 1;
+                _bindRunSubscription();
+                _writeState({ push: true });
+                renderRunsRoute();
+            },
+            { label: 'Run view', value: runViewFilter },
+        );
+        controls.appendChild(viewFilterControl.element);
+        panel.appendChild(controls);
+
+        const secondaryFilters = document.createElement('details');
+        secondaryFilters.className = 'run-secondary-filters';
+        secondaryFilters.open = Boolean(issueKindFilter || includeGenerated);
+        const secondarySummary = document.createElement('summary');
+        const secondaryTitle = document.createElement('span');
+        secondaryTitle.textContent = 'Issue and audit filters';
+        secondarySummary.appendChild(secondaryTitle);
+        const secondaryState = document.createElement('small');
+        secondaryState.textContent = [
+            issueKindFilter
+                ? (PROTOCOL_ISSUE_FILTER_OPTIONS.find((item) => item.value === issueKindFilter)?.label || 'Issue view')
+                : 'Runs',
+            includeGenerated ? 'generated shown' : 'generated hidden',
+        ].join(' · ');
+        secondarySummary.appendChild(secondaryState);
+        secondaryFilters.appendChild(secondarySummary);
+        const secondaryBody = document.createElement('div');
+        secondaryBody.className = 'run-secondary-filter-body';
         const issueFilterControl = UI.createSegmentedControl(
             PROTOCOL_ISSUE_FILTER_OPTIONS,
             (value) => {
@@ -7911,12 +9103,13 @@ function renderProtocolRuns(container) {
             },
             { label: 'Run triage focus', value: issueKindFilter || '' },
         );
-        controls.appendChild(issueFilterControl.element);
+        secondaryBody.appendChild(issueFilterControl.element);
 
         const generatedToggle = document.createElement('a');
         UI.updateGeneratedAuditToggleLink(generatedToggle, includeGenerated, 'runs');
-        controls.appendChild(generatedToggle);
-        panel.appendChild(controls);
+        secondaryBody.appendChild(generatedToggle);
+        secondaryFilters.appendChild(secondaryBody);
+        panel.appendChild(secondaryFilters);
 
         if (issueListActive) {
             if (runPaginator) runPaginator.clear();
@@ -7956,7 +9149,7 @@ function renderProtocolRuns(container) {
             issuesByRunId.set(runId, issue);
         });
 
-        const runSource = UI.defaultVisibleRecords(runs || [], { includeHidden: includeGenerated });
+        const runSource = [...(runs || [])];
         if (currentRunId && !runSource.some((item) => _runRecordId(item) === String(currentRunId || ''))) {
             const selectedHiddenRun = (runs || []).find((item) => _runRecordId(item) === String(currentRunId || ''));
             if (selectedHiddenRun) {
@@ -7967,6 +9160,9 @@ function renderProtocolRuns(container) {
         }
         panel.appendChild(_buildRunsOverviewStrip(runSource, issuesByRunId));
         const listRuns = runSource.filter((item) => {
+            const runId = _runRecordId(item);
+            const issue = issuesByRunId.get(String(runId || '').trim()) || null;
+            if (!_runMatchesViewFilter(item, issue)) return false;
             if (runStatusFilter && String(item.status || '') !== runStatusFilter) return false;
             if (!runSearch) return true;
             const haystack = [
@@ -7998,9 +9194,9 @@ function renderProtocolRuns(container) {
                     item.updated_at ? `Updated ${UI.relativeTime(item.updated_at)}` : '',
                     item.origin_channel ? `From ${item.origin_channel}` : '',
                 ],
-                groupKey: group.key,
-                groupLabel: group.label,
-                groupRank: group.rank,
+                groupKey: runViewFilter === 'attention' ? group.key : '',
+                groupLabel: runViewFilter === 'attention' ? group.label : '',
+                groupRank: runViewFilter === 'attention' ? group.rank : 0,
                 groupMeta: group.key === 'attention'
                     ? 'Review blocked or failed work first'
                     : group.key === 'active'
@@ -8212,12 +9408,17 @@ function renderProtocolRuns(container) {
             target.appendChild(wrap);
         };
 
-        const createRunArtifactRow = (artifact, { relationship = 'Produced output', missing = false } = {}) => {
+        const createRunArtifactRow = (artifact, { relationship = 'Produced output', missing = false, compactActions = false } = {}) => {
             const definition = artifactDefinitionByKey.get(String(artifact.artifact_key || '')) || null;
             const pathLabel = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
             const identifier = definition && String(definition.display_name || '').trim()
                 ? String(artifact.artifact_key || '').trim()
                 : '';
+            const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+            const explicitPrimary = autoMeta.primary_artifact || {};
+            const explicitPrimaryKey = String(explicitPrimary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            const isPrimaryArtifact = explicitPrimaryKey && String(artifact.artifact_key || '').trim() === explicitPrimaryKey;
+            const runtimeExpected = primaryRuntimeExpected(artifact, definition, isPrimaryArtifact ? explicitPrimary : {});
             return UI.createArtifactListRow({
                 label: _protocolArtifactDisplayLabel(artifact, definition),
                 sublabelParts: [
@@ -8232,7 +9433,11 @@ function renderProtocolRuns(container) {
                     currentRun.run.protocol_run_id,
                     artifact,
                     definition,
-                    { missing: missing || !artifact.exists },
+                    {
+                        missing: missing || !artifact.exists,
+                        runtimeExpected,
+                        prominentRuntime: compactActions,
+                    },
                 ),
             });
         };
@@ -8362,9 +9567,90 @@ function renderProtocolRuns(container) {
         };
         const taskUpdatedLabel = (task) => task?.updated_at ? `Updated ${UI.relativeTime(task.updated_at)}` : '';
         const stageAttemptLabel = (item) => `Attempt ${String(item?.attempt || 1)}`;
+        const stageStatusLabel = (item) => {
+            const status = String(item?.status || '').trim().toLowerCase();
+            const failureCode = String(item?.failure_code || '').trim().toLowerCase();
+            if (status === 'blocked' && failureCode.startsWith('runtime_')) return 'Needs runtime evidence';
+            if (status === 'blocked') return 'Needs attention';
+            return status ? _titleCaseWords(status) : 'Pending';
+        };
+        const runStatusInfo = (run = {}) => {
+            const status = String(run.status || 'queued').trim().toLowerCase();
+            const blockedCode = String(run.blocked_code || '').trim().toLowerCase();
+            if (status === 'blocked' && blockedCode.startsWith('runtime_')) {
+                return {
+                    status,
+                    active: false,
+                    actionable: true,
+                    label: 'Runtime verification required',
+                    kicker: 'Verification required',
+                    detail: run.blocked_detail || 'Start and exercise the primary artifact through the Registry before final acceptance.',
+                };
+            }
+            if (status === 'blocked') {
+                return {
+                    status,
+                    active: false,
+                    actionable: true,
+                    label: 'Needs attention',
+                    kicker: 'Needs attention',
+                    detail: run.blocked_detail || 'The current stage needs operator action before the run can continue.',
+                };
+            }
+            if (['queued', 'running'].includes(status)) {
+                return { status, active: true, actionable: true, label: status || 'running', kicker: 'Run in progress', detail: '' };
+            }
+            return {
+                status,
+                active: false,
+                actionable: !['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status),
+                label: status || 'queued',
+                kicker: ['completed', 'failed', 'cancelled', 'archived', 'deleted'].includes(status) ? 'Run finished' : 'Run status',
+                detail: run.termination_summary || '',
+            };
+        };
+        const primaryRuntimeExpected = (artifact, definition = {}, primary = {}) => {
+            const artifactKey = String(artifact?.artifact_key || primary?.artifact_key || '').trim();
+            const blockedCode = String(currentRun?.run?.blocked_code || '').trim().toLowerCase();
+            const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+            const explicitPrimaryKey = String(autoMeta.primary_artifact?.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            if (artifactKey && blockedCode.startsWith('runtime_') && (!explicitPrimaryKey || artifactKey === explicitPrimaryKey)) return true;
+            const parts = [
+                primary?.open_behavior,
+                definition?.open_behavior,
+                primary?.runtime_kind,
+                definition?.runtime_kind,
+                ...(Array.isArray(primary?.evidence_requirements) ? primary.evidence_requirements : []),
+            ].map((item) => String(item || '').trim()).filter(Boolean);
+            return parts.some((item) => /(runtime|runnable|app|service|api|ui|browser|playable)/i.test(item));
+        };
 
         const currentRunStageExecution = () => {
             const run = currentRun.run || {};
+            const primaryArtifactStageExecution = () => {
+                const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+                const primary = autoMeta.primary_artifact || {};
+                const primaryStageKey = String(primary.produced_by_stage_key || '').trim();
+                if (primaryStageKey) {
+                    const matchingAttempts = stageRows.filter((item) => String(item.stage_key || '') === primaryStageKey);
+                    if (matchingAttempts.length) return latestStageExecution(matchingAttempts);
+                }
+                const primaryArtifactKey = String(primary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+                const producedArtifact = primaryArtifactKey
+                    ? artifactRows.find((item) => String(item.artifact_key || '') === primaryArtifactKey)
+                    : null;
+                const producerExecutionId = String(producedArtifact?.produced_by_stage_execution_id || '').trim();
+                if (producerExecutionId && stageById.has(producerExecutionId)) {
+                    return stageById.get(producerExecutionId);
+                }
+                return null;
+            };
+            const runStatus = String(run.status || '').trim().toLowerCase();
+            const blockedCode = String(run.blocked_code || '').trim().toLowerCase();
+            if ((runStatus === 'blocked' && blockedCode.startsWith('runtime_')) || runStatus === 'completed') {
+                const primaryStage = primaryArtifactStageExecution();
+                if (primaryStage) return primaryStage;
+            }
             const executionId = String(run.current_stage_execution_id || '').trim();
             if (executionId && stageById.has(executionId)) {
                 return stageById.get(executionId);
@@ -8408,8 +9694,9 @@ function renderProtocolRuns(container) {
 
         const buildRunFocusHero = () => {
             const run = currentRun.run || {};
-            const status = String(run.status || 'queued').trim().toLowerCase();
-            const active = !['completed', 'failed', 'cancelled'].includes(status);
+            const statusInfo = runStatusInfo(run);
+            const status = statusInfo.status;
+            const active = statusInfo.active;
             const currentStage = currentRunStageExecution();
             const currentStageOrdinal = currentStage ? stageOrdinalFor(currentStage.stage_key) : 0;
             const totalStages = runStageCount();
@@ -8431,7 +9718,7 @@ function renderProtocolRuns(container) {
             main.className = 'run-focus-main';
             const kicker = document.createElement('div');
             kicker.className = 'run-focus-kicker';
-            kicker.textContent = active ? 'Run in progress' : 'Run finished';
+            kicker.textContent = statusInfo.kicker;
             main.appendChild(kicker);
             const title = document.createElement('h3');
             title.className = 'run-focus-title';
@@ -8440,8 +9727,8 @@ function renderProtocolRuns(container) {
             const stage = document.createElement('div');
             stage.className = 'run-focus-stage';
             stage.textContent = currentStage
-                ? `${currentStageDef.display_name || currentStage.stage_key || 'Stage'} · ${currentStage.status || run.status || 'queued'}`
-                : run.termination_summary || 'Waiting for the first stage';
+                ? `${currentStageDef.display_name || currentStage.stage_key || 'Stage'} · ${stageStatusLabel(currentStage)}`
+                : statusInfo.detail || 'Waiting for the first stage';
             main.appendChild(stage);
             if (run.problem_statement) {
                 const problem = document.createElement('p');
@@ -8495,7 +9782,7 @@ function renderProtocolRuns(container) {
             const live = document.createElement('div');
             live.className = `run-focus-live${active ? ' is-live' : ''}${active && !latestEvent && !currentTaskUpdate ? ' is-quiet' : ''}`;
             const liveLabel = document.createElement('strong');
-            liveLabel.textContent = currentTaskUpdate ? 'Agent update' : (active ? 'Live update' : 'Latest update');
+            liveLabel.textContent = currentTaskUpdate ? 'Agent update' : (active ? 'Live update' : status === 'blocked' ? 'What is needed' : 'Latest update');
             live.appendChild(liveLabel);
             const liveCopy = document.createElement('span');
             liveCopy.textContent = taskProgressText
@@ -8503,14 +9790,14 @@ function renderProtocolRuns(container) {
                 ? _protocolEventText(latestEvent)
                 : active
                     ? quietProgressText
-                    : run.termination_summary || 'Run is no longer active.');
+                    : statusInfo.detail || run.termination_summary || 'Run is no longer active.');
             live.appendChild(liveCopy);
             state.appendChild(live);
 
             const metrics = document.createElement('div');
             metrics.className = 'run-focus-metrics';
             [
-                { label: 'Status', value: run.status || 'queued' },
+                { label: 'Status', value: statusInfo.label },
                 { label: 'Stage', value: totalStages ? `${currentStageOrdinal || 1} / ${totalStages}` : 'n/a' },
                 { label: 'Outputs', value: `${artifactRows.length}${pendingArtifactRows.length ? ` / ${artifactRows.length + pendingArtifactRows.length}` : ''}` },
                 { label: 'Issues', value: String(currentIssues.length) },
@@ -8534,18 +9821,35 @@ function renderProtocolRuns(container) {
             const actions = document.createElement('div');
             actions.className = 'run-focus-actions';
             const actionSpecs = _runActionSpecs().filter((spec) => spec.visible !== false);
-            if (actionSpecs.length) {
-                const actionTitle = document.createElement('div');
-                actionTitle.className = 'detail-label';
-                actionTitle.textContent = 'Operator controls';
-                actions.appendChild(actionTitle);
-                if (actionSpecs.some((spec) => spec.intervention)) {
-                    const actionNote = document.createElement('p');
-                    actionNote.className = 'quiet-note run-focus-action-note';
-                    actionNote.textContent = 'These controls can intervene in the current stage; use them only when the displayed stage evidence is enough to make that decision.';
-                    actions.appendChild(actionNote);
-                }
-                actions.appendChild(_buildRunActionBar({ specs: actionSpecs }));
+            const actionTitle = document.createElement('div');
+            actionTitle.className = 'detail-label';
+            actionTitle.textContent = actionSpecs.length ? 'Operator controls' : 'Run actions';
+            actions.appendChild(actionTitle);
+            if (actionSpecs.some((spec) => spec.intervention)) {
+                const actionNote = document.createElement('p');
+                actionNote.className = 'quiet-note run-focus-action-note';
+                actionNote.textContent = 'These controls can intervene in the current stage; use them only when the displayed stage evidence is enough to make that decision.';
+                actions.appendChild(actionNote);
+            }
+            actions.appendChild(_buildRunActionBar({ specs: actionSpecs }));
+            const lifecycleSpecs = _runLifecycleSpecs().filter((spec) => spec.visible !== false);
+            if (lifecycleSpecs.length) {
+                const lifecycleTitle = document.createElement('div');
+                lifecycleTitle.className = 'detail-label';
+                lifecycleTitle.textContent = 'Lifecycle';
+                actions.appendChild(lifecycleTitle);
+                const row = document.createElement('div');
+                row.className = 'editor-actions';
+                lifecycleSpecs.forEach((item) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = item.danger ? 'btn btn-danger' : 'btn';
+                    button.textContent = item.label;
+                    button.disabled = !item.enabled;
+                    button.addEventListener('click', () => _openRunLifecycleDialog(item));
+                    row.appendChild(button);
+                });
+                actions.appendChild(row);
             }
             lower.appendChild(actions);
             if (actions.childElementCount) {
@@ -8557,8 +9861,9 @@ function renderProtocolRuns(container) {
 
         const buildRunLivenessCard = () => {
             const run = currentRun.run || {};
-            const status = String(run.status || '').trim().toLowerCase();
-            const active = !['completed', 'failed', 'cancelled'].includes(status);
+            const statusInfo = runStatusInfo(run);
+            const status = statusInfo.status;
+            const active = statusInfo.active;
             const currentStage = currentRunStageExecution();
             const currentStageOrdinal = currentStage ? stageOrdinalFor(currentStage.stage_key) : 0;
             const currentStageDef = currentStage
@@ -8576,20 +9881,20 @@ function renderProtocolRuns(container) {
 
             const label = active && currentStage
                 ? `Running stage ${currentStageOrdinal || 1} of ${runStageCount() || 1}: ${currentStageDef.display_name || currentStage.stage_key || 'Stage'}`
-                : `Run ${status || 'state'}`;
+                : statusInfo.label;
             card.appendChild(UI.renderListRow({
                 label,
                 sublabel: [
-                    active ? 'Work is being dispatched through the protocol runtime' : run.termination_summary || 'Execution is no longer active',
+                    active ? 'Work is being dispatched through the protocol runtime' : statusInfo.detail || run.termination_summary || 'Execution is no longer active',
                     elapsed ? `elapsed ${elapsed}` : '',
                     averageMs ? `typical completed run ${durationLabel(averageMs)}` : 'estimate available after completed run history',
                 ].filter(Boolean).join(' · '),
-                badgeText: active ? 'live' : (run.status || ''),
+                    badgeText: active ? 'live' : (statusInfo.label || run.status || ''),
                 badgeClass: active ? 'badge-running' : '',
             }));
             card.appendChild(UI.renderMetadataGrid([
                 { label: 'Current stage', value: currentStage ? (currentStageDef.display_name || currentStage.stage_key || 'Stage') : '—' },
-                { label: 'Stage state', value: currentStage?.status || run.status || '—' },
+                { label: 'Stage state', value: currentStage ? stageStatusLabel(currentStage) : statusInfo.label || '—' },
                 { label: 'Assigned to', value: currentTaskTarget || '—' },
                 { label: 'Task state', value: taskStateLabel(currentTask) || '—' },
                 { label: 'Available outputs', value: String(artifactRows.length) },
@@ -8657,14 +9962,14 @@ function renderProtocolRuns(container) {
             titleWrap.className = 'protocol-lineage-copy';
             const label = document.createElement('strong');
             label.className = 'protocol-lineage-title';
-            label.textContent = `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'} · ${item.status}`;
+            label.textContent = `${index + 1}. ${stageDef.display_name || item.stage_key || 'Stage'} · ${stageStatusLabel(item)}`;
             titleWrap.appendChild(label);
             const subtitle = document.createElement('div');
             subtitle.className = 'protocol-lineage-subtitle';
             subtitle.textContent = [
                 participant.display_name || item.participant_key || '',
                 taskTarget,
-                taskState,
+                taskState ? `Task ${taskState}` : '',
                 item.decision_summary || item.failure_detail || '',
             ].filter(Boolean).join(' · ');
             titleWrap.appendChild(subtitle);
@@ -8848,16 +10153,97 @@ function renderProtocolRuns(container) {
             return section;
         };
 
-        const buildPrimaryArtifactPanel = () => {
+        const artifactStageFor = (artifact) => {
+            const executionId = String(artifact?.produced_by_stage_execution_id || '').trim();
+            return executionId ? stageById.get(executionId) || null : null;
+        };
+
+        const inferPrimaryArtifact = () => {
             const metadata = currentRun.version?.definition_json?.metadata || {};
             const autoMeta = metadata.auto_protocol || {};
-            const primary = autoMeta.primary_artifact || {};
-            const key = String(primary.artifact_key || autoMeta.primary_artifact_key || '').trim();
-            if (!key) return null;
-            const artifact = artifactRows.find((item) => String(item.artifact_key || '').trim() === key)
-                || pendingArtifactRows.find((item) => String(item.artifact_key || '').trim() === key)
-                || { artifact_key: key, exists: false };
-            const definition = artifactDefinitionByKey.get(key) || {};
+            const explicitPrimary = autoMeta.primary_artifact || {};
+            const explicitKey = String(explicitPrimary.artifact_key || autoMeta.primary_artifact_key || '').trim();
+            const allArtifacts = [...artifactRows, ...pendingArtifactRows]
+                .filter((item) => String(item?.artifact_key || '').trim());
+            if (explicitKey) {
+                const explicitArtifact = allArtifacts.find((item) => String(item.artifact_key || '').trim() === explicitKey)
+                    || { artifact_key: explicitKey, exists: false };
+                return {
+                    artifact: explicitArtifact,
+                    definition: artifactDefinitionByKey.get(explicitKey) || {},
+                    primary: explicitPrimary,
+                    inferred: false,
+                    key: explicitKey,
+                };
+            }
+            if (!allArtifacts.length) return null;
+            const evidenceLike = /(^|[_-])(review|audit|evidence|logs?)([_-]|$)/i;
+            const scored = allArtifacts.map((artifact, index) => {
+                const key = String(artifact.artifact_key || '').trim();
+                const definition = artifactDefinitionByKey.get(key) || {};
+                const pathLabel = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
+                const stage = artifactStageFor(artifact);
+                const stageKey = String(stage?.stage_key || '').trim();
+                const verified = String(artifact.verification_state || artifact.state || '').trim().toLowerCase() === 'verified';
+                let score = 0;
+                if (artifact.exists !== false) score += 50;
+                if (UI.isLikelyDirectoryArtifactPath(pathLabel)) score += 40;
+                if (_protocolArtifactPreviewable(artifact)) score += 20;
+                if (verified) score += 10;
+                if (!evidenceLike.test(key)) score += 12;
+                if (stageKey && !evidenceLike.test(stageKey)) score += 8;
+                if (Number(artifact.size_bytes || 0) > 0) score += Math.min(10, Math.log10(Number(artifact.size_bytes || 1)));
+                return { artifact, definition, key, score, index };
+            }).sort((left, right) => {
+                if (right.score !== left.score) return right.score - left.score;
+                return left.index - right.index;
+            });
+            const selected = scored[0] || null;
+            if (!selected) return null;
+            return {
+                artifact: selected.artifact,
+                definition: selected.definition,
+                primary: {
+                    artifact_key: selected.key,
+                    display_name: selected.definition.display_name || _protocolArtifactDisplayLabel(selected.artifact, selected.definition),
+                    produced_by_stage_key: artifactStageFor(selected.artifact)?.stage_key || '',
+                    expected_path: _artifactDefinitionPath(selected.definition || selected.artifact),
+                },
+                inferred: true,
+                key: selected.key,
+            };
+        };
+
+        const buildPrimaryArtifactPanel = ({ includeRunControls = false } = {}) => {
+            const inferred = inferPrimaryArtifact();
+            if (!inferred) return null;
+            const { artifact, definition, primary, key } = inferred;
+            const producerStage = artifactStageFor(artifact);
+            const producerStageDef = producerStage
+                ? stageDefinitionByKey.get(String(producerStage.stage_key || '')) || {}
+                : {};
+            const producerTask = taskForStage(producerStage);
+            const producerUpdate = taskUpdateText(producerTask, 260)
+                || producerStage?.decision_summary
+                || producerStage?.failure_detail
+                || '';
+            const finalStageCandidates = stageRows.filter((item) => {
+                const stageKey = String(item?.stage_key || '').trim();
+                const stageDef = stageDefinitionByKey.get(stageKey) || {};
+                const label = `${stageKey} ${String(stageDef.display_name || '')}`.toLowerCase();
+                return /(accept|final|release|evidence)/i.test(label);
+            });
+            const finalStage = latestStageExecution(finalStageCandidates) || latestStageExecution(stageRows);
+            const finalStageDef = finalStage
+                ? stageDefinitionByKey.get(String(finalStage.stage_key || '')) || {}
+                : {};
+            const finalTask = taskForStage(finalStage);
+            const finalUpdate = finalStage?.decision_summary
+                || taskUpdateText(finalTask, 320)
+                || finalStage?.failure_detail
+                || '';
+            const totalExecutions = stageRows.length;
+            const totalStages = stageAttemptsByKey.size || runStageCount();
             const panel = document.createElement('article');
             panel.className = 'run-primary-artifact-panel';
             const head = document.createElement('div');
@@ -8871,41 +10257,180 @@ function renderProtocolRuns(container) {
             badge.textContent = artifact.exists ? 'available' : 'not produced yet';
             head.appendChild(badge);
             panel.appendChild(head);
-            panel.appendChild(UI.renderMetadataGrid([
-                { label: 'Artifact', value: key },
-                { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },
-                { label: 'Expected path', value: primary.expected_path || _artifactDefinitionPath(definition) || '-' },
-                { label: 'Observed path', value: _protocolArtifactDisplayPath(artifact) || '-' },
-                { label: 'Verification', value: artifact.verification_state || artifact.state || '-' },
-            ], { compact: true }));
-            panel.appendChild(_protocolArtifactActionRow(
+            const note = document.createElement('p');
+            note.className = 'quiet-note';
+            note.textContent = inferred.inferred
+                ? 'Promoted from produced artifacts because this run did not declare a primary outcome.'
+                : 'This is the protocol-declared main outcome for the run.';
+            panel.appendChild(note);
+            const runtimeExpected = primaryRuntimeExpected(artifact, definition, primary);
+            if (runtimeExpected && String(currentRun.run?.blocked_code || '').trim().toLowerCase().startsWith('runtime_')) {
+                panel.appendChild(UI.renderListRow({
+                    label: 'Runtime verification required',
+                    sublabel: currentRun.run?.blocked_detail || 'Start and exercise the primary artifact through the Registry, then accept the final stage.',
+                    badgeText: 'verify',
+                    badgeClass: 'badge-blocked',
+                }));
+            }
+            const actions = _protocolArtifactActionRow(
                 currentRun.run.protocol_run_id,
                 artifact,
                 definition,
-                { missing: !artifact.exists },
-            ));
+                {
+                    missing: !artifact.exists,
+                    runtimeExpected,
+                    prominentRuntime: true,
+                },
+            );
+            actions.classList.add('run-primary-actions');
+            panel.appendChild(actions);
+
+            const story = document.createElement('div');
+            story.className = 'run-primary-story-list';
+            if (producerStage) {
+                story.appendChild(UI.renderListRow({
+                    label: `Built by ${producerStageDef.display_name || producerStage.stage_key || 'producer stage'}`,
+                    sublabel: [
+                        producerUpdate,
+                        stageAttemptLabel(producerStage),
+                        producerStage.completed_at ? `completed ${UI.relativeTime(producerStage.completed_at)}` : '',
+                    ].filter(Boolean).join(' · '),
+                    badgeText: stageStatusLabel(producerStage),
+                    badgeClass: String(producerStage.status || '').toLowerCase() === 'completed' ? 'badge-connected' : '',
+                }));
+            }
+            if (finalStage && finalStage !== producerStage) {
+                story.appendChild(UI.renderListRow({
+                    label: `Verified by ${finalStageDef.display_name || finalStage.stage_key || 'final review'}`,
+                    sublabel: [
+                        finalUpdate,
+                        stageAttemptLabel(finalStage),
+                        finalStage.completed_at ? `completed ${UI.relativeTime(finalStage.completed_at)}` : '',
+                    ].filter(Boolean).join(' · '),
+                    badgeText: stageStatusLabel(finalStage),
+                    badgeClass: String(finalStage.status || '').toLowerCase() === 'completed' ? 'badge-connected' : '',
+                }));
+            }
+            if (totalExecutions || totalStages) {
+                story.appendChild(UI.renderListRow({
+                    label: 'Execution history',
+                    sublabel: `${totalExecutions || totalStages} execution${(totalExecutions || totalStages) === 1 ? '' : 's'} across ${totalStages || totalExecutions} stage${(totalStages || totalExecutions) === 1 ? '' : 's'}. Full handoff and review history is below.`,
+                    badgeText: stageRows.length > stageAttemptsByKey.size ? 'loops' : 'history',
+                }));
+            }
+            if (story.childElementCount) {
+                panel.appendChild(story);
+            }
             const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
+            const packageSummary = document.createElement('div');
+            packageSummary.className = 'run-primary-package-summary';
+            const packageLabel = document.createElement('strong');
+            packageLabel.textContent = 'Package';
+            packageSummary.appendChild(packageLabel);
+            const packageCopy = document.createElement('span');
+            const observedPath = _protocolArtifactDisplayPath(artifact);
+            const expectedPath = primary.expected_path || _artifactDefinitionPath(definition);
+            const packagePath = observedPath || expectedPath || '';
+            const packageName = packagePath
+                ? String(packagePath).split('/').filter(Boolean).slice(-1)[0] || packagePath
+                : key;
+            packageCopy.textContent = [
+                key,
+                artifact.verification_state || artifact.state || '',
+                packageName ? `workspace folder ${packageName}` : '',
+                evidence ? 'release evidence available' : '',
+            ].filter(Boolean).join(' · ');
+            packageSummary.appendChild(packageCopy);
+            const moreDetails = document.createElement('details');
+            moreDetails.className = 'run-primary-package-details';
+            const moreDetailsSummary = document.createElement('summary');
+            moreDetailsSummary.textContent = 'Evidence and paths';
+            moreDetails.appendChild(moreDetailsSummary);
             if (evidence) {
-                panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence' }));
+                const evidenceRow = document.createElement('div');
+                evidenceRow.className = 'run-primary-evidence-detail';
+                const evidenceCopy = document.createElement('span');
+                evidenceCopy.textContent = [
+                    'Release evidence',
+                    evidence.verification_state || evidence.state || '',
+                    _compactRunText(_protocolArtifactDisplayPath(evidence) || '', 96),
+                ].filter(Boolean).join(' · ');
+                evidenceRow.appendChild(evidenceCopy);
+                const evidenceActions = document.createElement('div');
+                evidenceActions.className = 'run-primary-compact-actions';
+                const evidenceOpen = document.createElement('a');
+                evidenceOpen.href = API.protocolRunArtifactContentUrl(currentRun.run.protocol_run_id, evidence.artifact_key);
+                evidenceOpen.className = 'btn btn-sm';
+                evidenceOpen.textContent = 'Open evidence';
+                evidenceActions.appendChild(evidenceOpen);
+                const evidenceDownload = document.createElement('a');
+                evidenceDownload.href = API.protocolRunArtifactContentUrl(currentRun.run.protocol_run_id, evidence.artifact_key, { download: true });
+                evidenceDownload.className = 'btn btn-sm';
+                evidenceDownload.textContent = 'Download evidence';
+                evidenceActions.appendChild(evidenceDownload);
+                evidenceRow.appendChild(evidenceActions);
+                moreDetails.appendChild(evidenceRow);
+            }
+            moreDetails.appendChild(UI.renderMetadataGrid([
+                { label: 'Artifact key', value: key },
+                { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },
+                { label: 'Expected path', value: expectedPath || '-' },
+                { label: 'Observed path', value: observedPath || '-' },
+                { label: 'Verification', value: artifact.verification_state || artifact.state || '-' },
+            ], { compact: true }));
+            packageSummary.appendChild(moreDetails);
+            panel.appendChild(packageSummary);
+            if (includeRunControls) {
+                const controls = document.createElement('div');
+                controls.className = 'run-primary-control-bar';
+                const actionSpecs = _runActionSpecs().filter((spec) => spec.visible !== false);
+                controls.appendChild(_buildRunActionBar({ specs: actionSpecs }));
+                const lifecycleSpecs = _runLifecycleSpecs().filter((spec) => spec.visible !== false);
+                if (lifecycleSpecs.length) {
+                    const moreOptions = document.createElement('details');
+                    moreOptions.className = 'run-primary-more-options';
+                    const moreOptionsSummary = document.createElement('summary');
+                    moreOptionsSummary.textContent = 'More run options';
+                    moreOptions.appendChild(moreOptionsSummary);
+                    const row = document.createElement('div');
+                    row.className = 'editor-actions';
+                    lifecycleSpecs.forEach((item) => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = item.danger ? 'btn btn-danger' : 'btn';
+                        button.textContent = item.label;
+                        button.disabled = !item.enabled;
+                        button.addEventListener('click', () => _openRunLifecycleDialog(item));
+                        row.appendChild(button);
+                    });
+                    moreOptions.appendChild(row);
+                    controls.appendChild(moreOptions);
+                }
+                if (controls.childElementCount) {
+                    panel.appendChild(controls);
+                }
             }
             return panel;
         };
 
-        detailPanel.appendChild(buildRunFocusHero());
-        const primaryArtifactPanel = buildPrimaryArtifactPanel();
+        const normalizedRunStatus = String(currentRun.run?.status || '').trim().toLowerCase();
+        const primaryOwnsRunStory = !['queued', 'running'].includes(normalizedRunStatus);
+        const primaryArtifactPanel = buildPrimaryArtifactPanel({ includeRunControls: primaryOwnsRunStory });
         if (primaryArtifactPanel) {
             detailPanel.appendChild(primaryArtifactPanel);
+        }
+        if (!primaryArtifactPanel || !primaryOwnsRunStory) {
+            detailPanel.appendChild(buildRunFocusHero());
         }
 
         const stagePanel = document.createElement('div');
         stagePanel.className = 'run-stage-timeline';
         appendSectionTitle(stagePanel, 'Stages', 'Click a stage to see the work, outputs, and decisions for that step.');
         if (stageRows.length > stageAttemptsByKey.size) {
-            stagePanel.appendChild(UI.renderListRow({
-                label: 'Loop/attempt history',
-                sublabel: `${stageRows.length} stage executions across ${stageAttemptsByKey.size} declared stages. Send-backs and repeated attempts are shown in chronological handoff order below.`,
-                badgeText: 'attempts',
-            }));
+            const attemptNote = document.createElement('p');
+            attemptNote.className = 'quiet-note run-stage-attempt-note';
+            attemptNote.textContent = `${stageRows.length} executions across ${stageAttemptsByKey.size} stages; repeated attempts are shown in handoff order.`;
+            stagePanel.appendChild(attemptNote);
         }
         if (stageRows.length) {
             const stageValues = new Set(stageRows.map((item, index) => stageValueFor(item, index)));
@@ -8959,7 +10484,8 @@ function renderProtocolRuns(container) {
                 meta.textContent = [
                     stageAttemptLabel(stageItem),
                     previousAttempt ? 'previous attempt' : '',
-                    taskState || stageItem.status || 'pending',
+                    stageStatusLabel(stageItem),
+                    taskState ? `task ${taskState}` : '',
                     taskTarget ? `Agent ${taskTarget}` : '',
                     activeTaskState ? taskUpdate : '',
                     producedArtifacts.length ? `${producedArtifacts.length} output${producedArtifacts.length === 1 ? '' : 's'}` : '',
@@ -8988,7 +10514,17 @@ function renderProtocolRuns(container) {
                 missing: true,
             }));
         }
-        detailPanel.appendChild(stagePanel);
+        if (primaryArtifactPanel && primaryOwnsRunStory) {
+            const stageHistory = document.createElement('details');
+            stageHistory.className = 'run-stage-history-disclosure';
+            const summary = document.createElement('summary');
+            summary.textContent = `Stage history (${stageRows.length || stageAttemptsByKey.size})`;
+            stageHistory.appendChild(summary);
+            stageHistory.appendChild(stagePanel);
+            detailPanel.appendChild(stageHistory);
+        } else {
+            detailPanel.appendChild(stagePanel);
+        }
 
         const auditDetails = document.createElement('details');
         auditDetails.className = 'run-audit-disclosure';
@@ -9061,6 +10597,7 @@ function renderProtocolRuns(container) {
             currentIssues,
             lastRunEvent,
             issueKindFilter,
+            runViewFilter,
             runStatusFilter,
             runSearch,
             includeGenerated,
@@ -9082,6 +10619,7 @@ function renderProtocolRuns(container) {
         const response = await API.listProtocolRuns({
             limit,
             cursor: runPaginator ? runPaginator.cursor : 0,
+            status: runStatusFilter || (['completed', 'archived', 'deleted'].includes(runViewFilter) ? runViewFilter : ''),
             include_generated: includeGenerated ? '1' : '0',
         });
         runsListData = response || null;

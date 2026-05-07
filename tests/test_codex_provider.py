@@ -1,5 +1,6 @@
 """Tests for codex provider — command building, event parsing."""
 
+import asyncio
 import logging
 import sys
 import tempfile
@@ -796,67 +797,135 @@ def _failing_file_change_script() -> str:
     """)
 
 
+class _FakeCodexStdout:
+    def __init__(self, lines: list[tuple[float, bytes]]) -> None:
+        self._lines = list(lines)
+
+    async def readline(self) -> bytes:
+        if not self._lines:
+            return b""
+        delay, payload = self._lines.pop(0)
+        if delay:
+            await asyncio.sleep(delay)
+        return payload
+
+
+class _FakeCodexStderr:
+    async def read(self) -> bytes:
+        return b""
+
+
+class _FakeCodexProcess:
+    def __init__(self, lines: list[tuple[float, bytes]]) -> None:
+        self.stdout = _FakeCodexStdout(lines)
+        self.stderr = _FakeCodexStderr()
+        self.returncode: int | None = None
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+async def _run_with_fake_codex_process(
+    monkeypatch,
+    provider: CodexProvider,
+    progress: FakeProgress,
+    lines: list[tuple[float, bytes]],
+    *,
+    is_resume: bool,
+) -> RunResult:
+    proc = _FakeCodexProcess(lines)
+
+    async def fake_exec(*args, **kwargs):
+        del args, kwargs
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    return await provider._run_cmd(["codex", "exec", "test"], progress, is_resume=is_resume)
+
+
+_THREAD_STARTED_LINE = b'{"type":"thread.started","thread_id":"t-123"}\n'
+_DONE_LINE = b'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n'
+
+
 # -- _run_cmd timeout behaviour --
 
-async def test_timeout_non_resume():
+async def test_timeout_non_resume(monkeypatch):
     """Non-resume: 1.5s process, 1s timeout -> killed on first deadline."""
-    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    cfg = make_config(timeout_seconds=0.05, working_dir=Path(tempfile.gettempdir()))
     provider = CodexProvider(cfg)
 
-    def slow_cmd(delay: float) -> list[str]:
-        return [sys.executable, "-c", _slow_codex_script(delay)]
-
     progress1 = FakeProgress()
-    result1 = await provider._run_cmd(slow_cmd(1.5), progress1, is_resume=False)
+    result1 = await _run_with_fake_codex_process(
+        monkeypatch,
+        provider,
+        progress1,
+        [(0.2, _THREAD_STARTED_LINE), (0, _DONE_LINE)],
+        is_resume=False,
+    )
     assert result1.timed_out is True
     assert result1.returncode == 124
     extended_msgs = [u for u in progress1.updates if "this may take a moment" in u]
     assert len(extended_msgs) == 0
 
 
-async def test_timeout_resume_compaction_succeeds():
+async def test_timeout_resume_compaction_succeeds(monkeypatch):
     """Resume: 1.5s process, 1s timeout -> extends, finishes within 2s -> success."""
-    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    cfg = make_config(timeout_seconds=0.05, working_dir=Path(tempfile.gettempdir()))
     provider = CodexProvider(cfg)
 
-    def slow_cmd(delay: float) -> list[str]:
-        return [sys.executable, "-c", _slow_codex_script(delay)]
-
     progress2 = FakeProgress()
-    result2 = await provider._run_cmd(slow_cmd(1.5), progress2, is_resume=True)
+    result2 = await _run_with_fake_codex_process(
+        monkeypatch,
+        provider,
+        progress2,
+        [(0.06, _THREAD_STARTED_LINE), (0, _DONE_LINE)],
+        is_resume=True,
+    )
     assert result2.timed_out is False
     assert "done" in result2.text
     assert result2.provider_state_updates.get("thread_id") == "t-123"
     extended_msgs2 = [u for u in progress2.updates if "this may take a moment" in u]
     assert len(extended_msgs2) == 1
+    assert not any("compaction" in u.lower() for u in progress2.updates)
 
 
-async def test_timeout_resume_double_timeout():
+async def test_timeout_resume_double_timeout(monkeypatch):
     """Resume: 3s process, 1s timeout -> extends, still not done at 2s -> killed."""
-    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    cfg = make_config(timeout_seconds=0.05, working_dir=Path(tempfile.gettempdir()))
     provider = CodexProvider(cfg)
 
-    def slow_cmd(delay: float) -> list[str]:
-        return [sys.executable, "-c", _slow_codex_script(delay)]
-
     progress3 = FakeProgress()
-    result3 = await provider._run_cmd(slow_cmd(3), progress3, is_resume=True)
+    result3 = await _run_with_fake_codex_process(
+        monkeypatch,
+        provider,
+        progress3,
+        [(0.2, _THREAD_STARTED_LINE), (0, _DONE_LINE)],
+        is_resume=True,
+    )
     assert result3.timed_out is True
     assert result3.returncode == 124
     extended_msgs3 = [u for u in progress3.updates if "this may take a moment" in u]
     assert len(extended_msgs3) == 1
 
 
-async def test_timeout_fast_non_resume():
+async def test_timeout_fast_non_resume(monkeypatch):
     """Fast process: finishes before any timeout -> success."""
-    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    cfg = make_config(timeout_seconds=0.05, working_dir=Path(tempfile.gettempdir()))
     provider = CodexProvider(cfg)
 
-    def slow_cmd(delay: float) -> list[str]:
-        return [sys.executable, "-c", _slow_codex_script(delay)]
-
     progress4 = FakeProgress()
-    result4 = await provider._run_cmd(slow_cmd(0.1), progress4, is_resume=False)
+    result4 = await _run_with_fake_codex_process(
+        monkeypatch,
+        provider,
+        progress4,
+        [(0, _THREAD_STARTED_LINE), (0, _DONE_LINE)],
+        is_resume=False,
+    )
     assert result4.timed_out is False
     assert "done" in result4.text
 

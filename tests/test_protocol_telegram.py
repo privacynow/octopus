@@ -178,6 +178,7 @@ async def test_protocol_auto_command_generates_actionable_summary(monkeypatch):
             args=["auto", "Build", "a", "2D", "browser", "game", "with", "historical", "figures", "and", "playtesting"],
         )
 
+        assert "Designing an Auto Protocol workflow" in msg.replies[0]["text"]
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         assert "Focus:" in reply
@@ -222,9 +223,77 @@ async def test_protocol_auto_modify_latest_revises_existing_session(monkeypatch)
             args=["auto", "modify", "latest", "Add", "a", "UX", "reviewer", "before", "release"],
         )
 
+        assert "Updating the Auto Protocol draft" in msg.replies[0]["text"]
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         assert "Modify:" in reply
+
+
+async def test_protocol_improve_run_creates_auto_protocol_revision_from_run_context(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+        seen: dict[str, str] = {}
+
+        class _Client:
+            async def list_runs(self, **kwargs):
+                assert kwargs["limit"] == 10
+                return [
+                    ProtocolRunRecord(
+                        protocol_run_id="riskrun123456",
+                        protocol_id="risk-protocol",
+                        status="completed",
+                        current_stage_key="release",
+                    )
+                ]
+
+            async def get_run(self, run_id):
+                assert run_id == "riskrun123456"
+                detail = _run_detail(run_id=run_id, status="completed", stage_key="release")
+                detail.run.protocol_id = "risk-protocol"
+                detail.run.problem_statement = "Build a payments and onboarding risk engine."
+                return detail
+
+            async def create_protocol_auto_design_session(self, payload):
+                assert payload["mode"] == "revise"
+                assert payload["surface"] == "telegram"
+                assert payload["target_protocol_id"] == "risk-protocol"
+                assert payload["preferred_design_agent_id"] == "agent-1"
+                seen["requirement"] = payload["requirement_text"]
+                seen["constraints"] = payload["constraints_text"]
+                return _auto_session(
+                    requirement=payload["requirement_text"],
+                    target_protocol_id=payload["target_protocol_id"],
+                )
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol improve-run latest Add a routed UI and runtime manifest",
+            args=["improve-run", "latest", "Add", "a", "routed", "UI", "and", "runtime", "manifest"],
+        )
+
+        assert "Designing an improved protocol from that run" in msg.replies[0]["text"]
+        assert "Add a routed UI and runtime manifest" in seen["requirement"]
+        assert "Build a payments and onboarding risk engine" not in seen["requirement"]
+        assert "Build a payments and onboarding risk engine" in seen["constraints"]
+        assert "root octopus-runtime.json" in seen["constraints"]
+        reply = last_reply(msg)
+        assert "Auto Protocol" in reply
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
+        assert session["last_auto_protocol_session_id"] == "auto-1"
 
 
 async def test_protocol_auto_stages_callback_renders_generated_stage_view(monkeypatch):
@@ -598,9 +667,7 @@ async def test_protocol_artifacts_lists_downloadable_outputs(monkeypatch):
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert "Preview plan.md" in buttons
-        assert "Open plan.md" in buttons
-        assert "Send plan.md" in buttons
+        assert buttons == ["Open Run in Registry", "Preview plan.md", "Open plan.md", "Send plan.md"]
 
 
 async def test_protocol_artifacts_download_sends_requested_document(monkeypatch):
@@ -721,9 +788,66 @@ async def test_protocol_artifacts_callback_shows_action_buttons(monkeypatch):
             for row in msg.replies[-1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        assert "Preview plan.md" in buttons
-        assert "Open plan.md" in buttons
-        assert "Send plan.md" in buttons
+        assert buttons == ["Open Run in Registry", "Preview plan.md", "Open plan.md", "Send plan.md"]
+
+
+async def test_protocol_artifacts_highlights_runnable_package_actions(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        def _detail():
+            detail = _run_detail(run_id="run-1", version=2, stage_key="build")
+            detail.artifacts = [
+                SimpleNamespace(
+                    artifact_key="playable_package",
+                    verification_state="verified",
+                    state="available",
+                    exists=True,
+                    workspace_path="output",
+                    location="output",
+                    size_bytes=4096,
+                )
+            ]
+            return detail
+
+        class _Client:
+            async def get_run(self, run_id):
+                return _detail()
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol artifacts run-1",
+            args=["artifacts", "run-1"],
+        )
+
+        reply = last_reply(msg)
+        assert "Protocol artifacts" in reply
+        assert "Open app" in reply
+        assert "Contents" in reply
+        assert "Running app" not in reply
+        callbacks = get_callback_data_values(msg.replies[-1])
+        assert "protocol:runtime_start:run-1:1" in callbacks
+        assert "protocol:download:run-1:1" in callbacks
+        buttons = [
+            button.text
+            for row in msg.replies[-1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert buttons == ["Open Run in Registry", "Start app", "Send package"]
 
 
 async def test_protocol_artifacts_download_names_package_zip(monkeypatch):

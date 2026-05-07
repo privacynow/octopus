@@ -278,7 +278,7 @@ def test_resolve_bot_accepts_unique_display_name_alias(tmp_path: Path) -> None:
     assert bot.slug == "lift-and-shift-m1-bot"
 
 
-def test_start_bot_rebuilds_provider_image_before_start(tmp_path: Path) -> None:
+def test_start_bot_rebuilds_provider_image_before_start(tmp_path: Path, monkeypatch) -> None:
     env_dir = tmp_path / ".deploy" / "bots" / "example-bot"
     env_dir.mkdir(parents=True, exist_ok=True)
     (env_dir / ".env").write_text("BOT_PROVIDER=codex\n", encoding="utf-8")
@@ -286,11 +286,14 @@ def test_start_bot_rebuilds_provider_image_before_start(tmp_path: Path) -> None:
     docker = _ComposeDockerRunner()
     manager = OctopusManager(tmp_path, docker=docker)
     calls: list[str] = []
+    sleeps: list[float] = []
     manager.ensure_provider_image_ready = lambda provider, force=False: calls.append(f"image:{provider}")  # type: ignore[method-assign]
+    monkeypatch.setattr("app.octopus_cli.core.time.sleep", lambda seconds: sleeps.append(seconds))
 
     manager.start_bot("example-bot")
 
     assert calls == ["image:codex"]
+    assert sleeps == [3]
     assert docker.commands == [
         ("example-bot", "run", "--rm", "db-init"),
         ("example-bot", "up", "-d", "bot"),

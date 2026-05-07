@@ -157,6 +157,8 @@ Important indexes and constraints:
 | `agent_registry.protocol_runs` | Updated/status/org/protocol/entry-agent/root-conversation/origin-channel/blocked-code filters. |
 | `agent_registry.protocol_stage_executions` | Run lookup, routed task uniqueness, running lease and timeout sweeps. |
 | `agent_registry.protocol_artifacts` | Latest artifact by run/key. |
+| `agent_registry.protocol_artifact_snapshots` | Durable retained artifact package lookup by run/key and content hash. |
+| `agent_registry.workspace_cleanup_inventory` | Operator dry-run/execution observations for bot workspace cleanup. |
 | `agent_registry.protocol_idempotency` | One response per scoped action and idempotency key. |
 | `bot_content.skill_*` | Skill track/revision/file integrity and approval history. |
 
@@ -183,6 +185,9 @@ Key files:
 | `octopus_registry/ingress.py` | Operator-facing management bridge for skills, guidance, conversation settings, reset. |
 | `octopus_registry/management_client.py` | Registry-internal request/result relay to connected agents. |
 | `octopus_registry/artifact_paths.py` | Safe artifact path resolution for protocol and task artifact content. |
+| `octopus_registry/artifact_snapshots.py` | Registry-owned durable artifact package snapshots for file and directory artifacts. |
+| `app/runtime/artifact_runtime.py` | Bot-side supervisor for runnable protocol artifacts. Registry calls it through management requests; it starts/stops/fetches from processes inside the bot runtime. |
+| `app/runtime/workspace_hygiene.py` | Bot-side dry-run and confirmed cleanup for transient workspace files. |
 | `octopus_registry/ui_http.py` | UI shell routes, login/logout, static asset cache busting. |
 | `octopus_registry/ws.py` | WebSocket client/topic manager. |
 
@@ -198,8 +203,9 @@ Registry API families:
 | Management bridge | `/v1/agents/{agent_id}/catalog/skills...`, `/guidance/{provider}...`, conversation skill/settings/reset routes | Registry UI, future peer channels. |
 | Protocol authoring | `GET /v1/protocols`, `POST /v1/protocols`, `POST /v1/protocol-drafts`, `/v1/protocol-auto/sessions...`, parse/draft export/package export/package import/diff/validate/publish/archive | Registry UI, Telegram Auto Protocol commands. |
 | Protocol templates | `GET/POST /v1/protocol-templates` | Protocols UI. |
-| Protocol runs | `GET/POST /v1/protocol-runs`, issues, participants, artifacts, timeline, export, actions, rehearsal | Registry UI, Telegram protocol commands, SDK client. |
-| Usage/summary/approvals | `GET /v1/summary`, `GET /v1/usage`, `GET /v1/approvals` | Operations surfaces. |
+| Protocol runs | `GET/POST /v1/protocol-runs`, archive/restore/delete, issues, participants, artifacts, snapshots, timeline, export, actions, rehearsal | Registry UI, Telegram protocol commands, SDK client. |
+| Runnable artifacts | `/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime...`, `/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/...` | Registry UI, Telegram links, SDK client. |
+| Usage/summary/approvals/workspace cleanup | `GET /v1/summary`, `GET /v1/usage`, `GET /v1/approvals`, `/v1/admin/workspaces/cleanup...` | Operations surfaces. |
 
 The checked-in OpenAPI artifact is `docs/registry-openapi.json`. When registry
 route contracts change, regenerate and test it.
@@ -233,6 +239,19 @@ Runs UI and Telegram use that metadata to promote the user-facing output before
 supporting plans, reviews, and release evidence. The normal generated topology
 keeps the primary outcome stage second-last and uses one final adversarial
 acceptance stage that can send the work back to the outcome stage.
+
+Existing-run improvement is the same Auto Protocol path. Registry and Telegram
+build run-context requirement text from the selected run, then create a
+`revise` Auto Protocol session against that run's protocol id. There is no
+separate artifact patcher, run-specific generator, or Telegram-only protocol
+revision path.
+
+Auto Protocol surface parity is an architecture rule. Registry UI and Telegram
+must render the same session state, warnings, primary artifact contract, and
+available actions from the same Registry API records. Telegram may compress the
+presentation for chat, but it must not require users to memorize complex
+protocol command sequences when buttons, visible session ids, or short
+follow-up commands can carry the workflow.
 
 ### Registry Realtime
 
@@ -714,7 +733,9 @@ Artifact resolution rules:
   dashboard link, the same preview/open/download/copy affordance should be used.
 - Rehearsal text can be served even when no workspace file exists.
 - Protocol run export includes metadata and lineage. It should not silently
-  expose file contents except through explicit content routes.
+  expose file contents except through explicit content routes. Runtime
+  instances and runtime events are part of the run export so reviewer evidence,
+  health checks, starts/stops, and routed UI/API exercises are auditable.
 - Protocol package export is a definition-sharing path. It includes the
   protocol document and required skill package documents, not produced run
   artifacts.
@@ -839,6 +860,9 @@ UI consistency rules:
 - Expand detail inline under the selected row where the surface is list-based.
 - Use the same tab grammar for dense detail sections.
 - Use the same artifact action row everywhere artifacts are referenced.
+- Runnable artifact controls must extend the same artifact row. Do not create a
+  separate artifact browser, Telegram-only runtime flow, or Registry process
+  runner.
 - Avoid clickable-looking pills for non-actions.
 - Browser actions that mutate state must call `/v1/*` APIs through `api.js`.
 - Standard protocol authoring must not render operator/internal controls.
@@ -903,6 +927,11 @@ Protocol Telegram buttons are presentation affordances only. Button callbacks
 resolve runs and artifacts through `octopus_sdk.protocols.ProtocolService` and
 the same registry-backed ports used by slash commands; they must not introduce a
 Telegram-only protocol execution, artifact, or run-control path.
+
+Telegram protocol flows must be verified as human-usable chat workflows, not
+only as command parser coverage. Auto Protocol messages should explain the
+proposal, blockers, primary outcome, and next actions in the message itself,
+with buttons for common actions whenever the platform supports them.
 
 `/protocol export` is a run export command. Protocol package export/import are
 Registry authoring workflows because they need review UI, skill target mapping,
@@ -969,8 +998,14 @@ Verification expectations for UI architecture work:
 
 - Test static contracts first.
 - Run focused route/API/unit tests for changed components.
+- Use `bash scripts/test/test_focused.sh <tier>` for local iteration tiers:
+  `unit-fast`, `registry-contract`, `bot-runtime-focused`,
+  `browser-focused`, `integration-focused`, or `full`.
 - Run Playwright for the affected browser flows.
 - Verify in real Safari at desktop and narrow widths before calling UI work done.
+- For Auto Protocol changes, also verify the Telegram Web flow in real Safari:
+  generate, inspect, modify or reopen, apply/publish/run when ready, and follow
+  run/artifact links.
 - When a live deployed UI looks wrong, hard-refresh Safari with macOS-specific
   refresh behavior before deciding whether code or cache is at fault.
 
@@ -1107,6 +1142,7 @@ product pressure and should be improved without creating parallel paths.
 | Registry UI size | Large vanilla JS components, especially protocol authoring/runs. | Consolidate into shared primitives and keep one interaction grammar. |
 | Tasks vs runs | Tasks are real delegation objects, but protocol stages also use tasks. | Keep task substrate; render user-facing lineage consistently. |
 | Artifact availability | Content can be referenced from tasks, runs, stages, conversations, and dashboards. | One artifact row/action component and one backend content contract. |
+| Runnable artifacts | Interactive outputs need UI/API access, logs, stop/delete semantics, and zip download without SSH. | Registry owns URLs and persistence; bot runtime owns processes through management requests; the artifact package remains the stored source of truth. |
 | Protocol authoring density | Stage editing can become cognitively heavy. | Progressive inline stage editor with section tabs and state preservation. |
 | Skills naming | UI says skills, runtime says skills, routing says routing skills. | Keep nouns clear and avoid duplicate lists. |
 | Operator-only controls | Internal protocol knobs are dangerous in normal authoring. | Enforce in API/store and omit from default DOM. |

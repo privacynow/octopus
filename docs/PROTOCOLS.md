@@ -95,6 +95,12 @@ protocol and choose `Improve with Auto Protocol`. Drafts are changed only after
 confirmation. Published versions are immutable; Auto Protocol prepares a draft
 revision that affects only future runs after publish.
 
+Auto Protocol can also improve from an existing run. Open `Work -> Runs`, select
+the run, and choose `Improve this run`. Octopus includes the run objective,
+status, primary artifact, and produced artifacts as context, then creates a
+normal Auto Protocol revision of the underlying protocol. This is the path to
+bring an older run up to the current bar without manually patching the artifact.
+
 The generated result is not a separate format. It is the same canonical
 protocol document used by manual authoring, export/import, publish, and run
 execution.
@@ -116,6 +122,40 @@ Every Auto Protocol declares primary artifact metadata. Runs UI and Telegram
 promote that artifact first, then show supporting plans, reviews, and release
 evidence below it. Users should not have to hunt through intermediate review
 files to find the thing they asked Octopus to produce.
+
+The default Runs page is recent-first for meaningful Registry and Telegram runs.
+Use the view filters for attention, running, completed, outcome-bearing, or
+surface-specific runs; use the generated/audit toggle only when inspecting
+rehearsal, smoke, or internal generated records.
+
+### Auto Protocol Verification
+
+Treat Registry and Telegram as peer product surfaces for Auto Protocol. A
+change is not done just because the SDK compiler and Registry panel work. The
+same session lifecycle must be usable from Telegram without memorizing hidden
+commands or copying raw ids between screens.
+
+Minimum human verification:
+
+1. Generate a protocol from Registry and inspect the summary, packages, stages,
+   warnings, primary artifact, and available actions.
+2. Generate a protocol from Telegram with `/protocol auto <requirement>` and
+   confirm the returned card is readable, explains the proposed workflow, shows
+   the primary outcome, and offers obvious next actions.
+3. Modify or re-open the Telegram session with visible controls or short
+   follow-up commands shown in the message. A normal user should not need to
+   remember a complex protocol command grammar.
+4. Apply, publish, and run from the surface being tested when validation and
+   assignments are ready, or show clear blockers and next steps when they are
+   not ready.
+5. Open the run and confirm the primary artifact is promoted before supporting
+   plans, reviews, logs, and evidence.
+6. Verify Registry desktop, Registry narrow, Telegram Web, and Telegram links in
+   real Safari for UI-impacting changes.
+
+If Registry and Telegram disagree about readiness, actions, warnings, stage
+shape, or primary artifact prominence, treat that as a product defect rather
+than a documentation issue.
 
 ## Review Loop Pattern
 
@@ -219,6 +259,39 @@ For workspace file artifacts:
 The run page should show declared and produced artifacts clearly. Produced
 artifacts should offer preview, open, download, copy path, or package browsing
 where the host can resolve them.
+
+When a produced workspace artifact is observed, Octopus snapshots the available
+file or directory into Registry-managed artifact storage. Users can also click
+`Retain package` from the run artifact row. Content routes prefer the live
+workspace path, then the retained package, then an honest unavailable state.
+This lets authors clean bot workspaces without breaking important outcomes.
+
+### Runnable artifacts
+
+If the expected output is an interactive product, the protocol should make that
+explicit. Examples include browser games, analytics SPAs, Java or Python
+services, and risk engines with a UI over public APIs.
+
+Runnable package artifacts should include `octopus-runtime.json` at the package
+root. Static browser packages may also be recognized from a root `index.html`.
+Process-backed packages should declare:
+
+- `runtime_kind`: `node`, `python`, `java`, `binary`, or `process`
+- `start_command`: the command the bot runtime runs inside the package
+- `ui_path`, `health_path`, and `api_base_path`
+- a docs endpoint
+- smoke-test steps for reviewers
+
+Registry owns the user-facing URL, auth, status, and lifecycle. The bot runtime
+owns the process. Users should be able to start/open the app, exercise the UI or
+API, inspect logs/status, stop the runtime, and still download the artifact as a
+zip package.
+
+Final acceptance for a runnable primary artifact is evidence-gated. If the
+primary artifact declares `octopus-runtime.json`, Octopus expects runtime start
+evidence, a healthy runtime check, and at least one routed UI/API exercise event
+before the acceptance stage can complete successfully. This keeps a reviewer
+from accepting a runnable system only because files exist.
 
 ## Starting A Run
 

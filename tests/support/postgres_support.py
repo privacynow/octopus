@@ -1,4 +1,4 @@
-"""Postgres test harness (Phase 12): one DB per worker, truncate between tests.
+"""Postgres test harness (Phase 12): one container per run, one DB per worker.
 
 SAFETY: Truncation and schema changes must only run against a Postgres instance
 that the harness started (test Docker container). We never use BOT_DATABASE_URL
@@ -6,9 +6,10 @@ or TEST_POSTGRES_BASE_URL for destructive operations, to avoid touching dev/
 staging/production. When Docker is available we start a dedicated container;
 when it is not, Postgres tests are skipped.
 
-Run isolation: Container names and ports include a run-scoped id (see get_run_id)
-so parallel pytest invocations (e.g. two developers or two branches) do not
-kill each other's containers or bind to the same ports.
+Run isolation: The container name and port include a run-scoped id (see
+get_run_id), so parallel pytest invocations do not kill each other's containers
+or bind to the same ports. Workers share the container but use separate
+databases.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -24,10 +26,10 @@ from psycopg import connect
 
 from app.db.postgres_init import run_init
 
-# Test-only container: prefix + worker + run_id for name; base port + worker offset + run offset for port.
+# Test-only container: prefix + run_id for name; base port + run offset for port.
 TEST_POSTGRES_CONTAINER_PREFIX = "telegram_bot_test_pg"
 TEST_POSTGRES_BASE_PORT = 15432
-# Max port offset so base + worker_offset + run_offset stays < 65536 (worker_offset at most ~10).
+# Max port offset so base + run_offset stays < 65536.
 _TEST_PORT_RUN_RANGE = 40000
 TEST_POSTGRES_IMAGE = "postgres:16-alpine"
 TEST_POSTGRES_USER = "bot"
@@ -66,89 +68,111 @@ def get_run_id() -> str:
 
 
 def docker_available() -> bool:
-    """True if Docker is available and we can run containers."""
-    try:
-        r = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-        return r.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
-def _worker_index(worker_id: str) -> int:
-    """Numeric worker index for port offset (gw0->0, gw1->1, master->0)."""
-    if worker_id == "master":
-        return 0
-    if worker_id.startswith("gw"):
+    """True if Docker is installed and reachable; fail loudly on daemon errors."""
+    last_error = ""
+    for attempt in range(3):
         try:
-            return int(worker_id[2:])
-        except ValueError:
-            pass
-    return 0
+            r = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False
+        except subprocess.TimeoutExpired:
+            last_error = "docker info timed out"
+        else:
+            if r.returncode == 0:
+                return True
+            stderr = (r.stderr or "").strip() or "(no stderr)"
+            last_error = f"docker info exited {r.returncode}: {stderr}"
+        if attempt < 2:
+            time.sleep(1.0)
+    raise RuntimeError(
+        f"docker info failed while checking test Postgres availability after 3 attempts: "
+        f"{last_error or 'unknown Docker error'}"
+    )
 
 
-def _worker_port(worker_id: str, run_id: str) -> int:
-    """Distinct port per worker and per run. Run offset uses hashlib so it is stable across processes."""
-    worker_idx = _worker_index(worker_id)
+def _run_port(run_id: str) -> int:
+    """Run-scoped port."""
     run_offset = (
         int(hashlib.sha256(run_id.encode()).hexdigest()[:8], 16) % _TEST_PORT_RUN_RANGE
     )
-    return TEST_POSTGRES_BASE_PORT + worker_idx + run_offset
+    return TEST_POSTGRES_BASE_PORT + run_offset
 
 
-def _container_name(worker_id: str, run_id: str) -> str:
-    """Unique container name for this worker and run (safe for parallel pytest invocations)."""
-    safe_worker = worker_id.replace("-", "_")
+def _container_name(run_id: str) -> str:
+    """Unique container name for this run."""
     safe_run = run_id.replace("-", "_")[:16]
-    return f"{TEST_POSTGRES_CONTAINER_PREFIX}_{safe_worker}_{safe_run}"
+    return f"{TEST_POSTGRES_CONTAINER_PREFIX}_{safe_run}"
 
 
-def start_test_postgres_container(worker_id: str = "master", run_id: str | None = None) -> str | None:
+def start_test_postgres_container(run_id: str | None = None) -> str | None:
     """Start a test-only Postgres container. Returns base URL or None only when Docker is unavailable.
 
     When Docker is available but container start or readiness fails, raises RuntimeError (P1:
-    do not treat startup failures as skips). worker_id and run_id determine container name and
-    port so xdist workers and parallel pytest runs do not collide (P2).
+    do not treat startup failures as skips). run_id determines container name and port; xdist
+    workers share the container and use separate databases.
     """
     if not docker_available():
         return None
     rid = run_id or get_run_id()
-    container_name = _container_name(worker_id, rid)
-    port = _worker_port(worker_id, rid)
-    # Remove any leftover container a previous crash (same run only)
-    subprocess.run(
-        ["docker", "rm", "-f", container_name],
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-    r = subprocess.run(
-        [
-            "docker",
-            "run",
-            "-d",
-            "--name", container_name,
-            "-p", f"127.0.0.1:{port}:5432",
-            "-e", f"POSTGRES_USER={TEST_POSTGRES_USER}",
-            "-e", f"POSTGRES_PASSWORD={TEST_POSTGRES_PASSWORD}",
-            "-e", f"POSTGRES_DB={TEST_POSTGRES_DB}",
-            TEST_POSTGRES_IMAGE,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    if r.returncode != 0:
-        stderr = (r.stderr or "").strip() or "(no stderr)"
-        raise RuntimeError(
-            f"Postgres test container failed to start (docker run exited {r.returncode}). "
-            f"Container name: {container_name}. stderr: {stderr}"
+    container_name = _container_name(rid)
+    port = _run_port(rid)
+    lock_path = Path(tempfile.gettempdir()) / f"{container_name}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_path.open("a+") as lock_file:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        status = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{.State.Running}}",
+                container_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
+        if status.returncode != 0 or (status.stdout or "").strip() != "true":
+            subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            r = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "-d",
+                    "--name", container_name,
+                    "-p", f"127.0.0.1:{port}:5432",
+                    "-e", f"POSTGRES_USER={TEST_POSTGRES_USER}",
+                    "-e", f"POSTGRES_PASSWORD={TEST_POSTGRES_PASSWORD}",
+                    "-e", f"POSTGRES_DB={TEST_POSTGRES_DB}",
+                    TEST_POSTGRES_IMAGE,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if r.returncode != 0:
+                stderr = (r.stderr or "").strip() or "(no stderr)"
+                raise RuntimeError(
+                    f"Postgres test container failed to start (docker run exited {r.returncode}). "
+                    f"Container name: {container_name}. stderr: {stderr}"
+                )
     base_url = f"postgresql://{TEST_POSTGRES_USER}:{TEST_POSTGRES_PASSWORD}@127.0.0.1:{port}/{TEST_POSTGRES_DB}"
     # Wait for Postgres to accept connections
     for attempt in range(50):
@@ -158,21 +182,62 @@ def start_test_postgres_container(worker_id: str = "master", run_id: str | None 
             return base_url
         except Exception:
             time.sleep(0.5)
-    stop_test_postgres_container(worker_id, rid)
+    stop_test_postgres_container(rid)
     raise RuntimeError(
         f"Postgres test container started but did not accept connections within ~25s. "
         f"Container: {container_name}, port: {port}. Check docker logs {container_name}."
     )
 
 
-def stop_test_postgres_container(worker_id: str = "master", run_id: str | None = None) -> None:
-    """Stop and remove the test Postgres container for this worker/run. Idempotent."""
+def stop_test_postgres_container(run_id: str | None = None) -> None:
+    """Stop and remove the test Postgres container for this run. Idempotent."""
     rid = run_id or get_run_id()
-    container_name = _container_name(worker_id, rid)
+    container_name = _container_name(rid)
     subprocess.run(
         ["docker", "rm", "-f", container_name],
         capture_output=True,
         timeout=15,
+        check=False,
+    )
+
+
+def stop_test_postgres_containers_for_run(run_id: str) -> None:
+    """Best-effort cleanup for every worker container owned by a pytest run."""
+    safe_run = str(run_id or "").replace("-", "_")[:16]
+    if not safe_run:
+        return
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--format",
+                "{{.Names}}",
+                "--filter",
+                f"name={TEST_POSTGRES_CONTAINER_PREFIX}_",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return
+    if result.returncode != 0:
+        return
+    names = [
+        line.strip()
+        for line in (result.stdout or "").splitlines()
+        if line.strip().startswith(f"{TEST_POSTGRES_CONTAINER_PREFIX}_")
+        and line.strip().endswith(f"_{safe_run}")
+    ]
+    if not names:
+        return
+    subprocess.run(
+        ["docker", "rm", "-f", *names],
+        capture_output=True,
+        timeout=30,
         check=False,
     )
 
@@ -207,63 +272,83 @@ def create_test_database(base_url: str, db_name: str) -> None:
         conn.close()
 
 
+_RUNTIME_TABLES = (
+    "bot_runtime.control_plane_commands",
+    "bot_runtime.deferred_notifications",
+    "bot_runtime.work_items",
+    "bot_runtime.worker_heartbeats",
+    "bot_runtime.updates",
+    "bot_runtime.sessions",
+    "bot_runtime.usage_log",
+    "bot_runtime.user_access",
+)
+_REGISTRY_TABLES = (
+    "agent_registry.deliveries",
+    "agent_registry.events",
+    "agent_registry.routed_tasks",
+    "agent_registry.protocol_transitions",
+    "agent_registry.protocol_artifacts",
+    "agent_registry.protocol_stage_executions",
+    "agent_registry.protocol_run_participants",
+    "agent_registry.protocol_runs",
+    "agent_registry.protocol_definition_versions",
+    "agent_registry.protocol_definitions",
+    "agent_registry.conversations",
+    "agent_registry.agents",
+    "agent_registry.skills_override",
+    "agent_registry.meta",
+)
+_CONTENT_TABLES = (
+    "bot_content.skill_files",
+    "bot_content.skill_approval_records",
+    "bot_content.provider_guidance_approval_records",
+    "bot_content.skill_revisions",
+    "bot_content.provider_guidance_revisions",
+    "bot_content.skill_tracks",
+    "bot_content.provider_guidance_tracks",
+    "bot_content.skill_namespaces",
+)
+_CREDENTIAL_TABLES = ("bot_credentials.credentials",)
+
+
+def _truncate_tables(conn, tables: tuple[str, ...]) -> None:
+    if not tables:
+        return
+    with conn.cursor() as cur:
+        cur.execute(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE")
+    conn.commit()
+
+
+def truncate_all_test_tables(conn) -> None:
+    """Reset every test-owned schema group with one DB round trip."""
+    _truncate_tables(
+        conn,
+        _RUNTIME_TABLES + _REGISTRY_TABLES + _CONTENT_TABLES + _CREDENTIAL_TABLES,
+    )
+
+
 def truncate_runtime_tables(conn) -> None:
     """Truncate bot_runtime tables used by runtime and transport tests.
 
     Must only be called for connections to the harness-started test Postgres container,
     never for dev/staging/production (see module docstring).
     """
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE bot_runtime.control_plane_commands RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.deferred_notifications CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.work_items CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.worker_heartbeats CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.updates CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.sessions CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.usage_log RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE bot_runtime.user_access RESTART IDENTITY CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _RUNTIME_TABLES)
 
 
 def truncate_registry_tables(conn) -> None:
     """Truncate registry tables in the test schema. Safe only for harness-owned DBs."""
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE agent_registry.deliveries RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.events RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.routed_tasks RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_transitions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_artifacts RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_stage_executions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_run_participants RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_runs RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_definition_versions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.protocol_definitions RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.conversations RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.agents RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.skills_override RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE agent_registry.meta RESTART IDENTITY CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _REGISTRY_TABLES)
 
 
 def truncate_content_tables(conn) -> None:
     """Reset the dedicated content schema in the test database."""
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE bot_content.skill_files CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_approval_records CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_approval_records CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_revisions CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_revisions CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_tracks CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_tracks CASCADE")
-        cur.execute("TRUNCATE TABLE bot_content.skill_namespaces CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _CONTENT_TABLES)
 
 
 def truncate_credential_tables(conn) -> None:
     """Reset the dedicated credential schema in the test database."""
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE bot_credentials.credentials CASCADE")
-    conn.commit()
+    _truncate_tables(conn, _CREDENTIAL_TABLES)
 
 
 def init_test_db(conn) -> list[str]:

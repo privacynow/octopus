@@ -42,6 +42,9 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
     ProtocolScenarioRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactSnapshotRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
     ProtocolTransitionRecord,
 )
 
@@ -616,6 +619,32 @@ class AbstractRegistryStore(Protocol):
     def cleanup_workspace_data(self) -> dict[str, object]:
         """Remove workspace work records while preserving registered agents and catalog content."""
 
+    def save_workspace_cleanup_inventory(
+        self,
+        *,
+        inventory_id: str,
+        agent_id: str,
+        workspace_ref: str = "",
+        protocol_run_id: str = "",
+        scan_status: str = "completed",
+        file_count: int = 0,
+        total_bytes: int = 0,
+        retained_bytes: int = 0,
+        transient_bytes: int = 0,
+        unknown_bytes: int = 0,
+        summary: Mapping[str, object] | None = None,
+        access: ProtocolAccessContextRecord,
+    ) -> dict[str, object]:
+        """Persist a workspace cleanup dry-run or execution observation."""
+
+    def get_workspace_cleanup_inventory(
+        self,
+        inventory_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> dict[str, object] | None:
+        """Return one workspace cleanup observation."""
+
     def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         """Return currently pending conversation approvals in UI-ready form with offset-based pagination."""
 
@@ -891,6 +920,32 @@ class AbstractRegistryStore(Protocol):
     ) -> list[ProtocolArtifactRecord]:
         """Return artifact history for one run."""
 
+    def get_protocol_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactSnapshotRecord | None:
+        """Return the current durable snapshot for one run artifact."""
+
+    def save_protocol_artifact_snapshot(
+        self,
+        snapshot: ProtocolArtifactSnapshotRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactSnapshotRecord:
+        """Persist a durable artifact snapshot record."""
+
+    def delete_protocol_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactSnapshotRecord:
+        """Mark a durable artifact snapshot deleted."""
+
     def get_protocol_run_timeline(
         self,
         run_id: str,
@@ -898,6 +953,41 @@ class AbstractRegistryStore(Protocol):
         access: ProtocolAccessContextRecord,
     ) -> list[ProtocolTransitionRecord]:
         """Return transition history for one run."""
+
+    def get_protocol_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord | None:
+        """Return the current runtime instance for one run artifact."""
+
+    def save_protocol_artifact_runtime(
+        self,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord:
+        """Persist runtime instance state for one run artifact."""
+
+    def append_protocol_artifact_runtime_event(
+        self,
+        event: ProtocolArtifactRuntimeEventRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeEventRecord:
+        """Append a runtime lifecycle/audit event for one artifact."""
+
+    def list_protocol_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        """Return runtime lifecycle/audit events for one artifact."""
 
     def export_protocol_run(
         self,
@@ -918,6 +1008,33 @@ class AbstractRegistryStore(Protocol):
         expected_version: int | None = None,
     ) -> ProtocolRunMutationRecord:
         """Apply one idempotent operator action to a protocol run."""
+
+    def archive_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ) -> ProtocolRunMutationRecord:
+        """Archive one inactive protocol run while preserving audit and retained artifacts."""
+
+    def restore_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ) -> ProtocolRunMutationRecord:
+        """Restore one archived protocol run to its previous terminal state."""
+
+    def delete_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ) -> ProtocolRunMutationRecord:
+        """Soft-delete one terminal or archived protocol run."""
 
     def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
         """Sweep protocol maintenance work such as overdue timeouts."""

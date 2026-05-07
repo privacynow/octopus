@@ -360,6 +360,12 @@ def _protocol_artifact_links(runtime: TelegramRuntime, registry_url: str, run_id
             registry_url=registry_url,
             browse=True,
         ) if telegram_protocols.protocol_artifact_is_package(artifact) else "",
+        "runtime": telegram_protocols.protocol_artifact_runtime_url(
+            runtime,
+            run_id,
+            artifact_key,
+            registry_url=registry_url,
+        ) if telegram_protocols.protocol_artifact_is_package(artifact) else "",
         "download": telegram_protocols.protocol_artifact_url(
             runtime,
             run_id,
@@ -466,6 +472,7 @@ async def _send_protocol_artifact_preview(
         artifact_label=telegram_protocols.protocol_artifact_human_label(artifact),
         preview_link=preview_link,
         open_link=open_link,
+        runtime_link=links.get("runtime", ""),
         download_link=links.get("download", ""),
         artifact_ref=str(artifact_ref or ""),
         open_label=open_label,
@@ -1155,6 +1162,9 @@ async def cmd_protocol(
             if not change_request:
                 await update.effective_message.reply_text("Usage: /protocol auto modify latest|<session_id> <change request>")
                 return
+            await update.effective_message.reply_text(
+                "Updating the Auto Protocol draft. I will post the revised workflow here when planning finishes."
+            )
             try:
                 auto_session = await client.revise_protocol_auto_design_session(
                     session_id,
@@ -1194,6 +1204,9 @@ async def cmd_protocol(
             await update.effective_message.reply_text("Usage: /protocol auto <requirement>")
             return
         session_state = telegram_session_io.load(runtime, event.chat_id)
+        await update.effective_message.reply_text(
+            "Designing an Auto Protocol workflow. I will post the proposed stages, blockers, and actions here when planning finishes."
+        )
         try:
             auto_session = await client.create_protocol_auto_design_session({
                 "mode": "create",
@@ -1205,6 +1218,42 @@ async def cmd_protocol(
             })
         except RegistryClientError as exc:
             await update.effective_message.reply_text(f"Failed to generate the protocol. {exc}")
+            return
+        telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=auto_session.session_id)
+        await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
+        return
+    if sub in {"improve-run", "improve_run"}:
+        if len(args) < 3:
+            await update.effective_message.reply_text("Usage: /protocol improve-run latest|<run id|recent index> <change request>")
+            return
+        run_ref = str(args[1] or "").strip()
+        change_request = " ".join(args[2:]).strip()
+        if not run_ref or not change_request:
+            await update.effective_message.reply_text("Usage: /protocol improve-run latest|<run id|recent index> <change request>")
+            return
+        try:
+            detail = await telegram_protocols.resolve_protocol_run_ref(protocol_service, run_ref)
+            protocol_id = str(getattr(detail.run, "protocol_id", "") or "").strip()
+            if not protocol_id:
+                await update.effective_message.reply_text("That run does not have a protocol id to improve.")
+                return
+            await update.effective_message.reply_text(
+                "Designing an improved protocol from that run. I will post the proposed workflow here when planning finishes."
+            )
+            auto_session = await client.create_protocol_auto_design_session({
+                "mode": "revise",
+                "surface": "telegram",
+                "target_protocol_id": protocol_id,
+                "requirement_text": telegram_protocols.protocol_run_improvement_requirement(detail, change_request),
+                "constraints_text": telegram_protocols.protocol_run_improvement_constraints(detail),
+                "preferred_design_agent_id": agent_id,
+                "chat_ref": telegram_conversation_ref(runtime.config, event.chat_id),
+            })
+        except KeyError:
+            await update.effective_message.reply_text(f"Unknown protocol run: {run_ref}")
+            return
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to improve the run. {exc}")
             return
         telegram_protocols.persist_auto_protocol_session_ref(runtime, chat_id=event.chat_id, session_id=auto_session.session_id)
         await _send_auto_protocol_session(update.effective_message, auto_session, runtime, registry_url)
@@ -1434,6 +1483,49 @@ async def cmd_protocol(
         )
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
+    if sub in {"archive", "restore", "delete"}:
+        if len(args) < 2:
+            await update.effective_message.reply_text(f"Usage: /protocol {sub} <run> [reason]")
+            return
+        confirmation = len(args) >= 3 and str(args[2] or "").strip().lower() == "confirm"
+        reason_parts = args[3:] if confirmation else args[2:]
+        reason = " ".join(str(part).strip() for part in reason_parts if str(part).strip()).strip()
+        if sub == "delete" and not confirmation:
+            await update.effective_message.reply_text("Usage: /protocol delete <run> confirm [reason]")
+            return
+        try:
+            detail = await telegram_protocols.resolve_protocol_run_ref(protocol_service, str(args[1] or ""))
+            run_id = detail.run.protocol_run_id
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
+            return
+        except KeyError:
+            await update.effective_message.reply_text("Run not found. Use /protocol recent, then repeat the action with a number.")
+            return
+        try:
+            if sub == "archive":
+                result = await protocol_service.archive_run(run_id, reason=reason)
+            elif sub == "restore":
+                result = await protocol_service.restore_run(run_id, reason=reason)
+            else:
+                result = await protocol_service.delete_run(run_id, reason=reason, confirm="DELETE")
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to update the protocol run lifecycle. {exc}")
+            return
+        run = result.run
+        if run is None:
+            await update.effective_message.reply_text("Protocol lifecycle action completed without a refreshed run payload.")
+            return
+        if str(run.status or "") in {"completed", "failed", "cancelled", "archived", "deleted"}:
+            telegram_protocols.discard_protocol_run_watch(runtime, chat_id=event.chat_id, run_id=run.protocol_run_id)
+        rendered = telegram_presenters.protocol_run_updated_message(
+            run_id=run.protocol_run_id,
+            status=str(run.status or ""),
+            current_stage=str(run.current_stage_key or "n/a"),
+            deep_link=telegram_protocols.protocol_run_url(runtime, run.protocol_run_id, registry_url=registry_url),
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
     rendered = telegram_presenters.protocol_usage_message()
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
@@ -1558,6 +1650,54 @@ async def handle_protocol_callback(runtime: TelegramRuntime, event, query) -> No
         return
     if action == "download":
         await _send_protocol_artifact_download(message, protocol_service, run_ref, artifact_ref)
+        return
+    if action in {"runtime_start", "runtime_stop", "runtime_status"}:
+        if not artifact_ref:
+            await message.reply_text("Choose an artifact first.")
+            return
+        try:
+            detail = await telegram_protocols.resolve_protocol_run_ref(protocol_service, run_ref or "latest")
+            artifact = telegram_protocols.resolve_protocol_artifact_ref(detail, artifact_ref)
+            artifact_key = str(getattr(artifact, "artifact_key", "") or "").strip()
+            if action == "runtime_start":
+                runtime_result = await protocol_service.start_artifact_runtime(detail.run.protocol_run_id, artifact_key)
+                status = str(runtime_result.status or "")
+                result_message = runtime_result.message
+            elif action == "runtime_stop":
+                runtime_result = await protocol_service.stop_artifact_runtime(detail.run.protocol_run_id, artifact_key)
+                status = str(runtime_result.status or "")
+                result_message = runtime_result.message
+            else:
+                health = await protocol_service.get_artifact_runtime_health(detail.run.protocol_run_id, artifact_key)
+                status = str(health.status or "")
+                result_message = health.message
+        except RegistryClientError as exc:
+            await message.reply_text(f"Artifact app action failed. {exc}")
+            return
+        except KeyError:
+            await message.reply_text("Run or artifact not found. Use /protocol recent and choose an artifact.")
+            return
+        rendered = telegram_presenters.protocol_artifact_runtime_message(
+            run_id=detail.run.protocol_run_id,
+            artifact_label=telegram_protocols.protocol_artifact_human_label(artifact),
+            status=status,
+            message=result_message,
+            runtime_link=telegram_protocols.protocol_artifact_runtime_url(
+                runtime,
+                detail.run.protocol_run_id,
+                artifact_key,
+                registry_url=registry_url,
+            ),
+            package_link=telegram_protocols.protocol_artifact_url(
+                runtime,
+                detail.run.protocol_run_id,
+                artifact_key,
+                registry_url=registry_url,
+                download=True,
+            ),
+            artifact_ref=str(artifact_ref or ""),
+        )
+        await message.reply_text(rendered.text, **rendered.kwargs())
         return
     if action == "export":
         await _send_protocol_export(message, protocol_service, run_ref)

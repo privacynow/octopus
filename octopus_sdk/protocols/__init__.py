@@ -15,6 +15,7 @@ from .launch import (
 )
 from .ports import (
     ProtocolArtifactAccessPort,
+    ProtocolArtifactRuntimePort,
     ProtocolAuthoringPort,
     ProtocolAutoDesignModelPort,
     ProtocolAutoDesignSessionPort,

@@ -872,6 +872,7 @@ window.UI = (() => {
         openHref = '',
         browseHref = '',
         downloadHref = '',
+        downloadLabel = 'Download',
         copyPathText = '',
         available = true,
         unavailableReason = '',
@@ -935,7 +936,7 @@ window.UI = (() => {
             const downloadLink = document.createElement('a');
             downloadLink.href = String(downloadHref || '').trim();
             downloadLink.className = 'btn btn-sm';
-            downloadLink.textContent = 'Download';
+            downloadLink.textContent = downloadLabel || 'Download';
             downloadLink.addEventListener('click', stop);
             actionRow.appendChild(downloadLink);
         }

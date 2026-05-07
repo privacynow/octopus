@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import mimetypes
+import base64
 import copy
-from collections.abc import Awaitable, Callable
+import json
+import re
+from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+import uuid
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -14,6 +20,10 @@ from pydantic import ValidationError
 from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
+    ProtocolArtifactRuntimeManifestRecord,
     ProtocolAutoDesignModelRequestRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
@@ -37,7 +47,25 @@ from octopus_sdk.protocols import (
     protocol_package_required_skill_names,
     protocol_package_to_text,
 )
-from octopus_sdk.registry.management import DesignAutoProtocolRequest, DesignAutoProtocolResult
+from octopus_sdk.registry.management import (
+    ArtifactRuntimeFetchRequest,
+    ArtifactRuntimeFetchResult,
+    ArtifactRuntimeHealthRequest,
+    ArtifactRuntimeHealthResult,
+    ArtifactRuntimeLogsRequest,
+    ArtifactRuntimeLogsResult,
+    DesignAutoProtocolRequest,
+    DesignAutoProtocolResult,
+    StartArtifactRuntimeRequest,
+    StartArtifactRuntimeResult,
+    StopArtifactRuntimeRequest,
+    StopArtifactRuntimeResult,
+    WorkspaceCleanupPlanRecord,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResult,
+    WorkspaceUsageRequest,
+    WorkspaceUsageResult,
+)
 from octopus_sdk.registry.models import RegistryJsonRecord
 from octopus_sdk.skill_packages import (
     skill_document_from_text,
@@ -53,7 +81,9 @@ from .artifact_paths import (
 )
 from .artifact_responses import workspace_artifact_content_response
 from .artifact_responses import rendered_artifact_text_preview_response
+from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_snapshot
 from .auth import AuthContext
+from .config import load_registry_config
 from .http_support import json_payload as _json_payload, paginated_response as _paginated_response
 from .management_client import ManagementClientError, RegistryManagementClient
 from .ingress import (
@@ -66,6 +96,284 @@ from .store_base import AbstractRegistryStore
 
 _InvalidationBroadcaster = Callable[..., Awaitable[None]]
 _TopicEventBroadcaster = Callable[..., Awaitable[None]]
+
+
+def _runtime_http_path(value: str, default: str = "/") -> str:
+    text = str(value or default).strip() or default
+    if not text.startswith("/"):
+        text = f"/{text}"
+    return text
+
+
+def _runtime_proxy_base(run_id: str, artifact_key: str, area: str) -> str:
+    safe_run = quote(str(run_id), safe="")
+    safe_artifact = quote(str(artifact_key), safe="")
+    return f"/runtime/protocol-runs/{safe_run}/artifacts/{safe_artifact}/{area.strip('/')}"
+
+
+def _runtime_api_outbound_path(manifest: ProtocolArtifactRuntimeManifestRecord, proxy_tail: str) -> str:
+    base_path = _runtime_http_path(str(manifest.api_base_path or "/api"), "/api")
+    tail = str(proxy_tail or "").strip("/")
+    if not tail:
+        return base_path
+    tail_path = _runtime_http_path(tail)
+    base_prefix = base_path.rstrip("/")
+    if tail_path == base_path or tail_path.startswith(f"{base_prefix}/") or tail_path.startswith(f"{base_prefix}?"):
+        return tail_path
+    if base_path == "/":
+        return tail_path
+    return f"{base_prefix}{tail_path}"
+
+
+_RUNTIME_PROXY_REQUEST_HEADER_DENYLIST = {
+    "authorization",
+    "connection",
+    "content-length",
+    "cookie",
+    "host",
+    "if-match",
+    "if-modified-since",
+    "if-none-match",
+    "if-range",
+    "if-unmodified-since",
+    "origin",
+    "range",
+    "referer",
+    "sec-fetch-dest",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "sec-fetch-user",
+    "upgrade-insecure-requests",
+    "x-csrf-token",
+}
+
+
+def _runtime_proxy_request_headers(headers: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in headers.items()
+        if str(key).lower() not in _RUNTIME_PROXY_REQUEST_HEADER_DENYLIST
+    }
+
+
+def _runtime_proxy_response_headers(headers: Mapping[str, Any], *, content_type: str) -> dict[str, str]:
+    is_html = "text/html" in str(content_type or "").lower()
+    allowed = {"content-type", "cache-control", "etag", "last-modified", "location"}
+    if is_html:
+        allowed -= {"etag", "last-modified"}
+    result = {
+        str(key): str(value)
+        for key, value in headers.items()
+        if str(key).lower() in allowed
+    }
+    if is_html:
+        result["cache-control"] = "no-store"
+    return result
+
+
+def _runtime_rewrite_browser_path(
+    url: str,
+    *,
+    app_base: str,
+    api_base: str,
+    manifest: ProtocolArtifactRuntimeManifestRecord,
+) -> str:
+    text = str(url or "")
+    if not text.startswith("/") or text.startswith("//"):
+        return text
+    if text.startswith(f"{app_base}/") or text == app_base or text.startswith(f"{api_base}/") or text == api_base:
+        return text
+    api_root = _runtime_http_path(str(manifest.api_base_path or "/api"), "/api").rstrip("/") or "/api"
+    health_path = _runtime_http_path(str(manifest.health_path or "/health"), "/health").rstrip("/") or "/health"
+    if text == health_path or text.startswith(f"{health_path}?") or text.startswith(f"{health_path}#"):
+        suffix = text[len(health_path) :]
+        return f"{app_base}{health_path}{suffix}"
+    if text == api_root or text.startswith(f"{api_root}/") or text.startswith(f"{api_root}?") or text.startswith(f"{api_root}#"):
+        suffix = text[len(api_root) :]
+        return f"{api_base}{suffix}"
+    if text == "/api" or text.startswith("/api/") or text.startswith("/api?") or text.startswith("/api#"):
+        suffix = text[len("/api") :]
+        return f"{api_base}{suffix}"
+    return f"{app_base}{text}"
+
+
+_RUNTIME_URL_ATTR_RE = re.compile(r"(?P<prefix>\b(?:src|href|action)=['\"])(?P<url>/(?!/)[^'\"]*)(?P<suffix>['\"])", re.IGNORECASE)
+
+
+def _rewrite_runtime_html_content(
+    content: bytes,
+    *,
+    content_type: str,
+    run_id: str,
+    artifact_key: str,
+    manifest: ProtocolArtifactRuntimeManifestRecord,
+) -> bytes:
+    if "text/html" not in str(content_type or "").lower():
+        return content
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    app_base = _runtime_proxy_base(run_id, artifact_key, "app")
+    api_base = _runtime_proxy_base(run_id, artifact_key, "api")
+
+    def _replace_attr(match: re.Match[str]) -> str:
+        return (
+            match.group("prefix")
+            + _runtime_rewrite_browser_path(match.group("url"), app_base=app_base, api_base=api_base, manifest=manifest)
+            + match.group("suffix")
+        )
+
+    text = _RUNTIME_URL_ATTR_RE.sub(_replace_attr, text)
+    script = f"""
+<script>
+(() => {{
+  const appBase = {json.dumps(app_base)};
+  const apiBase = {json.dumps(api_base)};
+  const eventEndpoint = {json.dumps(f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/client-event")};
+  const apiRoot = {json.dumps(_runtime_http_path(str(manifest.api_base_path or "/api"), "/api").rstrip("/") or "/api")};
+  const healthPath = {json.dumps(_runtime_http_path(str(manifest.health_path or "/health"), "/health").rstrip("/") or "/health")};
+  const rewrite = (value) => {{
+    if (typeof value !== 'string') return value;
+    if (!value.startsWith('/') || value.startsWith('//')) return value;
+    if (value === appBase || value.startsWith(appBase + '/') || value === apiBase || value.startsWith(apiBase + '/')) return value;
+    if (value === healthPath || value.startsWith(healthPath + '?') || value.startsWith(healthPath + '#')) return appBase + value;
+    if (value === apiRoot || value.startsWith(apiRoot + '/') || value.startsWith(apiRoot + '?') || value.startsWith(apiRoot + '#')) return apiBase + value.slice(apiRoot.length);
+    if (value === '/api' || value.startsWith('/api/') || value.startsWith('/api?') || value.startsWith('/api#')) return apiBase + value.slice('/api'.length);
+    return appBase + value;
+  }};
+  window.OCTOPUS_RUNTIME = Object.freeze({{
+    appBase,
+    apiBase,
+    eventEndpoint,
+    healthPath: appBase + healthPath,
+    rewrite
+  }});
+  const originalFetch = window.fetch;
+  let csrfToken = '';
+  let csrfPromise = null;
+  const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  const isRuntimeProxyUrl = (value) => {{
+    try {{
+      const parsed = new URL(typeof value === 'string' ? value : value.url, window.location.href);
+      return parsed.origin === window.location.origin
+        && (parsed.pathname === appBase || parsed.pathname.startsWith(appBase + '/')
+          || parsed.pathname === apiBase || parsed.pathname.startsWith(apiBase + '/'));
+    }} catch (_err) {{
+      return false;
+    }}
+  }};
+  const methodFor = (input, init) => String(
+    (init && init.method)
+    || (input && typeof input === 'object' && input.method)
+    || 'GET'
+  ).toUpperCase();
+  const ensureCsrf = () => {{
+    if (csrfToken) return Promise.resolve(csrfToken);
+    if (!csrfPromise) {{
+      csrfPromise = originalFetch.call(window, '/v1/auth/csrf', {{ credentials: 'same-origin' }})
+        .then((response) => response.ok ? response.json() : {{}})
+        .then((data) => {{
+          csrfToken = String(data && (data.csrf_token || data.token) || '');
+          return csrfToken;
+        }})
+        .catch(() => '')
+        .finally(() => {{ csrfPromise = null; }});
+    }}
+    return csrfPromise;
+  }};
+  ensureCsrf();
+  if (originalFetch) {{
+    window.fetch = function(input, init) {{
+      let rewritten = input;
+      if (typeof input === 'string') {{
+        rewritten = rewrite(input);
+      }} else if (input && typeof input.url === 'string') {{
+        const parsed = new URL(input.url, window.location.href);
+        if (parsed.origin === window.location.origin) {{
+          const originalPath = parsed.pathname + parsed.search + parsed.hash;
+          const nextUrl = rewrite(originalPath);
+          if (nextUrl !== originalPath) rewritten = new Request(nextUrl, input);
+        }}
+      }}
+      const needsCsrf = mutatingMethods.has(methodFor(rewritten, init)) && isRuntimeProxyUrl(rewritten);
+      if (!needsCsrf) return originalFetch.call(this, rewritten, init);
+      return ensureCsrf().then((token) => {{
+        const headers = new Headers((init && init.headers) || (rewritten && typeof rewritten === 'object' && rewritten.headers) || undefined);
+        if (token) headers.set('X-CSRF-Token', token);
+        if (init) {{
+          return originalFetch.call(this, rewritten, {{ ...init, headers, credentials: init.credentials || 'same-origin' }});
+        }}
+        if (rewritten && typeof rewritten === 'object') {{
+          return originalFetch.call(this, new Request(rewritten, {{ headers, credentials: 'same-origin' }}));
+        }}
+        return originalFetch.call(this, rewritten, {{ headers, credentials: 'same-origin' }});
+      }});
+    }};
+  }}
+  const originalOpen = window.XMLHttpRequest && window.XMLHttpRequest.prototype && window.XMLHttpRequest.prototype.open;
+  const originalSend = window.XMLHttpRequest && window.XMLHttpRequest.prototype && window.XMLHttpRequest.prototype.send;
+  if (originalOpen) {{
+    window.XMLHttpRequest.prototype.open = function(method, url, ...rest) {{
+      const nextUrl = rewrite(url);
+      this.__octopusRuntimeNeedsCsrf = mutatingMethods.has(String(method || 'GET').toUpperCase()) && isRuntimeProxyUrl(nextUrl);
+      return originalOpen.call(this, method, nextUrl, ...rest);
+    }};
+  }}
+  if (originalSend) {{
+    window.XMLHttpRequest.prototype.send = function(...args) {{
+      if (this.__octopusRuntimeNeedsCsrf && csrfToken) {{
+        this.setRequestHeader('X-CSRF-Token', csrfToken);
+      }}
+      return originalSend.apply(this, args);
+    }};
+  }}
+  const cleanText = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 160);
+  const describeTarget = (target) => {{
+    if (!target || target === document) return {{}};
+    const element = target.closest && target.closest('button,a,input,select,textarea,[role="button"],[data-action]');
+    const node = element || target;
+    return {{
+      tag: String(node.tagName || '').toLowerCase(),
+      role: String(node.getAttribute && node.getAttribute('role') || ''),
+      text: cleanText(node.getAttribute && (node.getAttribute('aria-label') || node.getAttribute('title')) || node.innerText || node.textContent || ''),
+      href: String(node.getAttribute && node.getAttribute('href') || '').slice(0, 240),
+      action: String(node.getAttribute && (node.getAttribute('data-action') || node.getAttribute('name')) || '').slice(0, 120)
+    }};
+  }};
+  const reportClientEvent = (event) => {{
+    const details = describeTarget(event.target);
+    if (!details.tag && !details.text && !details.action) return;
+    const payload = {{
+      event_type: String(event.type || 'interaction'),
+      page_path: window.location.pathname,
+      page_hash: window.location.hash,
+      ...details
+    }};
+    ensureCsrf().then((token) => {{
+      const headers = {{ 'Content-Type': 'application/json' }};
+      if (token) headers['X-CSRF-Token'] = token;
+      return originalFetch.call(window, eventEndpoint, {{
+        method: 'POST',
+        headers,
+        credentials: 'same-origin',
+        keepalive: true,
+        body: JSON.stringify(payload)
+      }});
+    }}).catch(() => {{}});
+  }};
+  document.addEventListener('click', reportClientEvent, true);
+  document.addEventListener('submit', reportClientEvent, true);
+  document.addEventListener('change', reportClientEvent, true);
+}})();
+</script>
+""".strip()
+    head_match = re.search(r"<head\b[^>]*>", text, flags=re.IGNORECASE)
+    if head_match:
+        text = text[: head_match.end()] + script + text[head_match.end() :]
+    else:
+        text = script + text
+    return text.encode("utf-8")
 
 
 def build_protocol_router(
@@ -163,6 +471,39 @@ def build_protocol_router(
             _agent_json(agent)
             for agent in store.list_agents(cursor=0, limit=200, connectivity_state="connected")
         ]
+
+    def _management_agent_id_for_operation(
+        store: AbstractRegistryStore,
+        *,
+        requested_agent_id: str = "",
+        operation: str,
+    ) -> str:
+        agents = _connected_agents(store)
+        if requested_agent_id:
+            candidate = next((item for item in agents if str(item.get("agent_id") or "") == requested_agent_id), None)
+            if candidate is None:
+                raise _protocol_http_error(
+                    404,
+                    error_code="AGENT_NOT_CONNECTED",
+                    message="Requested agent is not connected.",
+                )
+            operations = {str(item or "").strip() for item in candidate.get("supported_admin_operations", []) or []}
+            if operation not in operations:
+                raise _protocol_http_error(
+                    409,
+                    error_code="AGENT_OPERATION_UNSUPPORTED",
+                    message=f"Requested agent does not support {operation}.",
+                )
+            return requested_agent_id
+        for agent in agents:
+            operations = {str(item or "").strip() for item in agent.get("supported_admin_operations", []) or []}
+            if operation in operations:
+                return str(agent.get("agent_id") or "").strip()
+        raise _protocol_http_error(
+            409,
+            error_code="AGENT_OPERATION_UNAVAILABLE",
+            message=f"Connect an agent that supports {operation}.",
+        )
 
     def _routing_skill_json(skill) -> dict[str, Any]:
         row = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
@@ -293,6 +634,142 @@ def build_protocol_router(
             )
         return result.payload.response
 
+    def _artifact_for_detail(detail, artifact_key: str) -> ProtocolArtifactRecord:
+        artifact = next(
+            (item for item in detail.artifacts if str(item.artifact_key or "").strip() == str(artifact_key or "").strip()),
+            None,
+        )
+        if artifact is None:
+            raise _protocol_http_error(
+                404,
+                error_code="PROTOCOL_ARTIFACT_NOT_FOUND",
+                message="Protocol artifact not found.",
+            )
+        return artifact
+
+    def _artifact_snapshot_path(snapshot) -> Path | None:
+        return artifact_snapshot_storage_path(load_registry_config().artifact_store_dir, snapshot)
+
+    def _artifact_snapshot_payload(snapshot) -> dict[str, Any]:
+        return {
+            "artifact_snapshot_id": snapshot.artifact_snapshot_id,
+            "protocol_artifact_id": snapshot.protocol_artifact_id,
+            "protocol_run_id": snapshot.protocol_run_id,
+            "artifact_key": snapshot.artifact_key,
+            "snapshot_kind": snapshot.snapshot_kind,
+            "storage_uri": snapshot.storage_uri,
+            "content_hash": snapshot.content_hash,
+            "size_bytes": snapshot.size_bytes,
+            "manifest_json": snapshot.manifest_json.as_dict(),
+            "retention_state": snapshot.retention_state,
+            "retention_until": snapshot.retention_until,
+            "created_at": snapshot.created_at,
+            "created_by": snapshot.created_by,
+            "deleted_at": snapshot.deleted_at,
+            "deleted_by": snapshot.deleted_by,
+        }
+
+    def _runtime_instance_id(run_id: str, artifact_key: str) -> str:
+        return uuid.uuid5(uuid.NAMESPACE_URL, f"octopus-runtime:{run_id}:{artifact_key}").hex
+
+    def _new_runtime_instance_id(run_id: str, artifact_key: str) -> str:
+        return f"{_runtime_instance_id(run_id, artifact_key)}-{uuid.uuid4().hex[:12]}"
+
+    def _runtime_manifest_from_path(path: Path) -> tuple[ProtocolArtifactRuntimeManifestRecord | None, str]:
+        root = path if path.is_dir() else path.parent
+        manifest_path = root / "octopus-runtime.json"
+        if manifest_path.is_file():
+            try:
+                raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+                return ProtocolArtifactRuntimeManifestRecord.model_validate(raw), str(manifest_path)
+            except (OSError, json.JSONDecodeError, ValidationError) as exc:
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_INVALID",
+                    message=f"Artifact runtime manifest is invalid: {exc}",
+                ) from exc
+        index_path = root / "index.html"
+        if index_path.is_file():
+            return ProtocolArtifactRuntimeManifestRecord(
+                runtime_kind="static",
+                display_name=root.name or "Artifact app",
+                description="Static web artifact served from the artifact package.",
+                ui_path="/",
+                health_path="/",
+            ), ""
+        return None, ""
+
+    def _runtime_agent_id(detail, artifact: ProtocolArtifactRecord) -> str:
+        producer_id = str(artifact.produced_by_stage_execution_id or "").strip()
+        participant_key = ""
+        if producer_id:
+            producer = next(
+                (item for item in detail.stage_executions if str(item.protocol_stage_execution_id or "") == producer_id),
+                None,
+            )
+            participant_key = str(getattr(producer, "participant_key", "") or "").strip()
+        if participant_key:
+            participant = next(
+                (item for item in detail.participants if str(item.participant_key or "") == participant_key),
+                None,
+            )
+            if participant is not None and str(participant.resolved_agent_id or "").strip():
+                return str(participant.resolved_agent_id or "").strip()
+        return str(detail.run.entry_agent_id or "").strip()
+
+    def _runtime_event(
+        *,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        event_kind: str,
+        actor_ref: str,
+        summary: str,
+        metadata: dict[str, object] | None = None,
+    ) -> ProtocolArtifactRuntimeEventRecord:
+        return ProtocolArtifactRuntimeEventRecord(
+            runtime_event_id=uuid.uuid4().hex,
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id=runtime.protocol_run_id,
+            artifact_key=runtime.artifact_key,
+            event_kind=event_kind,
+            actor_ref=actor_ref,
+            summary=summary,
+            metadata_json=RegistryJsonRecord(metadata or {}),
+        )
+
+    def _runtime_public_urls(run_id: str, artifact_key: str) -> dict[str, str]:
+        base = f"/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}"
+        return {
+            "runtime_url": f"{base}/app/",
+            "ui_url": f"{base}/app/",
+            "api_url": f"{base}/api/",
+            "health_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/health",
+        }
+
+    def _runtime_record_json(runtime: ProtocolArtifactRuntimeInstanceRecord | None) -> dict[str, object] | None:
+        return _json_payload(runtime) if runtime is not None else None
+
+    def _merge_runtime_record(
+        existing: ProtocolArtifactRuntimeInstanceRecord,
+        update: ProtocolArtifactRuntimeInstanceRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord:
+        payload = existing.model_dump(mode="json")
+        update_payload = update.model_dump(mode="json", exclude_none=True)
+        for key in (
+            "agent_id",
+            "manifest",
+            "manifest_path",
+            "artifact_path",
+            "runtime_url",
+            "ui_url",
+            "api_url",
+            "health_url",
+            "internal_url",
+        ):
+            if not update_payload.get(key):
+                update_payload.pop(key, None)
+        payload.update(update_payload)
+        return ProtocolArtifactRuntimeInstanceRecord.model_validate(payload)
+
     def _metadata_from_auto_session(session: ProtocolAutoDesignSessionRecord) -> dict[str, str]:
         doc = session.draft_definition_json.as_dict()
         metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
@@ -349,6 +826,41 @@ def build_protocol_router(
             "applied_protocol": result,
         })
         return store.update_protocol_auto_design_session(updated, access=access, event_kind="applied")
+
+    def _auto_protocol_session_has_applied_draft(session: ProtocolAutoDesignSessionRecord) -> bool:
+        return (
+            str(session.target_protocol_id or "").strip()
+            and session.applied_protocol is not None
+            and str(session.status or "").strip() in {"applied", "published", "running"}
+        )
+
+    def _ensure_auto_protocol_session_applied(
+        store: AbstractRegistryStore,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        if _auto_protocol_session_has_applied_draft(session):
+            return session
+        return _apply_auto_protocol_session(store, session, access=access)
+
+    def _ensure_auto_protocol_session_published(
+        store: AbstractRegistryStore,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAutoDesignSessionRecord:
+        session = _ensure_auto_protocol_session_applied(store, session, access=access)
+        if session.applied_protocol is not None and str(session.status or "").strip() in {"published", "running"}:
+            return session
+        result = store.publish_protocol(session.target_protocol_id, access=access)
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        return store.update_protocol_auto_design_session(
+            session.model_copy(update={"status": "published", "applied_protocol": result}),
+            access=access,
+            event_kind="published",
+        )
 
     def _ensure_auto_protocol_ready(session: ProtocolAutoDesignSessionRecord, *, action: str) -> None:
         unresolved = list(session.unresolved_decisions or [])
@@ -613,16 +1125,7 @@ def build_protocol_router(
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
             _ensure_auto_protocol_ready(session, action="publish")
-            if not str(session.target_protocol_id or "").strip():
-                session = _apply_auto_protocol_session(store, session, access=access)
-            result = store.publish_protocol(session.target_protocol_id, access=access)
-            if not result.ok:
-                raise _protocol_result_http_error(result)
-            session = store.update_protocol_auto_design_session(
-                session.model_copy(update={"status": "published", "applied_protocol": result}),
-                access=access,
-                event_kind="published",
-            )
+            session = _ensure_auto_protocol_session_published(store, session, access=access)
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except KeyError as exc:
@@ -642,15 +1145,7 @@ def build_protocol_router(
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
             _ensure_auto_protocol_ready(session, action="run")
-            if not str(session.target_protocol_id or "").strip():
-                session = _apply_auto_protocol_session(store, session, access=access)
-            loaded = store.get_protocol(session.target_protocol_id, access=access)
-            if not loaded.ok:
-                raise _protocol_result_http_error(loaded)
-            if not loaded.protocol or not str(loaded.protocol.current_version_id or "").strip():
-                publish_result = store.publish_protocol(session.target_protocol_id, access=access)
-                if not publish_result.ok:
-                    raise _protocol_result_http_error(publish_result)
+            session = _ensure_auto_protocol_session_published(store, session, access=access)
             agents = _connected_agents(store)
             entry_agent_id = str(payload.get("entry_agent_id") or "").strip()
             if not entry_agent_id and auth.is_agent and auth.agent_id:
@@ -1481,6 +1976,217 @@ def build_protocol_router(
         await broadcast_invalidations(topics=("protocols",), reason="protocol.archived")
         return _json_payload(result)
 
+    def _workspace_inventory_payload(row: dict[str, object] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        summary = row.get("summary_json") or {}
+        return {
+            "inventory_id": str(row.get("inventory_id") or ""),
+            "agent_id": str(row.get("agent_id") or ""),
+            "workspace_ref": str(row.get("workspace_ref") or ""),
+            "protocol_run_id": str(row.get("protocol_run_id") or ""),
+            "scan_status": str(row.get("scan_status") or ""),
+            "file_count": int(row.get("file_count") or 0),
+            "total_bytes": int(row.get("total_bytes") or 0),
+            "retained_bytes": int(row.get("retained_bytes") or 0),
+            "transient_bytes": int(row.get("transient_bytes") or 0),
+            "unknown_bytes": int(row.get("unknown_bytes") or 0),
+            "summary_json": summary,
+            "created_at": str(row.get("created_at") or ""),
+        }
+
+    def _save_workspace_inventory(
+        store: AbstractRegistryStore,
+        *,
+        access: ProtocolAccessContextRecord,
+        agent_id: str,
+        plan: WorkspaceCleanupPlanRecord,
+        scan_status: str,
+        inventory_id: str = "",
+        result_payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        row_id = str(inventory_id or plan.inventory_id or uuid.uuid4().hex)
+        summary = {
+            "plan": plan.model_copy(update={"inventory_id": row_id, "agent_id": agent_id}).model_dump(mode="json"),
+            "result": result_payload or {},
+        }
+        return store.save_workspace_cleanup_inventory(
+            inventory_id=row_id,
+            agent_id=agent_id,
+            workspace_ref=plan.workspace_ref,
+            protocol_run_id=plan.protocol_run_id,
+            scan_status=scan_status,
+            file_count=plan.file_count,
+            total_bytes=plan.total_bytes,
+            retained_bytes=plan.retained_bytes,
+            transient_bytes=plan.transient_bytes,
+            unknown_bytes=plan.unknown_bytes,
+            summary=summary,
+            access=access,
+        )
+
+    async def _workspace_usage_from_agent(
+        *,
+        store: AbstractRegistryStore,
+        access: ProtocolAccessContextRecord,
+        payload: dict[str, Any],
+    ) -> tuple[str, WorkspaceUsageResult]:
+        agent_id = _management_agent_id_for_operation(
+            store,
+            requested_agent_id=str(payload.get("agent_id") or ""),
+            operation="workspace_usage",
+        )
+        result = await RegistryManagementClient(store).send(
+            agent_id=agent_id,
+            payload=WorkspaceUsageRequest(
+                workspace_ref=str(payload.get("workspace_ref") or ""),
+                protocol_run_id=str(payload.get("protocol_run_id") or ""),
+                categories=[
+                    str(item or "").strip()
+                    for item in payload.get("categories", []) or []
+                    if str(item or "").strip()
+                ],
+                older_than=str(payload.get("older_than") or ""),
+                include_archived=bool(payload.get("include_archived") or False),
+                include_failed=bool(payload.get("include_failed", True)),
+                max_entries=int(payload.get("max_entries") or 250),
+            ),
+            timeout_seconds=45,
+        )
+        if not result.success or not isinstance(result.payload, WorkspaceUsageResult):
+            raise _protocol_http_error(
+                502,
+                error_code="WORKSPACE_USAGE_FAILED",
+                message=result.error_detail or "Workspace usage scan failed.",
+            )
+        plan = result.payload.plan.model_copy(update={"agent_id": agent_id})
+        return agent_id, WorkspaceUsageResult(plan=plan)
+
+    @router.get("/v1/admin/workspaces/usage")
+    async def resource_get_workspace_usage(
+        agent_id: str = Query(default=""),
+        workspace_ref: str = Query(default=""),
+        protocol_run_id: str = Query(default=""),
+        category: list[str] = Query(default_factory=list),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        selected_agent_id, result = await _workspace_usage_from_agent(
+            store=store,
+            access=access,
+            payload={
+                "agent_id": agent_id,
+                "workspace_ref": workspace_ref,
+                "protocol_run_id": protocol_run_id,
+                "categories": category,
+            },
+        )
+        row = _save_workspace_inventory(
+            store,
+            access=access,
+            agent_id=selected_agent_id,
+            plan=result.plan,
+            scan_status="completed",
+        )
+        return _json_payload({
+            "plan": result.plan.model_copy(update={"inventory_id": row["inventory_id"], "agent_id": selected_agent_id}).model_dump(mode="json"),
+            "inventory": _workspace_inventory_payload(row),
+        })
+
+    @router.post("/v1/admin/workspaces/cleanup/dry-run")
+    async def resource_dry_run_workspace_cleanup(
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        selected_agent_id, result = await _workspace_usage_from_agent(
+            store=store,
+            access=access,
+            payload=payload or {},
+        )
+        row = _save_workspace_inventory(
+            store,
+            access=access,
+            agent_id=selected_agent_id,
+            plan=result.plan,
+            scan_status="dry_run",
+        )
+        plan = result.plan.model_copy(update={"inventory_id": row["inventory_id"], "agent_id": selected_agent_id})
+        return _json_payload({"plan": plan.model_dump(mode="json"), "inventory": _workspace_inventory_payload(row)})
+
+    @router.get("/v1/admin/workspaces/cleanup/jobs/{job_id}")
+    def resource_get_workspace_cleanup_job(
+        job_id: str,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            row = store.get_workspace_cleanup_inventory(job_id, access=protocol_access(auth))
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="WORKSPACE_CLEANUP_FORBIDDEN", message=str(exc)) from exc
+        if row is None:
+            raise _protocol_http_error(404, error_code="WORKSPACE_CLEANUP_JOB_NOT_FOUND", message="Workspace cleanup job not found.")
+        return _json_payload({"inventory": _workspace_inventory_payload(row)})
+
+    @router.post("/v1/admin/workspaces/cleanup")
+    async def resource_execute_workspace_cleanup(
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        body = payload or {}
+        confirm = str(body.get("confirm") or "").strip().upper()
+        if confirm != "CLEAN":
+            raise _protocol_http_error(400, error_code="WORKSPACE_CLEANUP_CONFIRMATION_REQUIRED", message="Type CLEAN to confirm workspace cleanup.")
+        plan_payload = body.get("plan") or {}
+        if not plan_payload and str(body.get("job_id") or "").strip():
+            row = store.get_workspace_cleanup_inventory(str(body.get("job_id") or "").strip(), access=access)
+            summary = row.get("summary_json", {}) if row is not None else {}
+            if isinstance(summary, dict):
+                plan_payload = summary.get("plan") or {}
+        plan = WorkspaceCleanupPlanRecord.model_validate(plan_payload)
+        agent_id = _management_agent_id_for_operation(
+            store,
+            requested_agent_id=str(body.get("agent_id") or plan.agent_id or ""),
+            operation="workspace_cleanup",
+        )
+        plan = plan.model_copy(update={"agent_id": agent_id})
+        result = await RegistryManagementClient(store).send(
+            agent_id=agent_id,
+            payload=WorkspaceCleanupRequest(plan=plan, confirm=confirm),
+            timeout_seconds=90,
+        )
+        if not result.success or not isinstance(result.payload, WorkspaceCleanupResult):
+            raise _protocol_http_error(
+                502,
+                error_code="WORKSPACE_CLEANUP_FAILED",
+                message=result.error_detail or "Workspace cleanup failed.",
+            )
+        row = _save_workspace_inventory(
+            store,
+            access=access,
+            agent_id=agent_id,
+            plan=result.payload.plan,
+            scan_status="executed",
+            inventory_id=plan.inventory_id,
+            result_payload={
+                "removed_paths": result.payload.removed_paths,
+                "removed_bytes": result.payload.removed_bytes,
+                "failures": result.payload.failures,
+            },
+        )
+        await broadcast_invalidations(topics=("summary", "protocols"), reason="admin.workspace_cleanup.executed")
+        return _json_payload({
+            "plan": result.payload.plan.model_copy(update={"inventory_id": row["inventory_id"], "agent_id": agent_id}).model_dump(mode="json"),
+            "removed_paths": result.payload.removed_paths,
+            "removed_bytes": result.payload.removed_bytes,
+            "failures": result.payload.failures,
+            "inventory": _workspace_inventory_payload(row),
+        })
+
     @router.get("/v1/protocol-runs")
     def resource_list_protocol_runs(
         cursor: int = Query(default=0, ge=0),
@@ -1642,6 +2348,20 @@ def build_protocol_router(
         )
         media_type = mimetypes.guess_type(preferred_name)[0] or "application/octet-stream"
         if resolved_path is None:
+            snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=protocol_access(auth))
+            snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+            if snapshot_path is not None and snapshot_path.exists():
+                return workspace_artifact_content_response(
+                    resolved_path=snapshot_path,
+                    artifact_key=str(artifact.artifact_key or artifact_key or ""),
+                    preferred_path=str(artifact.workspace_path or artifact.location or ""),
+                    preferred_name=preferred_name,
+                    download=download,
+                    browse=browse,
+                    preview=preview,
+                    member_path=member_path or member_path_tail,
+                    request=request,
+                )
             content_text = resolve_protocol_artifact_rehearsal_text(detail, artifact)
             if content_text:
                 if preview and not download:
@@ -1676,6 +2396,708 @@ def build_protocol_router(
             preview=preview,
             member_path=member_path or member_path_tail,
             request=request,
+        )
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot")
+    def resource_get_protocol_run_artifact_snapshot(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+        snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+        return _json_payload({
+            "snapshot": _artifact_snapshot_payload(snapshot) if snapshot is not None else None,
+            "available": bool(snapshot_path is not None and snapshot_path.exists()),
+            "content_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/snapshot/content" if snapshot is not None else "",
+        })
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot")
+    def resource_create_protocol_run_artifact_snapshot(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        if resolved_path is None or not resolved_path.exists():
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_PATH_UNAVAILABLE",
+                message="Artifact path is not available on this host, so it cannot be snapshotted.",
+                details={"artifact_key": artifact.artifact_key, "workspace_path": artifact.workspace_path, "location": artifact.location},
+            )
+        snapshot = create_artifact_snapshot(
+            artifact_store_dir=load_registry_config().artifact_store_dir,
+            source_path=resolved_path,
+            protocol_artifact_id=artifact.protocol_artifact_id,
+            protocol_run_id=run_id,
+            artifact_key=artifact.artifact_key,
+            created_by=access.actor_ref,
+            retention_until=detail.run.retention_until,
+        )
+        saved = store.save_protocol_artifact_snapshot(snapshot, access=access)
+        return _json_payload({"snapshot": _artifact_snapshot_payload(saved)})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot/content")
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot/content/{member_path_tail:path}")
+    def resource_get_protocol_run_artifact_snapshot_content(
+        request: Request,
+        run_id: str,
+        artifact_key: str,
+        member_path_tail: str = "",
+        download: bool = Query(default=False),
+        browse: bool = Query(default=False),
+        preview: bool = Query(default=False),
+        member_path: str = Query(default="", alias="path"),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> Response:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+        snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+        if snapshot is None or snapshot_path is None or not snapshot_path.exists():
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_SNAPSHOT_NOT_FOUND", message="Artifact snapshot not found.")
+        return workspace_artifact_content_response(
+            resolved_path=snapshot_path,
+            artifact_key=str(artifact.artifact_key or artifact_key or ""),
+            preferred_path=str(artifact.workspace_path or artifact.location or ""),
+            preferred_name=artifact_download_name(
+                artifact_key=str(artifact.artifact_key or ""),
+                preferred_path=str(artifact.workspace_path or artifact.location or ""),
+            ),
+            download=download,
+            browse=browse,
+            preview=preview,
+            member_path=member_path or member_path_tail,
+            request=request,
+        )
+
+    @router.delete("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/snapshot")
+    def resource_delete_protocol_run_artifact_snapshot(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            deleted = store.delete_protocol_artifact_snapshot(
+                run_id,
+                artifact_key,
+                access=protocol_access(auth),
+            )
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_SNAPSHOT_FORBIDDEN", message=str(exc)) from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_SNAPSHOT_NOT_FOUND", message="Artifact snapshot not found.") from exc
+        return _json_payload({"snapshot": _artifact_snapshot_payload(deleted)})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime")
+    async def resource_get_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        if resolved_path is None:
+            snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+            snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+            if snapshot_path is not None and snapshot_path.exists():
+                resolved_path = snapshot_path
+        manifest, manifest_path = (None, "")
+        if resolved_path is not None:
+            manifest, manifest_path = _runtime_manifest_from_path(resolved_path)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact.artifact_key, access=access)
+        health = None
+        if runtime is None:
+            urls = _runtime_public_urls(run_id, artifact.artifact_key)
+            runtime = ProtocolArtifactRuntimeInstanceRecord(
+                runtime_instance_id=_runtime_instance_id(run_id, artifact.artifact_key),
+                protocol_run_id=run_id,
+                artifact_key=artifact.artifact_key,
+                agent_id=_runtime_agent_id(detail, artifact),
+                status="stopped" if manifest is not None else "not_configured",
+                manifest=manifest,
+                manifest_path=manifest_path,
+                artifact_path=str(resolved_path or ""),
+                **urls,
+            )
+        elif str(runtime.status or "").strip().lower() in {"running", "starting"}:
+            result = await RegistryManagementClient(store).send(
+                agent_id=runtime.agent_id,
+                payload=ArtifactRuntimeHealthRequest(
+                    runtime_instance_id=runtime.runtime_instance_id,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact.artifact_key,
+                ),
+                timeout_seconds=15,
+            )
+            if result.success and isinstance(result.payload, ArtifactRuntimeHealthResult) and result.payload.health.runtime is not None:
+                health = result.payload.health
+                runtime = store.save_protocol_artifact_runtime(
+                    _merge_runtime_record(runtime, result.payload.health.runtime),
+                    access=access,
+                )
+        return {
+            "runtime": _runtime_record_json(runtime),
+            "health": _json_payload(health) if health is not None else None,
+            "manifest_available": manifest is not None or runtime.manifest is not None,
+            "package_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/content?download=1",
+            "browse_url": f"/v1/protocol-runs/{run_id}/artifacts/{artifact.artifact_key}/content?browse=1",
+        }
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/start")
+    async def resource_start_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+            artifact = _artifact_for_detail(detail, artifact_key)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        resolved_path = resolve_protocol_artifact_path(detail, artifact)
+        if resolved_path is None:
+            snapshot = store.get_protocol_artifact_snapshot(run_id, artifact.artifact_key, access=access)
+            snapshot_path = _artifact_snapshot_path(snapshot) if snapshot is not None else None
+            if snapshot_path is not None and snapshot_path.exists():
+                resolved_path = snapshot_path
+        if resolved_path is None:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_PATH_UNAVAILABLE",
+                message="Artifact path is not available on this host.",
+                details={"artifact_key": artifact.artifact_key},
+            )
+        manifest, manifest_path = _runtime_manifest_from_path(resolved_path)
+        if manifest is None:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_MISSING",
+                message="This artifact does not declare a runnable app or API. You can still browse or download the package.",
+            )
+        agent_id = _runtime_agent_id(detail, artifact)
+        if not agent_id:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_AGENT_UNAVAILABLE",
+                message="No connected agent is available to run this artifact.",
+            )
+        existing_runtime = store.get_protocol_artifact_runtime(run_id, artifact.artifact_key, access=access)
+        if existing_runtime is not None and str(existing_runtime.status or "").strip().lower() in {"running", "starting"}:
+            try:
+                existing_result = await RegistryManagementClient(store).send(
+                    agent_id=existing_runtime.agent_id,
+                    payload=ArtifactRuntimeHealthRequest(
+                        runtime_instance_id=existing_runtime.runtime_instance_id,
+                        protocol_run_id=run_id,
+                        artifact_key=artifact.artifact_key,
+                    ),
+                    timeout_seconds=10,
+                )
+            except ManagementClientError:
+                existing_result = None
+            if (
+                existing_result is not None
+                and existing_result.success
+                and isinstance(existing_result.payload, ArtifactRuntimeHealthResult)
+                and existing_result.payload.health.runtime is not None
+            ):
+                refreshed = store.save_protocol_artifact_runtime(
+                    _merge_runtime_record(existing_runtime, existing_result.payload.health.runtime),
+                    access=access,
+                )
+                refreshed_status = str(refreshed.status or "").strip().lower()
+                if refreshed_status in {"running", "starting"}:
+                    store.append_protocol_artifact_runtime_event(
+                        _runtime_event(
+                            runtime=refreshed,
+                            event_kind="start_reused",
+                            actor_ref=access.actor_ref,
+                            summary=(
+                                "Runtime is already running."
+                                if refreshed_status == "running"
+                                else "Runtime process is already active; health check is still pending."
+                            ),
+                            metadata={"status": refreshed.status},
+                        ),
+                        access=access,
+                    )
+                    return _json_payload(
+                        ProtocolArtifactRuntimeActionResultRecord(
+                            ok=True,
+                            status=refreshed.status,
+                            message=(
+                                "Runtime is already running."
+                                if refreshed_status == "running"
+                                else "Runtime process is already active; health check is still pending."
+                            ),
+                            runtime=refreshed,
+                        )
+                    )
+
+        runtime_id = _new_runtime_instance_id(run_id, artifact.artifact_key)
+        urls = _runtime_public_urls(run_id, artifact.artifact_key)
+        starting = ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id=runtime_id,
+            protocol_run_id=run_id,
+            artifact_key=artifact.artifact_key,
+            agent_id=agent_id,
+            status="starting",
+            manifest=manifest,
+            manifest_path=manifest_path,
+            artifact_path=str(resolved_path),
+            started_by=access.actor_ref,
+            **urls,
+        )
+        store.save_protocol_artifact_runtime(starting, access=access)
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=starting,
+                event_kind="start_requested",
+                actor_ref=access.actor_ref,
+                summary="Runtime start requested.",
+                metadata={"agent_id": agent_id},
+            ),
+            access=access,
+        )
+        try:
+            result = await RegistryManagementClient(store).send(
+                agent_id=agent_id,
+                payload=StartArtifactRuntimeRequest(
+                    runtime_instance_id=runtime_id,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact.artifact_key,
+                    artifact_path=str(resolved_path),
+                    manifest_path=manifest_path,
+                    manifest=manifest,
+                    actor_ref=access.actor_ref,
+                ),
+                timeout_seconds=min(20, max(5, int(manifest.startup_timeout_seconds or 30) + 5)),
+            )
+        except ManagementClientError as exc:
+            failed = starting.model_copy(
+                update={
+                    "status": "failed",
+                    "failure_code": exc.error_code,
+                    "failure_detail": exc.detail,
+                }
+            )
+            store.save_protocol_artifact_runtime(failed, access=access)
+            store.append_protocol_artifact_runtime_event(
+                _runtime_event(
+                    runtime=failed,
+                    event_kind="failed",
+                    actor_ref=access.actor_ref,
+                    summary=exc.detail,
+                    metadata={"error_code": exc.error_code},
+                ),
+                access=access,
+            )
+            raise _protocol_http_error(exc.status_code, error_code=exc.error_code, message=exc.detail) from exc
+        if not result.success or not isinstance(result.payload, StartArtifactRuntimeResult):
+            detail_text = result.error_detail or "Bot failed to start artifact runtime."
+            failed = starting.model_copy(update={"status": "failed", "failure_code": result.error_code, "failure_detail": detail_text})
+            store.save_protocol_artifact_runtime(failed, access=access)
+            store.append_protocol_artifact_runtime_event(
+                _runtime_event(
+                    runtime=failed,
+                    event_kind="failed",
+                    actor_ref=access.actor_ref,
+                    summary=detail_text,
+                    metadata={"error_code": result.error_code},
+                ),
+                access=access,
+            )
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_START_FAILED", message=detail_text)
+        runtime = result.payload.result.runtime or starting
+        runtime = runtime.model_copy(
+            update={
+                "agent_id": agent_id,
+                "manifest": manifest,
+                "manifest_path": manifest_path,
+                "artifact_path": str(resolved_path),
+                **urls,
+            }
+        )
+        saved = store.save_protocol_artifact_runtime(runtime, access=access)
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=saved,
+                event_kind="started" if result.payload.result.ok else "failed",
+                actor_ref=access.actor_ref,
+                summary=result.payload.result.message,
+                metadata={"status": result.payload.result.status},
+            ),
+            access=access,
+        )
+        return _json_payload(result.payload.result.model_copy(update={"runtime": saved}))
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/stop")
+    async def resource_stop_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="stop_requested",
+                actor_ref=access.actor_ref,
+                summary="Runtime stop requested.",
+            ),
+            access=access,
+        )
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=StopArtifactRuntimeRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+                actor_ref=access.actor_ref,
+            ),
+            timeout_seconds=30,
+        )
+        if not result.success or not isinstance(result.payload, StopArtifactRuntimeResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_STOP_FAILED", message=result.error_detail or "Bot failed to stop artifact runtime.")
+        stopped = result.payload.result.runtime or runtime
+        saved = store.save_protocol_artifact_runtime(_merge_runtime_record(runtime, stopped), access=access)
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=saved,
+                event_kind="stopped",
+                actor_ref=access.actor_ref,
+                summary=result.payload.result.message,
+            ),
+            access=access,
+        )
+        return _json_payload(result.payload.result.model_copy(update={"runtime": saved}))
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/archive")
+    def resource_archive_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        if str(runtime.status or "").lower() == "running":
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_STILL_RUNNING",
+                message="Stop the artifact runtime before archiving it.",
+            )
+        archived = runtime.model_copy(update={"status": "archived", "updated_at": ""})
+        saved = store.save_protocol_artifact_runtime(archived, access=access)
+        event = store.append_protocol_artifact_runtime_event(
+            _runtime_event(runtime=saved, event_kind="archived", actor_ref=access.actor_ref, summary="Runtime archived."),
+            access=access,
+        )
+        return _json_payload({"runtime": saved, "event": event})
+
+    @router.delete("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime")
+    def resource_delete_protocol_artifact_runtime(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        if str(runtime.status or "").lower() == "running":
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_STILL_RUNNING",
+                message="Stop the artifact runtime before deleting it.",
+            )
+        deleted = runtime.model_copy(update={"status": "deleted", "updated_at": ""})
+        saved = store.save_protocol_artifact_runtime(deleted, access=access)
+        event = store.append_protocol_artifact_runtime_event(
+            _runtime_event(runtime=saved, event_kind="deleted", actor_ref=access.actor_ref, summary="Runtime deleted."),
+            access=access,
+        )
+        return _json_payload({"runtime": saved, "event": event})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/events")
+    def resource_list_protocol_artifact_runtime_events(
+        run_id: str,
+        artifact_key: str,
+        limit: int = Query(default=50, ge=1, le=200),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        events = store.list_protocol_artifact_runtime_events(
+            run_id,
+            artifact_key,
+            access=protocol_access(auth),
+            limit=limit,
+        )
+        return _json_payload({"items": events})
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/client-event")
+    async def resource_record_protocol_artifact_runtime_client_event(
+        request: Request,
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, Mapping):
+            payload = {}
+        event_type = str(payload.get("event_type", "interaction") or "interaction").strip().lower()[:40]
+        tag = str(payload.get("tag", "") or "").strip().lower()[:40]
+        text = re.sub(r"\s+", " ", str(payload.get("text", "") or "").strip())[:160]
+        action = str(payload.get("action", "") or "").strip()[:120]
+        summary_bits = [event_type]
+        if tag:
+            summary_bits.append(tag)
+        if text:
+            summary_bits.append(text)
+        elif action:
+            summary_bits.append(action)
+        event = store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="client_interaction",
+                actor_ref=access.actor_ref,
+                summary=" ".join(summary_bits)[:240],
+                metadata={
+                    "event_type": event_type,
+                    "tag": tag,
+                    "role": str(payload.get("role", "") or "").strip()[:80],
+                    "text": text,
+                    "action": action,
+                    "href": str(payload.get("href", "") or "").strip()[:240],
+                    "page_path": str(payload.get("page_path", "") or "").strip()[:240],
+                    "page_hash": str(payload.get("page_hash", "") or "").strip()[:120],
+                },
+            ),
+            access=access,
+        )
+        return _json_payload({"event": event})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/logs")
+    async def resource_get_protocol_artifact_runtime_logs(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=ArtifactRuntimeLogsRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+            ),
+            timeout_seconds=15,
+        )
+        if not result.success or not isinstance(result.payload, ArtifactRuntimeLogsResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_LOGS_FAILED", message=result.error_detail or "Bot failed to read artifact runtime logs.")
+        saved = store.save_protocol_artifact_runtime(
+            runtime.model_copy(update={"log_tail": result.payload.log_tail}),
+            access=access,
+        )
+        return _json_payload({"runtime": saved, "log_tail": result.payload.log_tail})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/health")
+    async def resource_get_protocol_artifact_runtime_health(
+        run_id: str,
+        artifact_key: str,
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=ArtifactRuntimeHealthRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+            ),
+            timeout_seconds=15,
+        )
+        if not result.success or not isinstance(result.payload, ArtifactRuntimeHealthResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_HEALTH_FAILED", message=result.error_detail or "Bot failed to check artifact runtime health.")
+        if result.payload.health.runtime is not None:
+            runtime = store.save_protocol_artifact_runtime(
+                _merge_runtime_record(runtime, result.payload.health.runtime),
+                access=access,
+            )
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="health_checked",
+                actor_ref=access.actor_ref,
+                summary=result.payload.health.message,
+                metadata={"ok": result.payload.health.ok, "status_code": result.payload.health.status_code},
+            ),
+            access=access,
+        )
+        return _json_payload(result.payload.health)
+
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/app",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/app/{proxy_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/api",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    @router.api_route(
+        "/runtime/protocol-runs/{run_id}/artifacts/{artifact_key}/api/{proxy_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def resource_proxy_protocol_artifact_runtime(
+        request: Request,
+        run_id: str,
+        artifact_key: str,
+        proxy_path: str = "",
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> Response:
+        access = protocol_access(auth)
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        if str(runtime.status or "").lower() != "running":
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_RUNNING",
+                message="Start the artifact runtime before opening this app or API.",
+                details={"status": runtime.status},
+            )
+        manifest = runtime.manifest or ProtocolArtifactRuntimeManifestRecord()
+        route_path = str(request.url.path)
+        is_api = f"/artifacts/{artifact_key}/api" in route_path
+        tail = str(proxy_path or "").strip("/")
+        if is_api:
+            outbound_path = _runtime_api_outbound_path(manifest, tail)
+        else:
+            outbound_path = f"/{tail}" if tail else str(manifest.ui_path or "/")
+        body = await request.body()
+        headers = _runtime_proxy_request_headers(request.headers)
+        result = await RegistryManagementClient(store).send(
+            agent_id=runtime.agent_id,
+            payload=ArtifactRuntimeFetchRequest(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key=artifact_key,
+                method=request.method,
+                path=outbound_path,
+                query_string=request.url.query,
+                headers=RegistryJsonRecord(headers),
+                body_base64=base64.b64encode(body).decode("ascii") if body else "",
+            ),
+            timeout_seconds=45,
+        )
+        if not result.success or not isinstance(result.payload, ArtifactRuntimeFetchResult):
+            raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_PROXY_FAILED", message=result.error_detail or "Artifact runtime proxy failed.")
+        store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="fetch",
+                actor_ref=access.actor_ref,
+                summary=f"{request.method} {outbound_path} -> {result.payload.status_code}",
+                metadata={
+                    "status_code": result.payload.status_code,
+                    "method": request.method.upper(),
+                    "path": outbound_path,
+                    "query_string": request.url.query,
+                    "is_api": is_api,
+                },
+            ),
+            access=access,
+        )
+        raw_response_headers = result.payload.headers.as_dict()
+        media_type = str(raw_response_headers.get("content-type") or raw_response_headers.get("Content-Type") or "")
+        response_headers = _runtime_proxy_response_headers(raw_response_headers, content_type=media_type)
+        content = base64.b64decode(str(result.payload.body_base64 or "").encode("ascii"))
+        media_type = response_headers.pop("content-type", None) or response_headers.pop("Content-Type", None)
+        if request.method.upper() == "GET":
+            content = _rewrite_runtime_html_content(
+                content,
+                content_type=str(media_type or ""),
+                run_id=run_id,
+                artifact_key=artifact_key,
+                manifest=manifest,
+            )
+        return Response(
+            content=content,
+            status_code=int(result.payload.status_code or 200),
+            media_type=media_type,
+            headers=response_headers,
         )
 
     @router.get("/v1/protocol-runs/{run_id}/timeline")
@@ -1736,6 +3158,63 @@ def build_protocol_router(
             event_kind="protocol_run.terminal" if str(result.run.status if result.run is not None else "") in {"completed", "failed", "cancelled"} else "protocol_run.updated",
             reason=f"protocol.run.{action}",
         )
+        return _json_payload(result)
+
+    @router.post("/v1/protocol-runs/{run_id}/archive")
+    async def resource_archive_protocol_run(
+        run_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.archive_protocol_run(
+            run_id,
+            access=protocol_access(auth),
+            reason=str((payload or {}).get("reason", "") or ""),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols", "summary", f"protocol-run:{run_id}"), reason="protocol.run.archived")
+        await broadcast_topic_event(run_id=run_id, event_kind="protocol_run.updated", reason="protocol.run.archived")
+        return _json_payload(result)
+
+    @router.post("/v1/protocol-runs/{run_id}/restore")
+    async def resource_restore_protocol_run(
+        run_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.restore_protocol_run(
+            run_id,
+            access=protocol_access(auth),
+            reason=str((payload or {}).get("reason", "") or ""),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols", "summary", f"protocol-run:{run_id}"), reason="protocol.run.restored")
+        await broadcast_topic_event(run_id=run_id, event_kind="protocol_run.updated", reason="protocol.run.restored")
+        return _json_payload(result)
+
+    @router.delete("/v1/protocol-runs/{run_id}")
+    async def resource_delete_protocol_run(
+        run_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        confirm = str((payload or {}).get("confirm", "") or "").strip().upper()
+        if confirm != "DELETE":
+            raise _protocol_http_error(400, error_code="PROTOCOL_RUN_DELETE_CONFIRMATION_REQUIRED", message="Type DELETE to confirm run deletion.")
+        result = store.delete_protocol_run(
+            run_id,
+            access=protocol_access(auth),
+            reason=str((payload or {}).get("reason", "") or ""),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols", "summary", f"protocol-run:{run_id}"), reason="protocol.run.deleted")
+        await broadcast_topic_event(run_id=run_id, event_kind="protocol_run.updated", reason="protocol.run.deleted")
         return _json_payload(result)
 
     @router.get("/v1/protocol-runs/{run_id}/rehearsal/sessions")

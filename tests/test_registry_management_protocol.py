@@ -12,6 +12,8 @@ import octopus_registry.ingress as registry_ingress
 from octopus_registry.store_postgres import RegistryPostgresStore
 from octopus_sdk.registry.management import (
     ALL_MANAGEMENT_OPERATIONS,
+    ArtifactRuntimeFetchRequest,
+    ArtifactRuntimeFetchResult,
     ConversationSkillListingRecord,
     ConversationSkillStateResult,
     InstallCatalogSkillResult,
@@ -22,6 +24,19 @@ from octopus_sdk.registry.management import (
     ProviderGuidanceDetailResult,
     ProviderGuidanceLifecycleDetailRecord,
     RuntimeSkillCatalogItemRecord,
+    StartArtifactRuntimeRequest,
+    StartArtifactRuntimeResult,
+    WorkspaceCleanupEntryRecord,
+    WorkspaceCleanupPlanRecord,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResult,
+    WorkspaceUsageRequest,
+    WorkspaceUsageResult,
+)
+from octopus_sdk.protocols import (
+    ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeEndpointRecord,
+    ProtocolArtifactRuntimeManifestRecord,
 )
 from octopus_sdk.identity import conversation_key_for_ref
 
@@ -137,6 +152,128 @@ def test_management_request_round_trip_polls_delivery_and_persists_result(postgr
     assert loaded.request_id == request.request_id
     assert loaded.payload is not None
     assert loaded.payload.operation == "list_catalog_skills"
+
+
+def test_artifact_runtime_management_payloads_round_trip() -> None:
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="java",
+        start_command="mvn spring-boot:run",
+        ui_path="/",
+        health_path="/health",
+        api_base_path="/api",
+        endpoints=[
+            ProtocolArtifactRuntimeEndpointRecord(label="API docs", path="/docs", endpoint_kind="docs"),
+        ],
+        smoke_test=["GET /health", "GET /docs"],
+    )
+    request = ManagementRequest(
+        agent_id="agent-1",
+        payload=StartArtifactRuntimeRequest(
+            runtime_instance_id="runtime-1",
+            protocol_run_id="run-1",
+            artifact_key="risk_engine",
+            artifact_path="/workspace/run/risk-engine",
+            manifest=manifest,
+        ),
+    )
+
+    decoded = ManagementRequest.model_validate(request.model_dump(mode="json"))
+
+    assert decoded.payload.operation == "start_artifact_runtime"
+    assert isinstance(decoded.payload, StartArtifactRuntimeRequest)
+    assert decoded.payload.manifest.runtime_kind == "java"
+
+    result = ManagementResult(
+        request_id=request.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=StartArtifactRuntimeResult(
+            result=ProtocolArtifactRuntimeActionResultRecord(
+                ok=True,
+                status="running",
+                message="started",
+            )
+        ),
+    )
+    decoded_result = ManagementResult.model_validate(result.model_dump(mode="json"))
+    assert isinstance(decoded_result.payload, StartArtifactRuntimeResult)
+    assert decoded_result.payload.result.status == "running"
+
+    fetch = ManagementRequest(
+        agent_id="agent-1",
+        payload=ArtifactRuntimeFetchRequest(
+            runtime_instance_id="runtime-1",
+            protocol_run_id="run-1",
+            artifact_key="risk_engine",
+            path="/api/decisions",
+        ),
+    )
+    decoded_fetch = ManagementRequest.model_validate(fetch.model_dump(mode="json"))
+    assert isinstance(decoded_fetch.payload, ArtifactRuntimeFetchRequest)
+    fetch_result = ManagementResult(
+        request_id=fetch.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=ArtifactRuntimeFetchResult(status_code=200, body_base64="e30="),
+    )
+    decoded_fetch_result = ManagementResult.model_validate(fetch_result.model_dump(mode="json"))
+    assert isinstance(decoded_fetch_result.payload, ArtifactRuntimeFetchResult)
+
+
+def test_workspace_cleanup_management_payloads_round_trip() -> None:
+    usage = ManagementRequest(
+        agent_id="agent-1",
+        payload=WorkspaceUsageRequest(categories=["runtime_logs"], max_entries=10),
+    )
+    decoded_usage = ManagementRequest.model_validate(usage.model_dump(mode="json"))
+    assert isinstance(decoded_usage.payload, WorkspaceUsageRequest)
+    assert decoded_usage.payload.operation == "workspace_usage"
+
+    plan = WorkspaceCleanupPlanRecord(
+        agent_id="agent-1",
+        categories=["runtime_logs"],
+        entries=[
+            WorkspaceCleanupEntryRecord(
+                path="/tmp/octopus/artifact-runtimes/run-1",
+                category="runtime_logs",
+                size_bytes=120,
+                file_count=2,
+                safe_to_delete=True,
+            )
+        ],
+        total_bytes=120,
+        deletable_bytes=120,
+        file_count=2,
+    )
+    usage_result = ManagementResult(
+        request_id=usage.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=WorkspaceUsageResult(plan=plan),
+    )
+    decoded_usage_result = ManagementResult.model_validate(usage_result.model_dump(mode="json"))
+    assert isinstance(decoded_usage_result.payload, WorkspaceUsageResult)
+    assert decoded_usage_result.payload.plan.deletable_bytes == 120
+
+    cleanup = ManagementRequest(
+        agent_id="agent-1",
+        payload=WorkspaceCleanupRequest(plan=plan, confirm="CLEAN"),
+    )
+    decoded_cleanup = ManagementRequest.model_validate(cleanup.model_dump(mode="json"))
+    assert isinstance(decoded_cleanup.payload, WorkspaceCleanupRequest)
+    cleanup_result = ManagementResult(
+        request_id=cleanup.request_id,
+        agent_id="agent-1",
+        success=True,
+        payload=WorkspaceCleanupResult(
+            plan=plan,
+            removed_paths=["/tmp/octopus/artifact-runtimes/run-1"],
+            removed_bytes=120,
+        ),
+    )
+    decoded_cleanup_result = ManagementResult.model_validate(cleanup_result.model_dump(mode="json"))
+    assert isinstance(decoded_cleanup_result.payload, WorkspaceCleanupResult)
+    assert decoded_cleanup_result.payload.removed_bytes == 120
 
 
 @pytest.mark.asyncio

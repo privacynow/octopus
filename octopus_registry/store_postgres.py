@@ -23,6 +23,8 @@ from octopus_sdk.protocols import (
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeEventRecord,
+    ProtocolArtifactRuntimeInstanceRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
@@ -1085,7 +1087,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "protocol_compliance_events",
             "protocol_idempotency",
             "protocol_transitions",
+            "protocol_artifact_snapshots",
             "protocol_artifacts",
+            "workspace_cleanup_inventory",
             "protocol_stage_executions",
             "protocol_run_participants",
             "protocol_runs",
@@ -1108,6 +1112,45 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "tables": counts,
                 "preserved": ["agents", "runtime_skills", "skills_override", "provider_guidance", "catalog content"],
             }
+
+    def save_workspace_cleanup_inventory(
+        self,
+        *,
+        inventory_id: str,
+        agent_id: str,
+        workspace_ref: str = "",
+        protocol_run_id: str = "",
+        scan_status: str = "completed",
+        file_count: int = 0,
+        total_bytes: int = 0,
+        retained_bytes: int = 0,
+        transient_bytes: int = 0,
+        unknown_bytes: int = 0,
+        summary: Mapping[str, object] | None = None,
+        access: ProtocolAccessContextRecord,
+    ) -> dict[str, object]:
+        return self._protocol_store.save_workspace_cleanup_inventory(
+            inventory_id=inventory_id,
+            agent_id=agent_id,
+            workspace_ref=workspace_ref,
+            protocol_run_id=protocol_run_id,
+            scan_status=scan_status,
+            file_count=file_count,
+            total_bytes=total_bytes,
+            retained_bytes=retained_bytes,
+            transient_bytes=transient_bytes,
+            unknown_bytes=unknown_bytes,
+            summary=summary,
+            access=access,
+        )
+
+    def get_workspace_cleanup_inventory(
+        self,
+        inventory_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> dict[str, object] | None:
+        return self._protocol_store.get_workspace_cleanup_inventory(inventory_id, access=access)
 
     def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         with self._connect() as conn:
@@ -1435,6 +1478,32 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> list[ProtocolArtifactRecord]:
         return self._protocol_store.get_protocol_run_artifacts(run_id, access=access)
 
+    def get_protocol_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ):
+        return self._protocol_store.get_protocol_artifact_snapshot(run_id, artifact_key, access=access)
+
+    def save_protocol_artifact_snapshot(
+        self,
+        snapshot,
+        *,
+        access: ProtocolAccessContextRecord,
+    ):
+        return self._protocol_store.save_protocol_artifact_snapshot(snapshot, access=access)
+
+    def delete_protocol_artifact_snapshot(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ):
+        return self._protocol_store.delete_protocol_artifact_snapshot(run_id, artifact_key, access=access)
+
     def get_protocol_run_timeline(
         self,
         run_id: str,
@@ -1442,6 +1511,46 @@ class RegistryPostgresStore(AbstractRegistryStore):
         access: ProtocolAccessContextRecord,
     ) -> list[ProtocolTransitionRecord]:
         return self._protocol_store.get_protocol_run_timeline(run_id, access=access)
+
+    def get_protocol_artifact_runtime(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord | None:
+        return self._protocol_store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+
+    def save_protocol_artifact_runtime(
+        self,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeInstanceRecord:
+        return self._protocol_store.save_protocol_artifact_runtime(runtime, access=access)
+
+    def append_protocol_artifact_runtime_event(
+        self,
+        event: ProtocolArtifactRuntimeEventRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeEventRecord:
+        return self._protocol_store.append_protocol_artifact_runtime_event(event, access=access)
+
+    def list_protocol_artifact_runtime_events(
+        self,
+        run_id: str,
+        artifact_key: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 50,
+    ) -> list[ProtocolArtifactRuntimeEventRecord]:
+        return self._protocol_store.list_protocol_artifact_runtime_events(
+            run_id,
+            artifact_key,
+            access=access,
+            limit=limit,
+        )
 
     def export_protocol_run(
         self,
@@ -1469,6 +1578,33 @@ class RegistryPostgresStore(AbstractRegistryStore):
             idempotency_key=idempotency_key,
             expected_version=expected_version,
         )
+
+    def archive_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ):
+        return self._protocol_store.archive_protocol_run(run_id, access=access, reason=reason)
+
+    def restore_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ):
+        return self._protocol_store.restore_protocol_run(run_id, access=access, reason=reason)
+
+    def delete_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        reason: str = "",
+    ):
+        return self._protocol_store.delete_protocol_run(run_id, access=access, reason=reason)
 
     def list_protocol_scenarios(
         self,

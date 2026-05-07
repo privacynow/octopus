@@ -1,0 +1,296 @@
+from __future__ import annotations
+
+import base64
+import sys
+
+from app.runtime import artifact_runtime, workspace_hygiene
+from octopus_registry.protocol_http import (
+    _rewrite_runtime_html_content,
+    _runtime_api_outbound_path,
+    _runtime_proxy_request_headers,
+    _runtime_proxy_response_headers,
+)
+from octopus_sdk.protocols import ProtocolArtifactRuntimeManifestRecord
+from octopus_sdk.registry.management import (
+    ArtifactRuntimeFetchRequest,
+    ArtifactRuntimeHealthRequest,
+    ArtifactRuntimeLogsRequest,
+    StartArtifactRuntimeRequest,
+    StopArtifactRuntimeRequest,
+    WorkspaceCleanupRequest,
+    WorkspaceUsageRequest,
+)
+from tests.support.config_support import make_config
+
+
+def _process_manifest() -> ProtocolArtifactRuntimeManifestRecord:
+    return ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="java",
+        start_command="mvn spring-boot:run -Dspring-boot.run.arguments=--server.port=${PORT:8080}",
+        api_base_path="/api/v1",
+        endpoints=[{"endpoint_kind": "docs", "path": "/api/v1/docs", "label": "API docs"}],
+        smoke_test=["GET /health"],
+    )
+
+
+def test_runtime_proxy_normalizes_manifest_api_prefix():
+    manifest = _process_manifest()
+
+    assert _runtime_api_outbound_path(manifest, "") == "/api/v1"
+    assert _runtime_api_outbound_path(manifest, "scenarios") == "/api/v1/scenarios"
+    assert _runtime_api_outbound_path(manifest, "api/v1/scenarios") == "/api/v1/scenarios"
+
+
+def test_runtime_proxy_rewrites_html_for_registry_route():
+    rewritten = _rewrite_runtime_html_content(
+        b'<html><head></head><body><script src="/app.js"></script><a href="/api/v1/docs">Docs</a></body></html>',
+        content_type="text/html; charset=utf-8",
+        run_id="run-1",
+        artifact_key="produced_outcome",
+        manifest=_process_manifest(),
+    ).decode("utf-8")
+
+    assert "/runtime/protocol-runs/run-1/artifacts/produced_outcome/app/app.js" in rewritten
+    assert "/runtime/protocol-runs/run-1/artifacts/produced_outcome/api/docs" in rewritten
+    assert "window.OCTOPUS_RUNTIME" in rewritten
+    assert "window.fetch" in rewritten
+    assert "/v1/auth/csrf" in rewritten
+    assert "X-CSRF-Token" in rewritten
+
+
+def test_runtime_proxy_avoids_stale_browser_cache_headers():
+    headers = _runtime_proxy_request_headers({
+        "Accept": "text/html",
+        "If-None-Match": '"abc"',
+        "If-Modified-Since": "Wed, 06 May 2026 00:00:00 GMT",
+        "Cookie": "session=secret",
+        "Authorization": "Bearer secret",
+        "Origin": "http://127.0.0.1:8787",
+        "Referer": "http://127.0.0.1:8787/runtime/app",
+        "X-CSRF-Token": "secret",
+        "Sec-Fetch-Site": "same-origin",
+    })
+
+    assert headers == {"Accept": "text/html"}
+
+
+def test_runtime_proxy_rewritten_html_is_not_etag_cached():
+    headers = _runtime_proxy_response_headers(
+        {
+            "content-type": "text/html; charset=utf-8",
+            "etag": '"abc"',
+            "last-modified": "Wed, 06 May 2026 00:00:00 GMT",
+            "cache-control": "public, max-age=3600",
+        },
+        content_type="text/html; charset=utf-8",
+    )
+
+    assert headers == {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+    }
+
+
+def test_artifact_runtime_expands_manifest_port_placeholders():
+    manifest = _process_manifest().model_copy(update={
+        "start_command": (
+            "mvn spring-boot:run "
+            "-Dserver.port=${PORT:8080} "
+            "-Dalt.port=${PORT:-8080} "
+            "-Dplain=${PORT} "
+            "-Dbare=$PORT"
+        ),
+        "port_env": "PORT",
+    })
+
+    command = artifact_runtime._command_for(manifest, 49152)
+
+    assert "${PORT" not in command
+    assert "$PORT" not in command
+    assert "-Dserver.port=49152" in command
+    assert "-Dalt.port=49152" in command
+    assert "-Dplain=49152" in command
+    assert "-Dbare=49152" in command
+
+
+async def test_static_artifact_runtime_starts_fetches_and_stops(tmp_path):
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "index.html").write_text("<!doctype html><title>Runtime App</title>", encoding="utf-8")
+    config = make_config(data_dir=tmp_path / "data")
+    runtime_id = "runtime-test-static"
+    start = StartArtifactRuntimeRequest(
+        runtime_instance_id=runtime_id,
+        protocol_run_id="run-1",
+        artifact_key="package",
+        artifact_path=str(package_dir),
+        manifest=ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/"),
+        actor_ref="operator",
+    )
+
+    started = await artifact_runtime.start_artifact_runtime(start, config=config)
+    try:
+        assert started.result.ok is True
+        assert started.result.runtime is not None
+        assert started.result.runtime.status == "running"
+
+        fetched = await artifact_runtime.artifact_runtime_fetch(
+            ArtifactRuntimeFetchRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+                path="/",
+            )
+        )
+        body = base64.b64decode(fetched.body_base64.encode("ascii")).decode("utf-8")
+        assert fetched.status_code == 200
+        assert "<title>Runtime App</title>" in body
+
+        health = await artifact_runtime.artifact_runtime_health(
+            ArtifactRuntimeHealthRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+            )
+        )
+        assert health.health.ok is True
+
+        logs = await artifact_runtime.artifact_runtime_logs(
+            ArtifactRuntimeLogsRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+            )
+        )
+        assert "starting:" in logs.log_tail
+    finally:
+        stopped = await artifact_runtime.stop_artifact_runtime(
+            StopArtifactRuntimeRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+                actor_ref="operator",
+            )
+        )
+        assert stopped.result.status == "stopped"
+
+
+async def test_process_artifact_runtime_returns_while_health_is_pending(tmp_path):
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    config = make_config(data_dir=tmp_path / "data")
+    runtime_id = "runtime-test-pending"
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="process",
+        start_command=f"{sys.executable} -c \"import time; time.sleep(60)\"",
+        startup_timeout_seconds=1,
+        endpoints=[{"endpoint_kind": "docs", "path": "/docs", "label": "API docs"}],
+        smoke_test=["GET /health"],
+    )
+    start = StartArtifactRuntimeRequest(
+        runtime_instance_id=runtime_id,
+        protocol_run_id="run-1",
+        artifact_key="package",
+        artifact_path=str(package_dir),
+        manifest=manifest,
+        actor_ref="operator",
+    )
+
+    started = await artifact_runtime.start_artifact_runtime(start, config=config)
+    try:
+        assert started.result.ok is True
+        assert started.result.status == "starting"
+        assert started.result.runtime is not None
+        assert started.result.runtime.status == "starting"
+        assert "health path" in started.result.message
+
+        health = await artifact_runtime.artifact_runtime_health(
+            ArtifactRuntimeHealthRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+            )
+        )
+        assert health.health.ok is False
+        assert health.health.status == "starting"
+        assert health.health.runtime is not None
+        assert health.health.runtime.status == "starting"
+    finally:
+        await artifact_runtime.stop_artifact_runtime(
+            StopArtifactRuntimeRequest(
+                runtime_instance_id=runtime_id,
+                protocol_run_id="run-1",
+                artifact_key="package",
+                actor_ref="operator",
+            )
+        )
+
+
+async def test_artifact_runtime_health_marks_missing_process_stopped():
+    health = await artifact_runtime.artifact_runtime_health(
+        ArtifactRuntimeHealthRequest(
+            runtime_instance_id="missing-runtime",
+            protocol_run_id="run-1",
+            artifact_key="package",
+        )
+    )
+
+    assert health.health.ok is False
+    assert health.health.status == "stopped"
+    assert health.health.runtime is not None
+    assert health.health.runtime.status == "stopped"
+    assert health.health.runtime.failure_code == "runtime_not_running"
+
+
+async def test_workspace_hygiene_dry_run_and_cleanup(tmp_path):
+    working_dir = tmp_path / "workspace"
+    data_dir = tmp_path / "data"
+    cache_dir = working_dir / "project" / "target"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "build.log").write_text("temporary build output", encoding="utf-8")
+    runtime_log_dir = data_dir / "artifact-runtimes" / "run-1"
+    runtime_log_dir.mkdir(parents=True)
+    (runtime_log_dir / "runtime.log").write_text("runtime log", encoding="utf-8")
+    config = make_config(data_dir=data_dir, working_dir=working_dir)
+
+    usage = await workspace_hygiene.workspace_usage(
+        WorkspaceUsageRequest(categories=["build_caches", "runtime_logs"]),
+        config=config,
+    )
+
+    categories = {entry.category for entry in usage.plan.entries}
+    assert {"build_caches", "runtime_logs"}.issubset(categories)
+    assert usage.plan.deletable_bytes > 0
+    assert cache_dir.exists()
+
+    cleaned = await workspace_hygiene.workspace_cleanup(
+        WorkspaceCleanupRequest(plan=usage.plan, confirm="CLEAN"),
+        config=config,
+    )
+
+    assert cleaned.removed_bytes > 0
+    assert str(cache_dir.resolve()) in cleaned.removed_paths
+    assert not cache_dir.exists()
+
+
+async def test_workspace_hygiene_blocks_symlink_escape(tmp_path):
+    working_dir = tmp_path / "workspace"
+    outside_dir = tmp_path / "outside"
+    working_dir.mkdir()
+    outside_dir.mkdir()
+    escaped = working_dir / "target"
+    escaped.symlink_to(outside_dir, target_is_directory=True)
+    config = make_config(data_dir=tmp_path / "data", working_dir=working_dir)
+
+    usage = await workspace_hygiene.workspace_usage(
+        WorkspaceUsageRequest(categories=["build_caches"]),
+        config=config,
+    )
+    cleaned = await workspace_hygiene.workspace_cleanup(
+        WorkspaceCleanupRequest(plan=usage.plan, confirm="CLEAN"),
+        config=config,
+    )
+
+    assert cleaned.removed_paths == []
+    assert cleaned.failures
+    assert outside_dir.exists()

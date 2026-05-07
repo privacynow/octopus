@@ -125,6 +125,7 @@ Current command shape:
 /protocol auto modify latest|<session_id> <change request>
 /protocol auto status latest|<session_id>
 /protocol improve <slug> <change request>
+/protocol improve-run latest|<run id|recent index> <change request>
 /protocol start <slug> <problem statement> [--context <text>] [--constraints <text>] [--workspace <ref>]
 /protocol status latest|<number|short_id>
 /protocol artifacts latest|<number|short_id>
@@ -161,6 +162,9 @@ Behavior:
   `--workspace`; each option consumes text until the next option marker.
 - Protocol-authored custom run input keys can be passed with the same
   `--custom-key <text>` shape.
+- `improve-run` uses the selected run as context and creates a normal Auto
+  Protocol revision of that run's protocol. Use it when a completed artifact
+  needs to be brought up to the current runtime, review, or usability standard.
 - `status` reports registry run state and deep links when available.
 - `artifacts` lists declared and produced artifacts compactly.
 - `preview` opens a rendered preview for text and Markdown artifacts when
@@ -173,14 +177,58 @@ Open, Send, Export, Watch, Stop updates, Apply Draft, Publish, and Publish &
 Run. These buttons call the same registry-backed protocol service as the slash
 commands.
 
+### Auto Protocol Usability Bar
+
+Telegram Auto Protocol should be understandable as a guided chat flow. A user
+may start with one command, but the response should carry enough context and
+buttons that they do not have to memorize a long command manual.
+
+A usable Auto Protocol Telegram card should show:
+
+- what workflow Octopus proposes
+- the main work packages and stage count
+- the primary artifact or outcome
+- validation blockers or warnings in plain language
+- Apply Draft, Publish, Publish & Run, Status, and artifact actions when those
+  actions are valid
+- the shortest visible follow-up command for modification when a button cannot
+  collect text
+
+If a generated session is blocked, Telegram should say what to fix next instead
+of only reporting a code. If the session is ready, the user should be able to
+publish and run from Telegram or intentionally open Registry for richer editing.
+
+Real Safari verification for Telegram Web is part of the release bar for
+Telegram-facing protocol changes. Confirm that cards are readable, buttons are
+grouped sensibly, links open the configured Registry surface, and run/artifact
+messages promote the primary result before secondary evidence.
+
 ## Artifacts
 
 If a command reports produced artifacts, users should be able to preview, open,
-or download them through registry artifact routes when available.
+or download them through registry artifact routes when available. Those routes
+fall back to retained artifact packages when the live workspace path is gone.
 
 Package artifacts should expose the default open action when the package
 contains a browser entry such as `index.html`, and a contents action when a
 directory browser is useful.
+
+Runnable package artifacts may also show `Start app`, `Open app`, `Status`, and
+`Stop`. `Start app` asks the Registry to start the artifact inside the owning
+bot runtime; `Open app` opens the Registry-routed web UI/API URL. Runtime cards
+are progressive: stopped runtimes offer start/status/artifact actions, while
+running runtimes offer open/status/stop/artifact actions. The same package
+should still expose download and contents actions so a user is not forced into
+the live runtime path.
+
+Telegram is not the primary destructive lifecycle surface. It may show run
+archive/delete status or deep links, but high-risk cleanup and deletion flows
+should land in the browser Registry where the user can read consequences and
+confirm deliberately.
+
+Runtime links use the configured Registry public URL. If that URL is local to
+the host, it may not be reachable from a phone; use Telegram Web on the host or
+configure a reachable Registry URL before sharing the runtime path.
 
 If a document is declared but not produced yet, Telegram should say that
 clearly. If an available artifact cannot be opened from the Registry, treat that

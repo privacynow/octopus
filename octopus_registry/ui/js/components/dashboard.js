@@ -613,6 +613,119 @@ function renderDashboard(container) {
         });
     }
 
+    function openWorkspaceCleanupDryRunDialog() {
+        const form = document.createElement('div');
+        form.className = 'conversation-management-form';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'Scan connected bot workspaces before deleting transient logs, build outputs, dependency caches, or scratch directories.';
+        form.appendChild(note);
+        const categoryWrap = document.createElement('div');
+        categoryWrap.className = 'run-secondary-filter-body';
+        const categories = [
+            ['runtime_logs', 'Runtime logs'],
+            ['build_caches', 'Build caches'],
+            ['dependency_caches', 'Dependency caches'],
+            ['stage_scratch', 'Scratch directories'],
+        ];
+        categories.forEach(([value, label]) => {
+            const checkboxLabel = document.createElement('label');
+            checkboxLabel.className = 'checkbox-row';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = value;
+            checkbox.checked = true;
+            checkboxLabel.appendChild(checkbox);
+            const text = document.createElement('span');
+            text.textContent = label;
+            checkboxLabel.appendChild(text);
+            categoryWrap.appendChild(checkboxLabel);
+        });
+        form.appendChild(categoryWrap);
+        const result = document.createElement('div');
+        result.className = 'list-container';
+        form.appendChild(result);
+        let cleanupPlan = null;
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Close';
+        const scanBtn = document.createElement('button');
+        scanBtn.type = 'button';
+        scanBtn.className = 'btn btn-primary';
+        scanBtn.textContent = 'Dry run';
+        const cleanBtn = document.createElement('button');
+        cleanBtn.type = 'button';
+        cleanBtn.className = 'btn btn-danger';
+        cleanBtn.textContent = 'Clean selected';
+        cleanBtn.disabled = true;
+        const view = UI.showDialog('Workspace cleanup', form, {
+            actions: [cancelBtn, scanBtn, cleanBtn],
+            maxWidth: '760px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        const selectedCategories = () => Array.from(categoryWrap.querySelectorAll('input[type="checkbox"]'))
+            .filter((item) => item.checked)
+            .map((item) => item.value);
+        const bytesLabel = (value) => {
+            const bytes = Number(value || 0);
+            if (!Number.isFinite(bytes)) return '0 B';
+            if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+            if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+            if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${bytes} B`;
+        };
+        const renderPlan = (plan) => {
+            const rows = [
+                UI.renderMetadataGrid([
+                    { label: 'Candidates', value: String(plan.entries?.length || 0) },
+                    { label: 'Files', value: String(plan.file_count || 0) },
+                    { label: 'Total', value: bytesLabel(plan.total_bytes || 0) },
+                    { label: 'Deletable', value: bytesLabel(plan.deletable_bytes || 0) },
+                ], { compact: true }),
+                ...(plan.entries || []).slice(0, 12).map((entry) => UI.renderListRow({
+                    label: entry.path || 'Workspace entry',
+                    sublabel: entry.reason || entry.category || '',
+                    badgeText: entry.safe_to_delete ? entry.category : 'review',
+                })),
+            ];
+            UI.reconcileChildren(result, rows.length ? rows : [UI.renderEmptyState('No cleanup candidates found.', true)]);
+        };
+        scanBtn.addEventListener('click', async () => {
+            scanBtn.disabled = true;
+            cleanBtn.disabled = true;
+            UI.reconcileChildren(result, [UI.renderEmptyState('Scanning connected bot workspace…', true)]);
+            try {
+                const response = await API.dryRunWorkspaceCleanup({ categories: selectedCategories() });
+                cleanupPlan = response?.plan || null;
+                renderPlan(cleanupPlan || {});
+                cleanBtn.disabled = !(cleanupPlan?.entries || []).some((entry) => entry.safe_to_delete);
+            } catch (err) {
+                UI.reportError('Workspace cleanup dry run failed', err, { context: 'Workspace cleanup dry run failed' });
+            } finally {
+                scanBtn.disabled = false;
+            }
+        });
+        cleanBtn.addEventListener('click', async () => {
+            if (!cleanupPlan) return;
+            cleanBtn.disabled = true;
+            try {
+                const response = await API.executeWorkspaceCleanup({
+                    plan: cleanupPlan,
+                    confirm: 'CLEAN',
+                });
+                UI.notify(`Workspace cleanup removed ${response?.removed_paths?.length || 0} paths.`, 'success');
+                cleanupPlan = response?.plan || cleanupPlan;
+                renderPlan(cleanupPlan);
+            } catch (err) {
+                UI.reportError('Workspace cleanup failed', err, { context: 'Workspace cleanup execution failed' });
+            } finally {
+                cleanBtn.disabled = false;
+            }
+        });
+    }
+
     function renderMaintenanceSection() {
         const section = document.createElement('section');
         section.className = 'workspace-section';
@@ -625,8 +738,15 @@ function renderDashboard(container) {
         section.appendChild(head);
         const body = document.createElement('div');
         body.className = 'list-container';
+        const hygieneRow = UI.renderListRow({
+            label: 'Workspace cleanup dry run',
+            sublabel: 'Scans connected bot workspaces and deletes only selected transient files after confirmation.',
+            badgeText: 'dry run',
+            onClick: openWorkspaceCleanupDryRunDialog,
+        });
+        body.appendChild(hygieneRow);
         const cleanupRow = UI.renderListRow({
-            label: 'Clean workspace data',
+            label: 'Reset registry workspace data',
             sublabel: 'Preserves agents and skills; removes conversations, tasks, protocols, runs, artifacts, and events.',
             badgeText: 'requires password',
             onClick: openCleanupDialog,

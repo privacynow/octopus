@@ -8,6 +8,7 @@ from typing import Any
 
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.protocols.auto_design import (
+    AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE,
     ProtocolAutoDesignModelRequestRecord,
     ProtocolAutoDesignModelResponseRecord,
 )
@@ -38,7 +39,13 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "Your job is semantic decomposition, not final protocol JSON. Infer the smallest serious workflow that can deliver the requested outcome. "
         "Avoid customer/example-specific shortcuts. Keep the plan under 18 final stages after compilation, so prefer 3-6 supporting work packages plus one primary outcome package. "
         "Each work package must be domain-specific to the requirement, have a strict quality bar, and include an adversarial review rubric. "
-        "Do not add several final reviewers after the primary artifact; final acceptance will inspect or exercise the primary outcome.\n\n"
+        "Do not add several final reviewers after the primary artifact; final acceptance will inspect or exercise the primary outcome. "
+        "When the outcome is an app, game, report SPA, API service, backend system, or any other interactive product, the implementation package must produce a user-facing UI/API package, tests/smoke evidence, and an octopus-runtime.json manifest at the package root. "
+        "The implementation package must build and smoke-test the package before final acceptance; runtime start commands are launch commands only and must not install dependencies, compile, package, run tests, or use developer-mode commands like mvn spring-boot:run. "
+        "The operator UI/API must make the result of core user actions visible in the product itself. A user should not need logs or raw JSON archaeology to know what happened. "
+        f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE} "
+        "For static HTML packages, runtime_kind can be static and index.html must be at the package root. "
+        "For Java, Python, Node, binary, or process-backed systems, choose coherent public APIs and an operator UI that exercises those APIs through the runtime surface.\n\n"
         "Return this JSON object shape:\n"
         "{\n"
         '  "requirement_summary": "plain summary",\n'
@@ -59,14 +66,14 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         '      "quality_bar": "strict completion bar",\n'
         '      "artifact_key": "stable_snake_case_artifact",\n'
         '      "artifact_display_name": "Human artifact name",\n'
-        '      "artifact_description": "artifact contract",\n'
+        '      "artifact_description": "artifact contract, including runtime manifest expectations when runnable",\n'
         '      "review_role_key": "stable_snake_case_reviewer",\n'
         '      "review_display_name": "Human reviewer name",\n'
         '      "review_responsibility": "independent review responsibility",\n'
         '      "review_rubric": "adversarial rubric with revise conditions"\n'
         "    }\n"
         "  ],\n"
-        '  "primary_artifact": {"artifact_key": "produced_outcome", "display_name": "Produced Outcome", "produced_by_stage_key": "produce_outcome"},\n'
+        '  "primary_artifact": {"artifact_key": "produced_outcome", "display_name": "Produced Outcome", "produced_by_stage_key": "produce_outcome", "open_behavior": "runtime"},\n'
         '  "review_policy": {"stance": "adversarial", "max_review_rounds": 3, "stage_hard_cap": 18},\n'
         '  "run_inputs": [{"key": "problem_statement", "label": "Run objective", "kind": "textarea", "required": true, "default_value": "..."}],\n'
         '  "acceptance_criteria": ["..."],\n'
@@ -77,6 +84,7 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "Required package guidance: include requirement/planning work, requirement review will be added by the compiler, "
         "include focused supporting packages that are truly needed, and include one implementation/outcome package. "
         "For the outcome package use package_key 'implementation' if you include it; otherwise the compiler will create it. "
+        "For runnable outcomes, set primary_artifact.open_behavior to 'runtime' and make the implementation artifact contract require a root octopus-runtime.json manifest. "
         "Do not include validation-only or final-review-only packages.\n\n"
         "Planning input JSON:\n"
         f"{json.dumps(payload, sort_keys=True)}"

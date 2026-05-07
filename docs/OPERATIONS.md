@@ -139,10 +139,17 @@ files were expected, which files were produced, and what remains blocked.
 For every customer-relevant artifact:
 
 1. Open or preview it from the run.
-2. Download it if the customer needs a local copy.
-3. Confirm the content matches the declared output.
-4. Confirm missing artifacts are labeled as missing.
-5. Confirm artifact actions appear wherever the artifact is linked.
+2. Retain the package when the artifact matters beyond the live workspace.
+3. Download it if the customer needs a local copy.
+4. Confirm the content matches the declared output.
+5. Confirm missing artifacts are labeled as missing.
+6. Confirm artifact actions appear wherever the artifact is linked.
+7. For runnable artifacts, start the app, open the Registry-routed URL, exercise
+   the primary UI/API path, inspect health/logs if available, and stop the
+   runtime when evaluation is complete.
+8. Export the run when audit handoff matters; runtime instances and runtime
+   events are included in the run export alongside stages, artifacts, tasks, and
+   transitions.
 
 If a produced artifact cannot be previewed, opened, downloaded, or located from
 the customer-facing surface where it appears, record that as a product issue.
@@ -208,6 +215,22 @@ For a reusable demo environment:
 2. Preserve agents, credentials, skills, guidance, and tokens unless the goal is
    a full teardown.
 3. Do not clean a customer environment without an explicit operator decision.
+
+Runnable artifact processes have explicit runtime limits. The bot runtime reaps
+expired local processes, and Registry maintenance records expired runtime state
+and events so operators can see what happened. Prefer `Stop app`, `Archive`, or
+`Delete` from the run artifact controls before using broader workspace cleanup.
+
+The Dashboard workspace cleanup control is the product-safe cleanup path. It
+performs a dry run through the connected bot, reports candidate paths and byte
+counts, then deletes only approved transient categories after confirmation.
+Use the older workspace-data reset only for intentional demo resets; it removes
+Registry work records while preserving agents, skills, guidance, credentials,
+and tokens.
+
+Run archive/delete is separate from workspace cleanup. Archive hides completed
+or failed runs from normal views while preserving audit and retained packages.
+Delete is a soft-delete retention action and requires explicit confirmation.
 
 ## What To Avoid
 

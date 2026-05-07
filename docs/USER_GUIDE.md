@@ -216,6 +216,12 @@ the same controls as any other protocol. For revision from chat or deeper
 authoring notes, stay with [PROTOCOLS.md](PROTOCOLS.md) and
 [TELEGRAM.md](TELEGRAM.md).
 
+Telegram can also start an Auto Protocol session when you want a chat-first
+flow. The message should summarize the proposed workflow, show the primary
+outcome, and provide obvious actions such as Apply Draft, Publish, Publish &
+Run, Status, and Artifacts when they are available. Use Registry when you want
+more room to inspect or manually edit the draft.
+
 If a workflow matters, expect to see explicit review stages in the run history.
 Good protocols do not rely on one agent producing the final output in one pass;
 they route work through planner, implementer, and reviewer responsibilities so
@@ -238,9 +244,22 @@ A useful run page should answer:
 - what outputs were produced?
 - what is blocked, waiting, failed, canceled, or complete?
 
+The default Runs list is recent-first for meaningful work from Registry and
+Telegram. Use the view filters when you want only runs that need attention,
+running runs, completed runs, runs with outcomes, or runs from a specific
+surface. Archived and deleted runs are hidden from the normal recent view; use
+the archive/delete filters when you need retention history. Use `Show
+generated/audit runs` for rehearsal, smoke, and internal generated work.
+
 For active runs, watch the run status and latest agent update before retrying.
 A long-running stage is not automatically stuck. It should show enough progress
 or state for a user to understand whether work is still moving.
+
+When a completed run needs to be improved, select it and use `Improve this run`.
+Octopus sends the run objective, status, primary artifact, and produced artifact
+summary through Auto Protocol and creates a normal revision of the original
+protocol. The previous artifact remains audit evidence; the improvement creates
+a new draft, publish, and run path.
 
 ## Open Artifacts
 
@@ -251,11 +270,38 @@ An artifact can be:
 - declared but not produced yet
 - available
 - unavailable from the current host
+- retained as a durable package
 - expired or deleted
 
 Where supported, artifact actions should include preview, open, download, copy
 path, or package browsing. Missing or inconsistent artifact actions are product
 issues, not a normal user burden.
+
+Multi-file artifacts are always still packages. Use `Download` when you need the
+complete zip, and use `Contents` when you need to inspect files in place. Use
+`Retain package` for important outputs before workspace cleanup; if the live
+workspace path later disappears, the artifact can still open or download from
+the retained package.
+
+Some artifacts are runnable products, such as browser games, analytics apps, or
+backend systems with an operator UI and APIs. When the package contains
+`octopus-runtime.json` or a static `index.html`, the run can show `Start app`
+and `Open app`. Octopus starts the process inside the bot runtime, routes the
+UI/API through the Registry, and keeps package browse/download actions available
+beside the live app. Stop the runtime when you are done testing it.
+
+## Archive, Delete, And Cleanup
+
+Archive hides a run from the normal list while preserving the run, stages,
+artifacts, retained packages, runtime events, and audit trail. Delete is a soft
+delete used for retention and clutter control; it requires explicit
+confirmation and keeps historical audit available to authorized operators.
+
+Workspace cleanup lives under `Operations -> Dashboard`. It is dry-run-first:
+Octopus asks a connected bot to scan its own workspace, shows transient
+logs/caches/scratch directories it can remove, and only then executes the
+approved cleanup. Cleanup should not remove the only copy of an important
+artifact; retain the package first when the artifact matters.
 
 ## Use Telegram
 
@@ -272,6 +318,9 @@ for setup notes and command details.
 
 If you are new, learn the browser Registry workflow first after the agent exists.
 It exposes more context and is easier to inspect when something goes wrong.
+Telegram should still be readable without keeping this guide open: protocol
+cards should show the current state, the next safe actions, and the primary
+artifact when one exists.
 
 ## If Something Looks Wrong
 

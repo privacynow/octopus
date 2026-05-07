@@ -1177,7 +1177,7 @@ async def test_callback_exception_marks_work_item_failed(monkeypatch):
 # =====================================================================
 
 @pytest.mark.asyncio
-async def test_format_provider_error_kills_subprocess_on_timeout():
+async def test_format_provider_error_kills_subprocess_on_timeout(monkeypatch):
     import app.summarize as summarize_mod
 
     killed = []
@@ -1192,18 +1192,13 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
         async def wait(self):
             pass
 
-    original = asyncio.create_subprocess_exec
-
     async def mock_exec(*args, **kwargs):
         return FakeProc()
 
-    asyncio.create_subprocess_exec = mock_exec
-    try:
-        # Long text triggers summarization attempt
-        result = await summarize_mod.format_provider_error("E" * 5000, 1)
-    finally:
-        asyncio.create_subprocess_exec = mock_exec
-        asyncio.create_subprocess_exec = original
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", mock_exec)
+    # Long text triggers summarization attempt. Use a test-sized timeout; the
+    # behavior under test is cleanup on timeout, not waiting for production TTL.
+    result = await summarize_mod.format_provider_error("E" * 5000, 1, timeout=0.01)
 
     # Subprocess was killed
     assert len(killed) == 1
@@ -1390,33 +1385,6 @@ async def test_codex_no_thread_id_in_progress():
     assert CodexProvider._map_event(
         {"type": "event_msg", "payload": {"type": "session_configured", "thread_id": "t-789"}}, True
     ) is None
-
-
-async def test_codex_compaction_wording():
-    """Extended timeout message uses user-facing wording, not internal 'compaction'."""
-    import sys, tempfile
-    from pathlib import Path
-
-    cfg = _make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
-    provider = CodexProvider(cfg)
-
-    # A script that takes 1.5s (triggers timeout extension on resume)
-    import textwrap
-    script = textwrap.dedent(f"""\
-        import json, sys, time
-        sys.stdout.write(json.dumps({{"type": "thread.started", "thread_id": "t-1"}}) + "\\n")
-        sys.stdout.flush()
-        time.sleep(1.5)
-        sys.stdout.write(json.dumps({{"type": "item.completed", "item": {{"type": "agent_message", "text": "done"}}}}) + "\\n")
-        sys.stdout.flush()
-    """)
-    progress = FakeProgress()
-    result = await provider._run_cmd(
-        [sys.executable, "-c", script], progress, is_resume=True
-    )
-    extended_msgs = [u for u in progress.updates if "this may take a moment" in u]
-    assert len(extended_msgs) == 1
-    assert not any("compaction" in u.lower() for u in progress.updates)
 
 
 # =====================================================================

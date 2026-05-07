@@ -648,18 +648,42 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
             stopRuntime.hidden = prominentRuntime || !['running', 'starting'].includes(status);
             scheduleRuntimePoll();
         };
+        const runtimeActionErrorMessage = (err, fallback = 'Runtime action failed.') => {
+            const payloadDetail = err?.payload?.detail && typeof err.payload.detail === 'object'
+                ? err.payload.detail
+                : {};
+            const details = err?.details && typeof err.details === 'object' ? err.details : {};
+            const blocker = Array.isArray(details.blockers)
+                ? details.blockers.map((item) => String(item || '').trim()).find(Boolean)
+                : '';
+            const message = blocker || payloadDetail.message || err?.message || fallback;
+            const needsRevise = err?.errorCode === 'PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_NOT_RUN_READY'
+                && !/revise/i.test(message);
+            const expanded = needsRevise ? `${message}. Revise the artifact package first.` : message;
+            return String(expanded || fallback).slice(0, 220);
+        };
+        const setRuntimeActionableFailure = (message) => {
+            currentRuntimeReady = false;
+            runtimeBtn.hidden = !runtimeExpected || ['archived', 'deleted'].includes(currentRuntimeStatus);
+            runtimeBtn.disabled = false;
+            runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';
+            runtimeStatus.hidden = !runtimeExpected;
+            openRuntime.hidden = true;
+            stopRuntime.hidden = true;
+            runtimeHint.hidden = !runtimeExpected;
+            runtimeHint.textContent = message || 'Runtime action failed. Try again or manage app.';
+            stopRuntimePoll();
+        };
         const refreshRuntimeState = async () => {
             if (runtimePollInFlight) return;
             runtimePollInFlight = true;
             try {
                 const status = await API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key);
                 setRuntimeState(status?.runtime || {}, status?.health || null);
-            } catch (_err) {
-                runtimeBtn.hidden = !runtimeExpected;
-                runtimeStatus.hidden = !runtimeExpected;
-                openRuntime.hidden = true;
-                stopRuntime.hidden = true;
-                stopRuntimePoll();
+            } catch (err) {
+                setRuntimeActionableFailure(
+                    `Could not check current app status: ${runtimeActionErrorMessage(err, 'Try again or manage app.')}`,
+                );
             } finally {
                 runtimePollInFlight = false;
             }
@@ -675,8 +699,7 @@ function _protocolArtifactActionRow(runId, artifact, definition = null, {
                 setRuntimeState(runtime);
             } catch (err) {
                 UI.reportError('Failed to start artifact app', err, { context: 'Artifact runtime start failed' });
-                runtimeBtn.disabled = false;
-                runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';
+                setRuntimeActionableFailure(`Start failed: ${runtimeActionErrorMessage(err, 'Try again or manage app.')}`);
             }
         });
         actionRow.insertBefore(runtimeBtn, actionRow.firstChild);

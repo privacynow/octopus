@@ -342,6 +342,22 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "path.startsWith('/ui/protocol-runs')" not in router_js
 
 
+def test_protocol_artifact_runtime_controls_recover_after_status_or_start_failures() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const runtimeActionErrorMessage = (err" in workspace
+    assert "PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_NOT_RUN_READY" in workspace
+    assert ". Revise the artifact package first." in workspace
+    assert "const setRuntimeActionableFailure = (message) =>" in workspace
+    assert "runtimeBtn.disabled = false;" in workspace
+    assert "runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';" in workspace
+    assert "Could not check current app status:" in workspace
+    assert "setRuntimeActionableFailure(`Start failed: ${runtimeActionErrorMessage" in workspace
+
+
 def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:
     """Authoring styles are kit-owned; runs styles are protocol-scoped."""
     repo_root = Path(__file__).resolve().parents[1]
@@ -1187,7 +1203,7 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "onClick: previewTarget" in helper
     assert "event.preventDefault();" in helper
     assert "const available = !missing && artifact?.exists !== false;" in protocol_workspace
-    assert "openHref: available ? API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "openHref: showStorageOpen && available ? API.protocolRunArtifactContentUrl" in protocol_workspace
     assert "API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace

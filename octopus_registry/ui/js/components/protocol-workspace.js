@@ -10298,32 +10298,77 @@ function renderProtocolRuns(container) {
             if (story.childElementCount) {
                 panel.appendChild(story);
             }
-            panel.appendChild(UI.renderMetadataGrid([
-                { label: 'Artifact', value: key },
+            const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
+            const packageSummary = document.createElement('div');
+            packageSummary.className = 'run-primary-package-summary';
+            const packageLabel = document.createElement('strong');
+            packageLabel.textContent = 'Package';
+            packageSummary.appendChild(packageLabel);
+            const packageCopy = document.createElement('span');
+            const observedPath = _protocolArtifactDisplayPath(artifact);
+            const expectedPath = primary.expected_path || _artifactDefinitionPath(definition);
+            const packagePath = observedPath || expectedPath || '';
+            const packageName = packagePath
+                ? String(packagePath).split('/').filter(Boolean).slice(-1)[0] || packagePath
+                : key;
+            packageCopy.textContent = [
+                key,
+                artifact.verification_state || artifact.state || '',
+                packageName ? `workspace folder ${packageName}` : '',
+                evidence ? 'release evidence available' : '',
+            ].filter(Boolean).join(' · ');
+            packageSummary.appendChild(packageCopy);
+            const moreDetails = document.createElement('details');
+            moreDetails.className = 'run-primary-package-details';
+            const moreDetailsSummary = document.createElement('summary');
+            moreDetailsSummary.textContent = 'Evidence and paths';
+            moreDetails.appendChild(moreDetailsSummary);
+            if (evidence) {
+                const evidenceRow = document.createElement('div');
+                evidenceRow.className = 'run-primary-evidence-detail';
+                const evidenceCopy = document.createElement('span');
+                evidenceCopy.textContent = [
+                    'Release evidence',
+                    evidence.verification_state || evidence.state || '',
+                    _compactRunText(_protocolArtifactDisplayPath(evidence) || '', 96),
+                ].filter(Boolean).join(' · ');
+                evidenceRow.appendChild(evidenceCopy);
+                const evidenceActions = document.createElement('div');
+                evidenceActions.className = 'run-primary-compact-actions';
+                const evidenceOpen = document.createElement('a');
+                evidenceOpen.href = API.protocolRunArtifactContentUrl(currentRun.run.protocol_run_id, evidence.artifact_key);
+                evidenceOpen.className = 'btn btn-sm';
+                evidenceOpen.textContent = 'Open evidence';
+                evidenceActions.appendChild(evidenceOpen);
+                const evidenceDownload = document.createElement('a');
+                evidenceDownload.href = API.protocolRunArtifactContentUrl(currentRun.run.protocol_run_id, evidence.artifact_key, { download: true });
+                evidenceDownload.className = 'btn btn-sm';
+                evidenceDownload.textContent = 'Download evidence';
+                evidenceActions.appendChild(evidenceDownload);
+                evidenceRow.appendChild(evidenceActions);
+                moreDetails.appendChild(evidenceRow);
+            }
+            moreDetails.appendChild(UI.renderMetadataGrid([
+                { label: 'Artifact key', value: key },
                 { label: 'Produced by', value: primary.produced_by_stage_key || 'produce_outcome' },
-                { label: 'Expected path', value: primary.expected_path || _artifactDefinitionPath(definition) || '-' },
-                { label: 'Observed path', value: _protocolArtifactDisplayPath(artifact) || '-' },
+                { label: 'Expected path', value: expectedPath || '-' },
+                { label: 'Observed path', value: observedPath || '-' },
                 { label: 'Verification', value: artifact.verification_state || artifact.state || '-' },
             ], { compact: true }));
-            const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
-            if (evidence) {
-                panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence', compactActions: true }));
-            }
+            packageSummary.appendChild(moreDetails);
+            panel.appendChild(packageSummary);
             if (includeRunControls) {
                 const controls = document.createElement('div');
                 controls.className = 'run-primary-control-bar';
                 const actionSpecs = _runActionSpecs().filter((spec) => spec.visible !== false);
-                const actionLabel = document.createElement('div');
-                actionLabel.className = 'detail-label';
-                actionLabel.textContent = 'Run controls';
-                controls.appendChild(actionLabel);
                 controls.appendChild(_buildRunActionBar({ specs: actionSpecs }));
                 const lifecycleSpecs = _runLifecycleSpecs().filter((spec) => spec.visible !== false);
                 if (lifecycleSpecs.length) {
-                    const lifecycleLabel = document.createElement('div');
-                    lifecycleLabel.className = 'detail-label';
-                    lifecycleLabel.textContent = 'Lifecycle';
-                    controls.appendChild(lifecycleLabel);
+                    const moreOptions = document.createElement('details');
+                    moreOptions.className = 'run-primary-more-options';
+                    const moreOptionsSummary = document.createElement('summary');
+                    moreOptionsSummary.textContent = 'More run options';
+                    moreOptions.appendChild(moreOptionsSummary);
                     const row = document.createElement('div');
                     row.className = 'editor-actions';
                     lifecycleSpecs.forEach((item) => {
@@ -10335,7 +10380,8 @@ function renderProtocolRuns(container) {
                         button.addEventListener('click', () => _openRunLifecycleDialog(item));
                         row.appendChild(button);
                     });
-                    controls.appendChild(row);
+                    moreOptions.appendChild(row);
+                    controls.appendChild(moreOptions);
                 }
                 if (controls.childElementCount) {
                     panel.appendChild(controls);

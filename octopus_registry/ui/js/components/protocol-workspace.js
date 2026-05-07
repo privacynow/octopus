@@ -8375,7 +8375,7 @@ function renderProtocolRuns(container) {
             primary?.expected_path ? `Primary artifact expected path: ${primary.expected_path}` : '',
             artifacts.length ? `Existing artifacts:\n- ${artifacts.join('\n- ')}` : 'Existing artifacts: none recorded',
             '',
-            'Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
+            'Quality bar for the improved protocol: primary artifact first, root octopus-runtime.json for runnable UI/API/backend artifacts, coherent user-facing APIs, routed browser UI, downloadable zip package, outcome-readiness matrix, customer-facing branding check, smoke/runtime evidence, adversarial review, and no unnecessary late review stages after the main artifact review.',
         ].filter((line) => line !== '').join('\n');
     }
 

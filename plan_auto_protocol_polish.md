@@ -56,7 +56,7 @@ surface.
 | Runs discovery and recency | Default API keeps human-generated runs visible and recency ordered | Default Runs view is recent-first with useful human filters | Recent run references resolve predictably | Store visibility avoids burying real user runs | Documented | Covered | Pending current Safari proof |
 | Improve existing run | Reuses Auto Protocol revise session against the existing run's protocol | Run detail can generate/apply/publish/run an improvement protocol from run context | Telegram command can improve a selected run | No duplicate protocol generator or run model | Documented | Covered | Pending current Safari proof |
 | SDK-backed agent awareness | SDK owns protocol/run/artifact/capability awareness records and prompt rendering | Registry conversations receive the awareness brief | Telegram conversations receive the same awareness brief; `/protocol` remains a shortcut | Registry is authority implementation, not a bot-specific side channel | Documented | Covered | Pending current Safari proof |
-| Risk-engine Java/Maven proof | Toolchain expected; runtime start now rejects non-run-ready process commands before bot dispatch | Registry live proof exposed non-run-ready `mvn spring-boot:run`; prepared-artifact rerun pending | Telegram live proof still pending after prepared-artifact rerun | Acceptance gate and Registry start share the same run-ready manifest policy | Documented | Focused start/acceptance regressions covered | Pending current Safari proof after prepared artifact |
+| Risk-engine Java/Maven proof | Toolchain expected; runtime start now rejects non-run-ready process commands before bot dispatch | Registry live proof exposed non-run-ready `mvn spring-boot:run`; prepared-artifact rerun pending | Telegram live proof still pending after prepared-artifact rerun | Acceptance gate and Registry start share the same run-ready manifest policy and auto-revise runtime contract defects | Documented | Focused start/acceptance regressions covered | Pending current Safari proof after prepared artifact |
 
 Every implementation phase below must update this ledger when the product
 state changes. The ledger favors user outcomes over internal implementation
@@ -68,9 +68,12 @@ used `mvn spring-boot:run`, and live logs showed Maven dependency resolution
 during user start. That is not a run-ready artifact. The product now blocks the
 same class of manifest at Registry runtime start, before dispatching to a bot,
 using the same generic command policy already used by final acceptance. The
-next risk-engine proof must regenerate or revise the artifact through the real
-protocol path so its `start_command` launches a prepared package such as
-`java -jar target/app.jar`.
+final acceptance gate no longer requires an operator to manually return this
+class of work: when the protocol has a revise path, missing/invalid/non-run-ready
+runtime manifests become an in-product revise transition with the blocker
+details in the next stage input. The next risk-engine proof must regenerate or
+revise the artifact through the real protocol path so its `start_command`
+launches a prepared package such as `java -jar target/app.jar`.
 
 The prerequisite Auto Protocol closeout was completed before this workstream:
 user/developer docs were updated, Telegram Web was verified in real Safari, and

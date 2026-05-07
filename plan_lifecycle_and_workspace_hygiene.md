@@ -39,9 +39,10 @@ Runtime proof note, 2026-05-07: a live Registry risk-engine run proved artifact
 runtime start/stop, routing, runtime events, and snapshot/package availability,
 but it also exposed that Registry start still dispatched a process-backed
 manifest whose `start_command` used Maven developer mode. That path is now
-blocked before bot dispatch using the shared runtime manifest policy. The
-remaining live proof must use a regenerated or revised prepared artifact, not a
-developer-mode start command.
+blocked before bot dispatch using the shared runtime manifest policy, and final
+acceptance auto-revises manifest contract defects instead of relying on a manual
+operator return. The remaining live proof must use a regenerated or revised
+prepared artifact, not a developer-mode start command.
 
 ## Problem Statement
 

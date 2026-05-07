@@ -4382,7 +4382,104 @@ class ProtocolPostgresAdapter:
             )
             if row is None:
                 raise RuntimeError("Failed to persist artifact runtime event.")
-            return self._protocol_artifact_runtime_event_from_row(row)
+            saved = self._protocol_artifact_runtime_event_from_row(row)
+            self._maybe_complete_blocked_runtime_acceptance_in_tx(
+                conn,
+                run_id=event.protocol_run_id,
+                actor_ref=event.actor_ref or self._access_actor_ref(access),
+                now=created_at,
+            )
+            return saved
+
+    def _maybe_complete_blocked_runtime_acceptance_in_tx(
+        self,
+        conn,
+        *,
+        run_id: str,
+        actor_ref: str,
+        now: str,
+    ) -> None:
+        run_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+            (run_id,),
+        )
+        if run_row is None:
+            return
+        if str(run_row.get("status", "") or "").strip().lower() != "blocked":
+            return
+        if str(run_row.get("blocked_code", "") or "").strip().lower() != "runtime_evidence_required":
+            return
+        stage_execution_id = str(run_row.get("current_stage_execution_id", "") or "").strip()
+        if not stage_execution_id:
+            return
+        stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s",
+            (stage_execution_id,),
+        )
+        if stage_execution_row is None:
+            return
+        if str(stage_execution_row.get("status", "") or "").strip().lower() != "blocked":
+            return
+        if str(stage_execution_row.get("decision", "") or "").strip().lower() != "accept":
+            return
+        if str(stage_execution_row.get("failure_code", "") or "").strip().lower() != "runtime_evidence_required":
+            return
+        try:
+            document = self._protocol_document_for_run(conn, run_row)
+            stage = document.stage(str(stage_execution_row.get("stage_key", "") or ""))
+        except Exception:
+            return
+        if stage.stage_kind != "acceptance":
+            return
+
+        reason = (
+            "Registry runtime evidence now satisfies the blocked final acceptance gate: "
+            "runtime start, health check, routed UI/API exercise, visible outcome evidence, "
+            "outcome-readiness matrix, and customer-facing branding evidence are recorded."
+        )
+        engine = self._protocol_engine.evaluate_operator_action(
+            document=document,
+            run=self._protocol_run_from_row(run_row),
+            stage_execution=self._protocol_stage_execution_from_row(stage_execution_row),
+            stage_executions=self._protocol_stage_executions_for_run(conn, run_id),
+            action="accept",
+            reason=reason,
+            now=now,
+            review_edge_counts=protocol_review_edge_counts(self._protocol_run_transitions_history(conn, run_id)),
+        )
+        engine = self._runtime_acceptance_evidence_gate(
+            conn,
+            run_row=run_row,
+            stage_execution_row=stage_execution_row,
+            engine=engine,
+        )
+        if str(engine.run_status or "") != "completed":
+            return
+        self._apply_protocol_engine_decision_in_tx(
+            conn,
+            run_row=run_row,
+            stage_execution_row=stage_execution_row,
+            engine=engine,
+            actor_type="protocol_engine",
+            actor_ref=str(actor_ref or "runtime_evidence_gate"),
+            now=now,
+        )
+        self._record_protocol_compliance_event(
+            conn,
+            protocol_run_id=run_id,
+            protocol_definition_version_id=str(run_row.get("protocol_definition_version_id", "") or ""),
+            event_kind="runtime_evidence_auto_accept",
+            actor_ref=str(actor_ref or "runtime_evidence_gate"),
+            actor_role="protocol_engine",
+            summary=reason,
+            metadata={
+                "current_stage_key": str(stage_execution_row.get("stage_key", "") or ""),
+                "stage_execution_id": str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+            },
+            now=now,
+        )
 
     def list_protocol_artifact_runtime_events(
         self,

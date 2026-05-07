@@ -1599,6 +1599,35 @@ def test_registry_store_persists_protocol_artifact_runtime(postgres_registry_tru
     assert event.event_kind == "starting"
     assert [item.runtime_event_id for item in events] == [event.runtime_event_id]
 
+    next_runtime = store.save_protocol_artifact_runtime(
+        runtime.model_copy(
+            update={
+                "runtime_instance_id": "runtime-store-test-next",
+                "status": "running",
+                "updated_at": "2099-01-01T00:00:00Z",
+            }
+        ),
+        access=operator_access(),
+    )
+    next_event = store.append_protocol_artifact_runtime_event(
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=next_runtime.runtime_instance_id,
+            protocol_run_id=detail.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            event_kind="started",
+            actor_ref="test",
+            summary="Runtime started.",
+        ),
+        access=operator_access(),
+    )
+    current_events = store.list_protocol_artifact_runtime_events(
+        detail.run.protocol_run_id,
+        "produced_outcome",
+        access=operator_access(),
+    )
+
+    assert [item.runtime_event_id for item in current_events] == [next_event.runtime_event_id]
+
 
 def test_registry_store_persists_protocol_artifact_snapshot(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)

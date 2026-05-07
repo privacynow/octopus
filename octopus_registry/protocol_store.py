@@ -4209,17 +4209,34 @@ class ProtocolPostgresAdapter:
             detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
             if detail is None:
                 raise KeyError(run_id)
+            current_runtime = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT runtime_instance_id
+                FROM {SCHEMA}.protocol_artifact_runtime_instances
+                WHERE protocol_run_id = %s
+                  AND artifact_key = %s
+                  AND status <> 'deleted'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (run_id, artifact_key),
+            )
+            if current_runtime is None:
+                return []
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
                 f"""
                 SELECT *
                 FROM {SCHEMA}.protocol_artifact_runtime_events
-                WHERE protocol_run_id = %s
-                  AND artifact_key = %s
+                WHERE runtime_instance_id = %s
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (run_id, artifact_key, max(1, min(int(limit or 50), 200))),
+                (
+                    str(current_runtime.get("runtime_instance_id", "") or ""),
+                    max(1, min(int(limit or 50), 200)),
+                ),
             )
             return [self._protocol_artifact_runtime_event_from_row(row) for row in rows]
 

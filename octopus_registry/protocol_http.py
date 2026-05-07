@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from octopus_sdk.protocols import (
     ProtocolAccessContextRecord,
     ProtocolArtifactRecord,
+    ProtocolArtifactRuntimeActionResultRecord,
     ProtocolArtifactRuntimeEventRecord,
     ProtocolArtifactRuntimeInstanceRecord,
     ProtocolArtifactRuntimeManifestRecord,
@@ -670,6 +671,9 @@ def build_protocol_router(
 
     def _runtime_instance_id(run_id: str, artifact_key: str) -> str:
         return uuid.uuid5(uuid.NAMESPACE_URL, f"octopus-runtime:{run_id}:{artifact_key}").hex
+
+    def _new_runtime_instance_id(run_id: str, artifact_key: str) -> str:
+        return f"{_runtime_instance_id(run_id, artifact_key)}-{uuid.uuid4().hex[:12]}"
 
     def _runtime_manifest_from_path(path: Path) -> tuple[ProtocolArtifactRuntimeManifestRecord | None, str]:
         root = path if path.is_dir() else path.parent
@@ -2617,7 +2621,60 @@ def build_protocol_router(
                 error_code="PROTOCOL_ARTIFACT_RUNTIME_AGENT_UNAVAILABLE",
                 message="No connected agent is available to run this artifact.",
             )
-        runtime_id = _runtime_instance_id(run_id, artifact.artifact_key)
+        existing_runtime = store.get_protocol_artifact_runtime(run_id, artifact.artifact_key, access=access)
+        if existing_runtime is not None and str(existing_runtime.status or "").strip().lower() in {"running", "starting"}:
+            try:
+                existing_result = await RegistryManagementClient(store).send(
+                    agent_id=existing_runtime.agent_id,
+                    payload=ArtifactRuntimeHealthRequest(
+                        runtime_instance_id=existing_runtime.runtime_instance_id,
+                        protocol_run_id=run_id,
+                        artifact_key=artifact.artifact_key,
+                    ),
+                    timeout_seconds=10,
+                )
+            except ManagementClientError:
+                existing_result = None
+            if (
+                existing_result is not None
+                and existing_result.success
+                and isinstance(existing_result.payload, ArtifactRuntimeHealthResult)
+                and existing_result.payload.health.runtime is not None
+            ):
+                refreshed = store.save_protocol_artifact_runtime(
+                    _merge_runtime_record(existing_runtime, existing_result.payload.health.runtime),
+                    access=access,
+                )
+                refreshed_status = str(refreshed.status or "").strip().lower()
+                if refreshed_status in {"running", "starting"}:
+                    store.append_protocol_artifact_runtime_event(
+                        _runtime_event(
+                            runtime=refreshed,
+                            event_kind="start_reused",
+                            actor_ref=access.actor_ref,
+                            summary=(
+                                "Runtime is already running."
+                                if refreshed_status == "running"
+                                else "Runtime process is already active; health check is still pending."
+                            ),
+                            metadata={"status": refreshed.status},
+                        ),
+                        access=access,
+                    )
+                    return _json_payload(
+                        ProtocolArtifactRuntimeActionResultRecord(
+                            ok=True,
+                            status=refreshed.status,
+                            message=(
+                                "Runtime is already running."
+                                if refreshed_status == "running"
+                                else "Runtime process is already active; health check is still pending."
+                            ),
+                            runtime=refreshed,
+                        )
+                    )
+
+        runtime_id = _new_runtime_instance_id(run_id, artifact.artifact_key)
         urls = _runtime_public_urls(run_id, artifact.artifact_key)
         starting = ProtocolArtifactRuntimeInstanceRecord(
             runtime_instance_id=runtime_id,

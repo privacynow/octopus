@@ -2,8 +2,9 @@
 
 ## Status
 
-Implemented in `feature/auto_protocol`, pending final deployment and live
-Safari proof across Registry and Telegram.
+Implemented in `feature/auto_protocol`, deployed to the `/Users/tinker/octopus`
+checkout, and live-verified in Safari across Registry and Telegram for the
+prepared Java risk-engine artifact run `d38dab75b929405a9e4a3f1407491e76`.
 
 This document is now the mandatory execution plan for finishing the runnable
 artifact and Auto Protocol polish work. The work is not complete until every
@@ -44,19 +45,19 @@ surface.
 
 | Outcome | Backend Contract | Registry UI | Telegram | Engine/Store Enforcement | Docs | Focused Tests | Real Safari Proof |
 |---------|------------------|-------------|----------|--------------------------|------|---------------|-------------------|
-| Runtime manifest detection | Implemented | Implemented | Implemented through artifact cards | Implemented via manifest validation | Documented | Covered | Pending current Safari proof |
-| Start/open/stop runtime | Implemented | Implemented | Implemented | Implemented for lifecycle state | Documented | Covered | Real Safari verified stopped -> start attempt and non-run-ready 409 recovery; open/stop still need prepared artifact proof |
-| Health/logs/events visibility | Implemented | Implemented in runtime dialog | Status card implemented; detailed logs remain Registry-owned | Events persisted | Documented | Covered | Pending current Safari proof |
+| Runtime manifest detection | Implemented | Implemented | Implemented through artifact cards | Implemented via manifest validation | Documented | Covered | Safari verified prepared `java -jar` manifest on `d38dab75b929405a9e4a3f1407491e76` |
+| Start/open/stop runtime | Implemented | Implemented | Implemented | Implemented for lifecycle state | Documented | Covered | Safari verified Registry start/open/UI/API exercise and Telegram start/status/package delivery for the prepared Java artifact; stop controls remain existing lifecycle coverage |
+| Health/logs/events visibility | Implemented | Implemented in runtime dialog | Status card implemented; detailed logs remain Registry-owned | Events persisted | Documented | Covered | Safari/Telegram status recorded healthy Java runtime event with HTTP 200 and product health JSON |
 | Archive/delete runtime | Implemented HTTP | Implemented in runtime dialog | Registry-owned destructive lifecycle; Telegram links back to artifacts | Stop-before-archive/delete enforced | Documented | Covered | Pending current Safari proof |
-| Package browse/download zip | Implemented | Implemented | Implemented fallback package link | Existing artifact path | Documented | Covered | Pending current Safari proof |
-| Runtime evidence in review | Prompt guidance present | Evidence visible through runtime dialog and run detail | Status linked from cards | Hard accept gate implemented | Documented | Covered | Pending current Safari proof |
-| Runtime evidence in export | Implemented | N/A | N/A | Export payload includes runtime instances/events | Documented | Covered | Pending current Safari proof |
+| Package browse/download zip | Implemented | Implemented | Implemented fallback package link | Existing artifact path | Documented | Covered | Telegram Web delivered the `output` package and Registry served artifact routes for the prepared Java run |
+| Runtime evidence in review | Prompt guidance present | Evidence visible through runtime dialog and run detail | Status linked from cards | Hard accept gate implemented | Documented | Covered | Product engine completed `d38dab75b929405a9e4a3f1407491e76` after recorded start, health, routed UI/API exercise, visible result, readiness matrix, and branding evidence |
+| Runtime evidence in export | Implemented | N/A | N/A | Export payload includes runtime instances/events | Documented | Covered | Registry runtime events/exportable run state verified for `d38dab75b929405a9e4a3f1407491e76` |
 | Runtime cleanup/retention | Bot reaper and Registry sweep implemented | Operator lifecycle visible through runtime dialog | N/A | Runtime expiry policy enforced | Documented | Covered | Pending current Safari proof |
 | Fast/tiered tests | Focused runner and markers implemented | N/A | N/A | N/A | Documented | Focused tiers covered | N/A |
 | Runs discovery and recency | Default API keeps human-generated runs visible and recency ordered | Default Runs view is recent-first with useful human filters | Recent run references resolve predictably | Store visibility avoids burying real user runs | Documented | Covered | Pending current Safari proof |
 | Improve existing run | Reuses Auto Protocol revise session against the existing run's protocol | Run detail can generate/apply/publish/run an improvement protocol from run context | Telegram command can improve a selected run | No duplicate protocol generator or run model | Documented | Covered | Pending current Safari proof |
 | SDK-backed agent awareness | SDK owns protocol/run/artifact/capability awareness records and prompt rendering | Registry conversations receive the awareness brief | Telegram conversations receive the same awareness brief; `/protocol` remains a shortcut | Registry is authority implementation, not a bot-specific side channel | Documented | Covered | Pending current Safari proof |
-| Risk-engine Java/Maven proof | Toolchain expected; runtime start now rejects non-run-ready process commands before bot dispatch | Registry/Safari proof exposes non-run-ready `mvn spring-boot:run` as a product-visible blocker; prepared-artifact rerun pending | Telegram live proof still pending after prepared-artifact rerun | Acceptance gate and Registry start share the same run-ready manifest policy and auto-revise runtime contract defects | Documented | Focused start/acceptance/UI recovery regressions covered | Real Safari + Registry logs prove current Maven artifact is blocked before bot dispatch and the UI remains actionable; prepared artifact + Telegram proof pending |
+| Risk-engine Java/Maven proof | Prepared Java artifact generated through Auto Protocol with `java -jar target/risk-decision-engine.jar`; generic run-ready policy still blocks developer/build commands before dispatch | Registry/Safari proved routed UI/API, scenario execution, and runtime health for the prepared artifact | Telegram Web proved status, artifact package delivery, runtime start, and runtime health through Registry APIs | Acceptance gate and Registry start share the same run-ready manifest policy; product reviewer gate completed the run without Codex manually accepting or sending back | Documented | Focused start/acceptance/UI recovery regressions covered | Real Safari + Registry/Telegram logs prove prepared Java runtime `d38dab75b929405a9e4a3f1407491e76` is complete |
 
 Every implementation phase below must update this ledger when the product
 state changes. The ledger favors user outcomes over internal implementation
@@ -92,6 +93,25 @@ The prerequisite Auto Protocol closeout was completed before this workstream:
 user/developer docs were updated, Telegram Web was verified in real Safari, and
 the existing Auto Protocol lifecycle remained shared between Registry and
 Telegram.
+
+Prepared-artifact proof note, 2026-05-07: Auto Protocol generated the
+risk-engine class through the real Registry path as run
+`d38dab75b929405a9e4a3f1407491e76`. The produced artifact is a Java runtime
+package with `octopus-runtime.json` at the package root and a run-ready
+`start_command` of `java -jar target/risk-decision-engine.jar`; Maven remains a
+build/test tool for this artifact, not the user-start path. Real Safari opened
+the Registry-routed app, clicked `Run scenarios`, ran
+`scn_pay_review_high_value_new_customer`, and Registry runtime events recorded
+`GET /health`, `GET /api/v1`, `GET /api/v1/scenarios`,
+`GET /api/v1/decisions`, `GET /api/v1/models`, and
+`POST /api/v1/scenarios/scn_pay_review_high_value_new_customer/run` with HTTP
+200 responses. Telegram Web then used the same Registry APIs to show run status,
+list artifacts, deliver the `output` package, start the app on bot port `53137`,
+and record a healthy Java runtime status. The final acceptance transition was
+made by the product engine: `accept` by `protocol_engine/operator-session` after
+runtime start, health, routed UI/API exercise, visible outcome evidence,
+outcome-readiness matrix, and customer-facing branding evidence were present.
+Codex did not manually click or issue accept/send-back.
 
 ## Problem Statement
 

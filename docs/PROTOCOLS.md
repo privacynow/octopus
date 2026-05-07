@@ -315,6 +315,13 @@ matrix, and a customer-facing branding check before the acceptance stage can
 complete successfully. This keeps a reviewer from accepting a runnable system
 only because files exist or one happy-path click worked.
 
+The gate is product-owned. A human or chat operator can exercise the runtime,
+but the final accept/block decision is made from Registry run state, transitions,
+artifact evidence, and runtime events. Manifest policy is generic: process
+runtimes must start prepared artifacts and may be rejected for dependency
+install, build, package, test, or developer-mode commands; Maven is only one
+example of that broader policy.
+
 ## Starting A Run
 
 Runs start from the latest published protocol version, not unsaved draft edits.

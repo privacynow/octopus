@@ -2,9 +2,11 @@
 
 ## Status
 
-Implementation in progress on `feature/auto_protocol`. The completion ledger is
-the accountability source for what has landed in code, tests, docs, deployment,
-and real Registry/Telegram proof.
+Implementation in progress on `feature/auto_protocol`. The runtime/artifact
+proof slice for the prepared risk-engine run
+`d38dab75b929405a9e4a3f1407491e76` has landed, is deployed to
+`/Users/tinker/octopus`, and is verified through real Registry and Telegram
+surfaces.
 
 This plan is intentionally separate from `plan_auto_protocol.md` and
 `plan_auto_protocol_polish.md`.
@@ -19,17 +21,17 @@ operator cleanup, and documentation.
 
 | Outcome | Backend Contract | Registry UI | Telegram | Docs | Focused Tests | Real Surface Proof |
 |---------|------------------|-------------|----------|------|----------------|--------------------|
-| Durable artifact snapshot | Implemented | Implemented in artifact rows | Fallback links through artifact routes | Updated | Focused passing | Pending live proof |
+| Durable artifact snapshot | Implemented | Implemented in artifact rows | Fallback links through artifact routes | Updated | Focused passing | Live risk-engine `output` package delivered through Telegram and Registry artifact routes |
 | Workspace inventory by run | Implemented via bot management dry run | Dashboard cleanup dry run | N/A | Updated | Focused passing | Pending live proof |
 | Run archive/delete | Implemented soft archive/delete/restore | Implemented on run detail and filters | Commands implemented; Registry remains primary confirmation UI | Updated | Focused passing | Pending live proof |
 | Protocol lifecycle clarity | Existing archive/delete rules preserved | Existing UI preserved | Existing lifecycle preserved | Updated | Focused passing | Pending live proof |
 | Skill lifecycle clarity | Existing lifecycle preserved | Existing UI preserved | Existing Telegram preserved | Updated | Focused passing | Pending live proof |
 | Agent disable/archive/delete semantics | Existing soft delete preserved | Existing UI preserved | Existing summaries preserved | Updated | Focused passing | Pending live proof |
-| Runtime stop/archive/delete cleanup | Existing runtime lifecycle preserved; archive can stop runtimes first | Implemented controls retained | Existing runtime callbacks preserved | Updated | Focused passing | Pending live proof |
+| Runtime stop/archive/delete cleanup | Existing runtime lifecycle preserved; archive can stop runtimes first | Implemented controls retained | Existing runtime callbacks preserved | Updated | Focused passing | Runtime stale-state reconciliation and fresh Telegram start/status proved without losing package access |
 | Manual cleanup with dry run | Implemented | Implemented in Dashboard | N/A | Updated | Focused passing | Pending live proof |
 | Automatic workspace garbage collection | Runtime expiry implemented; workspace file deletion intentionally requires confirmed dry run | Status and dry-run eligibility | N/A | Updated | Focused passing | Pending live proof |
 | Workspace wipe recovery behavior | Snapshot fallback implemented | Artifact rows expose retained package | Artifact links use same fallback | Updated | Focused passing | Pending live proof |
-| Export includes durable artifact manifest | Implemented | N/A | N/A | Updated | Focused passing | Pending live proof |
+| Export includes durable artifact manifest | Implemented | N/A | N/A | Updated | Focused passing | Registry run state/events for `d38dab75b929405a9e4a3f1407491e76` include exportable runtime and artifact evidence |
 
 Every row must be completed against the same Registry and SDK contracts. Do not
 create a second artifact browser, Telegram-only cleanup path, or bot-local
@@ -51,6 +53,17 @@ before bot dispatch, and the UI stayed on an enabled `Start app` action with the
 Maven blocker visible inline. This proves the non-run-ready start is now a
 product-visible lifecycle decision; prepared-artifact start/open/stop proof is
 still pending.
+
+Prepared-artifact lifecycle proof note, 2026-05-07: run
+`d38dab75b929405a9e4a3f1407491e76` replaced the blocked developer-mode start
+with a prepared Java runtime package. Registry/Safari started and exercised the
+runtime through routed UI/API paths, and Telegram Web used the same Registry
+artifact APIs to list artifacts, send the retained `output` package, start the
+runtime, and check health. A post-redeploy health check also reconciled a stale
+runtime as not running without corrupting the artifact record; a fresh Telegram
+start then recorded `started` on bot port `53137` followed by a healthy HTTP 200
+runtime event. This proves runtime lifecycle state and retained package access
+remain separate.
 
 ## Problem Statement
 

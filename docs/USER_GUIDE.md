@@ -136,6 +136,14 @@ If an agent is connected but not execution-healthy, provider authentication is a
 common cause. An operator can check `./octopus status` or
 `./octopus doctor <bot>`.
 
+Local bot containers are built for serious work. They include common build and
+runtime tools such as Python, Node/npm, Java 21, Maven, C/C++ build tools,
+`rg`, `jq`, network utilities, and zip tools. Agents run as the `bot` user, but
+the local Docker image allows passwordless `sudo` inside the container so an
+operator-controlled agent can install additional package dependencies when a
+task requires them. Treat that as real machine access to the bot container, not
+as a restricted chat-only sandbox.
+
 ## Use Skills
 
 Skills are reusable instructions or tools. They can support conversations,

@@ -2392,6 +2392,16 @@ def test_runtime_acceptance_matrix_allows_clean_skipped_test_counts() -> None:
     )
 
 
+def test_runtime_visible_result_evidence_allows_unrelated_tool_failure_note() -> None:
+    evidence = (
+        "Clicked Run scenario through the Registry route and the decision result was displayed in the app.\n"
+        "The scenario returned a review outcome, medium band, and visible audit id.\n"
+        "Note: git status could not run because /workspace/workspace is not a git repository.\n"
+    )
+
+    assert ProtocolPostgresAdapter._runtime_acceptance_text_has_visible_result_evidence(evidence)
+
+
 def test_registry_store_revises_final_accept_when_runtime_start_command_is_not_run_ready(postgres_registry_truncated: str, tmp_path: Path) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     artifact_root = tmp_path / "output"

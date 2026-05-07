@@ -1232,7 +1232,8 @@ class ProtocolPostgresAdapter:
             return False
         negative_patterns = [
             r"\b(no|not|nothing|never)\s+(visible|shown|displayed|rendered|returned|updated|changed|worked|working|result)",
-            r"\b(did not|does not|cannot|could not|failed to|unable to)\s+(show|display|render|return|update|exercise|run|work)",
+            r"\b(did not|does not|cannot|could not|failed to|unable to)\s+(show|display|render|return|update)",
+            r"\b(did not|does not|cannot|could not|failed to|unable to)\s+(exercise|run|work)\b.{0,100}\b(app|ui|button|control|action|flow|scenario|journey|workflow|result)\b",
             r"\b(button|control|action|flow)\s+(did not|does not|failed to|cannot|could not)\b",
         ]
         if any(re.search(pattern, normalized) for pattern in negative_patterns):

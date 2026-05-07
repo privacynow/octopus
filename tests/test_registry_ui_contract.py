@@ -342,6 +342,24 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "path.startsWith('/ui/protocol-runs')" not in router_js
 
 
+def test_protocol_artifact_runtime_controls_recover_after_status_or_start_failures() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const runtimeActionErrorMessage = (err" in workspace
+    assert "PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_NOT_RUN_READY" in workspace
+    assert ". Revise the artifact package first." in workspace
+    assert "const setRuntimeActionableFailure = (message) =>" in workspace
+    assert "runtimeBtn.disabled = false;" in workspace
+    assert "runtimeBtn.textContent = currentRuntimeStatus === 'failed' ? 'Restart app' : 'Start app';" in workspace
+    assert "Could not check current app status:" in workspace
+    assert "setRuntimeActionableFailure(`Start failed: ${runtimeActionErrorMessage" in workspace
+    assert "Checking current app status." not in workspace
+    assert "Runtime declared. Start the app to exercise this outcome." in workspace
+
+
 def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:
     """Authoring styles are kit-owned; runs styles are protocol-scoped."""
     repo_root = Path(__file__).resolve().parents[1]
@@ -1187,12 +1205,20 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "onClick: previewTarget" in helper
     assert "event.preventDefault();" in helper
     assert "const available = !missing && artifact?.exists !== false;" in protocol_workspace
-    assert "openHref: available ? API.protocolRunArtifactContentUrl" in protocol_workspace
+    assert "openHref: showStorageOpen && available ? API.protocolRunArtifactContentUrl" in protocol_workspace
     assert "API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace
     assert "const inferPrimaryArtifact = () => {" in protocol_workspace
     assert "Promoted from produced artifacts because this run did not declare a primary outcome." in protocol_workspace
+    assert "run-primary-readiness-list" in protocol_workspace
+    assert "Primary outcome inferred" in protocol_workspace
+    assert "Primary outcome declared" in protocol_workspace
+    assert "Release evidence available" in protocol_workspace
+    assert "Release evidence missing" in protocol_workspace
+    assert "Runtime launch is not acceptance" in protocol_workspace
+    assert "final readiness still comes from the review evidence and run state" in protocol_workspace
+    assert "required evidence check" in protocol_workspace
     assert "unavailableReason: missing ? 'Declared artifact, not produced yet.'" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
     assert "function createTaskArtifactListRow(task, artifact, expectedOutput = null)" in helper
@@ -1202,6 +1228,12 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "UI.esc(UI.compactMarkdownReferences(event.content))" in event_renderers
     assert "getTaskArtifactText" not in api_js
     assert "getProtocolRunArtifactText" not in api_js
+
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+    assert ".run-primary-readiness-list .list-row-label" in css
+    assert "white-space: normal;" in css
 
 
 def test_task_expansion_rerenders_clicked_rows_before_showing_artifacts() -> None:

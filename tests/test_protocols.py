@@ -34,6 +34,7 @@ from octopus_sdk.protocols import (
     protocol_review_edge_key,
     render_protocol_stage_prompt,
     resolve_launchable_protocol,
+    runtime_manifest_run_ready_blockers,
     validate_protocol_document,
 )
 from octopus_sdk.protocols.engine import ProtocolRunEngine
@@ -41,6 +42,7 @@ from octopus_sdk.protocols.launch import ProtocolConversationLaunchRequestRecord
 from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
 from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
 from octopus_registry.protocol_runtime import evaluate_protocol_dispatch, runtime_protocol_selector
+from octopus_registry.protocol_store import ProtocolPostgresAdapter
 from octopus_registry.postgres import get_connection
 from octopus_registry.store_postgres import RegistryPostgresStore
 from psycopg.types.json import Jsonb
@@ -116,6 +118,36 @@ def _launchable_definition(**overrides) -> ProtocolDefinitionRecord:
     }
     base.update(overrides)
     return ProtocolDefinitionRecord.model_validate(base)
+
+
+def test_runtime_manifest_run_ready_policy_is_generic() -> None:
+    assert runtime_manifest_run_ready_blockers(None) == []
+    assert runtime_manifest_run_ready_blockers(
+        ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/health")
+    ) == []
+    assert runtime_manifest_run_ready_blockers(
+        ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="java",
+            start_command="java -jar target/risk-engine.jar --server.port=${PORT}",
+            ui_path="/",
+            health_path="/health",
+            endpoints=[{"label": "Docs", "path": "/api/docs", "endpoint_kind": "docs", "method": "GET"}],
+            smoke_test=["GET /health"],
+        )
+    ) == []
+
+    node_blockers = runtime_manifest_run_ready_blockers(
+        ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="node",
+            start_command="npm run build && node dist/server.js",
+            ui_path="/",
+            health_path="/health",
+            endpoints=[{"label": "Docs", "path": "/api/docs", "endpoint_kind": "docs", "method": "GET"}],
+            smoke_test=["GET /health"],
+        )
+    )
+
+    assert node_blockers == ["Node dependency, build, or test commands must run before acceptance"]
 
 
 @pytest.mark.asyncio
@@ -1753,7 +1785,7 @@ def test_registry_store_protocol_maintenance_expires_artifact_runtimes(postgres_
     assert any(item.event_kind == "stopped" for item in events)
 
 
-def test_registry_store_blocks_final_accept_when_expected_runtime_manifest_is_missing(postgres_registry_truncated: str, tmp_path: Path) -> None:
+def test_registry_store_revises_final_accept_when_expected_runtime_manifest_is_missing_or_invalid(postgres_registry_truncated: str, tmp_path: Path) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     artifact_root = tmp_path / "output"
     artifact_root.mkdir()
@@ -1860,25 +1892,97 @@ def test_registry_store_blocks_final_accept_when_expected_runtime_manifest_is_mi
         },
     )
 
-    blocked = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
-    assert blocked.run.status == "blocked"
-    assert blocked.run.blocked_code == "runtime_manifest_required"
-    assert "octopus-runtime.json" in blocked.run.blocked_detail
+    revised = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert revised.run.status == "running"
+    assert revised.run.blocked_code == ""
+    assert revised.run.current_stage_key == "produce"
+    assert revised.run.current_review_rounds == 1
+    assert revised.run.current_review_edge_key == "final:produce"
+    missing_transition = next(
+        item
+        for item in revised.transitions
+        if item.transition_kind == "advance" and item.error_code == "RUNTIME_MANIFEST_REQUIRED"
+    )
+    assert missing_transition.decision == "revise"
+    assert missing_transition.metadata_json.as_dict()["runtime_gate_auto_revise"] is True
 
     (artifact_root / "octopus-runtime.json").write_text(
         json.dumps({"runtime_kind": "java21-maven-spring-service", "endpoints": {"health": "/health"}}),
         encoding="utf-8",
     )
-    store.act_on_protocol_run(
-        created.run.protocol_run_id,
-        access=operator_access(),
-        action="accept",
-        reason="Retry acceptance after adding manifest.",
+    second_produce = next(
+        item
+        for item in revised.stage_executions
+        if item.stage_key == "produce" and item.status == "running"
+    )
+    store.update_routed_task_result(
+        enroll.agent_token,
+        second_produce.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "runtime-invalid-manifest-produce",
+            "summary": "Produced package with invalid manifest.",
+            "full_text": "Produced output.\nPROTOCOL_SUMMARY: Produced package.",
+            "artifacts": [
+                {
+                    "artifact_key": "produced_outcome",
+                    "artifact_kind": "workspace_file",
+                    "path": "output",
+                    "exists": True,
+                    "size_bytes": 110,
+                    "content_hash": "runtime-invalid-manifest",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    second_final_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    second_final_stage = next(
+        item
+        for item in second_final_detail.stage_executions
+        if item.stage_key == "final" and item.status == "running"
+    )
+    store.update_routed_task_result(
+        enroll.agent_token,
+        second_final_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "runtime-invalid-manifest-final",
+            "summary": "Accepted.",
+            "full_text": "Looks good.\nPROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Accepted.",
+            "artifacts": [
+                {
+                    "artifact_key": "release_evidence",
+                    "artifact_kind": "workspace_file",
+                    "path": "release.md",
+                    "exists": True,
+                    "size_bytes": 12,
+                    "content_hash": "release-invalid-manifest",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
     )
     invalid = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
-    assert invalid.run.status == "blocked"
-    assert invalid.run.blocked_code == "runtime_manifest_invalid"
-    assert "canonical Octopus runtime manifest schema" in invalid.run.blocked_detail
+    assert invalid.run.status == "running"
+    assert invalid.run.blocked_code == ""
+    assert invalid.run.current_stage_key == "produce"
+    assert invalid.run.current_review_rounds == 2
+    invalid_transition = next(
+        item
+        for item in invalid.transitions
+        if item.transition_kind == "advance" and item.error_code == "RUNTIME_MANIFEST_INVALID"
+    )
+    assert invalid_transition.decision == "revise"
+    assert invalid_transition.metadata_json.as_dict()["runtime_gate_auto_revise"] is True
+    third_produce = next(
+        item
+        for item in invalid.stage_executions
+        if item.stage_key == "produce" and item.status == "running"
+    )
+    assert third_produce.input_snapshot_json["runtime_gate_code"] == "runtime_manifest_invalid"
 
 
 def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgres_registry_truncated: str, tmp_path: Path) -> None:
@@ -2084,7 +2188,221 @@ def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgr
     }
 
 
-def test_registry_store_blocks_final_accept_when_runtime_start_command_is_not_run_ready(postgres_registry_truncated: str, tmp_path: Path) -> None:
+def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_satisfy_gate(postgres_registry_truncated: str, tmp_path: Path) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    artifact_root = tmp_path / "output"
+    artifact_root.mkdir()
+    release_evidence = tmp_path / "release.md"
+    release_evidence.write_text(
+        "Clicked Run scenario through the Registry route and the decision result was displayed in the app.\n"
+        "Automated tests: 5 run, 0 failures, 0 errors, and 0 skipped.\n"
+        "Outcome-readiness matrix:\n"
+        "PASS journey 1: Registry-routed scenario run displayed the decision result and audit id.\n"
+        "A post-stop health check failed as expected, proving the temporary runtime was stopped.\n"
+        "Branding check: no Octopus branding appears in customer-facing UI/API copy; "
+        "Octopus is only internal runtime evidence.\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "octopus-runtime.json").write_text(
+        json.dumps(
+            {
+                "runtime_kind": "static",
+                "ui_path": "/",
+                "health_path": "/health",
+                "metadata": {"minimum_core_journeys": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    document = {
+        "metadata": {
+            "slug": "runtime-proof-auto-complete",
+            "display_name": "Runtime Proof Auto Complete",
+            "auto_protocol": {"primary_artifact_key": "produced_outcome"},
+        },
+        "participants": [
+            {"participant_key": "worker", "display_name": "Worker"},
+            {"participant_key": "acceptor", "display_name": "Acceptor"},
+        ],
+        "artifacts": [
+            {"artifact_key": "produced_outcome", "kind": "workspace_file", "path": "output"},
+            {"artifact_key": "release_evidence", "kind": "workspace_file", "path": "release.md"},
+        ],
+        "stages": [
+            {
+                "stage_key": "produce",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "implementation"},
+                "stage_kind": "work",
+                "write_capable": True,
+                "outputs": ["produced_outcome"],
+                "transitions": {"completed": "final"},
+                "instructions": "Produce the runtime artifact.",
+            },
+            {
+                "stage_key": "final",
+                "participant_key": "acceptor",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "inputs": ["produced_outcome"],
+                "outputs": ["release_evidence"],
+                "transitions": {"accept": "__complete__", "revise": "produce", "fail": "__failed__"},
+                "instructions": "Accept only after runtime evidence exists.",
+            },
+        ],
+        "policies": {"single_active_writer": True, "max_review_rounds": 2},
+    }
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_registry.protocol_runs SET workspace_ref = %s WHERE protocol_run_id = %s",
+                (str(tmp_path), created.run.protocol_run_id),
+            )
+        conn.commit()
+
+    produce = detail.stage_executions[0]
+    store.update_routed_task_result(
+        enroll.agent_token,
+        produce.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "runtime-produce",
+            "summary": "Produced runtime package.",
+            "full_text": "Produced output.\nPROTOCOL_SUMMARY: Produced runtime package.",
+            "artifacts": [
+                {
+                    "artifact_key": "produced_outcome",
+                    "artifact_kind": "workspace_file",
+                    "path": "output",
+                    "exists": True,
+                    "size_bytes": 100,
+                    "content_hash": "runtime123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    final_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    final_stage = next(item for item in final_detail.stage_executions if item.stage_key == "final")
+    store.update_routed_task_result(
+        enroll.agent_token,
+        final_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "runtime-final",
+            "summary": "Accepted after review.",
+            "full_text": (
+                "Accepted after review. Detailed runtime and outcome-readiness evidence is in release.md.\n"
+                "PROTOCOL_DECISION: accept\n"
+                "PROTOCOL_SUMMARY: Accepted."
+            ),
+            "working_dir": str(tmp_path),
+            "artifacts": [
+                {
+                    "artifact_key": "release_evidence",
+                    "artifact_kind": "workspace_file",
+                    "path": "release.md",
+                    "exists": True,
+                    "size_bytes": 10,
+                    "content_hash": "release123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    blocked = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert blocked.run.status == "blocked"
+    assert blocked.run.blocked_code == "runtime_evidence_required"
+
+    runtime = store.save_protocol_artifact_runtime(
+        ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id="runtime-evidence-auto-complete",
+            protocol_run_id=created.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            agent_id=created.run.entry_agent_id,
+            status="running",
+            manifest=ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/health"),
+            artifact_path=str(artifact_root),
+            runtime_url=f"/runtime/protocol-runs/{created.run.protocol_run_id}/artifacts/produced_outcome/app/",
+        ),
+        access=operator_access(),
+    )
+    for event_kind, metadata in (
+        ("started", {}),
+        ("health_checked", {"ok": True, "status_code": 200}),
+        ("client_interaction", {"event_type": "click", "tag": "button", "text": "Run scenario"}),
+    ):
+        store.append_protocol_artifact_runtime_event(
+            ProtocolArtifactRuntimeEventRecord(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=created.run.protocol_run_id,
+                artifact_key="produced_outcome",
+                event_kind=event_kind,
+                actor_ref="operator-session",
+                summary=event_kind,
+                metadata_json=RegistryJsonRecord.model_validate(metadata),
+            ),
+            access=operator_access(),
+        )
+    still_blocked = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert still_blocked.run.status == "blocked"
+
+    store.append_protocol_artifact_runtime_event(
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id=created.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            event_kind="fetch",
+            actor_ref="operator-session",
+            summary="POST /decisions -> 200",
+            metadata_json=RegistryJsonRecord.model_validate(
+                {"status_code": 200, "method": "POST", "path": "/decisions", "is_api": True}
+            ),
+        ),
+        access=operator_access(),
+    )
+
+    completed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    final_stage = next(item for item in completed.stage_executions if item.stage_key == "final")
+    assert completed.run.status == "completed"
+    assert completed.run.blocked_code == ""
+    assert final_stage.status == "completed"
+    assert final_stage.failure_code == ""
+
+
+def test_runtime_acceptance_matrix_allows_clean_skipped_test_counts() -> None:
+    evidence = (
+        "Automated test evidence: 5 tests ran with 0 failures, 0 errors, and 0 skipped.\n"
+        "Outcome-readiness matrix:\n"
+        "PASS journey 1: health and UI load returned the visible dashboard.\n"
+        "PASS journey 2: API docs listed service-backed workflows.\n"
+        "PASS journey 3: scenarios returned six domains.\n"
+        "PASS journey 4: policy DSL validation returned valid true.\n"
+        "PASS journey 5: model curation approved and activated a version.\n"
+        "PASS journey 6: replay provenance produced an audit id.\n"
+    )
+
+    assert ProtocolPostgresAdapter._runtime_acceptance_text_has_outcome_readiness_matrix(
+        evidence,
+        minimum_core_journeys=6,
+    )
+
+
+def test_runtime_visible_result_evidence_allows_unrelated_tool_failure_note() -> None:
+    evidence = (
+        "Clicked Run scenario through the Registry route and the decision result was displayed in the app.\n"
+        "The scenario returned a review outcome, medium band, and visible audit id.\n"
+        "Note: git status could not run because /workspace/workspace is not a git repository.\n"
+    )
+
+    assert ProtocolPostgresAdapter._runtime_acceptance_text_has_visible_result_evidence(evidence)
+
+
+def test_registry_store_revises_final_accept_when_runtime_start_command_is_not_run_ready(postgres_registry_truncated: str, tmp_path: Path) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     artifact_root = tmp_path / "output"
     artifact_root.mkdir()
@@ -2233,10 +2551,30 @@ def test_registry_store_blocks_final_accept_when_runtime_start_command_is_not_ru
         },
     )
 
-    blocked = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
-    assert blocked.run.status == "blocked"
-    assert blocked.run.blocked_code == "runtime_manifest_not_run_ready"
-    assert "must only launch an already prepared artifact" in blocked.run.blocked_detail
+    revised = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert revised.run.status == "running"
+    assert revised.run.blocked_code == ""
+    assert revised.run.current_stage_key == "produce"
+    assert revised.run.current_review_rounds == 1
+    assert revised.run.current_review_edge_key == "final:produce"
+    next_produce = next(
+        item
+        for item in revised.stage_executions
+        if item.stage_key == "produce" and item.status == "running"
+    )
+    assert next_produce.input_snapshot_json["decision"] == "revise"
+    assert next_produce.input_snapshot_json["runtime_gate_code"] == "runtime_manifest_not_run_ready"
+    assert next_produce.input_snapshot_json["runtime_manifest_start_command"] == "mvn spring-boot:run"
+    assert "Maven commands build or resolve dependencies" in next_produce.input_snapshot_json["runtime_manifest_blockers"][0]
+    revise_transition = next(
+        item
+        for item in revised.transitions
+        if item.transition_kind == "advance" and item.error_code == "RUNTIME_MANIFEST_NOT_RUN_READY"
+    )
+    assert revise_transition.transition_kind == "advance"
+    assert revise_transition.decision == "revise"
+    assert revise_transition.error_code == "RUNTIME_MANIFEST_NOT_RUN_READY"
+    assert revise_transition.metadata_json.as_dict()["runtime_gate_auto_revise"] is True
 
 
 def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_draft(postgres_registry_truncated: str) -> None:

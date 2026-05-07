@@ -116,7 +116,10 @@ Generated workflows are budgeted. The normal compiler keeps the primary outcome
 stage immediately before final acceptance and rejects plans above the hard stage
 cap instead of silently creating a token-heavy workflow. The final stage is an
 adversarial outcome acceptance gate: it inspects or exercises the primary
-artifact and can send the work back to the outcome stage.
+artifact and can return defective work to the outcome stage. Runtime contract
+defects such as a missing, invalid, or non-run-ready manifest are converted into
+an in-product revise transition when the protocol has a revise path; missing
+operator exercise evidence remains blocked until the runtime is exercised.
 
 Every Auto Protocol declares primary artifact metadata. Runs UI and Telegram
 promote that artifact first, then show supporting plans, reviews, and release
@@ -285,6 +288,15 @@ Process-backed packages should declare:
   `metadata.outcome_readiness_checks` in the manifest for representative
   journeys or scenarios
 
+The `start_command` must launch an already prepared artifact. Registry rejects
+process-backed runtime starts that try to install dependencies, build, package,
+test, or use developer-mode commands such as `mvn spring-boot:run`. Build and
+smoke-test during the protocol work stage, then launch with a cheap command such
+as `java -jar target/app.jar`, a prebuilt binary, or an equivalent prepared app
+entry point. When Registry rejects a non-run-ready start, the run detail keeps
+the runtime action available and shows the product blocker so the next reviewer
+or revise path has a concrete correction target.
+
 Registry owns the user-facing URL, auth, status, and lifecycle. The bot runtime
 owns the process. Users should be able to start/open the app, exercise the UI or
 API, inspect logs/status, stop the runtime, and still download the artifact as a
@@ -302,6 +314,13 @@ routed UI/API core-action fetch, visible-result evidence, an outcome-readiness
 matrix, and a customer-facing branding check before the acceptance stage can
 complete successfully. This keeps a reviewer from accepting a runnable system
 only because files exist or one happy-path click worked.
+
+The gate is product-owned. A human or chat operator can exercise the runtime,
+but the final accept/block decision is made from Registry run state, transitions,
+artifact evidence, and runtime events. Manifest policy is generic: process
+runtimes must start prepared artifacts and may be rejected for dependency
+install, build, package, test, or developer-mode commands; Maven is only one
+example of that broader policy.
 
 ## Starting A Run
 

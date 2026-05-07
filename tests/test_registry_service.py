@@ -5326,6 +5326,86 @@ def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_fi
     assert saved_runtime.updated_at == "2026-05-06T04:00:00Z"
 
 
+def test_protocol_artifact_runtime_start_blocks_non_run_ready_manifest(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "octopus-runtime.json").write_text(
+        json.dumps(
+            {
+                "runtime_kind": "java",
+                "start_command": "mvn spring-boot:run -Dspring-boot.run.arguments=--server.port=${PORT:8080}",
+                "ui_path": "/",
+                "health_path": "/health",
+                "api_base_path": "/api",
+                "endpoints": [
+                    {"label": "Operator UI", "path": "/", "endpoint_kind": "ui", "method": "GET"},
+                    {"label": "Health", "path": "/health", "endpoint_kind": "health", "method": "GET"},
+                    {"label": "API docs", "path": "/api/docs", "endpoint_kind": "docs", "method": "GET"},
+                ],
+                "smoke_test": ["GET /health", "GET /", "GET /api/docs"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(package_dir),
+                        workspace_path="package",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_snapshot(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
+
+    from octopus_registry.management_client import RegistryManagementClient
+
+    async def _send(self, *, agent_id: str, payload, timeout_seconds: int = 30):
+        del self, agent_id, payload, timeout_seconds
+        raise AssertionError("Registry must not dispatch non-run-ready runtime manifests to a bot")
+
+    monkeypatch.setattr(RegistryManagementClient, "send", _send)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/start")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_NOT_RUN_READY"
+    assert "already prepared artifact" in response.json()["detail"]["message"]
+    blockers = response.json()["detail"]["details"]["blockers"]
+    assert any("Maven commands build or resolve dependencies" in item for item in blockers)
+
+
 def test_protocol_artifact_runtime_stop_preserves_typed_manifest(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

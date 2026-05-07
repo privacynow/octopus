@@ -113,6 +113,25 @@ def test_artifact_runtime_expands_manifest_port_placeholders():
     assert "-Dbare=49152" in command
 
 
+def test_artifact_runtime_environment_sets_spring_server_port(monkeypatch):
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("SERVER_PORT", raising=False)
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="java",
+        start_command="java -jar target/risk-decision-engine.jar",
+        port_env="APP_PORT",
+        endpoints=[{"endpoint_kind": "docs", "path": "/api/v1/docs", "label": "API docs"}],
+        smoke_test=["GET /health"],
+    )
+
+    env = artifact_runtime._runtime_environment(manifest, 56761)
+
+    assert env["APP_PORT"] == "56761"
+    assert env["PORT"] == "56761"
+    assert env["SERVER_PORT"] == "56761"
+    assert env["HOST"] == "127.0.0.1"
+
+
 async def test_static_artifact_runtime_starts_fetches_and_stops(tmp_path):
     package_dir = tmp_path / "package"
     package_dir.mkdir()

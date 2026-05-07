@@ -126,6 +126,17 @@ def _command_for(manifest: ProtocolArtifactRuntimeManifestRecord, port: int) -> 
     return _expand_port_placeholders(command, port_env=str(manifest.port_env or "PORT"), port=port)
 
 
+def _runtime_environment(manifest: ProtocolArtifactRuntimeManifestRecord, port: int) -> dict[str, str]:
+    env = dict(os.environ)
+    port_value = str(int(port))
+    configured_port_env = str(manifest.port_env or "PORT").strip() or "PORT"
+    env[configured_port_env] = port_value
+    env.setdefault("PORT", port_value)
+    env.setdefault("SERVER_PORT", port_value)
+    env.setdefault("HOST", "127.0.0.1")
+    return env
+
+
 def _runtime_record(
     request: StartArtifactRuntimeRequest,
     *,
@@ -223,9 +234,7 @@ async def start_artifact_runtime(
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{request.runtime_instance_id}.log"
     command = _command_for(request.manifest, port)
-    env = dict(os.environ)
-    env[str(request.manifest.port_env or "PORT")] = str(port)
-    env.setdefault("HOST", "127.0.0.1")
+    env = _runtime_environment(request.manifest, port)
     try:
         with log_path.open("ab") as log_file:
             log_file.write(f"\n[{_now()}] starting: {command}\n".encode("utf-8"))

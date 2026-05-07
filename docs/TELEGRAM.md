@@ -221,6 +221,12 @@ running runtimes offer open/status/stop/artifact actions. The same package
 should still expose download and contents actions so a user is not forced into
 the live runtime path.
 
+For completed runnable runs, the status card should summarize the latest final
+evidence and artifact availability. The artifacts card should prioritize the
+primary package while still offering supporting evidence files. Starting or
+checking a runtime from Telegram must call Registry runtime APIs; Telegram does
+not make independent lifecycle or review decisions.
+
 Telegram is not the primary destructive lifecycle surface. It may show run
 archive/delete status or deep links, but high-risk cleanup and deletion flows
 should land in the browser Registry where the user can read consequences and

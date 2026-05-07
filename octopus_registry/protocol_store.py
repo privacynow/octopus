@@ -66,6 +66,9 @@ from octopus_sdk.protocols import (
     protocol_participant_session_key,
     protocol_retention_until,
     protocol_review_edge_counts,
+    protocol_review_edge_key,
+    runtime_manifest_run_ready_blockers,
+    stage_target_for_decision,
     auto_protocol_event_summary,
     auto_protocol_runtime_expected_from_text,
     generate_auto_protocol_session,
@@ -76,7 +79,7 @@ from octopus_sdk.protocols.documents import draft_protocol_document_data
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 
-from .artifact_snapshots import create_artifact_snapshot
+from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_snapshot
 from .config import RegistryConfig, load_registry_config
 from .artifact_paths import resolve_protocol_artifact_path
 from .postgres import get_connection
@@ -1149,24 +1152,7 @@ class ProtocolPostgresAdapter:
 
     @staticmethod
     def _runtime_manifest_run_ready_blockers(manifest: ProtocolArtifactRuntimeManifestRecord | None) -> list[str]:
-        if manifest is None:
-            return []
-        if str(manifest.runtime_kind or "").strip().lower() == "static":
-            return []
-        command = str(manifest.start_command or "").strip()
-        if not command:
-            return ["start_command is missing"]
-        normalized = re.sub(r"\s+", " ", command.lower())
-        blocker_patterns = [
-            (r"(^|[;&|]\s*|\s)(\.\/mvnw|mvn)(\s|$)", "Maven commands build or resolve dependencies at user start"),
-            (r"(^|[;&|]\s*|\s)(\.\/gradlew|gradle)(\s|$)", "Gradle commands build or resolve dependencies at user start"),
-            (r"(^|[;&|]\s*|\s)(npm|pnpm|yarn)\s+(install|ci|add|build|test|run\s+build|run\s+test)(\s|$)", "Node dependency, build, or test commands must run before acceptance"),
-            (r"(^|[;&|]\s*|\s)(pip|pip3|python\s+-m\s+pip|poetry|uv)\s+(install|sync|add)(\s|$)", "Python dependency installation must run before acceptance"),
-            (r"(^|[;&|]\s*|\s)(cargo|go|dotnet)\s+(build|test|run)(\s|$)", "Build, test, or developer run commands must not be the user start command"),
-            (r"(^|[;&|]\s*|\s)(pytest|tox|nox|make\s+(test|build|package)|cmake|meson|bazel)(\s|$)", "Test or build commands must run before acceptance"),
-        ]
-        blockers = [message for pattern, message in blocker_patterns if re.search(pattern, normalized)]
-        return list(dict.fromkeys(blockers))
+        return runtime_manifest_run_ready_blockers(manifest)
 
     @staticmethod
     def _runtime_fetch_counts_as_core_exercise(
@@ -1246,7 +1232,8 @@ class ProtocolPostgresAdapter:
             return False
         negative_patterns = [
             r"\b(no|not|nothing|never)\s+(visible|shown|displayed|rendered|returned|updated|changed|worked|working|result)",
-            r"\b(did not|does not|cannot|could not|failed to|unable to)\s+(show|display|render|return|update|exercise|run|work)",
+            r"\b(did not|does not|cannot|could not|failed to|unable to)\s+(show|display|render|return|update)",
+            r"\b(did not|does not|cannot|could not|failed to|unable to)\s+(exercise|run|work)\b.{0,100}\b(app|ui|button|control|action|flow|scenario|journey|workflow|result)\b",
             r"\b(button|control|action|flow)\s+(did not|does not|failed to|cannot|could not)\b",
         ]
         if any(re.search(pattern, normalized) for pattern in negative_patterns):
@@ -1297,10 +1284,10 @@ class ProtocolPostgresAdapter:
             r"\bskipped\b",
             r"\buntested\b",
             r"\bnot\s+(covered|working|implemented|visible|usable)\b",
-            r"\bfailed\b",
             r"\bonly\s+the\s+first\b",
         )
-        if any(re.search(pattern, normalized) for pattern in negative_patterns):
+        negative_scan = re.sub(r"\b(?:0|zero|no)\s+skipped\b", "clean skip count", normalized)
+        if any(re.search(pattern, negative_scan) for pattern in negative_patterns):
             return False
         pass_count = len(re.findall(r"\b(pass(?:ed)?|verified|succeeded|works|working|ok)\b", normalized))
         return pass_count >= max(1, minimum_core_journeys)
@@ -1359,7 +1346,83 @@ class ProtocolPostgresAdapter:
                     str(result_json.get("summary", "") or ""),
                     str(result_json.get("full_text", "") or ""),
                 ])
+        parts.extend(self._runtime_acceptance_artifact_text(conn, stage_execution_row=stage_execution_row))
         return "\n".join(part for part in parts if part.strip())
+
+    def _runtime_acceptance_artifact_text(
+        self,
+        conn,
+        *,
+        stage_execution_row: Mapping[str, object],
+    ) -> list[str]:
+        stage_execution_id = str(stage_execution_row.get("protocol_stage_execution_id", "") or "").strip()
+        run_id = str(stage_execution_row.get("protocol_run_id", "") or "").strip()
+        if not stage_execution_id or not run_id:
+            return []
+        rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {SCHEMA}.protocol_artifacts
+            WHERE protocol_run_id = %s
+              AND produced_by_stage_execution_id = %s
+              AND exists = TRUE
+              AND state = 'available'
+              AND artifact_kind = 'workspace_file'
+              AND size_bytes > 0
+              AND size_bytes <= 131072
+            ORDER BY observed_at DESC, created_at DESC
+            LIMIT 8
+            """,
+            (run_id, stage_execution_id),
+        )
+        artifact_store_dir = load_registry_config().artifact_store_dir
+        texts: list[str] = []
+        for row in rows:
+            artifact_key = str(row.get("artifact_key", "") or "").strip()
+            path = self._runtime_acceptance_artifact_path(conn, row, artifact_store_dir=artifact_store_dir)
+            if path is None or not path.is_file():
+                continue
+            if path.suffix.lower() not in {"", ".txt", ".md", ".json"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            if text:
+                texts.append(f"Artifact {artifact_key}:\n{text[:131072]}")
+        return texts
+
+    def _runtime_acceptance_artifact_path(
+        self,
+        conn,
+        artifact_row: Mapping[str, object],
+        *,
+        artifact_store_dir: str,
+    ) -> Path | None:
+        artifact_id = str(artifact_row.get("protocol_artifact_id", "") or "").strip()
+        if artifact_id:
+            snapshot_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_artifact_snapshots
+                WHERE protocol_artifact_id = %s
+                  AND retention_state <> 'deleted'
+                ORDER BY created_at DESC, artifact_snapshot_id DESC
+                LIMIT 1
+                """,
+                (artifact_id,),
+            )
+            if snapshot_row is not None:
+                path = artifact_snapshot_storage_path(
+                    artifact_store_dir,
+                    self._protocol_artifact_snapshot_from_row(snapshot_row),
+                )
+                if path is not None and path.exists():
+                    return path
+        location = str(artifact_row.get("location", "") or "").strip()
+        return Path(location).expanduser().resolve() if location else None
 
     def _runtime_acceptance_evidence_gate(
         self,
@@ -1406,7 +1469,7 @@ class ProtocolPostgresAdapter:
             detail_text = (
                 "Final acceptance for this runnable primary artifact requires a valid root octopus-runtime.json manifest before completion. "
                 f"Registry could not parse the manifest for artifact '{primary_key}': {manifest_error}. "
-                "Send the work back to the primary outcome stage so the package uses the canonical Octopus runtime manifest schema."
+                "The acceptance gate is returning the run to the primary outcome stage so the package uses the canonical Octopus runtime manifest schema."
             )
             metadata = engine.transition_metadata.as_dict()
             metadata.update({
@@ -1416,25 +1479,21 @@ class ProtocolPostgresAdapter:
                 "missing_runtime_evidence": ["valid root octopus-runtime.json manifest"],
                 "runtime_manifest_error": manifest_error,
             })
-            return engine.model_copy(update={
-                "run_status": "blocked",
-                "stage_status": "blocked",
-                "failure_code": "runtime_manifest_invalid",
-                "failure_detail": detail_text,
-                "transition_kind": "blocked",
-                "transition_reason": detail_text,
-                "transition_error_code": "RUNTIME_MANIFEST_INVALID",
-                "run_blocked_code": "runtime_manifest_invalid",
-                "run_blocked_detail": detail_text,
-                "terminal_status": None,
-                "create_next_execution": False,
-                "next_stage_key": "",
-                "transition_metadata": RegistryJsonRecord.model_validate(metadata),
-            })
+            return self._runtime_acceptance_revise_or_block_decision(
+                conn,
+                document=document,
+                stage=stage,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                detail_text=detail_text,
+                failure_code="runtime_manifest_invalid",
+                transition_error_code="RUNTIME_MANIFEST_INVALID",
+                metadata=metadata,
+            )
         if runtime_expected and not manifest_present and not bool(runtime and runtime.manifest):
             detail_text = (
                 "Final acceptance for this runnable primary artifact requires a root octopus-runtime.json manifest before completion. "
-                "Send the work back to the primary outcome stage so the package includes runtime metadata, start/health paths, and smoke steps that Octopus can route through the Registry."
+                "The acceptance gate is returning the run to the primary outcome stage so the package includes runtime metadata, start/health paths, and smoke steps that Octopus can route through the Registry."
             )
             metadata = engine.transition_metadata.as_dict()
             metadata.update({
@@ -1443,21 +1502,17 @@ class ProtocolPostgresAdapter:
                 "primary_artifact_key": primary_key,
                 "missing_runtime_evidence": ["root octopus-runtime.json manifest"],
             })
-            return engine.model_copy(update={
-                "run_status": "blocked",
-                "stage_status": "blocked",
-                "failure_code": "runtime_manifest_required",
-                "failure_detail": detail_text,
-                "transition_kind": "blocked",
-                "transition_reason": detail_text,
-                "transition_error_code": "RUNTIME_MANIFEST_REQUIRED",
-                "run_blocked_code": "runtime_manifest_required",
-                "run_blocked_detail": detail_text,
-                "terminal_status": None,
-                "create_next_execution": False,
-                "next_stage_key": "",
-                "transition_metadata": RegistryJsonRecord.model_validate(metadata),
-            })
+            return self._runtime_acceptance_revise_or_block_decision(
+                conn,
+                document=document,
+                stage=stage,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                detail_text=detail_text,
+                failure_code="runtime_manifest_required",
+                transition_error_code="RUNTIME_MANIFEST_REQUIRED",
+                metadata=metadata,
+            )
 
         run_ready_blockers = self._runtime_manifest_run_ready_blockers(effective_manifest)
         if run_ready_blockers:
@@ -1466,7 +1521,7 @@ class ProtocolPostgresAdapter:
                 "Final acceptance for this runnable primary artifact requires a run-ready package before completion. "
                 "The runtime manifest start_command must only launch an already prepared artifact; it must not install dependencies, build, package, test, or use developer-mode run commands. "
                 f"Current start_command for artifact '{primary_key}' is {start_command!r}. "
-                "Send the work back to the primary outcome stage so it builds and smoke-tests the package first, then uses a cheap launch command such as a prebuilt binary or java -jar target/app.jar."
+                "The acceptance gate is returning the run to the primary outcome stage so it builds and smoke-tests the package first, then uses a cheap launch command such as a prebuilt binary or java -jar target/app.jar."
             )
             metadata = engine.transition_metadata.as_dict()
             metadata.update({
@@ -1477,21 +1532,17 @@ class ProtocolPostgresAdapter:
                 "runtime_manifest_blockers": run_ready_blockers,
                 "missing_runtime_evidence": ["run-ready runtime start command"],
             })
-            return engine.model_copy(update={
-                "run_status": "blocked",
-                "stage_status": "blocked",
-                "failure_code": "runtime_manifest_not_run_ready",
-                "failure_detail": detail_text,
-                "transition_kind": "blocked",
-                "transition_reason": detail_text,
-                "transition_error_code": "RUNTIME_MANIFEST_NOT_RUN_READY",
-                "run_blocked_code": "runtime_manifest_not_run_ready",
-                "run_blocked_detail": detail_text,
-                "terminal_status": None,
-                "create_next_execution": False,
-                "next_stage_key": "",
-                "transition_metadata": RegistryJsonRecord.model_validate(metadata),
-            })
+            return self._runtime_acceptance_revise_or_block_decision(
+                conn,
+                document=document,
+                stage=stage,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                detail_text=detail_text,
+                failure_code="runtime_manifest_not_run_ready",
+                transition_error_code="RUNTIME_MANIFEST_NOT_RUN_READY",
+                metadata=metadata,
+            )
 
         events = [item for item in detail.runtime_events if item.artifact_key == primary_key]
         has_started = any(str(item.event_kind or "") == "started" for item in events)
@@ -1581,6 +1632,97 @@ class ProtocolPostgresAdapter:
             "create_next_execution": False,
             "next_stage_key": "",
             "transition_metadata": RegistryJsonRecord.model_validate(metadata),
+        })
+
+    def _runtime_acceptance_revise_or_block_decision(
+        self,
+        conn,
+        *,
+        document: ProtocolDefinitionDocumentRecord,
+        stage,
+        stage_execution_row: Mapping[str, object],
+        engine,
+        detail_text: str,
+        failure_code: str,
+        transition_error_code: str,
+        metadata: Mapping[str, object],
+    ):
+        update_metadata = dict(metadata)
+        target = ""
+        if "revise" in set(stage.allowed_decisions()):
+            target = stage_target_for_decision(stage, "revise")
+            try:
+                document.stage(target)
+            except Exception:
+                target = ""
+        if target:
+            run_id = str(stage_execution_row.get("protocol_run_id", "") or "")
+            edge_key = protocol_review_edge_key(stage.stage_key, target)
+            revise_count = (
+                protocol_review_edge_counts(self._protocol_run_transitions_history(conn, run_id)).get(edge_key, 0)
+                + 1
+            )
+            update_metadata.update({
+                "review_edge_key": edge_key,
+                "current_review_rounds": revise_count,
+                "max_review_rounds": document.policies.max_review_rounds,
+                "runtime_gate_auto_revise": True,
+            })
+            if revise_count <= document.policies.max_review_rounds:
+                input_snapshot = {
+                    "previous_stage_key": stage.stage_key,
+                    "previous_stage_execution_id": str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                    "decision": "revise",
+                    "decision_summary": detail_text,
+                    "runtime_gate_code": failure_code,
+                    "primary_artifact_key": str(update_metadata.get("primary_artifact_key", "") or ""),
+                }
+                start_command = str(update_metadata.get("runtime_manifest_start_command", "") or "")
+                if start_command:
+                    input_snapshot["runtime_manifest_start_command"] = start_command
+                blockers = update_metadata.get("runtime_manifest_blockers", [])
+                if blockers:
+                    input_snapshot["runtime_manifest_blockers"] = blockers
+                return engine.model_copy(update={
+                    "run_status": "running",
+                    "stage_status": "completed",
+                    "decision": "revise",
+                    "summary": detail_text,
+                    "failure_code": "",
+                    "failure_detail": "",
+                    "transition_kind": "advance",
+                    "transition_reason": detail_text,
+                    "transition_error_code": transition_error_code,
+                    "next_stage_key": target,
+                    "create_next_execution": True,
+                    "terminal_status": None,
+                    "run_blocked_code": "",
+                    "run_blocked_detail": "",
+                    "input_snapshot": RegistryJsonRecord.model_validate(input_snapshot),
+                    "transition_metadata": RegistryJsonRecord.model_validate(update_metadata),
+                })
+            detail_text = (
+                f"Review edge {edge_key or stage.stage_key} exceeded max review rounds "
+                f"({revise_count} > {document.policies.max_review_rounds}) while enforcing runtime readiness. "
+                + detail_text
+            )
+            failure_code = "max_review_rounds_exceeded"
+            transition_error_code = "MAX_REVIEW_ROUNDS_EXCEEDED"
+
+        return engine.model_copy(update={
+            "run_status": "blocked",
+            "stage_status": "blocked",
+            "failure_code": failure_code,
+            "failure_detail": detail_text,
+            "transition_kind": "blocked",
+            "transition_reason": detail_text,
+            "transition_error_code": transition_error_code,
+            "run_blocked_code": failure_code,
+            "run_blocked_detail": detail_text,
+            "terminal_status": None,
+            "create_next_execution": False,
+            "next_stage_key": "",
+            "transition_metadata": RegistryJsonRecord.model_validate(update_metadata),
         })
 
     def _latest_protocol_review_feedback(
@@ -4317,7 +4459,104 @@ class ProtocolPostgresAdapter:
             )
             if row is None:
                 raise RuntimeError("Failed to persist artifact runtime event.")
-            return self._protocol_artifact_runtime_event_from_row(row)
+            saved = self._protocol_artifact_runtime_event_from_row(row)
+            self._maybe_complete_blocked_runtime_acceptance_in_tx(
+                conn,
+                run_id=event.protocol_run_id,
+                actor_ref=event.actor_ref or self._access_actor_ref(access),
+                now=created_at,
+            )
+            return saved
+
+    def _maybe_complete_blocked_runtime_acceptance_in_tx(
+        self,
+        conn,
+        *,
+        run_id: str,
+        actor_ref: str,
+        now: str,
+    ) -> None:
+        run_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+            (run_id,),
+        )
+        if run_row is None:
+            return
+        if str(run_row.get("status", "") or "").strip().lower() != "blocked":
+            return
+        if str(run_row.get("blocked_code", "") or "").strip().lower() != "runtime_evidence_required":
+            return
+        stage_execution_id = str(run_row.get("current_stage_execution_id", "") or "").strip()
+        if not stage_execution_id:
+            return
+        stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s",
+            (stage_execution_id,),
+        )
+        if stage_execution_row is None:
+            return
+        if str(stage_execution_row.get("status", "") or "").strip().lower() != "blocked":
+            return
+        if str(stage_execution_row.get("decision", "") or "").strip().lower() != "accept":
+            return
+        if str(stage_execution_row.get("failure_code", "") or "").strip().lower() != "runtime_evidence_required":
+            return
+        try:
+            document = self._protocol_document_for_run(conn, run_row)
+            stage = document.stage(str(stage_execution_row.get("stage_key", "") or ""))
+        except Exception:
+            return
+        if stage.stage_kind != "acceptance":
+            return
+
+        reason = (
+            "Registry runtime evidence now satisfies the blocked final acceptance gate: "
+            "runtime start, health check, routed UI/API exercise, visible outcome evidence, "
+            "outcome-readiness matrix, and customer-facing branding evidence are recorded."
+        )
+        engine = self._protocol_engine.evaluate_operator_action(
+            document=document,
+            run=self._protocol_run_from_row(run_row),
+            stage_execution=self._protocol_stage_execution_from_row(stage_execution_row),
+            stage_executions=self._protocol_stage_executions_for_run(conn, run_id),
+            action="accept",
+            reason=reason,
+            now=now,
+            review_edge_counts=protocol_review_edge_counts(self._protocol_run_transitions_history(conn, run_id)),
+        )
+        engine = self._runtime_acceptance_evidence_gate(
+            conn,
+            run_row=run_row,
+            stage_execution_row=stage_execution_row,
+            engine=engine,
+        )
+        if str(engine.run_status or "") != "completed":
+            return
+        self._apply_protocol_engine_decision_in_tx(
+            conn,
+            run_row=run_row,
+            stage_execution_row=stage_execution_row,
+            engine=engine,
+            actor_type="protocol_engine",
+            actor_ref=str(actor_ref or "runtime_evidence_gate"),
+            now=now,
+        )
+        self._record_protocol_compliance_event(
+            conn,
+            protocol_run_id=run_id,
+            protocol_definition_version_id=str(run_row.get("protocol_definition_version_id", "") or ""),
+            event_kind="runtime_evidence_auto_accept",
+            actor_ref=str(actor_ref or "runtime_evidence_gate"),
+            actor_role="protocol_engine",
+            summary=reason,
+            metadata={
+                "current_stage_key": str(stage_execution_row.get("stage_key", "") or ""),
+                "stage_execution_id": str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+            },
+            now=now,
+        )
 
     def list_protocol_artifact_runtime_events(
         self,

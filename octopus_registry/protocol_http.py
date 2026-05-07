@@ -46,6 +46,7 @@ from octopus_sdk.protocols import (
     protocol_package_hash,
     protocol_package_required_skill_names,
     protocol_package_to_text,
+    runtime_manifest_run_ready_blockers,
 )
 from octopus_sdk.registry.management import (
     ArtifactRuntimeFetchRequest,
@@ -2614,6 +2615,21 @@ def build_protocol_router(
                 409,
                 error_code="PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_MISSING",
                 message="This artifact does not declare a runnable app or API. You can still browse or download the package.",
+            )
+        run_ready_blockers = runtime_manifest_run_ready_blockers(manifest)
+        if run_ready_blockers:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_ARTIFACT_RUNTIME_MANIFEST_NOT_RUN_READY",
+                message=(
+                    "This artifact runtime is not run-ready. The manifest start_command must launch an already prepared "
+                    "artifact; it must not install dependencies, build, package, test, or use developer-mode run commands."
+                ),
+                details={
+                    "artifact_key": artifact.artifact_key,
+                    "start_command": manifest.start_command,
+                    "blockers": run_ready_blockers,
+                },
             )
         agent_id = _runtime_agent_id(detail, artifact)
         if not agent_id:

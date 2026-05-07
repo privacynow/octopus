@@ -2191,6 +2191,15 @@ def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_
     store = RegistryPostgresStore(postgres_registry_truncated)
     artifact_root = tmp_path / "output"
     artifact_root.mkdir()
+    release_evidence = tmp_path / "release.md"
+    release_evidence.write_text(
+        "Clicked Run scenario through the Registry route and the decision result was displayed in the app.\n"
+        "Outcome-readiness matrix:\n"
+        "PASS journey 1: Registry-routed scenario run displayed the decision result and audit id.\n"
+        "Branding check: no Octopus branding appears in customer-facing UI/API copy; "
+        "Octopus is only internal runtime evidence.\n",
+        encoding="utf-8",
+    )
     (artifact_root / "octopus-runtime.json").write_text(
         json.dumps(
             {
@@ -2282,14 +2291,11 @@ def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_
             "transition_id": "runtime-final",
             "summary": "Accepted after review.",
             "full_text": (
-                "Clicked Run scenario through the Registry route and the decision result was displayed in the app.\n"
-                "Outcome-readiness matrix:\n"
-                "PASS journey 1: Registry-routed scenario run displayed the decision result and audit id.\n"
-                "Branding check: no Octopus branding appears in customer-facing UI/API copy; "
-                "Octopus is only internal runtime evidence.\n"
+                "Accepted after review. Detailed runtime and outcome-readiness evidence is in release.md.\n"
                 "PROTOCOL_DECISION: accept\n"
                 "PROTOCOL_SUMMARY: Accepted."
             ),
+            "working_dir": str(tmp_path),
             "artifacts": [
                 {
                     "artifact_key": "release_evidence",

@@ -79,7 +79,7 @@ from octopus_sdk.protocols.documents import draft_protocol_document_data
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 
-from .artifact_snapshots import create_artifact_snapshot
+from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_snapshot
 from .config import RegistryConfig, load_registry_config
 from .artifact_paths import resolve_protocol_artifact_path
 from .postgres import get_connection
@@ -1345,7 +1345,83 @@ class ProtocolPostgresAdapter:
                     str(result_json.get("summary", "") or ""),
                     str(result_json.get("full_text", "") or ""),
                 ])
+        parts.extend(self._runtime_acceptance_artifact_text(conn, stage_execution_row=stage_execution_row))
         return "\n".join(part for part in parts if part.strip())
+
+    def _runtime_acceptance_artifact_text(
+        self,
+        conn,
+        *,
+        stage_execution_row: Mapping[str, object],
+    ) -> list[str]:
+        stage_execution_id = str(stage_execution_row.get("protocol_stage_execution_id", "") or "").strip()
+        run_id = str(stage_execution_row.get("protocol_run_id", "") or "").strip()
+        if not stage_execution_id or not run_id:
+            return []
+        rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {SCHEMA}.protocol_artifacts
+            WHERE protocol_run_id = %s
+              AND produced_by_stage_execution_id = %s
+              AND exists = TRUE
+              AND state = 'available'
+              AND artifact_kind = 'workspace_file'
+              AND size_bytes > 0
+              AND size_bytes <= 131072
+            ORDER BY observed_at DESC, created_at DESC
+            LIMIT 8
+            """,
+            (run_id, stage_execution_id),
+        )
+        artifact_store_dir = load_registry_config().artifact_store_dir
+        texts: list[str] = []
+        for row in rows:
+            artifact_key = str(row.get("artifact_key", "") or "").strip()
+            path = self._runtime_acceptance_artifact_path(conn, row, artifact_store_dir=artifact_store_dir)
+            if path is None or not path.is_file():
+                continue
+            if path.suffix.lower() not in {"", ".txt", ".md", ".json"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            if text:
+                texts.append(f"Artifact {artifact_key}:\n{text[:131072]}")
+        return texts
+
+    def _runtime_acceptance_artifact_path(
+        self,
+        conn,
+        artifact_row: Mapping[str, object],
+        *,
+        artifact_store_dir: str,
+    ) -> Path | None:
+        artifact_id = str(artifact_row.get("protocol_artifact_id", "") or "").strip()
+        if artifact_id:
+            snapshot_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_artifact_snapshots
+                WHERE protocol_artifact_id = %s
+                  AND retention_state <> 'deleted'
+                ORDER BY created_at DESC, artifact_snapshot_id DESC
+                LIMIT 1
+                """,
+                (artifact_id,),
+            )
+            if snapshot_row is not None:
+                path = artifact_snapshot_storage_path(
+                    artifact_store_dir,
+                    self._protocol_artifact_snapshot_from_row(snapshot_row),
+                )
+                if path is not None and path.exists():
+                    return path
+        location = str(artifact_row.get("location", "") or "").strip()
+        return Path(location).expanduser().resolve() if location else None
 
     def _runtime_acceptance_evidence_gate(
         self,

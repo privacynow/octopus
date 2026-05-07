@@ -6160,6 +6160,13 @@ select {
     text-overflow: ellipsis;
 }
 
+.run-primary-readiness-list .list-row-label,
+.run-primary-readiness-list .list-row-sublabel {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+}
+
 .run-primary-package-summary {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;

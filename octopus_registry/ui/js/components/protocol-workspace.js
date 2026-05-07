@@ -10292,6 +10292,43 @@ function renderProtocolRuns(container) {
                 : 'This is the protocol-declared main outcome for the run.';
             panel.appendChild(note);
             const runtimeExpected = primaryRuntimeExpected(artifact, definition, primary);
+            const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
+            const evidenceRequirements = Array.isArray(primary.evidence_requirements)
+                ? primary.evidence_requirements.map((item) => String(item || '').trim()).filter(Boolean)
+                : [];
+            const readiness = document.createElement('div');
+            readiness.className = 'run-primary-story-list run-primary-readiness-list';
+            readiness.appendChild(UI.renderListRow({
+                label: inferred.inferred ? 'Primary outcome inferred' : 'Primary outcome declared',
+                sublabel: inferred.inferred
+                    ? 'Registry selected the strongest produced package because this run did not name a primary outcome; use review evidence before treating it as ready.'
+                    : 'The protocol identified this artifact as the user-facing deliverable.',
+                badgeText: inferred.inferred ? 'inferred' : 'declared',
+                badgeClass: inferred.inferred ? 'badge-degraded' : 'badge-connected',
+            }));
+            readiness.appendChild(UI.renderListRow({
+                label: evidence ? 'Release evidence available' : 'Release evidence missing',
+                sublabel: evidence
+                    ? 'Open the evidence artifact to see what the reviewer inspected, accepted, revised, or left risky.'
+                    : 'No release evidence artifact is available for the UI to summarize.',
+                badgeText: evidence ? 'evidence' : 'missing',
+                badgeClass: evidence ? 'badge-connected' : 'badge-blocked',
+            }));
+            if (runtimeExpected) {
+                readiness.appendChild(UI.renderListRow({
+                    label: 'Runtime launch is not acceptance',
+                    sublabel: 'Start app and Open app expose the Registry-managed runtime; final readiness still comes from the review evidence and run state.',
+                    badgeText: 'runtime',
+                }));
+            }
+            if (evidenceRequirements.length) {
+                readiness.appendChild(UI.renderListRow({
+                    label: `${evidenceRequirements.length} required evidence check${evidenceRequirements.length === 1 ? '' : 's'}`,
+                    sublabel: evidenceRequirements.slice(0, 3).join(' · '),
+                    badgeText: 'quality bar',
+                }));
+            }
+            panel.appendChild(readiness);
             if (runtimeExpected && String(currentRun.run?.blocked_code || '').trim().toLowerCase().startsWith('runtime_')) {
                 panel.appendChild(UI.renderListRow({
                     label: 'Runtime verification required',
@@ -10349,7 +10386,6 @@ function renderProtocolRuns(container) {
             if (story.childElementCount) {
                 panel.appendChild(story);
             }
-            const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
             const packageSummary = document.createElement('div');
             packageSummary.className = 'run-primary-package-summary';
             const packageLabel = document.createElement('strong');

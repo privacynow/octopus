@@ -1211,6 +1211,14 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace
     assert "const inferPrimaryArtifact = () => {" in protocol_workspace
     assert "Promoted from produced artifacts because this run did not declare a primary outcome." in protocol_workspace
+    assert "run-primary-readiness-list" in protocol_workspace
+    assert "Primary outcome inferred" in protocol_workspace
+    assert "Primary outcome declared" in protocol_workspace
+    assert "Release evidence available" in protocol_workspace
+    assert "Release evidence missing" in protocol_workspace
+    assert "Runtime launch is not acceptance" in protocol_workspace
+    assert "final readiness still comes from the review evidence and run state" in protocol_workspace
+    assert "required evidence check" in protocol_workspace
     assert "unavailableReason: missing ? 'Declared artifact, not produced yet.'" in protocol_workspace
     assert "UI.createArtifactListRow({" in protocol_workspace
     assert "function createTaskArtifactListRow(task, artifact, expectedOutput = null)" in helper
@@ -1220,6 +1228,12 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "UI.esc(UI.compactMarkdownReferences(event.content))" in event_renderers
     assert "getTaskArtifactText" not in api_js
     assert "getProtocolRunArtifactText" not in api_js
+
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+    assert ".run-primary-readiness-list .list-row-label" in css
+    assert "white-space: normal;" in css
 
 
 def test_task_expansion_rerenders_clicked_rows_before_showing_artifacts() -> None:

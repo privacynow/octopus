@@ -18,6 +18,7 @@ from typing import runtime_checkable
 from uuid import uuid4
 
 from octopus_sdk.agent_directory import AgentDirectoryPort
+from octopus_sdk.agent_awareness import AgentAwarenessPort
 from octopus_sdk.authorization import AuthorizationPort, TrustTierResolverPort
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.conversation_projection import ConversationProjectionPort
@@ -288,6 +289,7 @@ class ExecutionServices:
     execution_faults: ExecutionFaultStatePort | None = None
     agent_directory: AgentDirectoryPort | None = None
     conversation_projection: ConversationProjectionPort | None = None
+    agent_awareness: AgentAwarenessPort | None = None
 
 
 @dataclass(frozen=True)

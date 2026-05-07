@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import pytest
 
@@ -23,6 +23,7 @@ from octopus_sdk.bot_runtime import (
     run_provider_preflight,
     run_provider_request,
 )
+from octopus_sdk.agent_awareness import AgentAwarenessRecord
 from octopus_sdk.execution import (
     ExecutionRuntime,
     TransportIdentity,
@@ -276,6 +277,58 @@ async def test_execute_request_runs__explicit_execution_runtime():
         assert outcome is not None
         assert outcome.status == "completed"
         assert len(prov.run_calls) == 1
+
+
+class _StaticAwareness:
+    async def build_awareness(self, request):
+        return AgentAwarenessRecord(
+            origin_channel=request.origin_channel,
+            agent_slug="m2",
+            agent_display_name="M2",
+            provider_name=request.provider_name,
+            protocols=[
+                {
+                    "protocol_id": "protocol-risk",
+                    "slug": "risk-engine",
+                    "display_name": "Payments Risk Engine",
+                    "description": "Build and operate a risk decision system.",
+                    "lifecycle_state": "published",
+                }
+            ],
+        )
+
+
+async def test_execute_request_injects_sdk_agent_awareness_into_telegram_context():
+    with fresh_env() as (_data_dir, _cfg, prov):
+        chat = FakeChat(12345)
+        message = TelegramExecutionMessage(current_runtime(), FakeMessage(chat=chat, text="what protocols can you run?"))
+        base_runtime = current_execution_runtime()
+        runtime = ExecutionRuntime(
+            dispatch=base_runtime.dispatch,
+            services=replace(base_runtime.services, agent_awareness=_StaticAwareness()),
+            interrupted_exc=base_runtime.interrupted_exc,
+        )
+
+        outcome = await execute_request(
+            build_telegram_transport_identity(
+                current_runtime(),
+                message,
+                chat.id,
+                actor_key=telegram_actor_key(42),
+            ),
+            "what protocols can you run?",
+            [],
+            message,
+            runtime=runtime,
+        )
+
+        assert outcome is not None
+        assert outcome.status == "completed"
+        assert len(prov.run_calls) == 1
+        system_prompt = prov.run_calls[0]["context"].system_prompt
+        assert "Octopus Agent Awareness" in system_prompt
+        assert "Payments Risk Engine" in system_prompt
+        assert "Telegram shortcuts" in system_prompt
 
 
 async def test_execute_request_latches_irrecoverable_provider_failure_and_blocks_retry():

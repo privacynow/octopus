@@ -33,6 +33,20 @@ from octopus_sdk.transport import (
 )
 from octopus_sdk.transport_dispatcher import TransportDispatcher
 from octopus_sdk.authorization import AuthorizationPort
+from octopus_sdk.agent_awareness import (
+    AgentArtifactOutcomeSummaryRecord,
+    AgentAwarenessPort,
+    AgentAwarenessRecord,
+    AgentAwarenessRequestRecord,
+    AgentProtocolSummaryRecord,
+    AgentRunSummaryRecord,
+    AgentRuntimeOutcomeSummaryRecord,
+    AgentStageOutcomeSummaryRecord,
+    AgentToolCapabilityRecord,
+    AgentWorkspaceAwarenessRecord,
+    ProtocolAgentAwarenessService,
+    ProtocolAwarenessSourcePort,
+)
 from octopus_sdk.bot_runtime import BotServicesPort, WorkflowComposition
 from octopus_sdk.composition import WorkflowComposer, WorkflowComposerError, WorkflowNotConfiguredError
 from octopus_sdk.content_models import (
@@ -160,6 +174,16 @@ __all__ = [
     "WorkflowComposition",
     "WorkflowNotConfiguredError",
     "AuthorizationPort",
+    "AgentArtifactOutcomeSummaryRecord",
+    "AgentAwarenessPort",
+    "AgentAwarenessRecord",
+    "AgentAwarenessRequestRecord",
+    "AgentProtocolSummaryRecord",
+    "AgentRunSummaryRecord",
+    "AgentRuntimeOutcomeSummaryRecord",
+    "AgentStageOutcomeSummaryRecord",
+    "AgentToolCapabilityRecord",
+    "AgentWorkspaceAwarenessRecord",
     "WorkQueuePort",
     "QueueSnapshot",
     "WorkerHeartbeat",
@@ -210,4 +234,6 @@ __all__ = [
     "TransportDispatcher",
     "TransportEgress",
     "TransportImplementation",
+    "ProtocolAgentAwarenessService",
+    "ProtocolAwarenessSourcePort",
 ]

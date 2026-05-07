@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
@@ -1146,6 +1147,27 @@ class ProtocolPostgresAdapter:
             auto_protocol.get("description", ""),
         )
 
+    @staticmethod
+    def _runtime_manifest_run_ready_blockers(manifest: ProtocolArtifactRuntimeManifestRecord | None) -> list[str]:
+        if manifest is None:
+            return []
+        if str(manifest.runtime_kind or "").strip().lower() == "static":
+            return []
+        command = str(manifest.start_command or "").strip()
+        if not command:
+            return ["start_command is missing"]
+        normalized = re.sub(r"\s+", " ", command.lower())
+        blocker_patterns = [
+            (r"(^|[;&|]\s*|\s)(\.\/mvnw|mvn)(\s|$)", "Maven commands build or resolve dependencies at user start"),
+            (r"(^|[;&|]\s*|\s)(\.\/gradlew|gradle)(\s|$)", "Gradle commands build or resolve dependencies at user start"),
+            (r"(^|[;&|]\s*|\s)(npm|pnpm|yarn)\s+(install|ci|add|build|test|run\s+build|run\s+test)(\s|$)", "Node dependency, build, or test commands must run before acceptance"),
+            (r"(^|[;&|]\s*|\s)(pip|pip3|python\s+-m\s+pip|poetry|uv)\s+(install|sync|add)(\s|$)", "Python dependency installation must run before acceptance"),
+            (r"(^|[;&|]\s*|\s)(cargo|go|dotnet)\s+(build|test|run)(\s|$)", "Build, test, or developer run commands must not be the user start command"),
+            (r"(^|[;&|]\s*|\s)(pytest|tox|nox|make\s+(test|build|package)|cmake|meson|bazel)(\s|$)", "Test or build commands must run before acceptance"),
+        ]
+        blockers = [message for pattern, message in blocker_patterns if re.search(pattern, normalized)]
+        return list(dict.fromkeys(blockers))
+
     def _runtime_acceptance_evidence_gate(
         self,
         conn,
@@ -1184,6 +1206,7 @@ class ProtocolPostgresAdapter:
         manifest_present, file_manifest, manifest_error = self._artifact_runtime_manifest_state(detail, artifact)
         runtime_expected = self._primary_artifact_expects_runtime(document)
         manifest_required = runtime_expected or bool(runtime and runtime.manifest) or manifest_present
+        effective_manifest = file_manifest or (runtime.manifest if runtime and runtime.manifest else None)
         if not manifest_required:
             return engine
         if manifest_present and file_manifest is None:
@@ -1236,6 +1259,40 @@ class ProtocolPostgresAdapter:
                 "transition_reason": detail_text,
                 "transition_error_code": "RUNTIME_MANIFEST_REQUIRED",
                 "run_blocked_code": "runtime_manifest_required",
+                "run_blocked_detail": detail_text,
+                "terminal_status": None,
+                "create_next_execution": False,
+                "next_stage_key": "",
+                "transition_metadata": RegistryJsonRecord.model_validate(metadata),
+            })
+
+        run_ready_blockers = self._runtime_manifest_run_ready_blockers(effective_manifest)
+        if run_ready_blockers:
+            start_command = str(effective_manifest.start_command or "").strip() if effective_manifest else ""
+            detail_text = (
+                "Final acceptance for this runnable primary artifact requires a run-ready package before completion. "
+                "The runtime manifest start_command must only launch an already prepared artifact; it must not install dependencies, build, package, test, or use developer-mode run commands. "
+                f"Current start_command for artifact '{primary_key}' is {start_command!r}. "
+                "Send the work back to the primary outcome stage so it builds and smoke-tests the package first, then uses a cheap launch command such as a prebuilt binary or java -jar target/app.jar."
+            )
+            metadata = engine.transition_metadata.as_dict()
+            metadata.update({
+                "runtime_evidence_required": True,
+                "runtime_manifest_not_run_ready": True,
+                "primary_artifact_key": primary_key,
+                "runtime_manifest_start_command": start_command,
+                "runtime_manifest_blockers": run_ready_blockers,
+                "missing_runtime_evidence": ["run-ready runtime start command"],
+            })
+            return engine.model_copy(update={
+                "run_status": "blocked",
+                "stage_status": "blocked",
+                "failure_code": "runtime_manifest_not_run_ready",
+                "failure_detail": detail_text,
+                "transition_kind": "blocked",
+                "transition_reason": detail_text,
+                "transition_error_code": "RUNTIME_MANIFEST_NOT_RUN_READY",
+                "run_blocked_code": "runtime_manifest_not_run_ready",
                 "run_blocked_detail": detail_text,
                 "terminal_status": None,
                 "create_next_execution": False,

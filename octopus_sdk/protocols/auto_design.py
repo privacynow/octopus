@@ -88,9 +88,11 @@ AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE = (
     "and it must validate as ProtocolArtifactRuntimeManifestRecord. Use runtime_kind exactly one of static, node, python, "
     "java, binary, or process. For a Java/Maven service use runtime_kind 'java', not a descriptive phrase. For process-backed "
     "runtimes include start_command, ui_path, health_path, api_base_path, smoke_test steps, and endpoints as an array of objects. "
+    "The package must be built and smoke-tested before final acceptance; start_command is only for launching the already prepared "
+    "runtime and must not run dependency installation, build, test, package, or developer server commands such as mvn spring-boot:run. "
     "Each endpoint object uses label, path, endpoint_kind, method, and description; endpoint_kind must be one of ui, api, health, "
     "docs, or other, and every process-backed runtime must include at least one endpoint with endpoint_kind 'docs'. "
-    "Example for Java: {\"runtime_kind\":\"java\",\"start_command\":\"mvn spring-boot:run\",\"ui_path\":\"/\","
+    "Example for Java: {\"runtime_kind\":\"java\",\"start_command\":\"java -jar target/risk-engine.jar\",\"ui_path\":\"/\","
     "\"health_path\":\"/health\",\"api_base_path\":\"/api\",\"endpoints\":[{\"label\":\"Operator UI\",\"path\":\"/\","
     "\"endpoint_kind\":\"ui\",\"method\":\"GET\",\"description\":\"Service-backed operator console\"},{\"label\":\"Health\","
     "\"path\":\"/health\",\"endpoint_kind\":\"health\",\"method\":\"GET\",\"description\":\"Runtime readiness\"},"
@@ -1423,11 +1425,14 @@ def _infer_work_packages(
         (
             f"Produce the final integrated outcome from the accepted plan, reviews, and production-layer artifacts. "
             f"The result must visibly satisfy the requirement coverage terms: {terms}. "
-            "Do not discard upstream production work; reconcile it into one usable deliverable."
+            "Do not discard upstream production work; reconcile it into one usable deliverable. "
+            "For runnable outcomes, make the package run-ready before completion and make the main user action visibly display its result."
         ),
         (
             "The deliverable is usable by the intended human, implements the accepted plan, integrates accepted production layers, "
-            "and leaves clear inspection evidence. Placeholder-level outcomes are not acceptable when the request asks for polish, variety, or commercial quality."
+            "and leaves clear inspection evidence. Runnable deliverables are not complete until they are built, smoke-tested, "
+            "launchable through a cheap start command, and show clear user-facing outcomes from their core actions. "
+            "Placeholder-level outcomes are not acceptable when the request asks for polish, variety, or commercial quality."
         ),
         "produced_outcome",
         "Produced Outcome",
@@ -1438,7 +1443,8 @@ def _infer_work_packages(
         review_display_name="Outcome Acceptance Reviewer",
         review_rubric=(
             "Inspect the produced outcome directly, exercise it where practical, compare it to the accepted plan and upstream artifacts, "
-            "and choose revise if the outcome is low-detail, not usable, untested by inspection, or below the stated quality bar."
+            "and choose revise if the outcome is low-detail, not usable, untested by inspection, hides core action results, "
+            "requires build/install work at user start, or falls below the stated quality bar."
         ),
         rationale="The primary outcome package owns the artifact the user actually asked Octopus to produce.",
         required_skills=("implementation", "verification", "acceptance evidence"),
@@ -2209,6 +2215,8 @@ def _build_plan(
             (
                 "This protocol expects a runnable primary artifact. Package it as a user-facing product: include a coherent UI/API, "
                 "tests or smoke steps, a root octopus-runtime.json manifest, and enough start/health/smoke metadata for Octopus to start it, proxy it, and let users try it. "
+                "Build and smoke-test the package during this stage so the manifest start_command launches a prepared artifact quickly instead of installing dependencies, compiling, testing, or packaging on user start. "
+                "Any user-triggered action in the UI must surface a clear result/outcome in the app itself, not require log inspection or raw JSON archaeology. "
                 f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE}"
                 if package.package_key == "implementation" and runtime_expected
                 else ""
@@ -2266,18 +2274,22 @@ def _build_plan(
                 f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE} "
                 "Start or open the Octopus-managed runtime, exercise the UI/API through the Registry URL, "
                 "and record runtime evidence before accepting. Do not accept based on direct localhost or container-only smoke checks when the Registry-managed runtime cannot parse, start, route, or fetch the app. "
+                "Do not accept if the runtime start command performs build, dependency installation, packaging, tests, or developer-mode bootstrapping; the implementation stage must prepare the package first and the start command must only launch it. "
+                "For UI/API systems, run at least one core user action and verify the result is visible and understandable in the app itself. "
                 "Choose revise if the manifest is missing or invalid, the runtime cannot start, health fails, the UI/API cannot be exercised, "
-                "the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, or below the stated quality bar. "
+                "the primary artifact is hard to find, low-detail, not usable, missing required behavior, hides the result of core actions, unsupported by evidence, or below the stated quality bar. "
             )
             if runtime_expected
             else (
                 "Adversarially inspect or exercise the primary produced outcome against the original requirement, accepted upstream artifacts, and quality bars. "
                 "If the primary artifact declares octopus-runtime.json, it must follow the Octopus runtime manifest contract, then start or open the Octopus-managed runtime, exercise the UI/API, and record runtime evidence before accepting. "
-                "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, unsupported by evidence, has an invalid runtime manifest, or falls below the stated quality bar. "
+                "If the runtime start command performs build, dependency installation, packaging, tests, or developer-mode bootstrapping, choose revise. "
+                "For UI/API systems, run at least one core user action and verify the result is visible and understandable in the app itself. "
+                "Choose revise if the primary artifact is hard to find, low-detail, not usable, missing required behavior, hides the result of core actions, unsupported by evidence, has an invalid runtime manifest, or falls below the stated quality bar. "
             )
         )
         + (
-            "Record final release evidence: what was inspected, what worked, what remains risky, and exact user-facing inspection steps. "
+            "Record final release evidence: what was inspected, what worked, what remains risky, exact user-facing inspection steps, and the visible outcome/result from at least one exercised core action when applicable. "
             "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
         ),
         inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
@@ -2309,6 +2321,8 @@ def _build_plan(
                 [
                     "A root octopus-runtime.json manifest exists for the primary artifact.",
                     "The Octopus-managed runtime starts, passes health, and is exercised through Registry routing.",
+                    "The runtime start command launches a prebuilt/prepared package and does not install, build, package, or test on user start.",
+                    "A core user action visibly surfaces its result in the runtime UI/API.",
                 ]
                 if runtime_expected
                 else []

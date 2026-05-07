@@ -9385,7 +9385,7 @@ function renderProtocolRuns(container) {
             target.appendChild(wrap);
         };
 
-        const createRunArtifactRow = (artifact, { relationship = 'Produced output', missing = false } = {}) => {
+        const createRunArtifactRow = (artifact, { relationship = 'Produced output', missing = false, compactActions = false } = {}) => {
             const definition = artifactDefinitionByKey.get(String(artifact.artifact_key || '')) || null;
             const pathLabel = _protocolArtifactDisplayPath(artifact) || _artifactDefinitionPath(definition || artifact);
             const identifier = definition && String(definition.display_name || '').trim()
@@ -9413,6 +9413,7 @@ function renderProtocolRuns(container) {
                     {
                         missing: missing || !artifact.exists,
                         runtimeExpected,
+                        prominentRuntime: compactActions,
                     },
                 ),
             });
@@ -10306,19 +10307,17 @@ function renderProtocolRuns(container) {
             ], { compact: true }));
             const evidence = artifactRows.find((item) => String(item.artifact_key || '').trim() === 'release_evidence') || null;
             if (evidence) {
-                panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence' }));
+                panel.appendChild(createRunArtifactRow(evidence, { relationship: 'Release evidence', compactActions: true }));
             }
             if (includeRunControls) {
                 const controls = document.createElement('div');
                 controls.className = 'run-primary-control-bar';
                 const actionSpecs = _runActionSpecs().filter((spec) => spec.visible !== false);
-                if (actionSpecs.length) {
-                    const actionLabel = document.createElement('div');
-                    actionLabel.className = 'detail-label';
-                    actionLabel.textContent = 'Run controls';
-                    controls.appendChild(actionLabel);
-                    controls.appendChild(_buildRunActionBar({ specs: actionSpecs }));
-                }
+                const actionLabel = document.createElement('div');
+                actionLabel.className = 'detail-label';
+                actionLabel.textContent = 'Run controls';
+                controls.appendChild(actionLabel);
+                controls.appendChild(_buildRunActionBar({ specs: actionSpecs }));
                 const lifecycleSpecs = _runLifecycleSpecs().filter((spec) => spec.visible !== false);
                 if (lifecycleSpecs.length) {
                     const lifecycleLabel = document.createElement('div');

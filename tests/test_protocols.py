@@ -1314,7 +1314,7 @@ def test_registry_store_protocol_timeout_sweeps_without_task_result(postgres_reg
     assert refreshed.stage_executions[0].failure_code == "stage_timeout"
 
 
-def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres_registry_truncated: str) -> None:
+def test_registry_store_protocol_issues_report_timeout_stuck_blocked_and_contract_runs(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     enroll, _published, created, detail = running_protocol_run(
         store,
@@ -1354,6 +1354,50 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
     refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert maintenance.swept_count == 1
     assert refreshed.run.status == "failed"
+
+    stuck_enroll = store.enroll(agent_card(bot_key="m-stuck"))
+    stuck_published = published_protocol(
+        store,
+        slug="mini-protocol-stuck",
+        document={
+            **protocol_document(),
+            "metadata": {
+                **protocol_document()["metadata"],
+                "slug": "mini-protocol-stuck",
+                "display_name": "Mini Protocol Stuck",
+            },
+        },
+    )
+    stuck_created = store.create_protocol_run(
+        {
+            "protocol_id": stuck_published.protocol.protocol_id,
+            "entry_agent_id": stuck_enroll.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the stuck feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    stuck_detail = store.get_protocol_run(stuck_created.run.protocol_run_id, access=operator_access())
+    stuck_stage = stuck_detail.stage_executions[0]
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agent_registry.protocol_stage_executions
+                SET lease_expires_at = %s
+                WHERE protocol_stage_execution_id = %s
+                """,
+                (expired, stuck_stage.protocol_stage_execution_id),
+            )
+        conn.commit()
+
+    stuck_issues = store.list_protocol_issues(
+        access=operator_access(),
+        issue_kind="stuck_lease",
+    )
+    assert any(item.protocol_run_id == stuck_created.run.protocol_run_id for item in stuck_issues)
 
     blocked_enroll = store.enroll(agent_card(bot_key="m2"))
     blocked_published = published_protocol(
@@ -1403,7 +1447,213 @@ def test_registry_store_protocol_issues_report_timeout_and_blocked_runs(postgres
     )
     assert filtered_issues
     assert all(item.protocol_run_id == blocked_created.run.protocol_run_id for item in filtered_issues)
+
+    contract_enroll = store.enroll(agent_card(bot_key="m-contract"))
+    contract_published = published_protocol(
+        store,
+        slug="mini-protocol-contract",
+        document={
+            **protocol_document(),
+            "metadata": {
+                **protocol_document()["metadata"],
+                "slug": "mini-protocol-contract",
+                "display_name": "Mini Protocol Contract",
+            },
+        },
+    )
+    contract_created = store.create_protocol_run(
+        {
+            "protocol_id": contract_published.protocol.protocol_id,
+            "entry_agent_id": contract_enroll.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the contract feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    contract_detail = store.get_protocol_run(contract_created.run.protocol_run_id, access=operator_access())
+    contract_stage = contract_detail.stage_executions[0]
+    store.update_routed_task_result(
+        contract_enroll.agent_token,
+        contract_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "contract-plan",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "plan-contract",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    review_detail = store.get_protocol_run(contract_created.run.protocol_run_id, access=operator_access())
+    review_stage = review_detail.stage_executions[0]
+    store.update_routed_task_result(
+        contract_enroll.agent_token,
+        review_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "contract-invalid-review",
+            "summary": "Review omitted the decision marker.",
+            "full_text": "Review omitted the required protocol decision.",
+        },
+    )
+    contract_issues = store.list_protocol_issues(
+        access=operator_access(),
+        issue_kind="invalid_contract",
+    )
+    assert any(item.protocol_run_id == contract_created.run.protocol_run_id for item in contract_issues)
     assert store.list_protocol_issues(access=operator_access(), issue_kind="not-a-real-issue-kind") == []
+
+
+def test_registry_store_interrupted_result_blocks_run_and_retry_records_timeline(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    stage = detail.stage_executions[0]
+
+    task = store.update_routed_task_result(
+        enroll.agent_token,
+        stage.routed_task_id,
+        {
+            "status": "interrupted",
+            "transition_id": "interrupted-recovery",
+            "summary": "Work was interrupted; retry this stage to continue.",
+            "full_text": "Recovered a routed task after the worker restarted before the result was durable.",
+        },
+    )
+
+    blocked = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert task.status == "failed"
+    assert blocked.run.status == "blocked"
+    assert blocked.run.blocked_code == "interrupted"
+    assert blocked.stage_executions[0].failure_code == "interrupted"
+    assert any(
+        item.transition_kind == "blocked" and item.error_code == "TASK_INTERRUPTED"
+        for item in blocked.transitions
+    )
+
+    retried = store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="retry",
+        reason="Retry interrupted disposable run.",
+    )
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+
+    assert retried.ok is True
+    assert retried.run is not None
+    assert retried.run.status == "running"
+    assert refreshed.run.current_stage_key == "planning"
+    assert refreshed.run.current_stage_execution_id != stage.protocol_stage_execution_id
+    previous_stage = next(
+        item
+        for item in refreshed.stage_executions
+        if item.protocol_stage_execution_id == stage.protocol_stage_execution_id
+    )
+    assert previous_stage.stage_key == "planning"
+    assert previous_stage.status == "blocked"
+    assert previous_stage.failure_code == "interrupted"
+    assert previous_stage.failure_detail == "Work was interrupted; retry this stage to continue."
+    assert any(item.transition_kind == "retry" for item in refreshed.transitions)
+
+
+def test_registry_store_stale_operator_send_back_does_not_block_next_stage(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    document = protocol_document()
+    document["artifacts"] = [
+        *document["artifacts"],
+        {
+            "artifact_key": "outcome",
+            "kind": "workspace_file",
+            "path": "protocol/outcome.md",
+        },
+    ]
+    document["stages"][1]["transitions"]["accept"] = "produce"
+    document["stages"].append(
+        {
+            "stage_key": "produce",
+            "participant_key": "worker",
+            "selector": {"kind": "skill", "value": "writing"},
+            "stage_kind": "work",
+            "write_capable": True,
+            "inputs": ["plan"],
+            "outputs": ["outcome"],
+            "transitions": {"completed": "__complete__"},
+            "instructions": "Write protocol/outcome.md.",
+        }
+    )
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    planning_stage = detail.stage_executions[0]
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        planning_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "plan-complete",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "plan123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    review_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    review_stage = next(item for item in review_detail.stage_executions if item.stage_key == "review")
+    store.update_routed_task_result(
+        enroll.agent_token,
+        review_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "review-accept",
+            "summary": "Accepted.",
+            "full_text": "Looks ready.\nPROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Accepted.",
+        },
+    )
+    produce_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert produce_detail.run.status == "running"
+    assert produce_detail.run.current_stage_key == "produce"
+    assert produce_detail.run.blocked_code == ""
+
+    stale_send_back = store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="send-back",
+        reason="The previous review-stage button was stale.",
+        expected_version=produce_detail.run.version,
+    )
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+
+    assert stale_send_back.ok is False
+    assert stale_send_back.status == "concurrent_modification"
+    assert "does not allow operator decision 'revise'" in stale_send_back.message
+    assert refreshed.run.status == "running"
+    assert refreshed.run.current_stage_key == "produce"
+    assert refreshed.run.blocked_code == ""
+    assert all(item.error_code != "INVALID_OPERATOR_DECISION" for item in refreshed.transitions)
 
 
 def test_registry_store_does_not_seed_protocol_templates_from_code(postgres_registry_truncated: str) -> None:

@@ -8516,6 +8516,8 @@ function renderProtocolRuns(container) {
         });
         const strip = document.createElement('div');
         strip.className = 'runs-overview-strip';
+        strip.setAttribute('role', 'list');
+        strip.setAttribute('aria-label', 'Run status summary');
         [
             { key: 'attention', label: 'Needs attention' },
             { key: 'active', label: 'Running now' },
@@ -8524,6 +8526,7 @@ function renderProtocolRuns(container) {
         ].forEach((item) => {
             const card = document.createElement('div');
             card.className = `runs-overview-card runs-overview-${item.key}`;
+            card.setAttribute('role', 'listitem');
             const value = document.createElement('strong');
             value.textContent = String(counts[item.key] || 0);
             card.appendChild(value);
@@ -9041,9 +9044,14 @@ function renderProtocolRuns(container) {
             btn.dataset.runAction = spec.action;
             btn.setAttribute('aria-label', `${spec.label} protocol run`);
             btn.disabled = !spec.enabled;
-            btn.addEventListener('click', (event) => {
+            btn.addEventListener('click', async (event) => {
                 const action = String(event.currentTarget?.dataset?.runAction || spec.action || '').trim();
-                const latestSpec = _runActionSpecs().find((item) => String(item.action || '') === action) || spec;
+                const latestSpec = _runActionSpecs().find((item) => String(item.action || '') === action) || null;
+                if (!latestSpec || latestSpec.visible === false || latestSpec.enabled === false) {
+                    await loadRunDetail();
+                    UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning');
+                    return;
+                }
                 _openRunActionDialog({
                     title: latestSpec.label,
                     action: latestSpec.action,

@@ -1266,6 +1266,8 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace
+    assert "if (!latestSpec || latestSpec.visible === false || latestSpec.enabled === false)" in protocol_workspace
+    assert "Review the refreshed state and try again." in protocol_workspace
     assert "const inferPrimaryArtifact = () => {" in protocol_workspace
     assert "Promoted from produced artifacts because this run did not declare a primary outcome." in protocol_workspace
     assert "run-primary-readiness-list" in protocol_workspace
@@ -1368,6 +1370,9 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "run-stage-timeline-button" in workspace
     assert "Run inspector" in workspace
     assert "issuesByRunId" in workspace
+    assert "strip.setAttribute('role', 'list')" in workspace
+    assert "strip.setAttribute('aria-label', 'Run status summary')" in workspace
+    assert "card.setAttribute('role', 'listitem')" in workspace
     kit = (
         repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
     ).read_text(encoding="utf-8")
@@ -1376,6 +1381,9 @@ def test_desktop_ui_rows_are_action_explicit_and_artifact_actions_are_container_
     assert "attempt ${item.attempt || item.attemptCount}" in kit
     assert "kit-run-stage-progress-node is-" in kit
     assert ".runs-overview-strip" in css
+    assert ".runs-overview-card + .runs-overview-card" in css
+    assert "background: transparent;" in css
+    assert "cursor: default;" in css
     assert ".run-focus-hero" in css
     assert ".run-focus-live" in css
     assert "kit-run-stage-current-glow" in css

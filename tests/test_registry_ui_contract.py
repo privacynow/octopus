@@ -428,6 +428,20 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
         assert dead not in css, f"dead CSS must be removed: {dead}"
 
 
+def test_protocol_runs_primary_artifact_rows_wrap_long_review_evidence_text() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".run-primary-artifact-panel > .list-row {" in css
+    assert ".run-primary-story-list .list-row,\n.run-primary-artifact-panel > .list-row {" in css
+    assert ".run-primary-artifact-panel > .list-row .list-row-sublabel" in css
+    assert "overflow-wrap: anywhere;" in css
+    assert ".run-primary-artifact-panel > .list-row .badge {" in css
+    assert ".run-primary-story-list .list-row,\n    .run-primary-artifact-panel > .list-row {\n        grid-template-columns: minmax(0, 1fr);" in css
+
+
 def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     dashboard = (

@@ -6325,27 +6325,41 @@ select {
 }
 
 .run-primary-story-list .list-row {
+    display: grid;
     min-width: 0;
     padding: var(--space-1-5) var(--space-2);
 }
 
-.run-primary-story-list .list-row {
+.run-primary-story-list .list-row,
+.run-primary-artifact-panel > .list-row {
+    display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
+    align-items: start;
+    gap: var(--space-2);
+}
+
+.run-primary-artifact-panel > .list-row {
+    min-width: 0;
 }
 
 .run-primary-story-list .list-row-label,
-.run-primary-story-list .list-row-sublabel {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
+.run-primary-story-list .list-row-sublabel,
 .run-primary-readiness-list .list-row-label,
-.run-primary-readiness-list .list-row-sublabel {
+.run-primary-readiness-list .list-row-sublabel,
+.run-primary-artifact-panel > .list-row .list-row-label,
+.run-primary-artifact-panel > .list-row .list-row-sublabel {
     white-space: normal;
     overflow: visible;
     text-overflow: clip;
+    overflow-wrap: anywhere;
+}
+
+.run-primary-story-list .badge,
+.run-primary-artifact-panel > .list-row .badge {
+    justify-self: end;
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
 }
 
 .run-primary-package-summary {
@@ -6785,6 +6799,16 @@ select {
     .run-stage-timeline-item > .protocol-lineage-card .metadata-grid,
     .run-stage-timeline-item > .protocol-lineage-card .task-item-facts {
         grid-template-columns: minmax(0, 1fr);
+    }
+
+    .run-primary-story-list .list-row,
+    .run-primary-artifact-panel > .list-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .run-primary-story-list .badge,
+    .run-primary-artifact-panel > .list-row .badge {
+        justify-self: start;
     }
 
     .run-focus-progress.kit-run-stage-progress {

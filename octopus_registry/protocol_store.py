@@ -4751,6 +4751,19 @@ class ProtocolPostgresAdapter:
             if stage_execution_row is None:
                 return ProtocolRunMutationRecord(ok=False, status="invalid", message="Protocol run has no active stage execution.")
             document = self._protocol_document_for_run(conn, run_row)
+            if normalized_action in {"accept", "send_back"}:
+                forced_decision = "accept" if normalized_action == "accept" else "revise"
+                current_stage_key = str(stage_execution_row.get("stage_key", "") or "")
+                current_stage = document.stage(current_stage_key)
+                if forced_decision not in set(current_stage.allowed_decisions()):
+                    return ProtocolRunMutationRecord(
+                        ok=False,
+                        status="concurrent_modification",
+                        message=(
+                            f"Current stage {current_stage.stage_key} does not allow operator decision "
+                            f"{forced_decision!r}; refresh the run before applying this action."
+                        ),
+                    )
             engine = self._protocol_engine.evaluate_operator_action(
                 document=document,
                 run=self._protocol_run_from_row(run_row),

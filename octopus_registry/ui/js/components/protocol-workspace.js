@@ -9044,9 +9044,14 @@ function renderProtocolRuns(container) {
             btn.dataset.runAction = spec.action;
             btn.setAttribute('aria-label', `${spec.label} protocol run`);
             btn.disabled = !spec.enabled;
-            btn.addEventListener('click', (event) => {
+            btn.addEventListener('click', async (event) => {
                 const action = String(event.currentTarget?.dataset?.runAction || spec.action || '').trim();
-                const latestSpec = _runActionSpecs().find((item) => String(item.action || '') === action) || spec;
+                const latestSpec = _runActionSpecs().find((item) => String(item.action || '') === action) || null;
+                if (!latestSpec || latestSpec.visible === false || latestSpec.enabled === false) {
+                    await loadRunDetail();
+                    UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning');
+                    return;
+                }
                 _openRunActionDialog({
                     title: latestSpec.label,
                     action: latestSpec.action,

@@ -1569,6 +1569,93 @@ def test_registry_store_interrupted_result_blocks_run_and_retry_records_timeline
     assert any(item.transition_kind == "retry" for item in refreshed.transitions)
 
 
+def test_registry_store_stale_operator_send_back_does_not_block_next_stage(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    document = protocol_document()
+    document["artifacts"] = [
+        *document["artifacts"],
+        {
+            "artifact_key": "outcome",
+            "kind": "workspace_file",
+            "path": "protocol/outcome.md",
+        },
+    ]
+    document["stages"][1]["transitions"]["accept"] = "produce"
+    document["stages"].append(
+        {
+            "stage_key": "produce",
+            "participant_key": "worker",
+            "selector": {"kind": "skill", "value": "writing"},
+            "stage_kind": "work",
+            "write_capable": True,
+            "inputs": ["plan"],
+            "outputs": ["outcome"],
+            "transitions": {"completed": "__complete__"},
+            "instructions": "Write protocol/outcome.md.",
+        }
+    )
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    planning_stage = detail.stage_executions[0]
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        planning_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "plan-complete",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "plan123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    review_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    review_stage = next(item for item in review_detail.stage_executions if item.stage_key == "review")
+    store.update_routed_task_result(
+        enroll.agent_token,
+        review_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "review-accept",
+            "summary": "Accepted.",
+            "full_text": "Looks ready.\nPROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Accepted.",
+        },
+    )
+    produce_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert produce_detail.run.status == "running"
+    assert produce_detail.run.current_stage_key == "produce"
+    assert produce_detail.run.blocked_code == ""
+
+    stale_send_back = store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="send-back",
+        reason="The previous review-stage button was stale.",
+        expected_version=produce_detail.run.version,
+    )
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+
+    assert stale_send_back.ok is False
+    assert stale_send_back.status == "concurrent_modification"
+    assert "does not allow operator decision 'revise'" in stale_send_back.message
+    assert refreshed.run.status == "running"
+    assert refreshed.run.current_stage_key == "produce"
+    assert refreshed.run.blocked_code == ""
+    assert all(item.error_code != "INVALID_OPERATOR_DECISION" for item in refreshed.transitions)
+
+
 def test_registry_store_does_not_seed_protocol_templates_from_code(postgres_registry_truncated: str) -> None:
     from app.db.postgres_init import run_init
 

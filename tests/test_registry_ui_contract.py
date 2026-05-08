@@ -1266,6 +1266,8 @@ def test_artifact_preview_actions_have_link_fallbacks() -> None:
     assert "API.getProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "API.stopProtocolRunArtifactRuntime(runId, artifact.artifact_key)" in protocol_workspace
     assert "stopRuntime.textContent = 'Stop app';" in protocol_workspace
+    assert "if (!latestSpec || latestSpec.visible === false || latestSpec.enabled === false)" in protocol_workspace
+    assert "Review the refreshed state and try again." in protocol_workspace
     assert "const inferPrimaryArtifact = () => {" in protocol_workspace
     assert "Promoted from produced artifacts because this run did not declare a primary outcome." in protocol_workspace
     assert "run-primary-readiness-list" in protocol_workspace

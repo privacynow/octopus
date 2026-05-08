@@ -2186,12 +2186,38 @@ def build_protocol_router(
         confirm = str(body.get("confirm") or "").strip().upper()
         if confirm != "CLEAN":
             raise _protocol_http_error(400, error_code="WORKSPACE_CLEANUP_CONFIRMATION_REQUIRED", message="Type CLEAN to confirm workspace cleanup.")
-        plan_payload = body.get("plan") or {}
-        if not plan_payload and str(body.get("job_id") or "").strip():
-            row = store.get_workspace_cleanup_inventory(str(body.get("job_id") or "").strip(), access=access)
-            summary = row.get("summary_json", {}) if row is not None else {}
-            if isinstance(summary, dict):
-                plan_payload = summary.get("plan") or {}
+        body_plan_payload = body.get("plan") if isinstance(body.get("plan"), dict) else {}
+        inventory_id = str(body.get("job_id") or body_plan_payload.get("inventory_id") or "").strip()
+        if not inventory_id:
+            raise _protocol_http_error(
+                400,
+                error_code="WORKSPACE_CLEANUP_DRY_RUN_REQUIRED",
+                message="Run a workspace cleanup dry run before executing cleanup.",
+            )
+        try:
+            inventory_row = store.get_workspace_cleanup_inventory(inventory_id, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="WORKSPACE_CLEANUP_FORBIDDEN", message=str(exc)) from exc
+        if inventory_row is None:
+            raise _protocol_http_error(
+                404,
+                error_code="WORKSPACE_CLEANUP_JOB_NOT_FOUND",
+                message="Workspace cleanup dry run was not found.",
+            )
+        if str(inventory_row.get("scan_status") or "") != "dry_run":
+            raise _protocol_http_error(
+                409,
+                error_code="WORKSPACE_CLEANUP_DRY_RUN_REQUIRED",
+                message="Run a fresh workspace cleanup dry run before executing cleanup.",
+            )
+        summary = inventory_row.get("summary_json", {})
+        plan_payload = summary.get("plan") if isinstance(summary, dict) else {}
+        if not isinstance(plan_payload, dict) or not plan_payload:
+            raise _protocol_http_error(
+                409,
+                error_code="WORKSPACE_CLEANUP_DRY_RUN_REQUIRED",
+                message="Workspace cleanup dry run did not include an executable plan.",
+            )
         plan = WorkspaceCleanupPlanRecord.model_validate(plan_payload)
         agent_id = _management_agent_id_for_operation(
             store,

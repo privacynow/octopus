@@ -64,6 +64,10 @@ from octopus_sdk.registry.management import (
     ManagementRequest,
     ManagementResult,
     StopArtifactRuntimeResult,
+    WorkspaceCleanupEntryRecord,
+    WorkspaceCleanupPlanRecord,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResult,
 )
 from octopus_sdk.registry.models import AgentRecord, RegistryJsonRecord, TaskRecord
 from octopus_sdk.registry.management_executor import (
@@ -192,6 +196,154 @@ def _ui_csrf_token(client: TestClient) -> str:
     response = client.get("/v1/auth/csrf")
     assert response.status_code == 200
     return response.json()["csrf_token"]
+
+
+def test_workspace_cleanup_execute_requires_stored_dry_run_inventory(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_workspace_cleanup_inventory(self, *args, **kwargs):
+            raise AssertionError("cleanup without a dry-run inventory should fail before store lookup")
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/admin/workspaces/cleanup",
+            json={
+                "confirm": "CLEAN",
+                "plan": {
+                    "entries": [
+                        {
+                            "path": "/home/bot/.provider-auth/.codex/.cache",
+                            "category": "dependency_caches",
+                            "safe_to_delete": True,
+                        }
+                    ]
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "WORKSPACE_CLEANUP_DRY_RUN_REQUIRED"
+
+
+def test_workspace_cleanup_execute_uses_stored_dry_run_plan(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    stored_plan = WorkspaceCleanupPlanRecord(
+        inventory_id="inventory-1",
+        agent_id="agent-1",
+        categories=["build_caches"],
+        entries=[
+            WorkspaceCleanupEntryRecord(
+                path="/home/bot/project/target",
+                category="build_caches",
+                safe_to_delete=True,
+            )
+        ],
+    )
+    saved: dict[str, object] = {}
+
+    class _Store:
+        def list_agents(self, cursor: int = 0, limit: int = 200, connectivity_state: str = ""):
+            del cursor, limit
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    connectivity_state="connected",
+                    supported_admin_operations=["workspace_cleanup"],
+                )
+            ]
+
+        def get_workspace_cleanup_inventory(self, inventory_id: str, *, access):
+            del access
+            assert inventory_id == "inventory-1"
+            return {
+                "inventory_id": "inventory-1",
+                "agent_id": "agent-1",
+                "workspace_ref": "",
+                "protocol_run_id": "",
+                "scan_status": "dry_run",
+                "file_count": 1,
+                "total_bytes": 1,
+                "retained_bytes": 0,
+                "transient_bytes": 1,
+                "unknown_bytes": 0,
+                "summary_json": {"plan": stored_plan.model_dump(mode="json")},
+                "created_at": "2026-05-08T00:00:00Z",
+            }
+
+        def save_workspace_cleanup_inventory(self, **kwargs):
+            saved.update(kwargs)
+            return {
+                "inventory_id": kwargs["inventory_id"],
+                "agent_id": kwargs["agent_id"],
+                "workspace_ref": kwargs.get("workspace_ref", ""),
+                "protocol_run_id": kwargs.get("protocol_run_id", ""),
+                "scan_status": kwargs["scan_status"],
+                "file_count": kwargs["file_count"],
+                "total_bytes": kwargs["total_bytes"],
+                "retained_bytes": kwargs["retained_bytes"],
+                "transient_bytes": kwargs["transient_bytes"],
+                "unknown_bytes": kwargs["unknown_bytes"],
+                "summary_json": kwargs["summary"],
+                "created_at": "2026-05-08T00:00:01Z",
+            }
+
+    from octopus_registry.management_client import RegistryManagementClient
+
+    async def _send(self, *, agent_id: str, payload, timeout_seconds: int = 30):
+        del self, timeout_seconds
+        assert agent_id == "agent-1"
+        assert isinstance(payload, WorkspaceCleanupRequest)
+        assert [entry.path for entry in payload.plan.entries] == ["/home/bot/project/target"]
+        return ManagementResult(
+            request_id="mgmt-cleanup-1",
+            agent_id="agent-1",
+            success=True,
+            payload=WorkspaceCleanupResult(plan=payload.plan, removed_paths=[], removed_bytes=0, failures=[]),
+        )
+
+    monkeypatch.setattr(RegistryManagementClient, "send", _send)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/admin/workspaces/cleanup",
+            json={
+                "confirm": "CLEAN",
+                "plan": {
+                    "inventory_id": "inventory-1",
+                    "entries": [
+                        {
+                            "path": "/home/bot/.provider-auth/.codex/.cache",
+                            "category": "dependency_caches",
+                            "safe_to_delete": True,
+                        }
+                    ],
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    assert saved["scan_status"] == "executed"
 
 
 def _enroll_and_register(

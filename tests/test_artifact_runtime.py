@@ -17,6 +17,8 @@ from octopus_sdk.registry.management import (
     ArtifactRuntimeLogsRequest,
     StartArtifactRuntimeRequest,
     StopArtifactRuntimeRequest,
+    WorkspaceCleanupEntryRecord,
+    WorkspaceCleanupPlanRecord,
     WorkspaceCleanupRequest,
     WorkspaceUsageRequest,
 )
@@ -313,3 +315,44 @@ async def test_workspace_hygiene_blocks_symlink_escape(tmp_path):
     assert cleaned.removed_paths == []
     assert cleaned.failures
     assert outside_dir.exists()
+
+
+async def test_workspace_hygiene_excludes_and_refuses_auth_cleanup_candidates(tmp_path):
+    working_dir = tmp_path / "workspace"
+    data_dir = tmp_path / "data"
+    protected_cache = working_dir / ".provider-auth" / ".codex" / ".cache"
+    protected_cache.mkdir(parents=True)
+    (protected_cache / "auth-cache.json").write_text("secret", encoding="utf-8")
+    normal_cache = working_dir / "project" / "target"
+    normal_cache.mkdir(parents=True)
+    (normal_cache / "build.log").write_text("temporary build output", encoding="utf-8")
+    config = make_config(data_dir=data_dir, working_dir=working_dir)
+
+    usage = await workspace_hygiene.workspace_usage(
+        WorkspaceUsageRequest(categories=["build_caches", "dependency_caches"]),
+        config=config,
+    )
+
+    assert str(protected_cache.resolve()) not in {entry.path for entry in usage.plan.entries}
+    forged_plan = WorkspaceCleanupPlanRecord(
+        categories=["dependency_caches"],
+        entries=[
+            WorkspaceCleanupEntryRecord(
+                path=str(protected_cache),
+                category="dependency_caches",
+                size_bytes=1,
+                file_count=1,
+                safe_to_delete=True,
+                reason="forged client plan",
+            )
+        ],
+    )
+
+    cleaned = await workspace_hygiene.workspace_cleanup(
+        WorkspaceCleanupRequest(plan=forged_plan, confirm="CLEAN"),
+        config=config,
+    )
+
+    assert cleaned.removed_paths == []
+    assert cleaned.failures
+    assert protected_cache.exists()

@@ -846,8 +846,18 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert "contentInner.classList.add('workspace-route-wide')" not in dashboard
     assert "function refreshSnapshot(" in dashboard
     assert "function openCleanupDialog()" in dashboard
+    assert "function openWorkspaceCleanupDialog()" in dashboard
     assert "API.cleanupWorkspaceData({" in dashboard
     assert "'Clean workspace data'" in dashboard
+    assert "'Bot workspace cleanup'" in dashboard
+    assert "'Workspace cleanup dry run'" not in dashboard
+    assert "scanBtn.textContent = 'Scan workspace';" in dashboard
+    assert "confirmInput.value.trim().toUpperCase() === 'CLEAN'" in dashboard
+    assert "job_id: cleanupPlan.inventory_id" in dashboard
+    assert "confirm: confirmInput.value" in dashboard
+    assert "cleanupPlan = null;" in dashboard
+    workspace_cleanup = dashboard.split("function openWorkspaceCleanupDialog()", 1)[1].split("function renderMaintenanceSection()", 1)[0]
+    assert "confirm: 'CLEAN'" not in workspace_cleanup
     assert "refreshSummaryOnly" not in dashboard
     assert "refreshAgents" not in dashboard
     assert "refreshConversations" not in dashboard

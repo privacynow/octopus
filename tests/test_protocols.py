@@ -1557,7 +1557,15 @@ def test_registry_store_interrupted_result_blocks_run_and_retry_records_timeline
     assert retried.run.status == "running"
     assert refreshed.run.current_stage_key == "planning"
     assert refreshed.run.current_stage_execution_id != stage.protocol_stage_execution_id
-    assert refreshed.stage_executions[0].stage_key == "planning"
+    previous_stage = next(
+        item
+        for item in refreshed.stage_executions
+        if item.protocol_stage_execution_id == stage.protocol_stage_execution_id
+    )
+    assert previous_stage.stage_key == "planning"
+    assert previous_stage.status == "blocked"
+    assert previous_stage.failure_code == "interrupted"
+    assert previous_stage.failure_detail == "Work was interrupted; retry this stage to continue."
     assert any(item.transition_kind == "retry" for item in refreshed.transitions)
 
 

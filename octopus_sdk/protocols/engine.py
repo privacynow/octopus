@@ -552,14 +552,16 @@ class ProtocolRunEngine:
             return ProtocolEngineDecisionRecord(
                 run_status="running",
                 stage_status=stage_execution.status,
+                failure_code=stage_execution.failure_code,
+                failure_detail=stage_execution.failure_detail,
                 summary=summary,
-            transition_kind="retry",
-            transition_reason=summary,
-            next_stage_key=stage.stage_key,
-            create_next_execution=True,
-            input_snapshot=RegistryJsonRecord.model_validate(
-                {
-                    "previous_stage_key": stage.stage_key,
+                transition_kind="retry",
+                transition_reason=summary,
+                next_stage_key=stage.stage_key,
+                create_next_execution=True,
+                input_snapshot=RegistryJsonRecord.model_validate(
+                    {
+                        "previous_stage_key": stage.stage_key,
                         "previous_stage_execution_id": stage_execution.protocol_stage_execution_id,
                         "decision": "retry",
                         "decision_summary": summary,

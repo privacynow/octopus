@@ -294,6 +294,23 @@ async def test_workspace_hygiene_dry_run_and_cleanup(tmp_path):
     assert not cache_dir.exists()
 
 
+async def test_workspace_hygiene_deduplicates_runtime_logs_nested_in_workspace(tmp_path):
+    working_dir = tmp_path / "workspace"
+    data_dir = working_dir / "data"
+    runtime_log_dir = data_dir / "artifact-runtimes" / "run-1"
+    runtime_log_dir.mkdir(parents=True)
+    (runtime_log_dir / "runtime.log").write_text("runtime log", encoding="utf-8")
+    config = make_config(data_dir=data_dir, working_dir=working_dir)
+
+    usage = await workspace_hygiene.workspace_usage(
+        WorkspaceUsageRequest(categories=["runtime_logs"]),
+        config=config,
+    )
+
+    runtime_entries = [entry.path for entry in usage.plan.entries if entry.category == "runtime_logs"]
+    assert runtime_entries == [str((data_dir / "artifact-runtimes").resolve())]
+
+
 async def test_workspace_hygiene_blocks_symlink_escape(tmp_path):
     working_dir = tmp_path / "workspace"
     outside_dir = tmp_path / "outside"

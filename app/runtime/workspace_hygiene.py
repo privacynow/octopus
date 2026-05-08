@@ -163,6 +163,19 @@ def _category_for(path: Path, config: BotConfig, roots: tuple[Path, ...] | None 
     return "unknown", False, "Unknown workspace content needs human review before deletion."
 
 
+def _entry_already_covered(path: Path, seen_entries: set[str]) -> bool:
+    for raw_seen in seen_entries:
+        seen_path = Path(raw_seen)
+        if path == seen_path:
+            return True
+        try:
+            path.relative_to(seen_path)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def _candidate_entries(config: BotConfig, request: WorkspaceUsageRequest) -> list[WorkspaceCleanupEntryRecord]:
     roots = _safe_roots(config)
     workspace = _workspace_root(config, request.workspace_ref)
@@ -172,6 +185,7 @@ def _candidate_entries(config: BotConfig, request: WorkspaceUsageRequest) -> lis
     runtime_logs = Path(config.data_dir) / "artifact-runtimes"
     roots_to_scan = [runtime_logs, workspace]
     seen: set[str] = set()
+    seen_entries: set[str] = set()
     for root in roots_to_scan:
         try:
             resolved_root = root.resolve()
@@ -186,14 +200,17 @@ def _candidate_entries(config: BotConfig, request: WorkspaceUsageRequest) -> lis
         if root_category == "runtime_logs":
             size, files = _tree_usage(resolved_root)
             if not requested or root_category in requested:
-                entries.append(WorkspaceCleanupEntryRecord(
-                    path=str(resolved_root),
-                    category=root_category,
-                    size_bytes=size,
-                    file_count=files,
-                    safe_to_delete=root_safe,
-                    reason=root_reason,
-                ))
+                entry_path = str(resolved_root)
+                if not _entry_already_covered(resolved_root, seen_entries):
+                    seen_entries.add(entry_path)
+                    entries.append(WorkspaceCleanupEntryRecord(
+                        path=entry_path,
+                        category=root_category,
+                        size_bytes=size,
+                        file_count=files,
+                        safe_to_delete=root_safe,
+                        reason=root_reason,
+                    ))
             continue
 
         for current, dirs, _files in os.walk(resolved_root):
@@ -214,9 +231,14 @@ def _candidate_entries(config: BotConfig, request: WorkspaceUsageRequest) -> lis
                     continue
                 if requested and category not in requested:
                     continue
+                resolved_candidate = candidate.resolve()
+                if _entry_already_covered(resolved_candidate, seen_entries):
+                    continue
+                entry_path = str(resolved_candidate)
+                seen_entries.add(entry_path)
                 size, files = _tree_usage(candidate)
                 entries.append(WorkspaceCleanupEntryRecord(
-                    path=str(candidate.resolve()),
+                    path=entry_path,
                     category=category,
                     size_bytes=size,
                     file_count=files,

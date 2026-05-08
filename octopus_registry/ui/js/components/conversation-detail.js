@@ -249,22 +249,38 @@ function renderConversationDetail(container, params) {
     textarea.rows = 1;
     composer.appendChild(textarea);
 
-    const resourcePicker = Kit.resourceAttachmentPicker({
+    let sendingMessage = false;
+    let resourcePicker = null;
+    let sendBtn = null;
+    function syncComposerSendState() {
+        if (!sendBtn || !resourcePicker) return;
+        const busy = resourcePicker.isBusy();
+        sendBtn.disabled = sendingMessage || busy;
+        sendBtn.title = busy ? 'Files are still uploading.' : '';
+    }
+
+    const composerActions = document.createElement('div');
+    composerActions.className = 'compose-actions';
+    composer.appendChild(composerActions);
+
+    resourcePicker = Kit.resourceAttachmentPicker({
         label: 'Attach files',
         help: 'Add source files, datasets, screenshots, or documents for this message.',
         sourceRef: convoId,
         targetKind: 'conversation',
         targetRef: convoId,
         relation: 'message',
+        variant: 'composer',
+        onStateChange: syncComposerSendState,
     });
-    composer.appendChild(resourcePicker.element);
+    composerActions.appendChild(resourcePicker.element);
 
-    const sendBtn = document.createElement('button');
+    sendBtn = document.createElement('button');
     sendBtn.className = 'btn btn-primary';
     sendBtn.type = 'button';
     sendBtn.textContent = 'Send';
     sendBtn.setAttribute('aria-label', 'Send message');
-    composer.appendChild(sendBtn);
+    composerActions.appendChild(sendBtn);
 
     const suggestionList = document.createElement('div');
     suggestionList.className = 'compose-suggestions';
@@ -2034,6 +2050,10 @@ function renderConversationDetail(container, params) {
     textarea.addEventListener('input', updateComposerAssist);
 
     async function sendMessage() {
+        if (resourcePicker.isBusy()) {
+            showProgressBanner('Files are still uploading.');
+            return;
+        }
         const text = textarea.value.trim();
         const resourceRefs = resourcePicker.resourceRefs();
         if (!text && !resourceRefs.length) return;
@@ -2044,7 +2064,8 @@ function renderConversationDetail(container, params) {
                 persist: true,
             });
         }
-        sendBtn.disabled = true;
+        sendingMessage = true;
+        syncComposerSendState();
         textarea.disabled = true;
         clearSuggestions();
         suggestionList.hidden = true;
@@ -2068,7 +2089,8 @@ function renderConversationDetail(container, params) {
         } catch (err) {
             UI.reportError('Failed to send the message', err, { context: 'Conversation send failed' });
         }
-        sendBtn.disabled = false;
+        sendingMessage = false;
+        syncComposerSendState();
         textarea.disabled = false;
         textarea.focus();
     }

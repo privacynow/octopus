@@ -5,11 +5,6 @@ function renderDashboard(container) {
     const cleanups = UI.beginCleanupScope();
     const RECENT_COMPLETED_WINDOW_MS = 24 * 60 * 60 * 1000;
     const TASK_GROUP_LIMIT = 3;
-    const contentInner = container.closest('.content-inner');
-    if (contentInner) {
-        contentInner.classList.add('workspace-route-wide');
-        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
-    }
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -31,43 +26,33 @@ function renderDashboard(container) {
     dashboardGrid.appendChild(summaryRailHost);
 
     const dashboardBoard = document.createElement('div');
-    dashboardBoard.className = 'dashboard-board';
+    dashboardBoard.className = 'dashboard-board dashboard-board-stream';
     dashboardBoard.dataset.key = 'dashboard-board';
     dashboardGrid.appendChild(dashboardBoard);
 
-    const primaryColumn = document.createElement('div');
-    primaryColumn.className = 'dashboard-column';
-    primaryColumn.dataset.key = 'dashboard-column-primary';
-    dashboardBoard.appendChild(primaryColumn);
-
-    const secondaryColumn = document.createElement('div');
-    secondaryColumn.className = 'dashboard-column';
-    secondaryColumn.dataset.key = 'dashboard-column-secondary';
-    dashboardBoard.appendChild(secondaryColumn);
-
     const approvalsHost = document.createElement('div');
     approvalsHost.dataset.key = 'approvals-host';
-    primaryColumn.appendChild(approvalsHost);
+    dashboardBoard.appendChild(approvalsHost);
 
     const tasksHost = document.createElement('div');
     tasksHost.dataset.key = 'tasks-host';
-    primaryColumn.appendChild(tasksHost);
+    dashboardBoard.appendChild(tasksHost);
 
     const conversationsHost = document.createElement('div');
     conversationsHost.dataset.key = 'open-conversations-host';
-    secondaryColumn.appendChild(conversationsHost);
+    dashboardBoard.appendChild(conversationsHost);
 
     const agentsHost = document.createElement('div');
     agentsHost.dataset.key = 'agents-host';
-    secondaryColumn.appendChild(agentsHost);
+    dashboardBoard.appendChild(agentsHost);
 
     const protocolIssuesHost = document.createElement('div');
     protocolIssuesHost.dataset.key = 'protocol-issues-host';
-    secondaryColumn.appendChild(protocolIssuesHost);
+    dashboardBoard.appendChild(protocolIssuesHost);
 
     const maintenanceHost = document.createElement('div');
     maintenanceHost.dataset.key = 'maintenance-host';
-    secondaryColumn.appendChild(maintenanceHost);
+    dashboardBoard.appendChild(maintenanceHost);
 
     function createSection(key, title, href, rows, emptyText) {
         const section = document.createElement('section');

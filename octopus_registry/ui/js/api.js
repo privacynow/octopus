@@ -114,22 +114,39 @@ const API = (() => {
         form.append('target_kind', String(opts.targetKind || ''));
         form.append('target_ref', String(opts.targetRef || ''));
         form.append('relation', String(opts.relation || 'context'));
-        const resp = await fetch('/v1/resources', {
-            method: 'POST',
-            body: form,
-            credentials: 'same-origin',
-            headers: { 'X-CSRF-Token': csrfToken },
-            signal: AbortSignal.timeout(Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT),
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/v1/resources', true);
+            xhr.withCredentials = true;
+            xhr.timeout = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT;
+            xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+            if (xhr.upload && typeof opts.onProgress === 'function') {
+                xhr.upload.addEventListener('progress', (event) => {
+                    if (!event.lengthComputable || !event.total) return;
+                    const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+                    opts.onProgress(percent, { loaded: event.loaded, total: event.total });
+                });
+            }
+            xhr.addEventListener('load', () => {
+                if (xhr.status === 401 || xhr.status === 302) {
+                    _showSessionExpired();
+                    reject(new Error('Authentication required'));
+                    return;
+                }
+                if (xhr.status < 200 || xhr.status >= 300) {
+                    reject(new Error(`${xhr.status}: ${xhr.responseText || xhr.statusText || 'Upload failed'}`));
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(xhr.responseText || '{}'));
+                } catch (err) {
+                    reject(err);
+                }
+            });
+            xhr.addEventListener('error', () => reject(new Error('Upload failed')));
+            xhr.addEventListener('timeout', () => reject(new Error('Upload timed out')));
+            xhr.send(form);
         });
-        if (resp.status === 401 || resp.status === 302) {
-            _showSessionExpired();
-            throw new Error('Authentication required');
-        }
-        if (!resp.ok) {
-            const text = await resp.text();
-            throw new Error(`${resp.status}: ${text}`);
-        }
-        return resp.json();
     }
 
     function _showSessionExpired() {

@@ -60,7 +60,7 @@ surface.
 | Registry runtime routing | Implemented for standard HTTP UI/API traffic | Preserve Registry as user-facing router and bot runtime as process executor |
 | Telegram runtime path | Implemented through Registry APIs and links | Keep future transports on the same SDK/Registry contracts |
 | Review evidence | Runtime acceptance gate and revise transition implemented | Ensure reviewers exercise runtime/UI/API when declared and persist rationale |
-| Lifecycle and retention | Runtime lifecycle, artifact package retention, snapshots, and exports implemented | Complete operator cleanup proof and preserve audit after workspace cleanup |
+| Lifecycle and retention | Runtime lifecycle, artifact package retention, snapshots, exports, and workspace cleanup dry-run/path-safety proof implemented | Prove post-cleanup audit preservation only when an operator intentionally executes cleanup |
 | Runs discovery | Recent human-originated runs surface by default | Keep generated/audit filtering explicit, not the default user path |
 | Improve existing run | Registry path implemented through Auto Protocol revise context | Keep it as protocol improvement, not artifact patching or a second generator |
 | SDK-backed bot awareness | Registry and Telegram receive shared awareness briefs | Future bot implementations must implement SDK ports, not copy surface code |
@@ -91,6 +91,13 @@ Latest proof notes:
   M1 fetching `/v1/resources/50d963c85f325563972d0389d71e9110` plus
   `/content`, and bot execution using a scoped `registry_conversation_*`
   upload directory.
+- On 2026-05-08, deployed Safari proof on `/Users/tinker/octopus` confirmed
+  Dashboard `Bot workspace cleanup` opens as a scan-first flow, keeps cleanup
+  disabled until a stored dry-run result and typed `CLEAN` confirmation exist,
+  excludes auth/credential paths from cleanup candidates, and deduplicates
+  nested runtime-log candidates into one actionable `/home/bot/data/artifact-runtimes`
+  entry. Registry logs showed `POST /v1/admin/workspaces/cleanup/dry-run`
+  returning `200 OK`; no destructive cleanup was executed during this proof.
 
 ## Problem Statement
 

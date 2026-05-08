@@ -223,7 +223,10 @@ and events so operators can see what happened. Prefer `Stop app`, `Archive`, or
 
 The Dashboard workspace cleanup control is the product-safe cleanup path. It
 performs a dry run through the connected bot, reports candidate paths and byte
-counts, then deletes only approved transient categories after confirmation.
+counts, then deletes only approved transient categories after typed `CLEAN`
+confirmation. Cleanup execution must use the stored dry-run inventory created
+by the scan; it does not trust client-supplied candidate paths. Auth and
+credential paths are protected from both scan results and deletion.
 Use the older workspace-data reset only for intentional demo resets; it removes
 Registry work records while preserving agents, skills, guidance, credentials,
 and tokens.

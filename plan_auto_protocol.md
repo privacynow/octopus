@@ -65,7 +65,7 @@ surface.
 | Improve existing run | Registry path implemented through Auto Protocol revise context | Keep it as protocol improvement, not artifact patching or a second generator |
 | SDK-backed bot awareness | Registry and Telegram receive shared awareness briefs | Future bot implementations must implement SDK ports, not copy surface code |
 | Java/Maven risk-engine proof | Prepared Java artifact run `d38dab75b929405a9e4a3f1407491e76` proved in Safari and Telegram | Keep this as representative proof, not hard-coded product logic |
-| Shared file/resource ingress | Implemented through SDK resource contracts, Registry upload/attach UX, protocol/conversation/run resource refs, Telegram upload registration, Registry delivery materialization, and access tests | Prove the deployed Safari UI path and keep future transports on the same SDK resource records |
+| Shared file/resource ingress | Implemented through SDK resource contracts, Registry upload/attach UX, protocol/conversation/run resource refs, Telegram upload registration, Registry delivery materialization, deployed Safari proof, and access tests | Keep future transports on the same SDK resource records |
 
 Latest proof notes:
 
@@ -84,6 +84,13 @@ Latest proof notes:
   run creation, OpenAPI regeneration, and the Registry/Postgres service suite.
 - On 2026-05-08, generic runtime guidance was checked to remove
   risk-engine/Maven-specific example leakage from generated protocols.
+- On 2026-05-08, deployed Safari proof on `/Users/tinker/octopus` attached
+  `octopus-resource-proof.txt` to Registry conversation
+  `9c380a0bb8ae945adca982d6e09d4484`, sent the conversation message, and
+  Registry logs showed `POST /v1/resources` `201`, conversation message `200`,
+  M1 fetching `/v1/resources/50d963c85f325563972d0389d71e9110` plus
+  `/content`, and bot execution using a scoped `registry_conversation_*`
+  upload directory.
 
 ## Problem Statement
 

@@ -8516,6 +8516,8 @@ function renderProtocolRuns(container) {
         });
         const strip = document.createElement('div');
         strip.className = 'runs-overview-strip';
+        strip.setAttribute('role', 'list');
+        strip.setAttribute('aria-label', 'Run status summary');
         [
             { key: 'attention', label: 'Needs attention' },
             { key: 'active', label: 'Running now' },
@@ -8524,6 +8526,7 @@ function renderProtocolRuns(container) {
         ].forEach((item) => {
             const card = document.createElement('div');
             card.className = `runs-overview-card runs-overview-${item.key}`;
+            card.setAttribute('role', 'listitem');
             const value = document.createElement('strong');
             value.textContent = String(counts[item.key] || 0);
             card.appendChild(value);

@@ -6013,9 +6013,10 @@ select {
 
 .runs-overview-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-    gap: var(--space-2);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
     margin: var(--space-1) 0 var(--space-2);
+    border-block: 1px solid var(--border);
 }
 
 .run-view-controls {
@@ -6077,10 +6078,16 @@ select {
     gap: var(--space-2);
     min-width: 0;
     overflow: hidden;
-    padding: var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg-secondary);
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    cursor: default;
+}
+
+.runs-overview-card + .runs-overview-card {
+    border-left: 1px solid var(--border);
 }
 
 .runs-overview-card strong {
@@ -6091,7 +6098,7 @@ select {
 
 .runs-overview-card span {
     min-width: 0;
-    color: var(--text);
+    color: var(--text-muted);
     font-size: var(--text-xs);
     font-weight: 700;
     overflow: hidden;
@@ -6105,15 +6112,21 @@ select {
 }
 
 .runs-overview-attention {
-    border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+    color: var(--danger);
 }
 
 .runs-overview-active {
-    border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+    color: var(--accent);
 }
 
 .runs-overview-completed {
-    border-color: color-mix(in srgb, var(--success) 32%, var(--border));
+    color: var(--success);
+}
+
+.runs-overview-attention strong,
+.runs-overview-active strong,
+.runs-overview-completed strong {
+    color: currentColor;
 }
 
 .run-focus-hero {
@@ -6662,6 +6675,18 @@ select {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .runs-overview-card + .runs-overview-card {
+        border-left: 0;
+    }
+
+    .runs-overview-card:nth-child(even) {
+        border-left: 1px solid var(--border);
+    }
+
+    .runs-overview-card:nth-child(n + 3) {
+        border-top: 1px solid var(--border);
+    }
+
     .run-focus-live {
         grid-template-columns: 1fr;
     }
@@ -6794,7 +6819,6 @@ select {
     }
 
     .run-focus-metrics,
-    .runs-overview-strip,
     .run-primary-artifact-panel .task-item-facts,
     .run-stage-timeline-item > .protocol-lineage-card .metadata-grid,
     .run-stage-timeline-item > .protocol-lineage-card .task-item-facts {

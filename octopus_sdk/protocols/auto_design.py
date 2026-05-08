@@ -86,17 +86,17 @@ _AUTO_RUNTIME_PHRASES = (
 AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE = (
     "Runtime manifest contract: runnable primary artifacts must place octopus-runtime.json at the artifact package root "
     "and it must validate as ProtocolArtifactRuntimeManifestRecord. Use runtime_kind exactly one of static, node, python, "
-    "java, binary, or process. For a Java/Maven service use runtime_kind 'java', not a descriptive phrase. For process-backed "
+    "java, binary, or process. For a Java service use runtime_kind 'java', not a descriptive phrase. For process-backed "
     "runtimes include start_command, ui_path, health_path, api_base_path, smoke_test steps, and endpoints as an array of objects. "
     "The package must be built and smoke-tested before final acceptance; start_command is only for launching the already prepared "
-    "runtime and must not run dependency installation, build, test, package, or developer server commands such as mvn spring-boot:run. "
+    "runtime and must not run dependency installation, build, test, package, or developer server commands at launch. "
     "Each endpoint object uses label, path, endpoint_kind, method, and description; endpoint_kind must be one of ui, api, health, "
     "docs, or other, and every process-backed runtime must include at least one endpoint with endpoint_kind 'docs'. "
     "For serious user-facing runtimes, manifest metadata should include outcome_readiness_checks as an array of representative "
     "journeys or scenarios that final acceptance must exercise, plus minimum_core_journeys when more than two checks are material. "
-    "Example for Java: {\"runtime_kind\":\"java\",\"start_command\":\"java -jar target/risk-engine.jar\",\"ui_path\":\"/\","
+    "Example for Java: {\"runtime_kind\":\"java\",\"start_command\":\"java -jar target/app.jar\",\"ui_path\":\"/\","
     "\"health_path\":\"/health\",\"api_base_path\":\"/api\",\"endpoints\":[{\"label\":\"Operator UI\",\"path\":\"/\","
-    "\"endpoint_kind\":\"ui\",\"method\":\"GET\",\"description\":\"Service-backed operator console\"},{\"label\":\"Health\","
+    "\"endpoint_kind\":\"ui\",\"method\":\"GET\",\"description\":\"Service-backed application UI\"},{\"label\":\"Health\","
     "\"path\":\"/health\",\"endpoint_kind\":\"health\",\"method\":\"GET\",\"description\":\"Runtime readiness\"},"
     "{\"label\":\"API docs\",\"path\":\"/api/docs\",\"endpoint_kind\":\"docs\",\"method\":\"GET\","
     "\"description\":\"Human-readable API documentation\"}],\"smoke_test\":[\"GET /health\",\"GET /\",\"GET /api/docs\"]}."
@@ -590,6 +590,7 @@ class ProtocolAutoDesignModelRequestRecord(RegistryRecordModel):
     workspace_ref: str = ""
     actor_ref: str = ""
     chat_ref: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
 
     @field_validator("available_agents", "available_skills", mode="before")
     @classmethod
@@ -645,6 +646,7 @@ class ProtocolAutoDesignEventSummaryRecord(RegistryRecordModel):
     stage_count: int = 0
     package_count: int = 0
     primary_artifact_key: str = ""
+    resource_count: int = 0
     change_summary: list[str] = Field(default_factory=list)
     actor_ref: str = ""
     created_at: str = ""
@@ -671,6 +673,7 @@ class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     preferred_design_agent_id: str = ""
     actor_ref: str = ""
     chat_ref: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
     idempotency_key: str = ""
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
 
@@ -694,6 +697,7 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     target_draft_revision: int = 0
     requirement_text: str = ""
     constraints_text: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
     analysis: ProtocolAutoDesignAnalysisRecord = Field(default_factory=ProtocolAutoDesignAnalysisRecord)
     plan: ProtocolAutoDesignPlanRecord = Field(default_factory=ProtocolAutoDesignPlanRecord)
@@ -3012,6 +3016,7 @@ def auto_protocol_event_summary(
         stage_count=len(session.plan.stages),
         package_count=len(session.analysis.work_packages),
         primary_artifact_key=str(session.plan.primary_artifact.artifact_key or ""),
+        resource_count=len(session.resource_refs),
         change_summary=list(session.change_summary or [])[:10],
         actor_ref=str(session.actor_ref or ""),
         created_at=str(created_at or session.updated_at or session.created_at or ""),
@@ -3088,6 +3093,7 @@ def generate_auto_protocol_session(
         target_draft_revision=request.target_draft_revision,
         requirement_text=request.requirement_text,
         constraints_text=request.constraints_text,
+        resource_refs=list(request.resource_refs or []),
         model_response=request.model_response,
         analysis=analysis,
         plan=plan,
@@ -3205,6 +3211,7 @@ def revise_auto_protocol_session(
         "target_draft_revision": request.target_draft_revision,
         "requirement_text": request.requirement_text,
         "constraints_text": request.constraints_text,
+        "resource_refs": list(request.resource_refs or []),
         "plan": compact_plan,
         "run_profile": compact_profile,
         "draft_definition_json": RegistryJsonRecord.model_validate(regenerated_draft),
@@ -3281,6 +3288,8 @@ def protocol_run_create_from_auto_session(
         "constraints": profile.constraints,
         "acceptance_criteria": profile.acceptance_criteria,
     }
+    if session.resource_refs:
+        constraints["resource_refs"] = list(session.resource_refs)
     return ProtocolRunCreateRecord(
         protocol_id=protocol_id,
         entry_agent_id=entry_agent_id,
@@ -3288,6 +3297,7 @@ def protocol_run_create_from_auto_session(
         origin_channel=origin_channel,
         workspace_ref=profile.workspace_ref,
         problem_statement=profile.problem_statement or session.requirement_text,
+        resource_refs=list(session.resource_refs or []),
         constraints_json=RegistryJsonRecord.model_validate({
             key: value for key, value in constraints.items() if str(value or "").strip()
         }),

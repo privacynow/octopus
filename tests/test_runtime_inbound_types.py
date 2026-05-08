@@ -6,6 +6,7 @@ import pytest
 from app.channels.registry.delivery_transport import build_registry_message_envelope
 from octopus_sdk.inbound_types import (
     InboundAction,
+    InboundAttachment,
     InboundEnvelope,
     InboundMessage,
     InboundUser,
@@ -109,6 +110,37 @@ def test_inbound_message_round_trips_internal_admission_class() -> None:
 
     assert isinstance(event, InboundMessage)
     assert event.admission_class == "internal"
+
+
+def test_inbound_attachment_round_trips_registry_resource_metadata() -> None:
+    payload = serialize_inbound(
+        InboundMessage(
+            user=InboundUser(id="reg:actor", username="registry"),
+            conversation_key="registry:prod:conversation:conv-1",
+            text="Review the attached file.",
+            source="registry",
+            transport="registry",
+            conversation_ref="registry:prod:conversation:conv-1",
+            authority_ref="registry:prod",
+            attachments=(
+                InboundAttachment(
+                    path=Path("/tmp/registry-resource/notes.txt"),
+                    original_name="notes.txt",
+                    is_image=False,
+                    mime_type="text/plain",
+                    resource_id="res_123",
+                    source_surface="registry",
+                ),
+            ),
+        )
+    )
+
+    event = deserialize_inbound("message", payload)
+
+    assert isinstance(event, InboundMessage)
+    assert len(event.attachments) == 1
+    assert event.attachments[0].resource_id == "res_123"
+    assert event.attachments[0].source_surface == "registry"
 
 
 def test_registry_message_envelope_defaults_external_and_supports_internal() -> None:

@@ -428,6 +428,20 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
         assert dead not in css, f"dead CSS must be removed: {dead}"
 
 
+def test_protocol_runs_primary_artifact_rows_wrap_long_review_evidence_text() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".run-primary-artifact-panel > .list-row {" in css
+    assert ".run-primary-story-list .list-row,\n.run-primary-artifact-panel > .list-row {" in css
+    assert ".run-primary-artifact-panel > .list-row .list-row-sublabel" in css
+    assert "overflow-wrap: anywhere;" in css
+    assert ".run-primary-artifact-panel > .list-row .badge {" in css
+    assert ".run-primary-story-list .list-row,\n    .run-primary-artifact-panel > .list-row {\n        grid-template-columns: minmax(0, 1fr);" in css
+
+
 def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     dashboard = (
@@ -826,19 +840,31 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
         repo_root / "octopus_registry" / "ui" / "css" / "main.css"
     ).read_text(encoding="utf-8")
 
-    assert "dashboardBoard.className = 'dashboard-board';" in dashboard
-    assert "primaryColumn.className = 'dashboard-column';" in dashboard
-    assert "secondaryColumn.className = 'dashboard-column';" in dashboard
+    assert "dashboardBoard.className = 'dashboard-board dashboard-board-stream';" in dashboard
+    assert "primaryColumn.className = 'dashboard-column';" not in dashboard
+    assert "secondaryColumn.className = 'dashboard-column';" not in dashboard
+    assert "contentInner.classList.add('workspace-route-wide')" not in dashboard
     assert "function refreshSnapshot(" in dashboard
     assert "function openCleanupDialog()" in dashboard
+    assert "function openWorkspaceCleanupDialog()" in dashboard
     assert "API.cleanupWorkspaceData({" in dashboard
     assert "'Clean workspace data'" in dashboard
+    assert "'Bot workspace cleanup'" in dashboard
+    assert "'Workspace cleanup dry run'" not in dashboard
+    assert "scanBtn.textContent = 'Scan workspace';" in dashboard
+    assert "confirmInput.value.trim().toUpperCase() === 'CLEAN'" in dashboard
+    assert "job_id: cleanupPlan.inventory_id" in dashboard
+    assert "confirm: confirmInput.value" in dashboard
+    assert "cleanupPlan = null;" in dashboard
+    workspace_cleanup = dashboard.split("function openWorkspaceCleanupDialog()", 1)[1].split("function renderMaintenanceSection()", 1)[0]
+    assert "confirm: 'CLEAN'" not in workspace_cleanup
     assert "refreshSummaryOnly" not in dashboard
     assert "refreshAgents" not in dashboard
     assert "refreshConversations" not in dashboard
     assert "refreshTasks" not in dashboard
     assert "refreshApprovals" not in dashboard
     assert ".dashboard-board {" in css
+    assert ".dashboard-board-stream {" in css
     assert ".dashboard-column {" in css
     assert ".dashboard-work-grid {" not in css
     assert ".kit-catalog-search {\n        flex: 0 1 auto;" in css
@@ -955,6 +981,37 @@ def test_conversation_composer_enter_submits_exact_direct_assignments() -> None:
     assert "selector: directAssignSelector(routingState.exactSuggestionMatch)" in detail
     assert "message_text: routingState.text" in detail
     assert "sendMessage();" in detail.split("function handleComposerKeydown(e) {", 1)[1].split("if (!suggestionList.hidden && suggestionMatches.length) {", 1)[0]
+
+
+def test_conversation_composer_uses_compact_resource_upload_with_progress() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "kit.js"
+    ).read_text(encoding="utf-8")
+    api = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "composerActions.className = 'compose-actions';" in detail
+    assert "variant: 'composer'" in detail
+    assert "onStateChange: syncComposerSendState" in detail
+    assert "if (resourcePicker.isBusy())" in detail
+    assert "Files are still uploading." in detail
+    assert "function resourceAttachmentPicker(" in helper
+    assert "variant = 'panel'" in helper
+    assert "kit-resource-picker-compact" in helper
+    assert "onProgress: (percent)" in helper
+    assert "XMLHttpRequest" in api
+    assert "xhr.upload.addEventListener('progress'" in api
+    assert ".compose-actions {" in css
+    assert ".kit-resource-trigger {" in css
+    assert ".kit-resource-progress {" in css
 
 
 def test_start_conversation_entrypoints_create_new_threads() -> None:

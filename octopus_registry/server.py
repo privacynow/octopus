@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+import contextlib
 from contextlib import asynccontextmanager
 import hmac
 import logging
 import mimetypes
+from pathlib import Path
+import tempfile
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket
 from starlette.websockets import WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
@@ -105,7 +109,9 @@ from .ingress import (
 )
 from .authority import StoreBackedRegistryAuthority
 from .backend import get_registry_authority, get_registry_store
+from .config import load_registry_config
 from .protocol_http import build_protocol_router
+from .resources import create_resource_from_file, resource_storage_path
 from .protocol_runtime import broadcast_protocol_run_event, internal_protocol_access
 from .store_base import (
     AbstractRegistryStore,
@@ -123,6 +129,7 @@ from .http_support import (
     LifecycleActionRequest,
     ProviderGuidanceDraftUpdateRequest,
     ProviderGuidancePreviewRequest,
+    ResourceAttachRequest,
     RuntimeSkillDraftUpdateRequest,
     RuntimeSkillPackageImportRequest,
     json_payload as _json_payload,
@@ -166,6 +173,121 @@ def get_store() -> AbstractRegistryStore:
 
 def get_authority() -> StoreBackedRegistryAuthority:
     return get_registry_authority()
+
+
+def _resource_actor_ref(auth: AuthContext) -> str:
+    if auth.is_agent and auth.agent_id:
+        return f"agent:{auth.agent_id}"
+    return "reg:registry-ui"
+
+
+def _resource_refs_from_value(value: object) -> list[str]:
+    refs: list[str] = []
+    if not isinstance(value, (list, tuple, set)):
+        return refs
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in refs:
+            refs.append(text)
+    return refs
+
+
+def _coordination_resource_refs(envelope: CoordinationActionEnvelope) -> list[str]:
+    refs: list[str] = []
+
+    def add_many(value: object) -> None:
+        for item in _resource_refs_from_value(value):
+            if item not in refs:
+                refs.append(item)
+
+    payload = envelope.payload
+    if envelope.action == "direct_assign":
+        add_many(getattr(payload, "resource_refs", []))
+        if isinstance(payload, Mapping):
+            add_many(payload.get("resource_refs", []))
+    elif envelope.action == "delegate_tasks":
+        tasks = getattr(payload, "tasks", [])
+        if isinstance(payload, Mapping):
+            tasks = payload.get("tasks", [])
+        for task in tasks or []:
+            add_many(getattr(task, "resource_refs", []))
+            if isinstance(task, Mapping):
+                add_many(task.get("resource_refs", []))
+    return refs
+
+
+def _require_resource_target_access(
+    auth: AuthContext,
+    store: AbstractRegistryStore,
+    *,
+    target_kind: str,
+    target_ref: str,
+) -> None:
+    if not auth.is_agent:
+        return
+    if target_kind == "conversation":
+        conv = store.get_conversation(normalize_conversation_id(target_ref))
+        _require_own_resource(auth, str(conv.get("target_agent_id", "") or ""))
+        return
+    if target_kind == "protocol_run":
+        detail = store.get_protocol_run(target_ref, access=internal_protocol_access())
+        if str(detail.run.entry_agent_id or "") == str(auth.agent_id or ""):
+            return
+        if any(
+            str(participant.resolved_agent_id or "") == str(auth.agent_id or "")
+            for participant in detail.participants
+        ):
+            return
+        raise HTTPException(status_code=403, detail="Agent tokens cannot attach resources to this protocol run.")
+    if target_kind == "routed_task":
+        task = store.get_task(target_ref)
+        if str(task.target_agent_id or "") == str(auth.agent_id or ""):
+            return
+        if str(task.origin_agent_id or "") == str(auth.agent_id or ""):
+            return
+        raise HTTPException(status_code=403, detail="Agent tokens cannot attach resources to this routed task.")
+    raise HTTPException(status_code=403, detail="Agent tokens cannot attach resources to this target.")
+
+
+def _require_resource_access(auth: AuthContext, store: AbstractRegistryStore, resource_id: str) -> None:
+    if not auth.is_agent:
+        return
+    resource = store.get_resource(resource_id)
+    if resource.owner_actor_ref == _resource_actor_ref(auth):
+        return
+    for attachment in store.list_resource_targets(resource_id=resource_id):
+        if attachment.target_kind == "protocol_run":
+            try:
+                detail = store.get_protocol_run(attachment.target_ref, access=internal_protocol_access())
+            except KeyError:
+                continue
+            if str(detail.run.entry_agent_id or "") == str(auth.agent_id or ""):
+                return
+            if any(
+                str(participant.resolved_agent_id or "") == str(auth.agent_id or "")
+                for participant in detail.participants
+            ):
+                return
+            continue
+        if attachment.target_kind == "routed_task":
+            try:
+                task = store.get_task(attachment.target_ref)
+            except KeyError:
+                continue
+            if str(task.target_agent_id or "") == str(auth.agent_id or ""):
+                return
+            if str(task.origin_agent_id or "") == str(auth.agent_id or ""):
+                return
+            continue
+        if attachment.target_kind != "conversation":
+            continue
+        try:
+            conv = store.get_conversation(normalize_conversation_id(attachment.target_ref))
+        except KeyError:
+            continue
+        if str(conv.get("target_agent_id", "") or "") == str(auth.agent_id or ""):
+            return
+    raise HTTPException(status_code=403, detail="Not authorized for this resource.")
 
 
 @asynccontextmanager
@@ -981,6 +1103,192 @@ async def resource_create_conversation(
     return result.model_dump(mode="json")
 
 
+@app.post("/v1/resources", status_code=201)
+async def resource_upload_resource(
+    file: UploadFile = File(...),
+    source_surface: str = Form(default="registry"),
+    source_ref: str = Form(default=""),
+    target_kind: str = Form(default=""),
+    target_ref: str = Form(default=""),
+    relation: str = Form(default="context"),
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    normalized_target_kind = str(target_kind or "").strip()
+    normalized_target_ref = str(target_ref or "").strip()
+    if normalized_target_kind or normalized_target_ref:
+        if not normalized_target_kind or not normalized_target_ref:
+            raise HTTPException(status_code=422, detail="target_kind and target_ref must be provided together.")
+        _require_resource_target_access(
+            auth,
+            store,
+            target_kind=normalized_target_kind,
+            target_ref=normalized_target_ref,
+        )
+    original_name = str(file.filename or "resource").strip() or "resource"
+    suffix = Path(original_name).suffix
+    tmp_path = Path("")
+    try:
+        with tempfile.NamedTemporaryFile(prefix="octopus-resource-", suffix=suffix, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+        resource = create_resource_from_file(
+            resource_store_dir=load_registry_config().artifact_store_dir,
+            source_path=tmp_path,
+            original_name=original_name,
+            mime_type=str(file.content_type or mimetypes.guess_type(original_name)[0] or ""),
+            owner_actor_ref=_resource_actor_ref(auth),
+            source_surface=str(source_surface or "registry").strip() or "registry",
+            source_ref=str(source_ref or "").strip(),
+            metadata={"filename": original_name},
+        )
+        saved = store.create_resource(resource)
+        attachment = None
+        if normalized_target_kind and normalized_target_ref:
+            attachment = store.attach_resource(
+                resource_id=saved.resource_id,
+                target_kind=normalized_target_kind,
+                target_ref=normalized_target_ref,
+                relation=str(relation or "context").strip() or "context",
+                created_by=_resource_actor_ref(auth),
+            )
+        return _json_payload({
+            "resource": saved.model_dump(mode="json"),
+            "attachment": attachment.model_dump(mode="json") if attachment is not None else None,
+        })
+    finally:
+        with contextlib.suppress(Exception):
+            if tmp_path:
+                tmp_path.unlink(missing_ok=True)
+        with contextlib.suppress(Exception):
+            await file.close()
+
+
+@app.get("/v1/resources")
+def resource_list_resources(
+    owner_actor_ref: str = Query(default=""),
+    source_surface: str = Query(default=""),
+    source_ref: str = Query(default=""),
+    target_kind: str = Query(default=""),
+    target_ref: str = Query(default=""),
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    if auth.is_agent:
+        if target_kind or target_ref:
+            if not target_kind or not target_ref:
+                raise HTTPException(status_code=422, detail="target_kind and target_ref must be provided together.")
+            _require_resource_target_access(auth, store, target_kind=target_kind, target_ref=target_ref)
+        else:
+            owner_actor_ref = _resource_actor_ref(auth)
+    elif target_kind and target_ref:
+        _require_resource_target_access(auth, store, target_kind=target_kind, target_ref=target_ref)
+    resources = store.list_resources(
+        owner_actor_ref=str(owner_actor_ref or "").strip(),
+        source_surface=str(source_surface or "").strip(),
+        source_ref=str(source_ref or "").strip(),
+        target_kind=str(target_kind or "").strip(),
+        target_ref=str(target_ref or "").strip(),
+        cursor=cursor,
+        limit=limit,
+    )
+    return _json_payload(_paginated_response("resources", resources, cursor, limit))
+
+
+@app.get("/v1/resources/{resource_id}")
+def resource_get_resource(
+    resource_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        resource = store.get_resource(resource_id)
+        _require_resource_access(auth, store, resource_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Resource not found.") from exc
+    return _json_payload(resource)
+
+
+@app.get("/v1/resources/{resource_id}/content")
+def resource_get_resource_content(
+    resource_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> Response:
+    try:
+        resource = store.get_resource(resource_id)
+        _require_resource_access(auth, store, resource_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Resource not found.") from exc
+    path = resource_storage_path(load_registry_config().artifact_store_dir, resource)
+    if path is None or not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Resource content is unavailable.")
+    return FileResponse(
+        path,
+        media_type=resource.mime_type or "application/octet-stream",
+        filename=resource.original_name or "resource",
+    )
+
+
+@app.post("/v1/resources/{resource_id}/attachments")
+def resource_attach_resource(
+    resource_id: str,
+    payload: ResourceAttachRequest,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        store.get_resource(resource_id)
+        _require_resource_access(auth, store, resource_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Resource not found.") from exc
+    _require_resource_target_access(
+        auth,
+        store,
+        target_kind=payload.target_kind,
+        target_ref=payload.target_ref,
+    )
+    attachment = store.attach_resource(
+        resource_id=resource_id,
+        target_kind=payload.target_kind,
+        target_ref=payload.target_ref,
+        relation=payload.relation,
+        created_by=_resource_actor_ref(auth),
+        metadata=payload.metadata,
+    )
+    return _json_payload(attachment)
+
+
+@app.delete("/v1/resources/attachments/{attachment_id}")
+def resource_detach_resource(
+    attachment_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        existing = store.get_resource_attachment(attachment_id)
+        _require_resource_access(auth, store, existing.resource_id)
+        _require_resource_target_access(
+            auth,
+            store,
+            target_kind=existing.target_kind,
+            target_ref=existing.target_ref,
+        )
+        attachment = store.detach_resource(
+            attachment_id=attachment_id,
+            detached_by=_resource_actor_ref(auth),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Resource attachment not found.") from exc
+    return _json_payload(attachment)
+
+
 @app.post("/v1/conversations/{conversation_id}/progress")
 async def resource_publish_progress(
     conversation_id: str,
@@ -1122,8 +1430,23 @@ async def resource_add_message(
 ) -> dict[str, Any]:
     conversation_id = normalize_conversation_id(conversation_id)
     text = payload.get("text", "").strip()
+    resource_refs = tuple(
+        str(item or "").strip()
+        for item in (payload.get("resource_refs", []) or [])
+        if str(item or "").strip()
+    )
+    for resource_id in resource_refs:
+        try:
+            store.get_resource(resource_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Resource not found: {resource_id}") from exc
     try:
-        result = authority.add_message(conversation_id, text, actor="operator")
+        result = authority.add_message(
+            conversation_id,
+            text,
+            actor="operator",
+            resource_refs=resource_refs,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
     except ValueError as exc:
@@ -1164,6 +1487,12 @@ async def resource_add_action(
         _require_own_resource(auth, str(conv.get("target_agent_id", "") or ""))
         if auth.agent_id and auth.agent_token:
             authority.remember_agent_token(auth.agent_id, auth.agent_token)
+    for resource_id in _coordination_resource_refs(payload):
+        try:
+            store.get_resource(resource_id)
+            _require_resource_access(auth, store, resource_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Resource not found: {resource_id}") from exc
     try:
         result = authority.submit_action(conversation_id, payload)
     except ValueError as exc:

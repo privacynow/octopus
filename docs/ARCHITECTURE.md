@@ -136,7 +136,7 @@ provider auth, or backup files do not define a supported persistence path.
 | Schema | Owner | Tables and purpose |
 | --- | --- | --- |
 | `bot_runtime` | Bot runtime | Sessions, inbound updates, work items, user access, usage log, worker heartbeats, control-plane commands, deferred notifications. |
-| `agent_registry` | Registry | Agents, runtime workers, deliveries, management requests, conversations, routed tasks, events, protocol definitions, versions, runs, participants, stages, artifacts, transitions, idempotency, compliance, routing skill overrides, registry-managed runtime skills and guidance. |
+| `agent_registry` | Registry | Agents, runtime workers, deliveries, management requests, conversations, routed tasks, events, resources, resource attachments, protocol definitions, versions, runs, participants, stages, artifacts, transitions, idempotency, compliance, routing skill overrides, registry-managed runtime skills and guidance. |
 | `bot_content` | Bot content services | Skill namespaces, tracks, revisions, files, provider guidance tracks/revisions, approval records. |
 | `bot_credentials` | Bot credential service | Actor/skill credential values. |
 
@@ -155,6 +155,10 @@ erDiagram
     PROTOCOL_RUNS ||--o{ PROTOCOL_ARTIFACTS : observes
     PROTOCOL_RUNS ||--o{ PROTOCOL_TRANSITIONS : audits
     PROTOCOL_STAGE_EXECUTIONS ||--o| ROUTED_TASKS : dispatches
+    RESOURCES ||--o{ RESOURCE_ATTACHMENTS : scopes
+    CONVERSATIONS ||--o{ RESOURCE_ATTACHMENTS : references
+    ROUTED_TASKS ||--o{ RESOURCE_ATTACHMENTS : receives
+    PROTOCOL_RUNS ||--o{ RESOURCE_ATTACHMENTS : receives
 ```
 
 Important indexes and constraints:
@@ -168,6 +172,8 @@ Important indexes and constraints:
 | `agent_registry.protocol_stage_executions` | Run lookup, routed task uniqueness, running lease and timeout sweeps. |
 | `agent_registry.protocol_artifacts` | Latest artifact by run/key. |
 | `agent_registry.protocol_artifact_snapshots` | Durable retained artifact package lookup by run/key and content hash. |
+| `agent_registry.resources` | User-provided input resources by owner/source/hash and lifecycle state. |
+| `agent_registry.resource_attachments` | Live scoped resource links to conversations, routed tasks, protocol runs, and Auto Protocol sessions. |
 | `agent_registry.workspace_cleanup_inventory` | Operator dry-run/execution observations for bot workspace cleanup. |
 | `agent_registry.protocol_idempotency` | One response per scoped action and idempotency key. |
 | `bot_content.skill_*` | Skill track/revision/file integrity and approval history. |
@@ -190,6 +196,7 @@ Key files:
 | `octopus_registry/store_postgres.py` | Postgres registry store implementation. |
 | `octopus_registry/store_shared/` | Domain-sliced SQL helpers for agents, conversations, deliveries, tasks, usage, content, summary. |
 | `octopus_registry/protocol_store.py` | Protocol-specific Postgres adapter, Auto Protocol session persistence, and canonical protocol mutation applier. |
+| `octopus_registry/resources.py` | Registry-owned filesystem storage and URI resolution for SDK resource records. |
 | `octopus_registry/protocol_runtime.py` | Protocol run event payloads, participant resolution, dispatch evaluation. |
 | `octopus_registry/rehearsal.py` | Rehearsal session manager for dry protocol response flows. |
 | `octopus_registry/ingress.py` | Operator-facing management bridge for skills, guidance, conversation settings, reset. |
@@ -210,6 +217,7 @@ Registry API families:
 | Agent discovery/routing | `POST /v1/agents/discovery/search`, `POST /v1/selector/preview`, `GET/POST /v1/routing/skills` | SDK delegation, protocol runtime, Registry UI. |
 | Routed work | `POST /v1/agents/routed-tasks`, status/result endpoints, `GET /v1/tasks`, `GET /v1/tasks/{id}` | Bot runtimes, Registry UI. |
 | Conversations | `GET/POST /v1/conversations`, messages, actions, events, progress, export | Registry UI and bot runtimes. |
+| Resources | `POST /v1/resources`, `GET /v1/resources`, content and attachment routes | Registry UI, SDK clients, bot runtimes. |
 | Management bridge | `/v1/agents/{agent_id}/catalog/skills...`, `/guidance/{provider}...`, conversation skill/settings/reset routes | Registry UI, future peer channels. |
 | Protocol authoring | `GET /v1/protocols`, `POST /v1/protocols`, `POST /v1/protocol-drafts`, `/v1/protocol-auto/sessions...`, parse/draft export/package export/package import/diff/validate/publish/archive | Registry UI, Telegram Auto Protocol commands. |
 | Protocol templates | `GET/POST /v1/protocol-templates` | Protocols UI. |
@@ -219,6 +227,34 @@ Registry API families:
 
 The checked-in OpenAPI artifact is `docs/registry-openapi.json`. When registry
 route contracts change, regenerate and test it.
+
+### Shared Resources
+
+User-provided files are represented by SDK resource records, not by
+surface-specific attachment shapes. The shared contract lives in
+`octopus_sdk/resources.py`; Registry persists those records in
+`agent_registry.resources` and scopes their use through
+`agent_registry.resource_attachments`.
+
+The resource path is:
+
+```text
+Registry UI, Telegram, or future channel
+  -> SDK/Registry resource upload
+  -> agent_registry.resources + resource_attachments
+  -> conversation, routed task, Auto Protocol session, or protocol run payload
+  -> bot registry delivery transport
+  -> authorized download through /v1/resources/{id}/content
+  -> scoped local InboundAttachment materialized for runtime execution
+```
+
+Registry owns resource metadata, hash, owner, source surface, lifecycle state,
+and access checks. Bot runtimes own only the local materialized copy used for
+one work item. Direct assignments attach referenced resources to the routed
+task target so the receiving agent can fetch the same SDK resource without
+depending on the original conversation target. Telegram native uploads are
+registered through the same `RegistryClient.upload_resource_from_path` method
+before bot handling continues.
 
 ### Auto Protocol
 
@@ -340,6 +376,7 @@ Key files:
 | `octopus_sdk/registry/authority_client.py` | Authority client protocol for registry-backed operations. |
 | `octopus_sdk/registry/management.py` | Management request/result types for skills, guidance, settings, reset. |
 | `octopus_sdk/registry_participant.py` | Participant interfaces for enrollment, health, discovery, mirroring, coordination. |
+| `octopus_sdk/resources.py` | Shared resource and resource-attachment records used by Registry, bot runtimes, and future channel adapters. |
 | `octopus_sdk/workflows/` | Conversation, delegation, pending, recovery, skills, guidance, lifecycle use cases. |
 | `octopus_sdk/protocols/` | Protocol models, Auto Protocol design/revision helpers, documents, validation, prompt rendering, engine, service, launch helpers. |
 | `octopus_sdk/events.py` | Typed event taxonomy and metadata validation. |

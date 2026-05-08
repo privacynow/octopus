@@ -64,6 +64,10 @@ from octopus_sdk.registry.management import (
     ManagementRequest,
     ManagementResult,
     StopArtifactRuntimeResult,
+    WorkspaceCleanupEntryRecord,
+    WorkspaceCleanupPlanRecord,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResult,
 )
 from octopus_sdk.registry.models import AgentRecord, RegistryJsonRecord, TaskRecord
 from octopus_sdk.registry.management_executor import (
@@ -116,6 +120,7 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
+    monkeypatch.setenv("REGISTRY_ARTIFACT_STORE_DIR", str(tmp_path / "registry-artifacts"))
     monkeypatch.delenv("REGISTRY_SESSION_SECRET", raising=False)
     registry_auth.reset_auth_attempt_limits_for_test()
 
@@ -191,6 +196,154 @@ def _ui_csrf_token(client: TestClient) -> str:
     response = client.get("/v1/auth/csrf")
     assert response.status_code == 200
     return response.json()["csrf_token"]
+
+
+def test_workspace_cleanup_execute_requires_stored_dry_run_inventory(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_workspace_cleanup_inventory(self, *args, **kwargs):
+            raise AssertionError("cleanup without a dry-run inventory should fail before store lookup")
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/admin/workspaces/cleanup",
+            json={
+                "confirm": "CLEAN",
+                "plan": {
+                    "entries": [
+                        {
+                            "path": "/home/bot/.provider-auth/.codex/.cache",
+                            "category": "dependency_caches",
+                            "safe_to_delete": True,
+                        }
+                    ]
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "WORKSPACE_CLEANUP_DRY_RUN_REQUIRED"
+
+
+def test_workspace_cleanup_execute_uses_stored_dry_run_plan(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    stored_plan = WorkspaceCleanupPlanRecord(
+        inventory_id="inventory-1",
+        agent_id="agent-1",
+        categories=["build_caches"],
+        entries=[
+            WorkspaceCleanupEntryRecord(
+                path="/home/bot/project/target",
+                category="build_caches",
+                safe_to_delete=True,
+            )
+        ],
+    )
+    saved: dict[str, object] = {}
+
+    class _Store:
+        def list_agents(self, cursor: int = 0, limit: int = 200, connectivity_state: str = ""):
+            del cursor, limit
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    connectivity_state="connected",
+                    supported_admin_operations=["workspace_cleanup"],
+                )
+            ]
+
+        def get_workspace_cleanup_inventory(self, inventory_id: str, *, access):
+            del access
+            assert inventory_id == "inventory-1"
+            return {
+                "inventory_id": "inventory-1",
+                "agent_id": "agent-1",
+                "workspace_ref": "",
+                "protocol_run_id": "",
+                "scan_status": "dry_run",
+                "file_count": 1,
+                "total_bytes": 1,
+                "retained_bytes": 0,
+                "transient_bytes": 1,
+                "unknown_bytes": 0,
+                "summary_json": {"plan": stored_plan.model_dump(mode="json")},
+                "created_at": "2026-05-08T00:00:00Z",
+            }
+
+        def save_workspace_cleanup_inventory(self, **kwargs):
+            saved.update(kwargs)
+            return {
+                "inventory_id": kwargs["inventory_id"],
+                "agent_id": kwargs["agent_id"],
+                "workspace_ref": kwargs.get("workspace_ref", ""),
+                "protocol_run_id": kwargs.get("protocol_run_id", ""),
+                "scan_status": kwargs["scan_status"],
+                "file_count": kwargs["file_count"],
+                "total_bytes": kwargs["total_bytes"],
+                "retained_bytes": kwargs["retained_bytes"],
+                "transient_bytes": kwargs["transient_bytes"],
+                "unknown_bytes": kwargs["unknown_bytes"],
+                "summary_json": kwargs["summary"],
+                "created_at": "2026-05-08T00:00:01Z",
+            }
+
+    from octopus_registry.management_client import RegistryManagementClient
+
+    async def _send(self, *, agent_id: str, payload, timeout_seconds: int = 30):
+        del self, timeout_seconds
+        assert agent_id == "agent-1"
+        assert isinstance(payload, WorkspaceCleanupRequest)
+        assert [entry.path for entry in payload.plan.entries] == ["/home/bot/project/target"]
+        return ManagementResult(
+            request_id="mgmt-cleanup-1",
+            agent_id="agent-1",
+            success=True,
+            payload=WorkspaceCleanupResult(plan=payload.plan, removed_paths=[], removed_bytes=0, failures=[]),
+        )
+
+    monkeypatch.setattr(RegistryManagementClient, "send", _send)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/admin/workspaces/cleanup",
+            json={
+                "confirm": "CLEAN",
+                "plan": {
+                    "inventory_id": "inventory-1",
+                    "entries": [
+                        {
+                            "path": "/home/bot/.provider-auth/.codex/.cache",
+                            "category": "dependency_caches",
+                            "safe_to_delete": True,
+                        }
+                    ],
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    assert saved["scan_status"] == "executed"
 
 
 def _enroll_and_register(
@@ -1018,6 +1171,120 @@ def test_registry_create_conversation_requires_origin_channel(monkeypatch, tmp_p
     )
     assert conversations.status_code == 200
     assert conversations.json()["conversations"] == []
+
+
+def test_registry_resources_upload_attach_and_deliver_to_conversation(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+    csrf = _ui_csrf_token(client)
+    agent_id, token = _enroll_and_register(client, "Resource Bot", "resource-bot")
+    created = client.post(
+        "/v1/conversations",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "target_agent_id": agent_id,
+            "origin_channel": "registry",
+            "external_conversation_ref": "resource-test",
+            "title": "Resource test",
+        },
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+
+    upload = client.post(
+        "/v1/resources",
+        headers={"X-CSRF-Token": csrf},
+        data={
+            "source_surface": "registry",
+            "source_ref": conversation_id,
+            "target_kind": "conversation",
+            "target_ref": conversation_id,
+            "relation": "message",
+        },
+        files={"file": ("notes.txt", b"registry resource contents", "text/plain")},
+    )
+    assert upload.status_code == 201
+    resource = upload.json()["resource"]
+    assert resource["original_name"] == "notes.txt"
+    assert resource["content_hash"].startswith("sha256:")
+
+    message = client.post(
+        f"/v1/conversations/{conversation_id}/messages",
+        headers={"X-CSRF-Token": csrf},
+        json={"text": "Use this file", "resource_refs": [resource["resource_id"]]},
+    )
+    assert message.status_code == 200
+    event = message.json()["event"]
+    assert event["metadata"]["resource_refs"] == [resource["resource_id"]]
+
+    poll_result = get_registry_store().poll(token, cursor=0, limit=100)
+    channel_delivery = next(item for item in poll_result.deliveries if item.kind == "channel_input")
+    assert channel_delivery.payload["resource_refs"] == [resource["resource_id"]]
+
+    content = client.get(f"/v1/resources/{resource['resource_id']}/content")
+    assert content.status_code == 200
+    assert content.content == b"registry resource contents"
+
+
+def test_direct_assignment_resource_refs_grant_target_task_access(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+    csrf = _ui_csrf_token(client)
+    origin_agent_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-bot")
+    _target_agent_id, target_token = _enroll_and_register(client, "Target Bot", "target-bot")
+    created = _create_conversation(
+        client,
+        origin_token,
+        origin_agent_id,
+        "resource-direct-assign",
+        title="Resource direct assignment",
+    )
+    conversation_id = created["conversation_id"]
+
+    upload = client.post(
+        "/v1/resources",
+        headers={"X-CSRF-Token": csrf},
+        data={
+            "source_surface": "registry",
+            "source_ref": conversation_id,
+            "target_kind": "conversation",
+            "target_ref": conversation_id,
+            "relation": "message",
+        },
+        files={"file": ("assignment.txt", b"direct assignment input", "text/plain")},
+    )
+    assert upload.status_code == 201
+    resource_id = upload.json()["resource"]["resource_id"]
+
+    action = client.post(
+        f"/v1/conversations/{conversation_id}/actions",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "action_id": "assign-resource-1",
+            "action": "direct_assign",
+            "payload": {
+                "selector": {"kind": "agent", "value": "target-bot"},
+                "title": "Review attached input",
+                "instructions": "Use the attached input file.",
+                "message_text": "Please review the attached input file.",
+                "resource_refs": [resource_id],
+            },
+        },
+    )
+    assert action.status_code == 200, action.text
+
+    poll_result = get_registry_store().poll(target_token, cursor=0, limit=100)
+    delivery = next(item for item in poll_result.deliveries if item.kind == "routed_task")
+    assert delivery.payload["resource_refs"] == [resource_id]
+
+    content = client.get(
+        f"/v1/resources/{resource_id}/content",
+        headers={"Authorization": f"Bearer {target_token}"},
+    )
+    assert content.status_code == 200
+    assert content.content == b"direct assignment input"
 
 
 def test_registry_enroll_requires_explicit_registry_scope(monkeypatch, tmp_path: Path):
@@ -5020,6 +5287,10 @@ def test_protocol_artifact_content_route_uses_rehearsal_text_when_file_unavailab
                 ],
             )
 
+        def get_protocol_artifact_snapshot(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
+
     app.dependency_overrides[registry_server.get_store] = lambda: _Store()
     app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
         is_operator=True,
@@ -5082,6 +5353,10 @@ def test_protocol_artifact_content_route_prefers_inline_artifact_contents_when_f
                     )
                 ],
             )
+
+        def get_protocol_artifact_snapshot(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
 
     app.dependency_overrides[registry_server.get_store] = lambda: _Store()
     app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(

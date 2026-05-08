@@ -9,6 +9,7 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
     compile_auto_protocol_plan,
     generate_auto_protocol_session,
+    protocol_run_create_from_auto_session,
     protocol_stage_runtime_contract,
     render_protocol_stage_prompt,
     revise_auto_protocol_session,
@@ -101,8 +102,8 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "runtime_kind 'java'" in produce_stage["instructions"]
     assert "endpoints as an array of objects" in produce_stage["instructions"]
     assert "endpoint_kind 'docs'" in produce_stage["instructions"]
-    assert "java -jar target/risk-engine.jar" in produce_stage["instructions"]
-    assert "mvn spring-boot:run" in produce_stage["instructions"]
+    assert "java -jar target/app.jar" in produce_stage["instructions"]
+    assert "developer server commands at launch" in produce_stage["instructions"]
     assert "must not run dependency installation" in produce_stage["instructions"]
     acceptance_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "final_evidence")
     assert acceptance_stage["transitions"]["revise"] == "produce_outcome"
@@ -136,6 +137,35 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     )
     assert session.analysis.work_packages
     assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
+
+
+def test_auto_protocol_preserves_resource_refs_into_run_creation():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="registry",
+            requirement_text="Build a browser-runnable utility that uses the uploaded source assets.",
+            resource_refs=["res_source_zip"],
+            available_agents=[
+                {
+                    "agent_id": "agent-1",
+                    "display_name": "General Builder",
+                    "routing_skills": ["implementation"],
+                }
+            ],
+            model_response=_planner_response("implementation"),
+        )
+    )
+
+    request = protocol_run_create_from_auto_session(
+        session,
+        protocol_id="protocol-1",
+        entry_agent_id="agent-1",
+    )
+
+    assert session.resource_refs == ["res_source_zip"]
+    assert session.event_summary.resource_count == 1
+    assert request.resource_refs == ["res_source_zip"]
+    assert request.constraints_json["resource_refs"] == ["res_source_zip"]
 
 
 def test_auto_protocol_normalizes_and_surfaces_planner_warning_strings():

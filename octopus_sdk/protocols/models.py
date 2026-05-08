@@ -515,6 +515,7 @@ class ProtocolRunRecord(RegistryRecordModel):
     repo_ref: str = ""
     branch_ref: str = ""
     problem_statement: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
     constraints_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     status: ProtocolRunStatus = "queued"
     current_stage_execution_id: str = ""
@@ -819,6 +820,7 @@ class ProtocolRunCreateRecord(RegistryRecordModel):
     repo_ref: str = ""
     branch_ref: str = ""
     problem_statement: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
     constraints_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
 

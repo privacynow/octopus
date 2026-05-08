@@ -272,6 +272,13 @@ class ProtocolPostgresAdapter:
 
     @staticmethod
     def _protocol_run_from_row(row: Mapping[str, object]) -> ProtocolRunRecord:
+        constraints_json = row["constraints_json"]
+        constraints_payload = constraints_json if isinstance(constraints_json, Mapping) else {}
+        resource_refs = [
+            str(item or "").strip()
+            for item in (constraints_payload.get("resource_refs", []) or [])
+            if str(item or "").strip()
+        ]
         return record(
             ProtocolRunRecord,
             {
@@ -290,7 +297,8 @@ class ProtocolPostgresAdapter:
                 "repo_ref": row["repo_ref"],
                 "branch_ref": row["branch_ref"],
                 "problem_statement": row["problem_statement"],
-                "constraints_json": row["constraints_json"],
+                "resource_refs": resource_refs,
+                "constraints_json": constraints_json,
                 "status": row["status"],
                 "current_stage_execution_id": row["current_stage_execution_id"],
                 "current_stage_key": row["current_stage_key"],
@@ -2692,6 +2700,7 @@ class ProtocolPostgresAdapter:
                 "target_draft_revision": int(row.get("target_draft_revision", 0) or 0),
                 "requirement_text": row.get("requirement_text", ""),
                 "constraints_text": row.get("constraints_text", ""),
+                "resource_refs": row.get("resource_refs_json") or [],
                 "model_response": row.get("planner_response_json") or None,
                 "analysis": row.get("analysis_json") or {},
                 "plan": row.get("plan_json") or {},
@@ -2731,6 +2740,7 @@ class ProtocolPostgresAdapter:
             "target_draft_revision": int(session.target_draft_revision or 0),
             "requirement_text": session.requirement_text,
             "constraints_text": session.constraints_text,
+            "resource_refs_json": list(session.resource_refs or []),
             "planner_response_json": session.model_response.model_dump(mode="json") if session.model_response is not None else {},
             "analysis_json": session.analysis.model_dump(mode="json"),
             "plan_json": session.plan.model_dump(mode="json"),
@@ -2805,12 +2815,12 @@ class ProtocolPostgresAdapter:
                     INSERT INTO {SCHEMA}.protocol_auto_sessions (
                         session_id, status, mode, surface, actor_ref, chat_ref,
                         source_protocol_id, source_version_id, source_draft_revision,
-                        target_protocol_id, target_draft_revision, requirement_text, constraints_text,
+                        target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json,
                         planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                         warnings_json, unresolved_decisions_json, change_summary_json,
                         applied_protocol_json, run_result_json, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (session_id) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -2825,6 +2835,7 @@ class ProtocolPostgresAdapter:
                         target_draft_revision = EXCLUDED.target_draft_revision,
                         requirement_text = EXCLUDED.requirement_text,
                         constraints_text = EXCLUDED.constraints_text,
+                        resource_refs_json = EXCLUDED.resource_refs_json,
                         planner_response_json = EXCLUDED.planner_response_json,
                         analysis_json = EXCLUDED.analysis_json,
                         plan_json = EXCLUDED.plan_json,
@@ -2853,6 +2864,7 @@ class ProtocolPostgresAdapter:
                         payload["target_draft_revision"],
                         payload["requirement_text"],
                         payload["constraints_text"],
+                        jsonb(payload["resource_refs_json"]),
                         jsonb(payload["planner_response_json"]),
                         jsonb(payload["analysis_json"]),
                         jsonb(payload["plan_json"]),
@@ -3922,6 +3934,18 @@ class ProtocolPostgresAdapter:
                     now=now,
                 )
                 root_conversation_id = str(created.conversation_id or "")
+            constraints_payload = (
+                request.constraints_json.as_dict()
+                if isinstance(request.constraints_json, RegistryJsonRecord)
+                else dict(request.constraints_json or {})
+            )
+            resource_refs = [
+                str(item or "").strip()
+                for item in (request.resource_refs or constraints_payload.get("resource_refs", []) or [])
+                if str(item or "").strip()
+            ]
+            if resource_refs:
+                constraints_payload["resource_refs"] = resource_refs
             with cur(conn) as db_cur:
                 db_cur.execute(
                     f"""
@@ -3952,11 +3976,7 @@ class ProtocolPostgresAdapter:
                         request.repo_ref,
                         request.branch_ref,
                         request.problem_statement,
-                        jsonb(
-                            request.constraints_json.as_dict()
-                            if isinstance(request.constraints_json, RegistryJsonRecord)
-                            else dict(request.constraints_json or {})
-                        ),
+                        jsonb(constraints_payload),
                         self._access_org_id(access),
                         self._access_actor_ref(access),
                         protocol_retention_until(now, days=PROTOCOL_DEFAULT_RETENTION_DAYS),
@@ -3967,6 +3987,29 @@ class ProtocolPostgresAdapter:
                 run_row = db_cur.fetchone()
                 if run_row is None:
                     raise RuntimeError("Failed to create protocol run")
+                for resource_id in resource_refs:
+                    db_cur.execute(
+                        f"""
+                        INSERT INTO {SCHEMA}.resource_attachments (
+                            attachment_id, resource_id, target_kind, target_ref, relation,
+                            metadata_json, created_by, created_at
+                        ) VALUES (%s, %s, 'protocol_run', %s, 'input', %s, %s, %s)
+                        ON CONFLICT (resource_id, target_kind, target_ref, relation)
+                            WHERE detached_at = ''
+                        DO UPDATE SET metadata_json = EXCLUDED.metadata_json
+                        """,
+                        (
+                            uuid.uuid5(
+                                uuid.NAMESPACE_URL,
+                                f"octopus-resource-attachment:{resource_id}:protocol_run:{run_id}:input",
+                            ).hex,
+                            resource_id,
+                            run_id,
+                            jsonb({"root_conversation_id": root_conversation_id}),
+                            self._access_actor_ref(access),
+                            now,
+                        ),
+                    )
                 for participant in document.participants:
                     participant_selector, required_skills = _participant_assignment_projection(document, participant.participant_key)
                     db_cur.execute(

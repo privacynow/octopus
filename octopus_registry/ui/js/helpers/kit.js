@@ -454,6 +454,194 @@ window.Kit = (() => {
         };
     }
 
+    function resourceAttachmentPicker({
+        label = 'Files',
+        help = 'Attach files for the agent to use.',
+        sourceRef = '',
+        targetKind = '',
+        targetRef = '',
+        relation = 'context',
+        variant = 'panel',
+        onStateChange = null,
+    } = {}) {
+        const compact = ['compact', 'composer'].includes(String(variant || '').trim().toLowerCase());
+        const root = document.createElement('div');
+        root.className = compact ? 'kit-resource-picker kit-resource-picker-compact' : 'kit-resource-picker';
+
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.className = compact ? 'kit-resource-input-hidden' : 'input';
+        input.setAttribute('aria-label', label);
+
+        const list = document.createElement('div');
+        list.className = 'kit-resource-list';
+
+        let trigger = null;
+        if (compact) {
+            trigger = document.createElement('button');
+            trigger.type = 'button';
+            trigger.className = 'kit-resource-trigger';
+            trigger.setAttribute('aria-label', label);
+            trigger.title = help || label;
+            trigger.innerHTML = '<svg viewBox="0 0 24 24" fill="none" focusable="false" aria-hidden="true"><path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"></path></svg>';
+            trigger.addEventListener('click', () => input.click());
+            root.appendChild(trigger);
+            root.appendChild(input);
+            root.appendChild(list);
+        } else {
+            const heading = document.createElement('div');
+            heading.className = 'kit-details-label';
+            heading.textContent = label;
+            root.appendChild(heading);
+            root.appendChild(input);
+
+            const note = document.createElement('div');
+            note.className = 'kit-details-help';
+            note.textContent = help;
+            root.appendChild(note);
+            root.appendChild(list);
+        }
+
+        const resources = [];
+
+        function notifyStateChange() {
+            if (typeof onStateChange === 'function') {
+                onStateChange({
+                    busy: resources.some((item) => ['queued', 'uploading'].includes(item.status)),
+                    resources: resources.slice(),
+                });
+            }
+        }
+
+        function statusLabel(resource) {
+            const status = String(resource.status || 'attached');
+            if (status === 'queued') return 'Queued';
+            if (status === 'uploading') return `${Number(resource.progress || 0)}%`;
+            if (status === 'failed') return 'Failed';
+            return '';
+        }
+
+        function render() {
+            UI.reconcileChildren(list, resources.map((resource, index) => {
+                const chip = document.createElement('span');
+                const status = String(resource.status || 'attached');
+                chip.className = `kit-resource-chip is-${status}`;
+                const size = Number(resource.size_bytes || 0);
+                const name = document.createElement('span');
+                name.className = 'kit-resource-chip-name';
+                name.textContent = `${resource.original_name || resource.resource_id || 'File'}${size > 0 ? ` · ${Math.ceil(size / 1024)} KB` : ''}`;
+                chip.appendChild(name);
+                const labelText = statusLabel(resource);
+                if (labelText) {
+                    const state = document.createElement('span');
+                    state.className = 'kit-resource-chip-state';
+                    state.textContent = labelText;
+                    chip.appendChild(state);
+                }
+                if (status === 'uploading') {
+                    const progress = document.createElement('span');
+                    progress.className = 'kit-resource-progress';
+                    progress.setAttribute('aria-hidden', 'true');
+                    const fill = document.createElement('span');
+                    fill.style.width = `${Math.max(2, Math.min(100, Number(resource.progress || 0)))}%`;
+                    progress.appendChild(fill);
+                    chip.appendChild(progress);
+                    const sr = document.createElement('span');
+                    sr.className = 'sr-only';
+                    sr.textContent = `Uploading ${resource.original_name || 'file'} ${Number(resource.progress || 0)} percent`;
+                    chip.appendChild(sr);
+                }
+                if (status !== 'uploading' && status !== 'queued') {
+                    const remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.className = 'kit-resource-chip-remove';
+                    remove.setAttribute('aria-label', `Remove ${resource.original_name || 'file'}`);
+                    remove.textContent = 'x';
+                    remove.addEventListener('click', () => {
+                        resources.splice(index, 1);
+                        render();
+                        notifyStateChange();
+                    });
+                    chip.appendChild(remove);
+                }
+                return chip;
+            }));
+        }
+
+        input.addEventListener('change', async () => {
+            const files = Array.from(input.files || []);
+            if (!files.length) return;
+            input.disabled = true;
+            if (trigger) trigger.disabled = true;
+            try {
+                for (const file of files) {
+                    const pending = {
+                        original_name: file.name,
+                        size_bytes: file.size,
+                        status: 'uploading',
+                        progress: 0,
+                    };
+                    resources.push(pending);
+                    render();
+                    notifyStateChange();
+                    try {
+                        const uploaded = await API.uploadResource(file, {
+                            sourceSurface: 'registry',
+                            sourceRef,
+                            targetKind,
+                            targetRef,
+                            relation,
+                            onProgress: (percent) => {
+                                pending.progress = percent;
+                                render();
+                                notifyStateChange();
+                            },
+                        });
+                        const resource = uploaded && uploaded.resource ? uploaded.resource : uploaded;
+                        if (resource && resource.resource_id) {
+                            Object.assign(pending, resource, {
+                                status: 'attached',
+                                progress: 100,
+                            });
+                        } else {
+                            pending.status = 'failed';
+                            pending.error = 'Upload response did not include a resource id.';
+                        }
+                    } catch (err) {
+                        pending.status = 'failed';
+                        pending.error = err && err.message ? err.message : 'Upload failed.';
+                        UI.reportError('Failed to upload file', err, { context: 'Resource upload failed' });
+                    }
+                    render();
+                    notifyStateChange();
+                }
+            } catch (err) {
+                UI.reportError('Failed to upload file', err, { context: 'Resource upload failed' });
+            } finally {
+                input.value = '';
+                input.disabled = false;
+                if (trigger) trigger.disabled = false;
+                notifyStateChange();
+            }
+        });
+
+        return {
+            element: root,
+            resourceRefs: () => resources
+                .filter((item) => String(item.status || 'attached') === 'attached')
+                .map((item) => String(item.resource_id || '').trim())
+                .filter(Boolean),
+            resources: () => resources.slice(),
+            isBusy: () => resources.some((item) => ['queued', 'uploading'].includes(item.status)),
+            clear: () => {
+                resources.splice(0, resources.length);
+                render();
+                notifyStateChange();
+            },
+        };
+    }
+
     function protocolArtifactContractPanel(protocolDocument, {
         title = 'Declared output contract',
         note = 'These artifacts come from the published protocol definition. Launch context can add run notes, but artifact verification follows this contract.',
@@ -3359,6 +3547,7 @@ window.Kit = (() => {
         lifecycleHeader,
         protocolRunLaunchFields,
         protocolRunLaunchForm,
+        resourceAttachmentPicker,
         protocolArtifactContractPanel,
         validationSurface,
         detailsPanel,

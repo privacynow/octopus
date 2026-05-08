@@ -262,6 +262,45 @@
         "title": "ArtifactRuntimeLogsResult",
         "type": "object"
       },
+      "Body_resource_upload_resource_v1_resources_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "relation": {
+            "default": "context",
+            "title": "Relation",
+            "type": "string"
+          },
+          "source_ref": {
+            "default": "",
+            "title": "Source Ref",
+            "type": "string"
+          },
+          "source_surface": {
+            "default": "registry",
+            "title": "Source Surface",
+            "type": "string"
+          },
+          "target_kind": {
+            "default": "",
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_ref": {
+            "default": "",
+            "title": "Target Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_resource_upload_resource_v1_resources_post",
+        "type": "object"
+      },
       "Body_ui_login_ui_login_post": {
         "properties": {
           "password": {
@@ -1069,6 +1108,13 @@
             "title": "Requested Skills",
             "type": "array"
           },
+          "resource_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Resource Refs",
+            "type": "array"
+          },
           "selector": {
             "$ref": "#/components/schemas/TargetSelector"
           },
@@ -1165,6 +1211,13 @@
               "type": "string"
             },
             "title": "Requested Skills",
+            "type": "array"
+          },
+          "resource_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Resource Refs",
             "type": "array"
           },
           "selector": {
@@ -2546,6 +2599,13 @@
             "title": "Repo Ref",
             "type": "string"
           },
+          "resource_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Resource Refs",
+            "type": "array"
+          },
           "root_conversation_id": {
             "default": "",
             "title": "Root Conversation Id",
@@ -3047,6 +3107,40 @@
           "state"
         ],
         "title": "ResetExecutionFaultResult",
+        "type": "object"
+      },
+      "ResourceAttachRequest": {
+        "properties": {
+          "metadata": {
+            "additionalProperties": true,
+            "description": "Optional attachment metadata",
+            "title": "Metadata",
+            "type": "object"
+          },
+          "relation": {
+            "default": "context",
+            "description": "Relationship between the resource and target",
+            "title": "Relation",
+            "type": "string"
+          },
+          "target_kind": {
+            "description": "Product target kind",
+            "minLength": 1,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_ref": {
+            "description": "Product target identifier",
+            "minLength": 1,
+            "title": "Target Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_ref"
+        ],
+        "title": "ResourceAttachRequest",
         "type": "object"
       },
       "RetryDecisionActionPayload": {
@@ -12047,6 +12141,88 @@
         "summary": "Resource Archive Protocol Artifact Runtime"
       }
     },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/client-event": {
+      "post": {
+        "operationId": "resource_record_protocol_artifact_runtime_client_event_v1_protocol_runs__run_id__artifacts__artifact_key__runtime_client_event_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Record Protocol Artifact Runtime Client Event V1 Protocol Runs  Run Id  Artifacts  Artifact Key  Runtime Client Event Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Record Protocol Artifact Runtime Client Event"
+      }
+    },
     "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/events": {
       "get": {
         "operationId": "resource_list_protocol_artifact_runtime_events_v1_protocol_runs__run_id__artifacts__artifact_key__runtime_events_get",
@@ -15061,6 +15237,513 @@
           }
         },
         "summary": "Resource Get Protocol Version"
+      }
+    },
+    "/v1/resources": {
+      "get": {
+        "operationId": "resource_list_resources_v1_resources_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "owner_actor_ref",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Owner Actor Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_surface",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Source Surface",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_ref",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Source Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_kind",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Target Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_ref",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Target Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cursor",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource List Resources V1 Resources Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource List Resources"
+      },
+      "post": {
+        "operationId": "resource_upload_resource_v1_resources_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_resource_upload_resource_v1_resources_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Upload Resource V1 Resources Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Upload Resource"
+      }
+    },
+    "/v1/resources/attachments/{attachment_id}": {
+      "delete": {
+        "operationId": "resource_detach_resource_v1_resources_attachments__attachment_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Detach Resource V1 Resources Attachments  Attachment Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Detach Resource"
+      }
+    },
+    "/v1/resources/{resource_id}": {
+      "get": {
+        "operationId": "resource_get_resource_v1_resources__resource_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "title": "Resource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Get Resource V1 Resources  Resource Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Resource"
+      }
+    },
+    "/v1/resources/{resource_id}/attachments": {
+      "post": {
+        "operationId": "resource_attach_resource_v1_resources__resource_id__attachments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "title": "Resource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceAttachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Attach Resource V1 Resources  Resource Id  Attachments Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Attach Resource"
+      }
+    },
+    "/v1/resources/{resource_id}/content": {
+      "get": {
+        "operationId": "resource_get_resource_content_v1_resources__resource_id__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "title": "Resource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Resource Content"
       }
     },
     "/v1/routing/skills": {

@@ -41,6 +41,7 @@ class RegistryAuthorityConversationStore(Protocol):
         conversation_id: ConversationId,
         text: str,
         actor: TransportActorKey,
+        resource_refs: tuple[str, ...] = (),
     ) -> MessageRecord: ...
 
     def submit_action(

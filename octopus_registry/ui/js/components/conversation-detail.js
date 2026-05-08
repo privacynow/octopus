@@ -249,12 +249,38 @@ function renderConversationDetail(container, params) {
     textarea.rows = 1;
     composer.appendChild(textarea);
 
-    const sendBtn = document.createElement('button');
+    let sendingMessage = false;
+    let resourcePicker = null;
+    let sendBtn = null;
+    function syncComposerSendState() {
+        if (!sendBtn || !resourcePicker) return;
+        const busy = resourcePicker.isBusy();
+        sendBtn.disabled = sendingMessage || busy;
+        sendBtn.title = busy ? 'Files are still uploading.' : '';
+    }
+
+    const composerActions = document.createElement('div');
+    composerActions.className = 'compose-actions';
+    composer.appendChild(composerActions);
+
+    resourcePicker = Kit.resourceAttachmentPicker({
+        label: 'Attach files',
+        help: 'Add source files, datasets, screenshots, or documents for this message.',
+        sourceRef: convoId,
+        targetKind: 'conversation',
+        targetRef: convoId,
+        relation: 'message',
+        variant: 'composer',
+        onStateChange: syncComposerSendState,
+    });
+    composerActions.appendChild(resourcePicker.element);
+
+    sendBtn = document.createElement('button');
     sendBtn.className = 'btn btn-primary';
     sendBtn.type = 'button';
     sendBtn.textContent = 'Send';
     sendBtn.setAttribute('aria-label', 'Send message');
-    composer.appendChild(sendBtn);
+    composerActions.appendChild(sendBtn);
 
     const suggestionList = document.createElement('div');
     suggestionList.className = 'compose-suggestions';
@@ -1573,6 +1599,15 @@ function renderConversationDetail(container, params) {
                 },
             });
             form.appendChild(launchForm.element);
+            const protocolResourcePicker = Kit.resourceAttachmentPicker({
+                label: 'Attach run files',
+                help: 'Add input files for this protocol run.',
+                sourceRef: convoId,
+                targetKind: 'conversation',
+                targetRef: convoId,
+                relation: 'protocol_run_input',
+            });
+            form.appendChild(protocolResourcePicker.element);
 
             const actions = document.createElement('div');
             actions.className = 'event-card-actions';
@@ -1605,6 +1640,7 @@ function renderConversationDetail(container, params) {
                         origin_channel: String((meta && meta.origin_channel) || 'registry'),
                         workspace_ref: protocolWorkspaceRef(),
                         problem_statement: problemStatement,
+                        resource_refs: protocolResourcePicker.resourceRefs(),
                         constraints_json: constraints,
                     }));
                     const run = response.run || null;
@@ -2014,8 +2050,13 @@ function renderConversationDetail(container, params) {
     textarea.addEventListener('input', updateComposerAssist);
 
     async function sendMessage() {
+        if (resourcePicker.isBusy()) {
+            showProgressBanner('Files are still uploading.');
+            return;
+        }
         const text = textarea.value.trim();
-        if (!text) return;
+        const resourceRefs = resourcePicker.resourceRefs();
+        if (!text && !resourceRefs.length) return;
         const routingState = currentComposerRoutingState();
         if (activeView !== 'conversation') {
             setActiveView('conversation', {
@@ -2023,7 +2064,8 @@ function renderConversationDetail(container, params) {
                 persist: true,
             });
         }
-        sendBtn.disabled = true;
+        sendingMessage = true;
+        syncComposerSendState();
         textarea.disabled = true;
         clearSuggestions();
         suggestionList.hidden = true;
@@ -2034,18 +2076,21 @@ function renderConversationDetail(container, params) {
                     title: directAssignTitle(routingState.instructions),
                     instructions: routingState.instructions,
                     message_text: routingState.text,
+                    resource_refs: resourceRefs,
                 });
                 void loadRelatedTasks({ soft: true });
             } else {
-                await API.sendMessage(convoId, text);
+                await API.sendMessage(convoId, text || 'Use the attached files as context.', { resourceRefs });
             }
             textarea.value = '';
+            resourcePicker.clear();
             updateComposerAssist();
             await reloadEvents();
         } catch (err) {
             UI.reportError('Failed to send the message', err, { context: 'Conversation send failed' });
         }
-        sendBtn.disabled = false;
+        sendingMessage = false;
+        syncComposerSendState();
         textarea.disabled = false;
         textarea.focus();
     }

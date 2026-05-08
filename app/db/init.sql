@@ -425,6 +425,53 @@ CREATE INDEX IF NOT EXISTS idx_events_kind
 CREATE INDEX IF NOT EXISTS idx_events_fts
     ON agent_registry.events USING GIN (to_tsvector('english', content));
 
+CREATE TABLE IF NOT EXISTS agent_registry.resources (
+    resource_id TEXT PRIMARY KEY,
+    owner_actor_ref TEXT NOT NULL DEFAULT '',
+    source_surface TEXT NOT NULL DEFAULT 'registry',
+    source_ref TEXT NOT NULL DEFAULT '',
+    original_name TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    size_bytes BIGINT NOT NULL DEFAULT 0,
+    content_hash TEXT NOT NULL DEFAULT '',
+    storage_uri TEXT NOT NULL DEFAULT '',
+    lifecycle_state TEXT NOT NULL DEFAULT 'active',
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT NOT NULL DEFAULT '',
+    deleted_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_registry_resources_owner
+    ON agent_registry.resources (owner_actor_ref, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_resources_source
+    ON agent_registry.resources (source_surface, source_ref, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_resources_hash
+    ON agent_registry.resources (content_hash, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_registry.resource_attachments (
+    attachment_id TEXT PRIMARY KEY,
+    resource_id TEXT NOT NULL,
+    target_kind TEXT NOT NULL,
+    target_ref TEXT NOT NULL,
+    relation TEXT NOT NULL DEFAULT 'context',
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    detached_at TEXT NOT NULL DEFAULT '',
+    detached_by TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (resource_id) REFERENCES agent_registry.resources(resource_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_resource_attachment_live
+    ON agent_registry.resource_attachments (resource_id, target_kind, target_ref, relation)
+    WHERE detached_at = '';
+CREATE INDEX IF NOT EXISTS idx_registry_resource_attachments_target
+    ON agent_registry.resource_attachments (target_kind, target_ref, created_at DESC)
+    WHERE detached_at = '';
+CREATE INDEX IF NOT EXISTS idx_registry_resource_attachments_resource
+    ON agent_registry.resource_attachments (resource_id, created_at DESC)
+    WHERE detached_at = '';
+
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_definitions (
     protocol_id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
@@ -810,6 +857,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     target_draft_revision INTEGER NOT NULL DEFAULT 0,
     requirement_text TEXT NOT NULL DEFAULT '',
     constraints_text TEXT NOT NULL DEFAULT '',
+    resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     plan_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -825,7 +873,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     updated_at TEXT NOT NULL
 );
 ALTER TABLE agent_registry.protocol_auto_sessions
-    ADD COLUMN IF NOT EXISTS planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ADD COLUMN IF NOT EXISTS planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_actor
     ON agent_registry.protocol_auto_sessions (actor_ref, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_target

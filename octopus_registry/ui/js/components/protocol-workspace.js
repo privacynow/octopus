@@ -2883,6 +2883,13 @@ function renderProtocolWorkspace(container) {
         constraints.rows = 3;
         constraints.placeholder = 'Optional constraints, data sources, delivery expectations, or acceptance notes.';
         form.appendChild(constraints);
+        const resourcePicker = Kit.resourceAttachmentPicker({
+            label: 'Attach files',
+            help: 'Add source files, datasets, assets, zips, screenshots, or documents.',
+            sourceRef: isRevision ? `protocol:${currentProtocolId}` : 'protocol-auto:create',
+            relation: 'context',
+        });
+        form.appendChild(resourcePicker.element);
         const status = document.createElement('p');
         status.className = 'quiet-note';
         status.textContent = 'Generated output becomes a normal editable protocol draft.';
@@ -2982,6 +2989,7 @@ function renderProtocolWorkspace(container) {
                     target_protocol_id: isRevision ? currentProtocolId : '',
                     requirement_text: text,
                     constraints_text: constraints.value.trim(),
+                    resource_refs: resourcePicker.resourceRefs(),
                     workspace_ref: '',
                 });
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
@@ -3004,6 +3012,7 @@ function renderProtocolWorkspace(container) {
                     target_protocol_id: isRevision ? currentProtocolId : '',
                     requirement_text: revise.value.trim(),
                     constraints_text: constraints.value.trim(),
+                    resource_refs: resourcePicker.resourceRefs(),
                 });
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 revise.value = '';
@@ -3387,6 +3396,13 @@ function renderProtocolWorkspace(container) {
             includeWorkspace: true,
         });
         body.appendChild(launchForm.element);
+        const resourcePicker = Kit.resourceAttachmentPicker({
+            label: 'Attach run files',
+            help: 'Add input files for this run.',
+            sourceRef: `protocol:${currentProtocolId}:run`,
+            relation: 'input',
+        });
+        body.appendChild(resourcePicker.element);
 
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
@@ -3424,6 +3440,7 @@ function renderProtocolWorkspace(container) {
                     origin_channel: 'registry',
                     workspace_ref: String(values.workspace_ref || ''),
                     problem_statement: String(values.problem_statement || ''),
+                    resource_refs: resourcePicker.resourceRefs(),
                     constraints_json: constraints,
                 });
                 const runId = String(created?.run?.protocol_run_id || '').trim();
@@ -8839,6 +8856,14 @@ function renderProtocolRuns(container) {
         request.placeholder = 'Example: make the runtime start without build/install work, exercise multiple routed journeys, record visible results, and add outcome-readiness plus branding evidence.';
         requestLabel.appendChild(request);
 
+        const resourcePicker = Kit.resourceAttachmentPicker({
+            label: 'Attach improvement files',
+            help: 'Add assets, mechanics, datasets, patches, screenshots, or zips for the improved protocol.',
+            sourceRef: `protocol-run:${sourceRun.run.protocol_run_id}`,
+            relation: 'improvement_context',
+        });
+        form.appendChild(resourcePicker.element);
+
         const qualityHint = document.createElement('p');
         qualityHint.className = 'quiet-note';
         qualityHint.textContent = 'Good improvements should produce a prepared runtime package, a routed UI/API users can actually exercise, a pass/fail outcome-readiness matrix, and customer-facing copy that uses the requested product/domain brand rather than Octopus.';
@@ -8925,6 +8950,7 @@ function renderProtocolRuns(container) {
                     target_protocol_id: sourceRun.run.protocol_id,
                     requirement_text: _runImprovementRequirement(sourceRun, changeRequest),
                     constraints_text: _runImprovementContext(sourceRun),
+                    resource_refs: resourcePicker.resourceRefs(),
                     workspace_ref: sourceRun.run.workspace_ref || '',
                 });
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);

@@ -229,6 +229,56 @@ def _conversation_context(
     return conversation
 
 
+def _attach_resource_refs(
+    conn,
+    *,
+    dialect: StoreDialect,
+    json_param,
+    resource_refs,
+    target_kind: str,
+    target_ref: str,
+    relation: str,
+    created_by: str,
+    now: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    seen: set[str] = set()
+    for resource_ref in resource_refs or []:
+        resource_id = str(resource_ref or "").strip()
+        if not resource_id or resource_id in seen:
+            continue
+        seen.add(resource_id)
+        attachment_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"octopus-resource-attachment:{resource_id}:{target_kind}:{target_ref}:{relation}",
+        ).hex
+        dialect.execute(
+            conn,
+            f"""
+            INSERT INTO {dialect.qualify('resource_attachments')} (
+                attachment_id, resource_id, target_kind, target_ref, relation,
+                metadata_json, created_by, created_at
+            ) VALUES (
+                {dialect.placeholder(1)}, {dialect.placeholder(2)}, {dialect.placeholder(3)}, {dialect.placeholder(4)},
+                {dialect.placeholder(5)}, {dialect.placeholder(6)}, {dialect.placeholder(7)}, {dialect.placeholder(8)}
+            )
+            ON CONFLICT (resource_id, target_kind, target_ref, relation)
+                WHERE detached_at = ''
+            DO UPDATE SET metadata_json = EXCLUDED.metadata_json
+            """,
+            (
+                attachment_id,
+                resource_id,
+                target_kind,
+                target_ref,
+                relation,
+                json_param(dict(metadata or {})),
+                created_by,
+                now,
+            ),
+        )
+
+
 def insert_event(
     conn,
     *,
@@ -381,10 +431,16 @@ def add_conversation_message(
     conversation_id: str,
     text: str,
     now: str,
+    resource_refs: tuple[str, ...] = (),
 ) -> MessageRecord:
     validated_text = validated_conversation_message_text(text)
     conversation = _conversation_context(conn, dialect=dialect, conversation_id=conversation_id)
     event_id = uuid.uuid4().hex
+    normalized_resource_refs = tuple(
+        str(item or "").strip()
+        for item in resource_refs
+        if str(item or "").strip()
+    )
     create_delivery(
         conn,
         target_agent_id=conversation["target_agent_id"],
@@ -399,6 +455,7 @@ def add_conversation_message(
             "external_conversation_ref": conversation["external_conversation_ref"],
             "stable_event_id": event_id,
             "stable_created_at": now,
+            "resource_refs": list(normalized_resource_refs),
         },
         now=now,
         delivery_id=uuid.uuid4().hex,
@@ -411,7 +468,7 @@ def add_conversation_message(
         conversation_id=conversation_id,
         kind="message.user",
         content=validated_text,
-        metadata={},
+        metadata={"resource_refs": list(normalized_resource_refs)} if normalized_resource_refs else {},
         created_at=now,
     )
     touch_conversation(conn, dialect=dialect, conversation_id=conversation_id, updated_at=now)
@@ -531,6 +588,7 @@ def add_conversation_action(
                 "priority": task.priority,
                 "requested_skills": list(task.requested_skills),
                 "context": dict(task.context),
+                "resource_refs": list(task.resource_refs or []),
             }
             for task in proposal.tasks
         ]
@@ -603,6 +661,7 @@ def add_conversation_action(
                     "priority": entry.get("priority", "normal"),
                     "requested_skills": entry.get("requested_skills", []),
                     "context": entry.get("context", {}),
+                    "resource_refs": entry.get("resource_refs", []),
                 }
             )
             requested_skills = normalized_requested_skills(entry.get("requested_skills", []), selector=draft.selector)
@@ -620,10 +679,23 @@ def add_conversation_action(
                 "instructions": draft.instructions,
                 "context": dict(draft.context),
                 "requested_skills": requested_skills,
+                "resource_refs": list(draft.resource_refs or []),
                 "priority": draft.priority,
                 "created_at": now,
             }
             create_routed_task_in_tx(conn, request, now=now)
+            _attach_resource_refs(
+                conn,
+                dialect=dialect,
+                json_param=json_param,
+                resource_refs=draft.resource_refs,
+                target_kind="routed_task",
+                target_ref=routed_task_id,
+                relation="input",
+                created_by="registry",
+                now=now,
+                metadata={"source_action": "delegation_approve", "proposal_id": proposal_id},
+            )
             routed_tasks.append(_task_stub(
                 routed_task_id=request["routed_task_id"],
                 target_agent_id=resolved_target["agent_id"],
@@ -686,6 +758,7 @@ def add_conversation_action(
             "selector_value": assignment.selector.value,
             "routed_task_id": routed_task_id,
             "requested_skills": requested_skills,
+            "resource_refs": list(assignment.resource_refs or []),
         }
         if parent_event_id:
             dialect.execute(
@@ -727,10 +800,23 @@ def add_conversation_action(
             "instructions": assignment.instructions,
             "context": dict(assignment.context),
             "requested_skills": requested_skills,
+            "resource_refs": list(assignment.resource_refs or []),
             "priority": assignment.priority,
             "created_at": now,
         }
         created = create_routed_task_in_tx(conn, request, now=now)
+        _attach_resource_refs(
+            conn,
+            dialect=dialect,
+            json_param=json_param,
+            resource_refs=assignment.resource_refs,
+            target_kind="routed_task",
+            target_ref=routed_task_id,
+            relation="input",
+            created_by="registry",
+            now=now,
+            metadata={"source_action": "direct_assign", "action_id": validated_envelope.action_id},
+        )
         inserted_event = created.get("event")
         if inserted_event is not None:
             inserted_events.append(inserted_event)

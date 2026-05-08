@@ -20,6 +20,7 @@ from app.channels.registry.refs import (
 )
 from app.config import BotConfig
 from app.runtime.session_runtime import save_runtime_session
+from app.storage import build_upload_path, is_image_path
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.processor_runner import ProcessorRunner
@@ -38,6 +39,7 @@ from octopus_sdk.identity import (
 )
 from octopus_sdk.inbound_types import (
     InboundAction,
+    InboundAttachment,
     InboundEnvelope,
     InboundMessage,
     InboundUser,
@@ -167,6 +169,7 @@ def build_registry_message_delivery(
     requested_skills: tuple[str, ...] = (),
     protocol_stage_contract: dict[str, Any] | None = None,
     working_dir_hint: str = "",
+    attachments: tuple[InboundAttachment, ...] = (),
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> tuple[str, str, str, str]:
@@ -187,6 +190,7 @@ def build_registry_message_delivery(
         requested_skills=requested_skills,
         protocol_stage_contract=protocol_stage_contract,
         working_dir_hint=working_dir_hint,
+        attachments=attachments,
         source_transport=source_transport,
         admission_class=admission_class,
     )
@@ -212,6 +216,7 @@ def build_registry_message_envelope(
     requested_skills: tuple[str, ...] = (),
     protocol_stage_contract: dict[str, Any] | None = None,
     working_dir_hint: str = "",
+    attachments: tuple[InboundAttachment, ...] = (),
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> InboundEnvelope:
@@ -232,7 +237,7 @@ def build_registry_message_envelope(
         conversation_key=conversation_key,
         text=text,
         title_text=title_text,
-        attachments=(),
+        attachments=attachments,
         source=source_transport,
         transport=source_transport,
         conversation_ref=conversation_ref,
@@ -317,6 +322,73 @@ def _coerce_registry_message_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _resource_refs_from_request(request: Mapping[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for item in request.get("resource_refs", []) or []:
+        text = str(item or "").strip()
+        if text:
+            refs.append(text)
+    constraints = request.get("constraints", {})
+    if isinstance(constraints, Mapping):
+        for item in constraints.get("resource_refs", []) or []:
+            text = str(item or "").strip()
+            if text and text not in refs:
+                refs.append(text)
+    return refs
+
+
+def _registry_client_for_delivery(config: BotConfig, registry_id: str) -> RegistryClient | None:
+    registry = next((item for item in config.agent_registries if item.registry_id == registry_id), None)
+    if registry is None or not registry.url:
+        return None
+    state = load_runtime_registry_connection_state(
+        config.data_dir,
+        registry_id,
+        registry_scope=registry.registry_scope,
+    )
+    if not state.agent_token:
+        return None
+    return RegistryClient(registry.url, agent_token=state.agent_token)
+
+
+async def _materialize_registry_resources(
+    *,
+    config: BotConfig,
+    registry_id: str,
+    conversation_key: str,
+    resource_refs: object,
+) -> tuple[InboundAttachment, ...]:
+    refs = [
+        str(item or "").strip()
+        for item in (resource_refs or [])
+        if str(item or "").strip()
+    ]
+    if not refs:
+        return ()
+    client = _registry_client_for_delivery(config, registry_id)
+    if client is None:
+        raise RuntimeError("Registry resource materialization requires an enrolled registry client")
+    attachments: list[InboundAttachment] = []
+    for resource_id in refs:
+        resource = await client.get_resource(resource_id)
+        content = await client.download_resource_content(resource_id)
+        original_name = resource.original_name or f"{resource_id}.bin"
+        target = build_upload_path(config.data_dir, conversation_key, original_name)
+        target.write_bytes(content)
+        mime_type = resource.mime_type or ""
+        attachments.append(
+            InboundAttachment(
+                path=target,
+                original_name=original_name,
+                is_image=mime_type.startswith("image/") or is_image_path(target),
+                mime_type=mime_type or None,
+                resource_id=resource_id,
+                source_surface=resource.source_surface or "registry",
+            )
+        )
+    return tuple(attachments)
+
+
 async def admit_registry_delivery(
     config: BotConfig,
     delivery: dict[str, Any],
@@ -335,6 +407,13 @@ async def admit_registry_delivery(
         conversation_ref = qualify_registry_conversation_ref(registry_id, str(payload["conversation_id"]))
         stable_event_id = str(payload.get("stable_event_id", "") or "")
         effective_delivery_id = stable_event_id if stable_event_id else delivery_id
+        conversation_key = conversation_key_for_ref(conversation_ref)
+        attachments = await _materialize_registry_resources(
+            config=config,
+            registry_id=registry_id,
+            conversation_key=conversation_key,
+            resource_refs=payload.get("resource_refs", []),
+        )
         # Registry UI input originates from the registry surface, so these remain
         # registry envelopes even when the conversation later mirrors elsewhere.
         envelope = build_registry_message_envelope(
@@ -344,6 +423,7 @@ async def admit_registry_delivery(
             delivery_id=effective_delivery_id,
             external_conversation_ref=str(payload.get("external_conversation_ref", "") or ""),
             registry_id=registry_id,
+            attachments=attachments,
         )
         submission = await submitter.admit_message(envelope)
         if submission.status in {"admitted", "queued", "duplicate"}:
@@ -383,6 +463,13 @@ async def admit_registry_delivery(
             shared_key = delegation_session_key(origin_agent_id, parent_conversation_id)
         else:
             shared_key = ""
+        conversation_key_for_resources = shared_key or conversation_key_for_ref(conversation_ref)
+        attachments = await _materialize_registry_resources(
+            config=config,
+            registry_id=registry_id,
+            conversation_key=conversation_key_for_resources,
+            resource_refs=_resource_refs_from_request(request),
+        )
         # Routed task deliveries originate from the registry and intentionally
         # enter the worker through the registry transport.
         envelope = build_registry_message_envelope(
@@ -400,6 +487,7 @@ async def admit_registry_delivery(
             requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
             protocol_stage_contract=_protocol_stage_contract_from_request(request),
             registry_id=registry_id,
+            attachments=attachments,
         )
         if runtime is not None and envelope.conversation_key:
             working_dir_hint = _apply_routed_task_session_overrides(

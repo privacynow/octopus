@@ -5,11 +5,6 @@ function renderDashboard(container) {
     const cleanups = UI.beginCleanupScope();
     const RECENT_COMPLETED_WINDOW_MS = 24 * 60 * 60 * 1000;
     const TASK_GROUP_LIMIT = 3;
-    const contentInner = container.closest('.content-inner');
-    if (contentInner) {
-        contentInner.classList.add('workspace-route-wide');
-        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
-    }
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -31,43 +26,33 @@ function renderDashboard(container) {
     dashboardGrid.appendChild(summaryRailHost);
 
     const dashboardBoard = document.createElement('div');
-    dashboardBoard.className = 'dashboard-board';
+    dashboardBoard.className = 'dashboard-board dashboard-board-stream';
     dashboardBoard.dataset.key = 'dashboard-board';
     dashboardGrid.appendChild(dashboardBoard);
 
-    const primaryColumn = document.createElement('div');
-    primaryColumn.className = 'dashboard-column';
-    primaryColumn.dataset.key = 'dashboard-column-primary';
-    dashboardBoard.appendChild(primaryColumn);
-
-    const secondaryColumn = document.createElement('div');
-    secondaryColumn.className = 'dashboard-column';
-    secondaryColumn.dataset.key = 'dashboard-column-secondary';
-    dashboardBoard.appendChild(secondaryColumn);
-
     const approvalsHost = document.createElement('div');
     approvalsHost.dataset.key = 'approvals-host';
-    primaryColumn.appendChild(approvalsHost);
+    dashboardBoard.appendChild(approvalsHost);
 
     const tasksHost = document.createElement('div');
     tasksHost.dataset.key = 'tasks-host';
-    primaryColumn.appendChild(tasksHost);
+    dashboardBoard.appendChild(tasksHost);
 
     const conversationsHost = document.createElement('div');
     conversationsHost.dataset.key = 'open-conversations-host';
-    secondaryColumn.appendChild(conversationsHost);
+    dashboardBoard.appendChild(conversationsHost);
 
     const agentsHost = document.createElement('div');
     agentsHost.dataset.key = 'agents-host';
-    secondaryColumn.appendChild(agentsHost);
+    dashboardBoard.appendChild(agentsHost);
 
     const protocolIssuesHost = document.createElement('div');
     protocolIssuesHost.dataset.key = 'protocol-issues-host';
-    secondaryColumn.appendChild(protocolIssuesHost);
+    dashboardBoard.appendChild(protocolIssuesHost);
 
     const maintenanceHost = document.createElement('div');
     maintenanceHost.dataset.key = 'maintenance-host';
-    secondaryColumn.appendChild(maintenanceHost);
+    dashboardBoard.appendChild(maintenanceHost);
 
     function createSection(key, title, href, rows, emptyText) {
         const section = document.createElement('section');
@@ -613,12 +598,12 @@ function renderDashboard(container) {
         });
     }
 
-    function openWorkspaceCleanupDryRunDialog() {
+    function openWorkspaceCleanupDialog() {
         const form = document.createElement('div');
         form.className = 'conversation-management-form';
         const note = document.createElement('p');
         note.className = 'quiet-note';
-        note.textContent = 'Scan connected bot workspaces before deleting transient logs, build outputs, dependency caches, or scratch directories.';
+        note.textContent = 'Scan connected bot workspaces first, review the transient cleanup plan, then type CLEAN before deleting selected safe candidates.';
         form.appendChild(note);
         const categoryWrap = document.createElement('div');
         categoryWrap.className = 'run-secondary-filter-body';
@@ -646,6 +631,22 @@ function renderDashboard(container) {
         result.className = 'list-container';
         form.appendChild(result);
         let cleanupPlan = null;
+        let scanBusy = false;
+        let cleanupBusy = false;
+
+        const confirmLabel = document.createElement('label');
+        confirmLabel.className = 'kit-details-field';
+        const confirmTitle = document.createElement('span');
+        confirmTitle.className = 'kit-details-label';
+        confirmTitle.textContent = 'Type CLEAN to execute cleanup';
+        confirmLabel.appendChild(confirmTitle);
+        const confirmInput = document.createElement('input');
+        confirmInput.type = 'text';
+        confirmInput.className = 'input';
+        confirmInput.disabled = true;
+        confirmInput.setAttribute('aria-label', 'Type CLEAN to execute cleanup');
+        confirmLabel.appendChild(confirmInput);
+        form.appendChild(confirmLabel);
 
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
@@ -654,11 +655,11 @@ function renderDashboard(container) {
         const scanBtn = document.createElement('button');
         scanBtn.type = 'button';
         scanBtn.className = 'btn btn-primary';
-        scanBtn.textContent = 'Dry run';
+        scanBtn.textContent = 'Scan workspace';
         const cleanBtn = document.createElement('button');
         cleanBtn.type = 'button';
         cleanBtn.className = 'btn btn-danger';
-        cleanBtn.textContent = 'Clean selected';
+        cleanBtn.textContent = 'Clean selected transient files';
         cleanBtn.disabled = true;
         const view = UI.showDialog('Workspace cleanup', form, {
             actions: [cancelBtn, scanBtn, cleanBtn],
@@ -668,6 +669,12 @@ function renderDashboard(container) {
         const selectedCategories = () => Array.from(categoryWrap.querySelectorAll('input[type="checkbox"]'))
             .filter((item) => item.checked)
             .map((item) => item.value);
+        const hasDeletableCandidate = () => Boolean((cleanupPlan?.entries || []).some((entry) => entry.safe_to_delete));
+        const cleanupConfirmed = () => confirmInput.value.trim().toUpperCase() === 'CLEAN';
+        const syncCleanState = () => {
+            confirmInput.disabled = !hasDeletableCandidate() || scanBusy || cleanupBusy;
+            cleanBtn.disabled = scanBusy || cleanupBusy || !hasDeletableCandidate() || !cleanupConfirmed();
+        };
         const bytesLabel = (value) => {
             const bytes = Number(value || 0);
             if (!Number.isFinite(bytes)) return '0 B';
@@ -692,36 +699,51 @@ function renderDashboard(container) {
             ];
             UI.reconcileChildren(result, rows.length ? rows : [UI.renderEmptyState('No cleanup candidates found.', true)]);
         };
+        confirmInput.addEventListener('input', syncCleanState);
+        categoryWrap.addEventListener('change', () => {
+            cleanupPlan = null;
+            confirmInput.value = '';
+            UI.reconcileChildren(result, [UI.renderEmptyState('Scan the selected categories before cleanup.', true)]);
+            syncCleanState();
+        });
         scanBtn.addEventListener('click', async () => {
+            scanBusy = true;
+            cleanupPlan = null;
+            confirmInput.value = '';
             scanBtn.disabled = true;
-            cleanBtn.disabled = true;
+            syncCleanState();
             UI.reconcileChildren(result, [UI.renderEmptyState('Scanning connected bot workspace…', true)]);
             try {
                 const response = await API.dryRunWorkspaceCleanup({ categories: selectedCategories() });
                 cleanupPlan = response?.plan || null;
                 renderPlan(cleanupPlan || {});
-                cleanBtn.disabled = !(cleanupPlan?.entries || []).some((entry) => entry.safe_to_delete);
             } catch (err) {
                 UI.reportError('Workspace cleanup dry run failed', err, { context: 'Workspace cleanup dry run failed' });
             } finally {
+                scanBusy = false;
                 scanBtn.disabled = false;
+                syncCleanState();
             }
         });
         cleanBtn.addEventListener('click', async () => {
-            if (!cleanupPlan) return;
-            cleanBtn.disabled = true;
+            if (!cleanupPlan || !hasDeletableCandidate() || !cleanupConfirmed()) return;
+            cleanupBusy = true;
+            syncCleanState();
             try {
                 const response = await API.executeWorkspaceCleanup({
-                    plan: cleanupPlan,
-                    confirm: 'CLEAN',
+                    job_id: cleanupPlan.inventory_id,
+                    confirm: confirmInput.value,
                 });
                 UI.notify(`Workspace cleanup removed ${response?.removed_paths?.length || 0} paths.`, 'success');
-                cleanupPlan = response?.plan || cleanupPlan;
-                renderPlan(cleanupPlan);
+                const executedPlan = response?.plan || cleanupPlan;
+                cleanupPlan = null;
+                confirmInput.value = '';
+                renderPlan(executedPlan || {});
             } catch (err) {
                 UI.reportError('Workspace cleanup failed', err, { context: 'Workspace cleanup execution failed' });
             } finally {
-                cleanBtn.disabled = false;
+                cleanupBusy = false;
+                syncCleanState();
             }
         });
     }
@@ -739,10 +761,10 @@ function renderDashboard(container) {
         const body = document.createElement('div');
         body.className = 'list-container';
         const hygieneRow = UI.renderListRow({
-            label: 'Workspace cleanup dry run',
-            sublabel: 'Scans connected bot workspaces and deletes only selected transient files after confirmation.',
-            badgeText: 'dry run',
-            onClick: openWorkspaceCleanupDryRunDialog,
+            label: 'Bot workspace cleanup',
+            sublabel: 'Scans connected bot workspaces first, then deletes selected transient files only after typed confirmation.',
+            badgeText: 'scan first',
+            onClick: openWorkspaceCleanupDialog,
         });
         body.appendChild(hygieneRow);
         const cleanupRow = UI.renderListRow({

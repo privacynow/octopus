@@ -662,6 +662,7 @@ class RoutedTaskRequest(RegistryRecordModel):
     internal_context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
     constraints: RoutedTaskConstraintsRecord = Field(default_factory=RoutedTaskConstraintsRecord)
     requested_skills: list[str] = Field(default_factory=list)
+    resource_refs: list[str] = Field(default_factory=list)
     session_key_override: str = ""
     project_id_override: str = ""
     file_policy_override: str = ""
@@ -843,6 +844,7 @@ class DelegationTaskDraft(RegistryRecordModel):
     priority: str = "normal"
     requested_skills: list[str] = Field(default_factory=list)
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
+    resource_refs: list[str] = Field(default_factory=list)
 
 
 class DelegationIntent(RegistryRecordModel):
@@ -868,6 +870,7 @@ class DirectAssignmentRequest(RegistryRecordModel):
     priority: str = "normal"
     requested_skills: list[str] = Field(default_factory=list)
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
+    resource_refs: list[str] = Field(default_factory=list)
 
 
 class ApproveRejectActionPayload(RegistryRecordModel):

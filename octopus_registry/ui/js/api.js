@@ -99,6 +99,56 @@ const API = (() => {
         return resp.text();
     }
 
+    async function uploadResource(file, opts = {}) {
+        if (!file) throw new Error('Choose a file to upload.');
+        if (!csrfToken) {
+            await fetchCsrf();
+        }
+        if (!csrfToken) {
+            throw new Error('Could not verify your session security. Refresh and try again.');
+        }
+        const form = new FormData();
+        form.append('file', file);
+        form.append('source_surface', String(opts.sourceSurface || 'registry'));
+        form.append('source_ref', String(opts.sourceRef || ''));
+        form.append('target_kind', String(opts.targetKind || ''));
+        form.append('target_ref', String(opts.targetRef || ''));
+        form.append('relation', String(opts.relation || 'context'));
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/v1/resources', true);
+            xhr.withCredentials = true;
+            xhr.timeout = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT;
+            xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+            if (xhr.upload && typeof opts.onProgress === 'function') {
+                xhr.upload.addEventListener('progress', (event) => {
+                    if (!event.lengthComputable || !event.total) return;
+                    const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+                    opts.onProgress(percent, { loaded: event.loaded, total: event.total });
+                });
+            }
+            xhr.addEventListener('load', () => {
+                if (xhr.status === 401 || xhr.status === 302) {
+                    _showSessionExpired();
+                    reject(new Error('Authentication required'));
+                    return;
+                }
+                if (xhr.status < 200 || xhr.status >= 300) {
+                    reject(new Error(`${xhr.status}: ${xhr.responseText || xhr.statusText || 'Upload failed'}`));
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(xhr.responseText || '{}'));
+                } catch (err) {
+                    reject(err);
+                }
+            });
+            xhr.addEventListener('error', () => reject(new Error('Upload failed')));
+            xhr.addEventListener('timeout', () => reject(new Error('Upload timed out')));
+            xhr.send(form);
+        });
+    }
+
     function _showSessionExpired() {
         if (document.getElementById('session-expired-overlay')) return;
         const overlay = document.createElement('div');
@@ -189,6 +239,7 @@ const API = (() => {
         setCsrfToken,
         fetchCsrf,
         routedTaskIdFromConversation,
+        uploadResource,
 
         // Agents
         getSummary: () =>
@@ -266,8 +317,10 @@ const API = (() => {
             request('GET', `/v1/conversations/${encodeURIComponent(id)}`),
         getEvents: (id, opts = {}) =>
             request('GET', `/v1/conversations/${encodeURIComponent(id)}/events`, { params: opts }),
-        sendMessage: (id, text) =>
-            request('POST', `/v1/conversations/${encodeURIComponent(id)}/messages`, { body: { text } }),
+        sendMessage: (id, text, opts = {}) =>
+            request('POST', `/v1/conversations/${encodeURIComponent(id)}/messages`, {
+                body: { text, resource_refs: opts.resourceRefs || [] },
+            }),
         conversationAction: (id, action, payload = {}) =>
             request('POST', `/v1/conversations/${encodeURIComponent(id)}/actions`, {
                 body: { action_id: _actionId(), action, payload },

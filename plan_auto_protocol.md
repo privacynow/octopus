@@ -35,14 +35,15 @@ Current proven baseline:
   and exports are represented through Registry state.
 - Real Safari and Telegram Web proof exists for the prepared Java risk-engine
   runtime `d38dab75b929405a9e4a3f1407491e76`.
+- Shared SDK resource records now cover Registry uploads, Auto Protocol
+  create/revise, manual run launch, improve-run, conversation messages, direct
+  assignments, Telegram upload registration, and bot-side materialization.
 
-Known open product gap:
+Current product watch item:
 
-- File and attachment ingress is not yet a coherent SDK-owned product path.
-  Telegram can stage photo/document attachments, but Registry Auto Protocol,
-  manual run launch, improve-run, and conversation surfaces do not expose a
-  shared upload/resource path. Future Slack, WhatsApp, and other bot
-  implementations must not copy Telegram-specific attachment behavior.
+- Future Slack, WhatsApp, and other bot implementations must use the SDK
+  resource records and Registry resource APIs instead of copying
+  surface-specific attachment behavior.
 
 ## Completion Ledger
 
@@ -59,12 +60,12 @@ surface.
 | Registry runtime routing | Implemented for standard HTTP UI/API traffic | Preserve Registry as user-facing router and bot runtime as process executor |
 | Telegram runtime path | Implemented through Registry APIs and links | Keep future transports on the same SDK/Registry contracts |
 | Review evidence | Runtime acceptance gate and revise transition implemented | Ensure reviewers exercise runtime/UI/API when declared and persist rationale |
-| Lifecycle and retention | Runtime lifecycle, artifact package retention, snapshots, and exports implemented | Complete operator cleanup proof and preserve audit after workspace cleanup |
+| Lifecycle and retention | Runtime lifecycle, artifact package retention, snapshots, exports, and workspace cleanup dry-run/path-safety proof implemented | Prove post-cleanup audit preservation only when an operator intentionally executes cleanup |
 | Runs discovery | Recent human-originated runs surface by default | Keep generated/audit filtering explicit, not the default user path |
 | Improve existing run | Registry path implemented through Auto Protocol revise context | Keep it as protocol improvement, not artifact patching or a second generator |
 | SDK-backed bot awareness | Registry and Telegram receive shared awareness briefs | Future bot implementations must implement SDK ports, not copy surface code |
 | Java/Maven risk-engine proof | Prepared Java artifact run `d38dab75b929405a9e4a3f1407491e76` proved in Safari and Telegram | Keep this as representative proof, not hard-coded product logic |
-| Shared file/resource ingress | Gap identified; Telegram has a local attachment path, Registry does not | Add SDK resource contracts, Registry upload/attach UX, channel adapter normalization, runtime materialization, tests, docs, and real-surface proof |
+| Shared file/resource ingress | Implemented through SDK resource contracts, Registry upload/attach UX, protocol/conversation/run resource refs, Telegram upload registration, Registry delivery materialization, deployed Safari proof, and access tests | Keep future transports on the same SDK resource records |
 
 Latest proof notes:
 
@@ -77,6 +78,26 @@ Latest proof notes:
 - On 2026-05-07, Registry UI proof confirmed that runtime launch is not treated
   as acceptance by itself; the run detail now separates primary outcome
   readiness from release evidence and runtime checks.
+- On 2026-05-08, automated proof covered Registry upload/attach/message
+  delivery, direct-assignment resource access for routed task targets, inbound
+  attachment resource metadata round-tripping, Auto Protocol resource refs into
+  run creation, OpenAPI regeneration, and the Registry/Postgres service suite.
+- On 2026-05-08, generic runtime guidance was checked to remove
+  risk-engine/Maven-specific example leakage from generated protocols.
+- On 2026-05-08, deployed Safari proof on `/Users/tinker/octopus` attached
+  `octopus-resource-proof.txt` to Registry conversation
+  `9c380a0bb8ae945adca982d6e09d4484`, sent the conversation message, and
+  Registry logs showed `POST /v1/resources` `201`, conversation message `200`,
+  M1 fetching `/v1/resources/50d963c85f325563972d0389d71e9110` plus
+  `/content`, and bot execution using a scoped `registry_conversation_*`
+  upload directory.
+- On 2026-05-08, deployed Safari proof on `/Users/tinker/octopus` confirmed
+  Dashboard `Bot workspace cleanup` opens as a scan-first flow, keeps cleanup
+  disabled until a stored dry-run result and typed `CLEAN` confirmation exist,
+  excludes auth/credential paths from cleanup candidates, and deduplicates
+  nested runtime-log candidates into one actionable `/home/bot/data/artifact-runtimes`
+  entry. Registry logs showed `POST /v1/admin/workspaces/cleanup/dry-run`
+  returning `200 OK`; no destructive cleanup was executed during this proof.
 
 ## Problem Statement
 

@@ -454,6 +454,85 @@ window.Kit = (() => {
         };
     }
 
+    function resourceAttachmentPicker({
+        label = 'Files',
+        help = 'Attach files for the agent to use.',
+        sourceRef = '',
+        targetKind = '',
+        targetRef = '',
+        relation = 'context',
+    } = {}) {
+        const root = document.createElement('div');
+        root.className = 'kit-resource-picker';
+        const heading = document.createElement('div');
+        heading.className = 'kit-details-label';
+        heading.textContent = label;
+        root.appendChild(heading);
+
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.className = 'input';
+        input.setAttribute('aria-label', label);
+        root.appendChild(input);
+
+        const note = document.createElement('div');
+        note.className = 'kit-details-help';
+        note.textContent = help;
+        root.appendChild(note);
+
+        const list = document.createElement('div');
+        list.className = 'kit-resource-list';
+        root.appendChild(list);
+
+        const resources = [];
+
+        function render() {
+            UI.reconcileChildren(list, resources.map((resource) => {
+                const chip = document.createElement('span');
+                chip.className = 'kit-resource-chip';
+                const size = Number(resource.size_bytes || 0);
+                chip.textContent = `${resource.original_name || resource.resource_id}${size > 0 ? ` · ${Math.ceil(size / 1024)} KB` : ''}`;
+                return chip;
+            }));
+        }
+
+        input.addEventListener('change', async () => {
+            const files = Array.from(input.files || []);
+            if (!files.length) return;
+            input.disabled = true;
+            try {
+                for (const file of files) {
+                    const uploaded = await API.uploadResource(file, {
+                        sourceSurface: 'registry',
+                        sourceRef,
+                        targetKind,
+                        targetRef,
+                        relation,
+                    });
+                    const resource = uploaded && uploaded.resource ? uploaded.resource : uploaded;
+                    if (resource && resource.resource_id) resources.push(resource);
+                }
+                render();
+            } catch (err) {
+                UI.reportError('Failed to upload file', err, { context: 'Resource upload failed' });
+            } finally {
+                input.value = '';
+                input.disabled = false;
+            }
+        });
+
+        return {
+            element: root,
+            resourceRefs: () => resources.map((item) => String(item.resource_id || '').trim()).filter(Boolean),
+            resources: () => resources.slice(),
+            clear: () => {
+                resources.splice(0, resources.length);
+                render();
+            },
+        };
+    }
+
     function protocolArtifactContractPanel(protocolDocument, {
         title = 'Declared output contract',
         note = 'These artifacts come from the published protocol definition. Launch context can add run notes, but artifact verification follows this contract.',
@@ -3359,6 +3438,7 @@ window.Kit = (() => {
         lifecycleHeader,
         protocolRunLaunchFields,
         protocolRunLaunchForm,
+        resourceAttachmentPicker,
         protocolArtifactContractPanel,
         validationSurface,
         detailsPanel,

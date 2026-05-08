@@ -49,6 +49,13 @@ class LifecycleActionRequest(BaseModel):
     note: str = Field(default="", description="Optional lifecycle note")
 
 
+class ResourceAttachRequest(BaseModel):
+    target_kind: str = Field(..., min_length=1, description="Product target kind")
+    target_ref: str = Field(..., min_length=1, description="Product target identifier")
+    relation: str = Field(default="context", description="Relationship between the resource and target")
+    metadata: dict[str, object] = Field(default_factory=dict, description="Optional attachment metadata")
+
+
 class RuntimeSkillDraftUpdateRequest(LifecycleActionRequest):
     body: str | None = Field(default=None, description="Draft instruction body override")
     display_name: str | None = Field(default=None, description="Optional display name override")

@@ -99,6 +99,39 @@ const API = (() => {
         return resp.text();
     }
 
+    async function uploadResource(file, opts = {}) {
+        if (!file) throw new Error('Choose a file to upload.');
+        if (!csrfToken) {
+            await fetchCsrf();
+        }
+        if (!csrfToken) {
+            throw new Error('Could not verify your session security. Refresh and try again.');
+        }
+        const form = new FormData();
+        form.append('file', file);
+        form.append('source_surface', String(opts.sourceSurface || 'registry'));
+        form.append('source_ref', String(opts.sourceRef || ''));
+        form.append('target_kind', String(opts.targetKind || ''));
+        form.append('target_ref', String(opts.targetRef || ''));
+        form.append('relation', String(opts.relation || 'context'));
+        const resp = await fetch('/v1/resources', {
+            method: 'POST',
+            body: form,
+            credentials: 'same-origin',
+            headers: { 'X-CSRF-Token': csrfToken },
+            signal: AbortSignal.timeout(Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT),
+        });
+        if (resp.status === 401 || resp.status === 302) {
+            _showSessionExpired();
+            throw new Error('Authentication required');
+        }
+        if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`${resp.status}: ${text}`);
+        }
+        return resp.json();
+    }
+
     function _showSessionExpired() {
         if (document.getElementById('session-expired-overlay')) return;
         const overlay = document.createElement('div');
@@ -189,6 +222,7 @@ const API = (() => {
         setCsrfToken,
         fetchCsrf,
         routedTaskIdFromConversation,
+        uploadResource,
 
         // Agents
         getSummary: () =>
@@ -266,8 +300,10 @@ const API = (() => {
             request('GET', `/v1/conversations/${encodeURIComponent(id)}`),
         getEvents: (id, opts = {}) =>
             request('GET', `/v1/conversations/${encodeURIComponent(id)}/events`, { params: opts }),
-        sendMessage: (id, text) =>
-            request('POST', `/v1/conversations/${encodeURIComponent(id)}/messages`, { body: { text } }),
+        sendMessage: (id, text, opts = {}) =>
+            request('POST', `/v1/conversations/${encodeURIComponent(id)}/messages`, {
+                body: { text, resource_refs: opts.resourceRefs || [] },
+            }),
         conversationAction: (id, action, payload = {}) =>
             request('POST', `/v1/conversations/${encodeURIComponent(id)}/actions`, {
                 body: { action_id: _actionId(), action, payload },

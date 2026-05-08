@@ -45,6 +45,7 @@ from octopus_sdk.protocols import (
     ProtocolTransitionRecord,
 )
 from octopus_sdk.protocols.engine import DEFAULT_PROTOCOL_RUN_ENGINE, ProtocolRunEngine
+from octopus_sdk.resources import ResourceAttachmentRecord, ResourceRecord
 from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
 from .protocol_store import ProtocolPostgresAdapter
 from .routing_skill_service import (
@@ -1636,10 +1637,292 @@ class RegistryPostgresStore(AbstractRegistryStore):
             access=access,
         )
 
-    def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:
+    @staticmethod
+    def _resource_from_row(row: Mapping[str, object]) -> ResourceRecord:
+        return _record(
+            ResourceRecord,
+            {
+                "resource_id": row.get("resource_id", ""),
+                "owner_actor_ref": row.get("owner_actor_ref", ""),
+                "source_surface": row.get("source_surface", ""),
+                "source_ref": row.get("source_ref", ""),
+                "original_name": row.get("original_name", ""),
+                "mime_type": row.get("mime_type", ""),
+                "size_bytes": int(row.get("size_bytes", 0) or 0),
+                "content_hash": row.get("content_hash", ""),
+                "storage_uri": row.get("storage_uri", ""),
+                "lifecycle_state": row.get("lifecycle_state", "active"),
+                "metadata_json": row.get("metadata_json") or {},
+                "created_at": row.get("created_at", ""),
+                "updated_at": row.get("updated_at", ""),
+                "deleted_at": row.get("deleted_at", ""),
+                "deleted_by": row.get("deleted_by", ""),
+            },
+        )
+
+    @staticmethod
+    def _resource_attachment_from_row(row: Mapping[str, object]) -> ResourceAttachmentRecord:
+        return _record(
+            ResourceAttachmentRecord,
+            {
+                "attachment_id": row.get("attachment_id", ""),
+                "resource_id": row.get("resource_id", ""),
+                "target_kind": row.get("target_kind", ""),
+                "target_ref": row.get("target_ref", ""),
+                "relation": row.get("relation", "context"),
+                "metadata_json": row.get("metadata_json") or {},
+                "created_by": row.get("created_by", ""),
+                "created_at": row.get("created_at", ""),
+                "detached_at": row.get("detached_at", ""),
+                "detached_by": row.get("detached_by", ""),
+            },
+        )
+
+    def create_resource(self, resource: ResourceRecord) -> ResourceRecord:
+        now = utcnow_iso()
+        saved = resource.model_copy(
+            update={
+                "created_at": resource.created_at or now,
+                "updated_at": now,
+            }
+        )
+        with self._connect() as conn, _write_tx(conn):
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                INSERT INTO {_SCHEMA}.resources (
+                    resource_id, owner_actor_ref, source_surface, source_ref,
+                    original_name, mime_type, size_bytes, content_hash, storage_uri,
+                    lifecycle_state, metadata_json, created_at, updated_at, deleted_at, deleted_by
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (resource_id) DO UPDATE SET
+                    owner_actor_ref = EXCLUDED.owner_actor_ref,
+                    source_surface = EXCLUDED.source_surface,
+                    source_ref = EXCLUDED.source_ref,
+                    original_name = EXCLUDED.original_name,
+                    mime_type = EXCLUDED.mime_type,
+                    size_bytes = EXCLUDED.size_bytes,
+                    content_hash = EXCLUDED.content_hash,
+                    storage_uri = EXCLUDED.storage_uri,
+                    lifecycle_state = EXCLUDED.lifecycle_state,
+                    metadata_json = EXCLUDED.metadata_json,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING *
+                """,
+                (
+                    saved.resource_id,
+                    saved.owner_actor_ref,
+                    saved.source_surface,
+                    saved.source_ref,
+                    saved.original_name,
+                    saved.mime_type,
+                    int(saved.size_bytes or 0),
+                    saved.content_hash,
+                    saved.storage_uri,
+                    saved.lifecycle_state,
+                    _jsonb(saved.metadata_json.as_dict()),
+                    saved.created_at,
+                    saved.updated_at,
+                    saved.deleted_at,
+                    saved.deleted_by,
+                ),
+            )
+            return self._resource_from_row(row)
+
+    def get_resource(self, resource_id: str) -> ResourceRecord:
+        with self._connect() as conn:
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {_SCHEMA}.resources WHERE resource_id = %s",
+                (str(resource_id or "").strip(),),
+            )
+            if row is None:
+                raise KeyError(resource_id)
+            return self._resource_from_row(row)
+
+    def list_resources(
+        self,
+        *,
+        owner_actor_ref: str = "",
+        source_surface: str = "",
+        source_ref: str = "",
+        target_kind: str = "",
+        target_ref: str = "",
+        cursor: int = 0,
+        limit: int = 50,
+    ) -> list[ResourceRecord]:
+        filters = ["r.lifecycle_state <> 'deleted'"]
+        params: list[object] = []
+        join = ""
+        if owner_actor_ref:
+            params.append(owner_actor_ref)
+            filters.append(f"r.owner_actor_ref = %s")
+        if source_surface:
+            params.append(source_surface)
+            filters.append("r.source_surface = %s")
+        if source_ref:
+            params.append(source_ref)
+            filters.append("r.source_ref = %s")
+        if target_kind or target_ref:
+            join = f"JOIN {_SCHEMA}.resource_attachments a ON a.resource_id = r.resource_id AND a.detached_at = ''"
+            if target_kind:
+                params.append(target_kind)
+                filters.append("a.target_kind = %s")
+            if target_ref:
+                params.append(target_ref)
+                filters.append("a.target_ref = %s")
+        params.extend([int(limit or 50) + 1, int(cursor or 0)])
+        with self._connect() as conn:
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT DISTINCT r.*
+                FROM {_SCHEMA}.resources r
+                {join}
+                WHERE {' AND '.join(filters)}
+                ORDER BY r.updated_at DESC, r.resource_id DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params),
+            )
+            return [self._resource_from_row(row) for row in rows]
+
+    def attach_resource(
+        self,
+        *,
+        resource_id: str,
+        target_kind: str,
+        target_ref: str,
+        relation: str = "context",
+        created_by: str = "",
+        metadata: Mapping[str, object] | None = None,
+    ) -> ResourceAttachmentRecord:
+        now = utcnow_iso()
+        normalized_resource_id = str(resource_id or "").strip()
+        normalized_target_kind = str(target_kind or "").strip()
+        normalized_target_ref = str(target_ref or "").strip()
+        normalized_relation = str(relation or "context").strip() or "context"
+        if not normalized_resource_id or not normalized_target_kind or not normalized_target_ref:
+            raise ValueError("resource_id, target_kind, and target_ref are required")
+        attachment_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"octopus-resource-attachment:{normalized_resource_id}:{normalized_target_kind}:{normalized_target_ref}:{normalized_relation}",
+        ).hex
+        with self._connect() as conn, _write_tx(conn):
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                INSERT INTO {_SCHEMA}.resource_attachments (
+                    attachment_id, resource_id, target_kind, target_ref, relation,
+                    metadata_json, created_by, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (resource_id, target_kind, target_ref, relation)
+                    WHERE detached_at = ''
+                DO UPDATE SET
+                    metadata_json = EXCLUDED.metadata_json,
+                    created_by = EXCLUDED.created_by
+                RETURNING *
+                """,
+                (
+                    attachment_id,
+                    normalized_resource_id,
+                    normalized_target_kind,
+                    normalized_target_ref,
+                    normalized_relation,
+                    _jsonb(dict(metadata or {})),
+                    created_by,
+                    now,
+                ),
+            )
+            return self._resource_attachment_from_row(row)
+
+    def list_resource_attachments(
+        self,
+        *,
+        target_kind: str,
+        target_ref: str,
+    ) -> list[ResourceAttachmentRecord]:
+        with self._connect() as conn:
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT *
+                FROM {_SCHEMA}.resource_attachments
+                WHERE target_kind = %s AND target_ref = %s AND detached_at = ''
+                ORDER BY created_at DESC, attachment_id DESC
+                """,
+                (str(target_kind or "").strip(), str(target_ref or "").strip()),
+            )
+            return [self._resource_attachment_from_row(row) for row in rows]
+
+    def list_resource_targets(self, *, resource_id: str) -> list[ResourceAttachmentRecord]:
+        with self._connect() as conn:
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT *
+                FROM {_SCHEMA}.resource_attachments
+                WHERE resource_id = %s AND detached_at = ''
+                ORDER BY created_at DESC, attachment_id DESC
+                """,
+                (str(resource_id or "").strip(),),
+            )
+            return [self._resource_attachment_from_row(row) for row in rows]
+
+    def get_resource_attachment(self, attachment_id: str) -> ResourceAttachmentRecord:
+        with self._connect() as conn:
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT *
+                FROM {_SCHEMA}.resource_attachments
+                WHERE attachment_id = %s
+                """,
+                (str(attachment_id or "").strip(),),
+            )
+            if row is None:
+                raise KeyError(attachment_id)
+            return self._resource_attachment_from_row(row)
+
+    def detach_resource(
+        self,
+        *,
+        attachment_id: str,
+        detached_by: str = "",
+    ) -> ResourceAttachmentRecord:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            return shared_add_conversation_message(
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                UPDATE {_SCHEMA}.resource_attachments
+                SET detached_at = %s, detached_by = %s
+                WHERE attachment_id = %s AND detached_at = ''
+                RETURNING *
+                """,
+                (now, detached_by, str(attachment_id or "").strip()),
+            )
+            if row is None:
+                raise KeyError(attachment_id)
+            return self._resource_attachment_from_row(row)
+
+    def add_conversation_message(
+        self,
+        conversation_id: str,
+        text: str,
+        *,
+        resource_refs: tuple[str, ...] = (),
+    ) -> MessageRecord:
+        now = utcnow_iso()
+        normalized_resource_refs = tuple(
+            str(item or "").strip()
+            for item in resource_refs
+            if str(item or "").strip()
+        )
+        with self._connect() as conn, _write_tx(conn):
+            result = shared_add_conversation_message(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 create_delivery=self._create_delivery,
@@ -1647,7 +1930,33 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 text=text,
                 now=now,
+                resource_refs=normalized_resource_refs,
             )
+            for resource_id in normalized_resource_refs:
+                POSTGRES_STORE_DIALECT.fetchone(
+                    conn,
+                    f"""
+                    INSERT INTO {_SCHEMA}.resource_attachments (
+                        attachment_id, resource_id, target_kind, target_ref, relation,
+                        metadata_json, created_by, created_at
+                    ) VALUES (%s, %s, 'conversation', %s, 'message', %s, 'registry', %s)
+                    ON CONFLICT (resource_id, target_kind, target_ref, relation)
+                        WHERE detached_at = ''
+                    DO UPDATE SET metadata_json = EXCLUDED.metadata_json
+                    RETURNING *
+                    """,
+                    (
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"octopus-resource-attachment:{resource_id}:conversation:{conversation_id}:message",
+                        ).hex,
+                        resource_id,
+                        conversation_id,
+                        _jsonb({"message_event_id": str(result.event.event_id if result.event else "")}),
+                        now,
+                    ),
+                )
+            return result
 
     def add_conversation_action(
         self,

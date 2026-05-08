@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from telegram import Update
@@ -2038,13 +2039,44 @@ async def handle_message(
     message = update.effective_message
     chat_id = msg.chat_id
     user_id = user.id
-    prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
-    payload = serialize_inbound(msg)
 
     cfg = runtime.config
     needs_welcome = not session_exists(cfg.data_dir, telegram_session_io.conversation_key(chat_id))
     if not msg.conversation_ref:
         msg = telegram_normalization.normalize_message_with_conversation_ref(msg, config=cfg, chat_id=chat_id)
+    if msg.attachments:
+        registry_access = telegram_protocols.registry_client_for_runtime(runtime)
+        if registry_access is None:
+            await update.effective_message.reply_text(
+                "I could not register the attached file with Registry. Check Registry connectivity and try again."
+            )
+            return
+        client, _agent_id, _registry_url = registry_access
+        registered_attachments = []
+        try:
+            for attachment in msg.attachments:
+                resource = await client.upload_resource_from_path(
+                    attachment.path,
+                    source_surface="telegram",
+                    source_ref=msg.conversation_ref or msg.conversation_key,
+                    target_kind="",
+                    target_ref="",
+                )
+                registered_attachments.append(
+                    replace(
+                        attachment,
+                        resource_id=resource.resource_id,
+                        source_surface=resource.source_surface,
+                    )
+                )
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(
+                f"I could not register the attached file with Registry: {exc.operator_detail or exc}"
+            )
+            return
+        msg = replace(msg, attachments=tuple(registered_attachments))
+    prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
+    payload = serialize_inbound(msg)
 
     data_dir = cfg.data_dir
     if await runtime_skill_maybe_handle_setup_message(

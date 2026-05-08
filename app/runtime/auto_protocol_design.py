@@ -41,7 +41,7 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "Each work package must be domain-specific to the requirement, have a strict quality bar, and include an adversarial review rubric. "
         "Do not add several final reviewers after the primary artifact; final acceptance will inspect or exercise the primary outcome. "
         "When the outcome is an app, game, report SPA, API service, backend system, or any other interactive product, the implementation package must produce a user-facing UI/API package, tests/smoke evidence, an outcome-readiness matrix, and an octopus-runtime.json manifest at the package root. "
-        "The implementation package must build and smoke-test the package before final acceptance; runtime start commands are launch commands only and must not install dependencies, compile, package, run tests, or use developer-mode commands like mvn spring-boot:run. "
+        "The implementation package must build and smoke-test the package before final acceptance; runtime start commands are launch commands only and must not install dependencies, compile, package, run tests, or use developer-mode commands. "
         "The operator UI/API must make the result of core user actions visible in the product itself. A user should not need logs or raw JSON archaeology to know what happened. "
         "Do not put Octopus branding, names, product titles, or platform language inside customer-facing artifacts unless the user explicitly asked for that branding. Octopus language is acceptable only in internal manifests, release evidence, and Registry-facing runtime instructions. "
         f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE} "

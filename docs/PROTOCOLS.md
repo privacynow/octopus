@@ -74,14 +74,15 @@ Auto Protocol is the fastest authoring path when the user knows the outcome but
 does not want to manually design every stage.
 
 From `Build -> Protocols`, choose `Auto protocol`, describe the desired outcome,
-and add optional constraints. Registry sends the design job to a connected
-provider-capable bot, which returns structured planning records. The SDK then
-compiles those records into a normal editable protocol draft with inferred
-roles, stages, artifacts, adversarial review loops, run inputs, and final
-evidence. Review the generated structure, ask for changes if needed, then apply
-it as a normal draft. When validation and assignments are already ready, the
-Auto Protocol panel can also publish or publish and run directly; otherwise use
-the normal editor to resolve the warnings first.
+attach any source files that should inform the work, and add optional
+constraints. Registry sends the design job to a connected provider-capable bot,
+which returns structured planning records. The SDK then compiles those records
+into a normal editable protocol draft with inferred roles, stages, artifacts,
+adversarial review loops, run inputs, resource references, and final evidence.
+Review the generated structure, ask for changes if needed, then apply it as a
+normal draft. When validation and assignments are already ready, the Auto
+Protocol panel can also publish or publish and run directly; otherwise use the
+normal editor to resolve the warnings first.
 
 Auto Protocol validates its generated draft before it shows it as ready. The
 generator repairs structural issues such as missing slugs, missing artifact
@@ -104,6 +105,12 @@ bring an older run up to the current bar without manually patching the artifact.
 The generated result is not a separate format. It is the same canonical
 protocol document used by manual authoring, export/import, publish, and run
 execution.
+
+Attached files are normal Registry resources. The same resource record can be
+used by Auto Protocol create/revise, manual run launch, improve-run, a Registry
+conversation message, a direct assignment, or a Telegram upload. Receiving bots
+get authorized resources as scoped input attachments through the SDK inbound
+message path.
 
 Auto Protocol is useful for serious workflows because it starts from the
 requirement and infers the workflow shape. It should not blindly create one
@@ -141,7 +148,7 @@ commands or copying raw ids between screens.
 Minimum human verification:
 
 1. Generate a protocol from Registry and inspect the summary, packages, stages,
-   warnings, primary artifact, and available actions.
+   warnings, primary artifact, attached-resource count, and available actions.
 2. Generate a protocol from Telegram with `/protocol auto <requirement>` and
    confirm the returned card is readable, explains the proposed workflow, shows
    the primary outcome, and offers obvious next actions.
@@ -290,11 +297,11 @@ Process-backed packages should declare:
 
 The `start_command` must launch an already prepared artifact. Registry rejects
 process-backed runtime starts that try to install dependencies, build, package,
-test, or use developer-mode commands such as `mvn spring-boot:run`. Build and
-smoke-test during the protocol work stage, then launch with a cheap command such
-as `java -jar target/app.jar`, a prebuilt binary, or an equivalent prepared app
-entry point. When Registry rejects a non-run-ready start, the run detail keeps
-the runtime action available and shows the product blocker so the next reviewer
+test, or use developer-mode commands. Build and smoke-test during the protocol
+work stage, then launch with a cheap command such as `java -jar target/app.jar`,
+a prebuilt binary, or an equivalent prepared app entry point. When Registry
+rejects a non-run-ready start, the run detail keeps the runtime action available
+and shows the product blocker so the next reviewer
 or revise path has a concrete correction target.
 
 Registry owns the user-facing URL, auth, status, and lifecycle. The bot runtime

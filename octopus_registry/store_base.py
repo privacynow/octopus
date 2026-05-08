@@ -94,6 +94,7 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     UsageSummaryRecord,
 )
+from octopus_sdk.resources import ResourceAttachmentRecord, ResourceRecord
 from octopus_sdk.time_utils import seconds_from_now_iso, utc_now_iso as utcnow_iso
 
 _OFFLINE_AFTER_SECONDS = 60
@@ -648,7 +649,66 @@ class AbstractRegistryStore(Protocol):
     def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         """Return currently pending conversation approvals in UI-ready form with offset-based pagination."""
 
-    def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:
+    def create_resource(self, resource: ResourceRecord) -> ResourceRecord:
+        """Persist a user-provided input resource."""
+
+    def get_resource(self, resource_id: str) -> ResourceRecord:
+        """Return one active or archived resource."""
+
+    def list_resources(
+        self,
+        *,
+        owner_actor_ref: str = "",
+        source_surface: str = "",
+        source_ref: str = "",
+        target_kind: str = "",
+        target_ref: str = "",
+        cursor: int = 0,
+        limit: int = 50,
+    ) -> list[ResourceRecord]:
+        """List resources by owner/source or attached target."""
+
+    def attach_resource(
+        self,
+        *,
+        resource_id: str,
+        target_kind: str,
+        target_ref: str,
+        relation: str = "context",
+        created_by: str = "",
+        metadata: Mapping[str, object] | None = None,
+    ) -> ResourceAttachmentRecord:
+        """Attach a resource to a product target."""
+
+    def list_resource_attachments(
+        self,
+        *,
+        target_kind: str,
+        target_ref: str,
+    ) -> list[ResourceAttachmentRecord]:
+        """List live resource attachments for a product target."""
+
+    def list_resource_targets(self, *, resource_id: str) -> list[ResourceAttachmentRecord]:
+        """List live targets for one resource."""
+
+    def get_resource_attachment(self, attachment_id: str) -> ResourceAttachmentRecord:
+        """Return one resource attachment."""
+
+    def detach_resource(
+        self,
+        *,
+        attachment_id: str,
+        detached_by: str = "",
+    ) -> ResourceAttachmentRecord:
+        """Detach a resource from a product target."""
+
+    def add_conversation_message(
+        self,
+        conversation_id: str,
+        text: str,
+        *,
+        resource_refs: tuple[str, ...] = (),
+    ) -> MessageRecord:
         """Queue a follow-up channel_input for an existing conversation."""
 
     def add_conversation_action(

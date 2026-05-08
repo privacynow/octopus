@@ -565,6 +565,20 @@ def build_protocol_router(
                 error_code="PROTOCOL_AUTO_REQUIREMENT_REQUIRED",
                 message="requirement_text is required for Auto Protocol generation.",
             )
+        resource_refs = [
+            str(item or "").strip()
+            for item in (payload.get("resource_refs", []) or [])
+            if str(item or "").strip()
+        ]
+        for resource_id in resource_refs:
+            try:
+                store.get_resource(resource_id)
+            except KeyError as exc:
+                raise _protocol_http_error(
+                    404,
+                    error_code="RESOURCE_NOT_FOUND",
+                    message=f"Attached resource was not found: {resource_id}",
+                ) from exc
         return ProtocolAutoDesignRequestRecord.model_validate({
             "mode": mode,
             "surface": str(payload.get("surface") or ("telegram" if auth.is_agent else "registry")),
@@ -580,6 +594,7 @@ def build_protocol_router(
             "preferred_design_agent_id": preferred_agent_id,
             "actor_ref": access.actor_ref,
             "chat_ref": str(payload.get("chat_ref") or ""),
+            "resource_refs": resource_refs,
             "idempotency_key": str(payload.get("idempotency_key") or ""),
         })
 
@@ -624,6 +639,7 @@ def build_protocol_router(
                     workspace_ref=request_payload.workspace_ref,
                     actor_ref=request_payload.actor_ref,
                     chat_ref=request_payload.chat_ref,
+                    resource_refs=request_payload.resource_refs,
                 ),
             ),
             timeout_seconds=90,
@@ -635,6 +651,31 @@ def build_protocol_router(
                 message=result.error_detail or "Auto Protocol planner failed.",
             )
         return result.payload.response
+
+    def _attach_auto_protocol_resources(
+        store: AbstractRegistryStore,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        actor_ref: str,
+    ) -> None:
+        for resource_id in session.resource_refs:
+            token = str(resource_id or "").strip()
+            if not token:
+                continue
+            try:
+                store.attach_resource(
+                    resource_id=token,
+                    target_kind="protocol_auto_session",
+                    target_ref=session.session_id,
+                    relation="context",
+                    created_by=actor_ref,
+                )
+            except KeyError as exc:
+                raise _protocol_http_error(
+                    404,
+                    error_code="RESOURCE_NOT_FOUND",
+                    message=f"Attached resource was not found: {token}",
+                ) from exc
 
     def _artifact_for_detail(detail, artifact_key: str) -> ProtocolArtifactRecord:
         artifact = next(
@@ -1023,6 +1064,7 @@ def build_protocol_router(
             model_response = await _auto_protocol_model_response(store, request_payload)
             request_payload = request_payload.model_copy(update={"model_response": model_response})
             session = store.create_protocol_auto_design_session(request_payload, access=access)
+            _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except ManagementClientError as exc:
@@ -1089,6 +1131,7 @@ def build_protocol_router(
                 updated_at=existing.updated_at,
             )
             session = store.update_protocol_auto_design_session(revised, access=access, event_kind="revised")
+            _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except ManagementClientError as exc:
@@ -2256,6 +2299,29 @@ def build_protocol_router(
                     message="Rehearsal participant is unavailable right now.",
                 )
             request_payload = payload.model_copy(update={"entry_agent_id": rehearsal_agent_id})
+        resource_refs = [
+            str(item or "").strip()
+            for item in (request_payload.resource_refs or [])
+            if str(item or "").strip()
+        ]
+        if not resource_refs:
+            constraints = request_payload.constraints_json.as_dict()
+            resource_refs = [
+                str(item or "").strip()
+                for item in (constraints.get("resource_refs", []) or [])
+                if str(item or "").strip()
+            ]
+        for resource_id in resource_refs:
+            try:
+                store.get_resource(resource_id)
+            except KeyError as exc:
+                raise _protocol_http_error(
+                    404,
+                    error_code="RESOURCE_NOT_FOUND",
+                    message=f"Attached resource was not found: {resource_id}",
+                ) from exc
+        if resource_refs and resource_refs != list(request_payload.resource_refs or []):
+            request_payload = request_payload.model_copy(update={"resource_refs": resource_refs})
         result = store.create_protocol_run(
             request_payload,
             access=protocol_access(auth),

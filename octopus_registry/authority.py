@@ -131,13 +131,18 @@ class StoreBackedRegistryAuthority(
         conversation_id: ConversationId,
         text: str,
         actor: TransportActorKey,
+        resource_refs: tuple[str, ...] = (),
     ) -> MessageRecord:
         del actor
         normalized = str(text or "").strip()
         parts = normalized.split(None, 1)
         if parts and parse_target_selector(parts[0]) is not None and len(parts) == 1:
             raise ValueError("Add instructions after the target selector to route work directly.")
-        return self.store.add_conversation_message(str(conversation_id), normalized)
+        return self.store.add_conversation_message(
+            str(conversation_id),
+            normalized,
+            resource_refs=tuple(str(item or "").strip() for item in resource_refs if str(item or "").strip()),
+        )
 
     def submit_action(
         self,

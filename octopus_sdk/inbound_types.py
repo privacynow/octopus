@@ -70,6 +70,8 @@ class InboundAttachment:
     original_name: str
     is_image: bool
     mime_type: str | None = None
+    resource_id: str = ""
+    source_surface: str = ""
 
 
 @dataclass(frozen=True)
@@ -232,6 +234,8 @@ def serialize_inbound(
                         "original_name": a.original_name,
                         "is_image": a.is_image,
                         "mime_type": a.mime_type,
+                        "resource_id": a.resource_id,
+                        "source_surface": a.source_surface,
                     }
                     for a in event.attachments
                 ],
@@ -319,6 +323,8 @@ def deserialize_inbound(
                 original_name=item["original_name"],
                 is_image=item["is_image"],
                 mime_type=item.get("mime_type"),
+                resource_id=str(item.get("resource_id", "") or ""),
+                source_surface=str(item.get("source_surface", "") or ""),
             )
             for item in data.get("attachments", [])
         )

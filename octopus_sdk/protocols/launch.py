@@ -26,6 +26,7 @@ class ProtocolConversationLaunchRequestRecord(RegistryRecordModel):
     repo_ref: str = ""
     branch_ref: str = ""
     problem_statement: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
     constraints_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
 
@@ -147,10 +148,19 @@ def build_protocol_run_request_from_inputs(
     if not problem_statement:
         raise ValueError("problem_statement is required")
     workspace_ref = str(inputs.get("workspace_ref", "") or "").strip()
+    raw_resource_refs = inputs.get("resource_refs", [])
+    if isinstance(raw_resource_refs, (list, tuple, set)):
+        resource_refs = [
+            str(item or "").strip()
+            for item in raw_resource_refs
+            if str(item or "").strip()
+        ]
+    else:
+        resource_refs = []
     constraints = {
         str(key): value
         for key, value in dict(inputs or {}).items()
-        if key not in {"problem_statement", "workspace_ref"} and str(value or "").strip()
+        if key not in {"problem_statement", "workspace_ref", "resource_refs"} and str(value or "").strip()
     }
     return ProtocolRunCreateRecord(
         protocol_id=str(definition.protocol_id or "").strip(),
@@ -161,6 +171,7 @@ def build_protocol_run_request_from_inputs(
         repo_ref=str(repo_ref or "").strip(),
         branch_ref=str(branch_ref or "").strip(),
         problem_statement=problem_statement,
+        resource_refs=resource_refs,
         constraints_json=RegistryJsonRecord.model_validate(constraints),
     )
 
@@ -239,6 +250,7 @@ def build_conversation_protocol_run_request(
         repo_ref=str(request.repo_ref or "").strip(),
         branch_ref=str(request.branch_ref or "").strip(),
         problem_statement=str(request.problem_statement or "").strip(),
+        resource_refs=list(request.resource_refs or []),
         constraints_json=RegistryJsonRecord.model_validate(request.constraints_json or {}),
     )
 

@@ -116,6 +116,7 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
+    monkeypatch.setenv("REGISTRY_ARTIFACT_STORE_DIR", str(tmp_path / "registry-artifacts"))
     monkeypatch.delenv("REGISTRY_SESSION_SECRET", raising=False)
     registry_auth.reset_auth_attempt_limits_for_test()
 
@@ -1018,6 +1019,120 @@ def test_registry_create_conversation_requires_origin_channel(monkeypatch, tmp_p
     )
     assert conversations.status_code == 200
     assert conversations.json()["conversations"] == []
+
+
+def test_registry_resources_upload_attach_and_deliver_to_conversation(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+    csrf = _ui_csrf_token(client)
+    agent_id, token = _enroll_and_register(client, "Resource Bot", "resource-bot")
+    created = client.post(
+        "/v1/conversations",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "target_agent_id": agent_id,
+            "origin_channel": "registry",
+            "external_conversation_ref": "resource-test",
+            "title": "Resource test",
+        },
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+
+    upload = client.post(
+        "/v1/resources",
+        headers={"X-CSRF-Token": csrf},
+        data={
+            "source_surface": "registry",
+            "source_ref": conversation_id,
+            "target_kind": "conversation",
+            "target_ref": conversation_id,
+            "relation": "message",
+        },
+        files={"file": ("notes.txt", b"registry resource contents", "text/plain")},
+    )
+    assert upload.status_code == 201
+    resource = upload.json()["resource"]
+    assert resource["original_name"] == "notes.txt"
+    assert resource["content_hash"].startswith("sha256:")
+
+    message = client.post(
+        f"/v1/conversations/{conversation_id}/messages",
+        headers={"X-CSRF-Token": csrf},
+        json={"text": "Use this file", "resource_refs": [resource["resource_id"]]},
+    )
+    assert message.status_code == 200
+    event = message.json()["event"]
+    assert event["metadata"]["resource_refs"] == [resource["resource_id"]]
+
+    poll_result = get_registry_store().poll(token, cursor=0, limit=100)
+    channel_delivery = next(item for item in poll_result.deliveries if item.kind == "channel_input")
+    assert channel_delivery.payload["resource_refs"] == [resource["resource_id"]]
+
+    content = client.get(f"/v1/resources/{resource['resource_id']}/content")
+    assert content.status_code == 200
+    assert content.content == b"registry resource contents"
+
+
+def test_direct_assignment_resource_refs_grant_target_task_access(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+    csrf = _ui_csrf_token(client)
+    origin_agent_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-bot")
+    _target_agent_id, target_token = _enroll_and_register(client, "Target Bot", "target-bot")
+    created = _create_conversation(
+        client,
+        origin_token,
+        origin_agent_id,
+        "resource-direct-assign",
+        title="Resource direct assignment",
+    )
+    conversation_id = created["conversation_id"]
+
+    upload = client.post(
+        "/v1/resources",
+        headers={"X-CSRF-Token": csrf},
+        data={
+            "source_surface": "registry",
+            "source_ref": conversation_id,
+            "target_kind": "conversation",
+            "target_ref": conversation_id,
+            "relation": "message",
+        },
+        files={"file": ("assignment.txt", b"direct assignment input", "text/plain")},
+    )
+    assert upload.status_code == 201
+    resource_id = upload.json()["resource"]["resource_id"]
+
+    action = client.post(
+        f"/v1/conversations/{conversation_id}/actions",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "action_id": "assign-resource-1",
+            "action": "direct_assign",
+            "payload": {
+                "selector": {"kind": "agent", "value": "target-bot"},
+                "title": "Review attached input",
+                "instructions": "Use the attached input file.",
+                "message_text": "Please review the attached input file.",
+                "resource_refs": [resource_id],
+            },
+        },
+    )
+    assert action.status_code == 200, action.text
+
+    poll_result = get_registry_store().poll(target_token, cursor=0, limit=100)
+    delivery = next(item for item in poll_result.deliveries if item.kind == "routed_task")
+    assert delivery.payload["resource_refs"] == [resource_id]
+
+    content = client.get(
+        f"/v1/resources/{resource_id}/content",
+        headers={"Authorization": f"Bearer {target_token}"},
+    )
+    assert content.status_code == 200
+    assert content.content == b"direct assignment input"
 
 
 def test_registry_enroll_requires_explicit_registry_scope(monkeypatch, tmp_path: Path):
@@ -5020,6 +5135,10 @@ def test_protocol_artifact_content_route_uses_rehearsal_text_when_file_unavailab
                 ],
             )
 
+        def get_protocol_artifact_snapshot(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
+
     app.dependency_overrides[registry_server.get_store] = lambda: _Store()
     app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
         is_operator=True,
@@ -5082,6 +5201,10 @@ def test_protocol_artifact_content_route_prefers_inline_artifact_contents_when_f
                     )
                 ],
             )
+
+        def get_protocol_artifact_snapshot(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
 
     app.dependency_overrides[registry_server.get_store] = lambda: _Store()
     app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(

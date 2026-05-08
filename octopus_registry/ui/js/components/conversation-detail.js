@@ -249,6 +249,16 @@ function renderConversationDetail(container, params) {
     textarea.rows = 1;
     composer.appendChild(textarea);
 
+    const resourcePicker = Kit.resourceAttachmentPicker({
+        label: 'Attach files',
+        help: 'Add source files, datasets, screenshots, or documents for this message.',
+        sourceRef: convoId,
+        targetKind: 'conversation',
+        targetRef: convoId,
+        relation: 'message',
+    });
+    composer.appendChild(resourcePicker.element);
+
     const sendBtn = document.createElement('button');
     sendBtn.className = 'btn btn-primary';
     sendBtn.type = 'button';
@@ -1573,6 +1583,15 @@ function renderConversationDetail(container, params) {
                 },
             });
             form.appendChild(launchForm.element);
+            const protocolResourcePicker = Kit.resourceAttachmentPicker({
+                label: 'Attach run files',
+                help: 'Add input files for this protocol run.',
+                sourceRef: convoId,
+                targetKind: 'conversation',
+                targetRef: convoId,
+                relation: 'protocol_run_input',
+            });
+            form.appendChild(protocolResourcePicker.element);
 
             const actions = document.createElement('div');
             actions.className = 'event-card-actions';
@@ -1605,6 +1624,7 @@ function renderConversationDetail(container, params) {
                         origin_channel: String((meta && meta.origin_channel) || 'registry'),
                         workspace_ref: protocolWorkspaceRef(),
                         problem_statement: problemStatement,
+                        resource_refs: protocolResourcePicker.resourceRefs(),
                         constraints_json: constraints,
                     }));
                     const run = response.run || null;
@@ -2015,7 +2035,8 @@ function renderConversationDetail(container, params) {
 
     async function sendMessage() {
         const text = textarea.value.trim();
-        if (!text) return;
+        const resourceRefs = resourcePicker.resourceRefs();
+        if (!text && !resourceRefs.length) return;
         const routingState = currentComposerRoutingState();
         if (activeView !== 'conversation') {
             setActiveView('conversation', {
@@ -2034,12 +2055,14 @@ function renderConversationDetail(container, params) {
                     title: directAssignTitle(routingState.instructions),
                     instructions: routingState.instructions,
                     message_text: routingState.text,
+                    resource_refs: resourceRefs,
                 });
                 void loadRelatedTasks({ soft: true });
             } else {
-                await API.sendMessage(convoId, text);
+                await API.sendMessage(convoId, text || 'Use the attached files as context.', { resourceRefs });
             }
             textarea.value = '';
+            resourcePicker.clear();
             updateComposerAssist();
             await reloadEvents();
         } catch (err) {

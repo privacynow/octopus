@@ -7,6 +7,7 @@ async — the client and store run in different processes.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Literal, TypeVar
 
 import httpx
@@ -77,6 +78,7 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     RoutedTaskUpdate,
 )
+from octopus_sdk.resources import ResourceAttachmentRecord, ResourceRecord
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ProtocolRegistryErrorCode = Literal[
@@ -230,6 +232,8 @@ class RegistryClient(
         headers = self._headers(require_auth=require_auth)
         if extra_headers:
             headers.update({str(key): str(value) for key, value in extra_headers.items() if str(value or "").strip()})
+        if "files" in kwargs or "data" in kwargs:
+            headers.pop("Content-Type", None)
 
         async def _do(client: httpx.AsyncClient) -> object:
             try:
@@ -390,6 +394,62 @@ class RegistryClient(
             json={"text": text},
         )
         return MessageRecord.model_validate(result)
+
+    async def upload_resource_from_path(
+        self,
+        path: str | Path,
+        *,
+        source_surface: str = "registry",
+        source_ref: str = "",
+        target_kind: str = "",
+        target_ref: str = "",
+        relation: str = "context",
+    ) -> ResourceRecord:
+        file_path = Path(path)
+        data = {
+            "source_surface": source_surface,
+            "source_ref": source_ref,
+            "target_kind": target_kind,
+            "target_ref": target_ref,
+            "relation": relation,
+        }
+        with file_path.open("rb") as handle:
+            result = await self._request(
+                "POST",
+                "/v1/resources",
+                data=data,
+                files={"file": (file_path.name, handle)},
+            )
+        payload = result.get("resource", result) if isinstance(result, dict) else result
+        return ResourceRecord.model_validate(payload)
+
+    async def get_resource(self, resource_id: str) -> ResourceRecord:
+        result = await self._request("GET", f"/v1/resources/{resource_id}")
+        return ResourceRecord.model_validate(result)
+
+    async def download_resource_content(self, resource_id: str) -> bytes:
+        return await self._request_bytes("GET", f"/v1/resources/{resource_id}/content")
+
+    async def attach_resource(
+        self,
+        resource_id: str,
+        *,
+        target_kind: str,
+        target_ref: str,
+        relation: str = "context",
+        metadata: Mapping[str, object] | None = None,
+    ) -> ResourceAttachmentRecord:
+        result = await self._request(
+            "POST",
+            f"/v1/resources/{resource_id}/attachments",
+            json={
+                "target_kind": target_kind,
+                "target_ref": target_ref,
+                "relation": relation,
+                "metadata": dict(metadata or {}),
+            },
+        )
+        return ResourceAttachmentRecord.model_validate(result)
 
     async def submit_action(
         self,

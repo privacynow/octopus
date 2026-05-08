@@ -10,6 +10,7 @@ import pytest
 
 from app import work_queue
 import app.agents.state as agent_state_module
+import app.channels.registry.delivery_transport as delivery_transport_module
 from app.channels.registry.delivery_transport import (
     admit_registry_delivery,
     build_registry_delivery_runtime,
@@ -1421,6 +1422,57 @@ async def test_admit_registry_delivery_routed_task_keeps_title_structured_and_bo
     assert captured["text"] == "Check the replication lag on the follower."
     assert captured["context_text"] == '{\n  "service": "registry",\n  "ticket": 42\n}'
     assert captured["constraints_text"] == '{\n  "mode": "readonly"\n}'
+
+
+async def test_admit_registry_delivery_routed_task_materializes_constraint_resource_refs(
+    monkeypatch,
+    tmp_path: Path,
+):
+    captured: dict[str, object] = {}
+
+    async def fake_materialize_registry_resources(*, config, registry_id, conversation_key, resource_refs):
+        del config, registry_id, conversation_key
+        captured["resource_refs"] = list(resource_refs)
+        return ()
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["attachments"] = envelope.event.attachments
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    monkeypatch.setattr(
+        delivery_transport_module,
+        "_materialize_registry_resources",
+        fake_materialize_registry_resources,
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-routed-resources-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-with-resources-1",
+                "title": "Inspect attached resources",
+                "instructions": "Use the attached source material.",
+                "origin_agent_id": "origin-1",
+                "resource_refs": ["res-top"],
+                "constraints": {"resource_refs": ["res-top", "res-constraint"]},
+            },
+        },
+        submitter=_CapturingSubmitter(),
+        dispatcher=None,
+    )
+
+    assert outcome == "accepted"
+    assert captured["resource_refs"] == ["res-top", "res-constraint"]
+    assert captured["attachments"] == ()
 
 
 async def test_admit_registry_delivery_routed_task_preserves_external_conversation_ref(

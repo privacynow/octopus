@@ -342,7 +342,7 @@ def update_routed_task_result(
     requested_status = validated_payload.status
     if requested_status == "completed":
         transition = "complete"
-    elif requested_status == "failed":
+    elif requested_status in {"failed", "interrupted"}:
         transition = "fail"
     elif requested_status == "timed_out":
         transition = "time_out"
@@ -388,7 +388,7 @@ def update_routed_task_result(
     if not duplicate:
         persisted_result = validated_payload.model_dump(mode="json", exclude_none=True)
         persisted_result["completed_at"] = completed_at
-        persisted_result["status"] = decision.new_state
+        persisted_result["status"] = requested_status
         dialect.execute(
             conn,
             (

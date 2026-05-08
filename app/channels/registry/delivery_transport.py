@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import logging
 from typing import Any
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from app.agents.registry_projection_interfaces import registry_implementation_ref
 from app.agents.registry_control_processor import RegistryControlProcessor

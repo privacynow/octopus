@@ -2010,7 +2010,7 @@ class ProtocolPostgresAdapter:
                 continue
         return ProtocolStageTaskResultRecord(
             routed_task_id=str(task_row.get("routed_task_id", "") or ""),
-            status=str(task_row.get("status", "") or ""),
+            status=str(result_json.get("status", "") or task_row.get("status", "") or ""),
             summary=str(result_json.get("summary", "") or ""),
             full_text=str(result_json.get("full_text", "") or ""),
             artifacts=observations,

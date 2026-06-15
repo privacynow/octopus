@@ -260,14 +260,14 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
         outcome = await setup.submit_credential_value(
             session,
             actor_key=actor_key,
-            raw_value="ghp_test_token",
+            raw_value="example-github-test_token",
             validator=fake_validator,
         )
         assert outcome.status == "ready"
         assert "github-integration" in session.active_skills
 
         creds = load_user_credentials(data_dir, actor_key, derive_encryption_key(cfg.credential_key))
-        assert creds["github-integration"]["GITHUB_TOKEN"] == "ghp_test_token"
+        assert creds["github-integration"]["GITHUB_TOKEN"] == "example-github-test_token"
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()
@@ -304,7 +304,7 @@ async def test_setup_use_case_logs_validation_host_with_skill_name(monkeypatch, 
         outcome = await setup.submit_credential_value(
             session,
             actor_key=actor_key,
-            raw_value="ghp_test_token",
+            raw_value="example-github-test_token",
         )
 
         assert outcome.status == "ready"

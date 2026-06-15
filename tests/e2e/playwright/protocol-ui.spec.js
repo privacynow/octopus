@@ -762,7 +762,7 @@ test.describe('protocol authoring live', () => {
     expect(stages.find((item) => String(item.stage_key || '') === 'plan_review')?.transitions?.accept).toBe('secondary-approval');
     expect(inserted?.transitions?.completed).toBe('architecture');
     expect(inserted?.selector?.kind).toBe('agent');
-    expect(inserted?.selector?.value).toBe('lift-and-shift-m1-bot');
+    expect(inserted?.selector?.value).toBe(connectedAgent.slug);
     expect(insertedIndex).toBeGreaterThan(-1);
     expect(architectureIndex).toBeGreaterThan(insertedIndex);
 

@@ -848,7 +848,8 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert "function openCleanupDialog()" in dashboard
     assert "function openWorkspaceCleanupDialog()" in dashboard
     assert "API.cleanupWorkspaceData({" in dashboard
-    assert "'Clean workspace data'" in dashboard
+    assert "'Reset registry workspace data'" in dashboard
+    assert "cleanBtn.textContent = 'Reset registry data';" in dashboard
     assert "'Bot workspace cleanup'" in dashboard
     assert "'Workspace cleanup dry run'" not in dashboard
     assert "scanBtn.textContent = 'Scan workspace';" in dashboard

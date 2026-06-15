@@ -136,13 +136,13 @@ def test_successful_summarize_returns_summary():
 
 def test_sanitize_provider_error_text_redacts_paths_and_secret_assignments():
     text = (
-        "Provider failed at /Users/tinker/output/bots/telegram-agent-bot/app/providers/codex.py "
+        "Provider failed at /opt/octopus/workspaces/review-bot/app/providers/codex.py "
         "with API_KEY=super-secret-value and token: abcdef1234567890"
     )
 
     sanitized = sanitize_provider_error_text(text)
 
-    assert "/Users/tinker/output" not in sanitized
+    assert "/opt/octopus/workspaces" not in sanitized
     assert "super-secret-value" not in sanitized
     assert "abcdef1234567890" not in sanitized
     assert "<path>" in sanitized

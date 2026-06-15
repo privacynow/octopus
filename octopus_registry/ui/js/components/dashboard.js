@@ -571,8 +571,8 @@ function renderDashboard(container) {
         const cleanBtn = document.createElement('button');
         cleanBtn.type = 'button';
         cleanBtn.className = 'btn';
-        cleanBtn.textContent = 'Clean workspace data';
-        const view = UI.showDialog('Clean workspace data', form, {
+        cleanBtn.textContent = 'Reset registry data';
+        const view = UI.showDialog('Reset registry workspace data', form, {
             actions: [cancelBtn, cleanBtn],
             role: 'alertdialog',
             initialFocus: passwordInput,
@@ -587,11 +587,11 @@ function renderDashboard(container) {
                     confirm: confirmInput.value || '',
                 });
                 view.close();
-                UI.notify('Workspace data cleaned. Agents and skills were preserved.', 'success');
+                UI.notify('Registry workspace data reset. Agents and skills were preserved.', 'success');
                 await refreshSnapshot({ soft: true });
             } catch (err) {
-                UI.reportError('Failed to clean workspace data', err, {
-                    context: 'Dashboard workspace-data cleanup failed',
+                UI.reportError('Failed to reset registry workspace data', err, {
+                    context: 'Dashboard registry workspace-data reset failed',
                 });
                 cleanBtn.disabled = false;
             }

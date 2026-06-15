@@ -24,6 +24,11 @@ The `./octopus` command is the Octopus control panel. It starts the local stack,
 shows health, helps configure agents, and provides operator actions such as
 logs, diagnostics, restarts, and provider login.
 
+The first run creates a host-local `.deploy/` directory. That directory is not
+the product source; it is generated deployment state for this one machine.
+Expect it to hold registry tokens, Telegram bot config, provider login state,
+database volumes, build logs, and workspace mount paths.
+
 Important current constraint: new local agents are created through
 Telegram-backed bot setup. You can use the browser Registry as your main product
 surface after that, but the first working agent still needs a Telegram bot token
@@ -35,7 +40,7 @@ You need:
 
 - Docker Desktop or Docker Engine
 - Git
-- Python 3
+- Python 3.12 through 3.14 with `venv`
 - a Telegram account so you can create a bot token with BotFather
 - access to at least one model provider used by your agents, such as Codex or
   Claude
@@ -147,6 +152,53 @@ If your team uses a private repository URL, use the HTTPS clone URL they provide
 and sign in when Git asks. SSH clone URLs are fine too, but only use them if you
 already have GitHub SSH keys configured.
 
+## Fresh Public Host Setup
+
+A fresh clone on another machine starts without local deployment state. That is
+intentional. The tracked repository includes the source code, Docker files, CLI,
+docs, dependency constraints, and one deploy template:
+
+```text
+.deploy/bots/.env.example
+```
+
+Everything else under `.deploy/` is generated after setup and is specific to one
+host. Do not copy a development `.deploy/` directory to a public machine unless
+you are deliberately migrating a private environment and have protected or
+rotated every credential in it.
+
+For a new public or shared host:
+
+1. Clone the repository on the host.
+2. Install Docker and Python prerequisites.
+3. Decide the Registry address before creating agents.
+4. Start the Registry with an explicit bind host and public URL.
+5. Create new Telegram bot identities or intentionally migrate existing ones.
+6. Authenticate the model provider on that host.
+7. Create or attach a workspace path that exists on that host.
+8. Run `./octopus status` and open the Registry URL it prints.
+
+For a local-only laptop install, the default Registry URL is fine:
+
+```bash
+./octopus start registry
+```
+
+For a Registry that other machines or phones must reach, bind Docker to a
+reachable interface and set the URL users and remote bots will actually use:
+
+```bash
+./octopus start registry --registry-bind-host 0.0.0.0 --registry-public-url https://octopus.example.com
+```
+
+`0.0.0.0` is only a listen address. Do not put it in browser links, Telegram
+messages, bot connection records, or documentation for users. Use a real DNS
+name or IP address in `--registry-public-url`, preferably behind HTTPS.
+
+If you need to move an existing private environment instead of starting fresh,
+use [OPERATIONS.md](OPERATIONS.md). Migration is a credentialed backup/restore
+operation, not a normal public clone.
+
 ## Start Octopus
 
 Run:
@@ -161,9 +213,9 @@ environment and builds local images.
 If the CLI shows recommended actions, start there. For a first environment, the
 usual order is:
 
-1. add a bot or agent configuration
-2. authenticate that agent's provider, such as Codex or Claude
-3. start the Registry
+1. start the Registry, especially if you need non-default public URL settings
+2. add a bot or agent configuration
+3. authenticate that agent's provider, such as Codex or Claude
 4. start stopped bots
 5. run `./octopus status`
 
@@ -332,6 +384,20 @@ those bots is configured and started, `Work -> Agents` will be empty.
 
 The agent cannot use its model provider yet. Run `./octopus`, then
 `Diagnose -> Provider auth`.
+
+`Registry URL is local but users are remote`
+
+The Registry was probably started with the default local URL. Restart or
+redeploy the Registry with an explicit public URL, then reconnect or restart
+bots so generated links and local connection records use the intended address:
+
+```bash
+./octopus redeploy registry --registry-bind-host 0.0.0.0 --registry-public-url https://octopus.example.com
+./octopus restart bots
+```
+
+Use firewall, VPN, or reverse-proxy controls appropriate for the host before
+exposing the port.
 
 `Agent connected but not execution healthy`
 

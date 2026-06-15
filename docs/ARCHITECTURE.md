@@ -68,6 +68,13 @@ flowchart LR
 per bot. Each stack normally has its own Postgres container, although the schema
 families can be pointed at a shared external Postgres by configuration.
 
+`.deploy/` is generated operational state, not source. In a clean clone only
+`.deploy/bots/.env.example` is tracked. Registry tokens, bot tokens, provider
+auth state, workspace mounts, build logs, database volumes, and compose
+workspace overrides are created per host and should be regenerated for fresh
+public deployments unless the operator is deliberately restoring a trusted
+private backup.
+
 ```mermaid
 flowchart TB
     subgraph Host["Host checkout"]
@@ -1019,6 +1026,8 @@ Security boundaries in the current runtime:
 | Artifact paths | Safe path validation and workspace-root checks. |
 | Skill files | Safe relative paths, size limits, executable policy. |
 | Provider credentials | Credential store and provider auth mounts, not prompt-visible secrets. |
+| Bot workspace cleanup | Dry-run inventory persisted by the Registry, typed confirmation, bot-owned execution. |
+| Registry workspace reset | Password-confirmed operator reset of work records; not a file cleanup path. |
 
 Current role model is simple and should not be overclaimed. `ProtocolAccessContextRecord`
 uses actor ref, org id, and roles such as admin, publisher, author, auditor,

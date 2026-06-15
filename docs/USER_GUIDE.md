@@ -77,6 +77,11 @@ If step 3 fails, the product is not ready for normal use yet. Ask the operator
 to check [GETTING_STARTED.md](GETTING_STARTED.md) or
 [OPERATIONS.md](OPERATIONS.md).
 
+If you are using Octopus on a remote or public host, use the public Registry URL
+printed by `./octopus status`. A URL containing `127.0.0.1`, `localhost`, or
+`0.0.0.0` is only useful on the host itself unless your operator has configured
+tunneling or a reverse proxy.
+
 After this basic path works, move to `Build -> Protocols` when you are ready to
 run a repeatable staged workflow. Do not make a new user create a blank protocol
 as their first proof that the product works; start from a published protocol or

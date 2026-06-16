@@ -1,6 +1,7 @@
 """Handler integration tests for Codex-specific session and script behavior."""
 
 from octopus_sdk.execution_context import ResolvedExecutionContext, resolve_execution_context
+from octopus_sdk.execution import _agent_awareness_prompt_block, _system_prompt_section_digest
 from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunContext, RunResult
 from octopus_sdk.sessions import session_from_dict
 from tests.support.skill_test_helpers import (
@@ -12,6 +13,9 @@ from app.storage import default_session, save_session
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
+    current_execution_runtime,
+    current_runtime,
+    current_transport_identity,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -65,7 +69,7 @@ async def test_codex_script_staging():
         setup_globals(cfg, prov)
 
         key = derive_encryption_key(cfg.credential_key)
-        save_user_credential(data_dir, 42, "github-integration", "GITHUB_TOKEN", "ghp_test", key)
+        save_user_credential(data_dir, 42, "github-integration", "GITHUB_TOKEN", "example-github-test", key)
 
         chat = FakeChat(12345)
         msg = FakeMessage(chat=chat, text="use github")
@@ -92,6 +96,43 @@ def _default_hash(cfg):
     """Compute the correct context hash for a default session with no project."""
     raw = default_session("codex", ProviderStateRecord(), "off")
     return resolve_execution_context(session_from_dict(raw), cfg, "codex").context_hash
+
+
+async def _current_codex_provider_state(
+    cfg,
+    *,
+    thread_id: str,
+    prompt: str,
+    chat_id: int = 12345,
+    actor_key: str = "tg:42",
+) -> ProviderStateRecord:
+    raw = default_session("codex", ProviderStateRecord(), "off")
+    session = session_from_dict(raw)
+    telegram_runtime = current_runtime()
+    runtime = current_execution_runtime()
+    resolved = resolve_execution_context(
+        session,
+        cfg,
+        "codex",
+        catalog=telegram_runtime.services.workflows.runtime_skills.catalog,
+    )
+    message = FakeMessage(chat=FakeChat(chat_id), text=prompt)
+    transport = current_transport_identity(message, chat_id, actor_key=actor_key)
+    awareness_block = await _agent_awareness_prompt_block(
+        runtime,
+        transport,
+        prompt,
+        resolved,
+        trust_tier="trusted",
+    )
+    return ProviderStateRecord(
+        {
+            "thread_id": thread_id,
+            "context_hash": resolved.context_hash,
+            "boot_id": runtime.dispatch.boot_id,
+            "agent_awareness_digest": _system_prompt_section_digest(awareness_block),
+        }
+    )
 
 
 async def test_codex_retry_clears_thread():
@@ -136,10 +177,13 @@ async def test_codex_failed_resume_clears_thread():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        current_hash = _default_hash(cfg)
         session = default_session(
             "codex",
-            ProviderStateRecord({"thread_id": "thread-abc", "context_hash": current_hash}),
+            await _current_codex_provider_state(
+                cfg,
+                thread_id="thread-abc",
+                prompt="continue working",
+            ),
             "off",
         )
         save_session(data_dir, telegram_conversation_key(12345), session)
@@ -166,10 +210,13 @@ async def test_codex_timed_out_resume_preserves_thread():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        current_hash = _default_hash(cfg)
         session = default_session(
             "codex",
-            ProviderStateRecord({"thread_id": "thread-abc", "context_hash": current_hash}),
+            await _current_codex_provider_state(
+                cfg,
+                thread_id="thread-abc",
+                prompt="continue working",
+            ),
             "off",
         )
         save_session(data_dir, telegram_conversation_key(12345), session)
@@ -270,7 +317,7 @@ async def test_codex_error_output_redacts_paths_and_secrets():
         prov.run_results = [
             RunResult(
                 text=(
-                    "Failure in /Users/tinker/output/bots/private/run.log "
+                    "Failure in /opt/octopus/workspaces/private/run.log "
                     "with password=hunter2 and token: abcdef1234567890"
                 ),
                 returncode=2,
@@ -292,7 +339,7 @@ async def test_codex_error_output_redacts_paths_and_secrets():
         all_bot_text = " ".join(
             (m.get("text") or m.get("edit_text") or "") for m in current_bot_instance().sent_messages
         )
-        assert "/Users/tinker/output/bots/private/run.log" not in all_bot_text
+        assert "/opt/octopus/workspaces/private/run.log" not in all_bot_text
         assert "hunter2" not in all_bot_text
         assert "abcdef1234567890" not in all_bot_text
         assert "&lt;path&gt;" in all_bot_text or "<path>" in all_bot_text
@@ -338,7 +385,11 @@ async def test_codex_same_boot_preserves_thread():
 
         session = default_session(
             "codex",
-            ProviderStateRecord({"thread_id": "my-thread", "boot_id": "same-boot"}),
+            await _current_codex_provider_state(
+                cfg,
+                thread_id="my-thread",
+                prompt="hello",
+            ),
             "off",
         )
         save_session(data_dir, telegram_conversation_key(12345), session)
@@ -367,7 +418,7 @@ async def test_scripts_dir_in_run_context():
         setup_globals(cfg, prov)
 
         key = derive_encryption_key(cfg.credential_key)
-        save_user_credential(data_dir, 42, "github-integration", "GITHUB_TOKEN", "ghp_test", key)
+        save_user_credential(data_dir, 42, "github-integration", "GITHUB_TOKEN", "example-github-test", key)
 
         chat = FakeChat(12345)
         user = FakeUser(42)

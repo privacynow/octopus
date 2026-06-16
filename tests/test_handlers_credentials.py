@@ -83,7 +83,7 @@ async def test_credential_capture(monkeypatch):
         assert setup["remaining"][0].get("validate") is not None
         assert "needs setup" in " ".join(r.get("text", "") for r in msg1.replies).lower()
 
-        secret_msg = FakeMessage(chat=chat, text="ghp_fake_token_12345")
+        secret_msg = FakeMessage(chat=chat, text="example-github-fake_token_12345")
         await _th.handle_message(FakeUpdate(message=secret_msg, user=user, chat=chat), FakeContext())
         assert secret_msg.deleted
 
@@ -94,7 +94,7 @@ async def test_credential_capture(monkeypatch):
         key = derive_encryption_key(cfg.credential_key)
         creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
         assert "github-integration" in creds
-        assert creds["github-integration"].get("GITHUB_TOKEN") == "ghp_fake_token_12345"
+        assert creds["github-integration"].get("GITHUB_TOKEN") == "example-github-fake_token_12345"
         assert "ready" in " ".join(r.get("text", "") for r in secret_msg.replies).lower()
 
         msg3 = FakeMessage(chat=chat, text="list my repos")
@@ -103,7 +103,7 @@ async def test_credential_capture(monkeypatch):
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
         assert "GITHUB_TOKEN" in ctx.credential_env
-        assert ctx.credential_env["GITHUB_TOKEN"] == "ghp_fake_token_12345"
+        assert ctx.credential_env["GITHUB_TOKEN"] == "example-github-fake_token_12345"
 
 
 async def test_credential_validation_failure(monkeypatch):
@@ -283,7 +283,7 @@ async def test_credential_env_in_context():
         setup_globals(cfg, prov)
 
         key = derive_encryption_key(cfg.credential_key)
-        save_user_credential(data_dir, telegram_actor_key(42), "github-integration", "GITHUB_TOKEN", "ghp_real_token", key)
+        save_user_credential(data_dir, telegram_actor_key(42), "github-integration", "GITHUB_TOKEN", "example-github-real_token", key)
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -292,7 +292,7 @@ async def test_credential_env_in_context():
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
-        assert ctx.credential_env.get("GITHUB_TOKEN") == "ghp_real_token"
+        assert ctx.credential_env.get("GITHUB_TOKEN") == "example-github-real_token"
         assert len(ctx.system_prompt) > 0
 
 
@@ -351,7 +351,7 @@ async def test_credential_completion_activates():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        await _th.handle_message(FakeUpdate(message=FakeMessage(chat=chat, text="ghp_my_token"), user=user, chat=chat), FakeContext())
+        await _th.handle_message(FakeUpdate(message=FakeMessage(chat=chat, text="example-github-my_token"), user=user, chat=chat), FakeContext())
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert "github-integration" in session.get("active_skills", [])
@@ -441,8 +441,8 @@ async def test_cross_user_credential_isolation():
         setup_globals(cfg, prov)
 
         key = derive_encryption_key(cfg.credential_key)
-        save_user_credential(data_dir, telegram_actor_key(100), "github-integration", "GITHUB_TOKEN", "ghp_alice_token", key)
-        save_user_credential(data_dir, telegram_actor_key(200), "github-integration", "GITHUB_TOKEN", "ghp_bob_token", key)
+        save_user_credential(data_dir, telegram_actor_key(100), "github-integration", "GITHUB_TOKEN", "example-github-alice_token", key)
+        save_user_credential(data_dir, telegram_actor_key(200), "github-integration", "GITHUB_TOKEN", "example-github-bob_token", key)
 
         chat = FakeChat(12345)
         alice = FakeUser(uid=100, username="alice")
@@ -466,8 +466,8 @@ async def test_cross_user_credential_isolation():
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
-        assert ctx.credential_env.get("GITHUB_TOKEN") == "ghp_alice_token"
-        assert ctx.credential_env.get("GITHUB_TOKEN") != "ghp_bob_token"
+        assert ctx.credential_env.get("GITHUB_TOKEN") == "example-github-alice_token"
+        assert ctx.credential_env.get("GITHUB_TOKEN") != "example-github-bob_token"
 
 
 async def test_group_chat_setup_isolation(monkeypatch):
@@ -503,7 +503,7 @@ async def test_group_chat_setup_isolation(monkeypatch):
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
 
-        bob_secret = FakeMessage(chat=chat, text="ghp_bob_secret_token")
+        bob_secret = FakeMessage(chat=chat, text="example-github-bob_secret_token")
         await _th.handle_message(FakeUpdate(message=bob_secret, user=bob, chat=chat), FakeContext())
         assert not bob_secret.deleted
 
@@ -511,7 +511,7 @@ async def test_group_chat_setup_isolation(monkeypatch):
         assert session.get("awaiting_skill_setup") is not None
         assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
 
-        alice_secret = FakeMessage(chat=chat, text="ghp_alice_real_token")
+        alice_secret = FakeMessage(chat=chat, text="example-github-alice_real_token")
         await _th.handle_message(FakeUpdate(message=alice_secret, user=alice, chat=chat), FakeContext())
         assert alice_secret.deleted
 
@@ -521,7 +521,7 @@ async def test_group_chat_setup_isolation(monkeypatch):
         key = derive_encryption_key(cfg.credential_key)
         alice_creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
         bob_creds = load_user_credentials(data_dir, telegram_actor_key(200), key)
-        assert alice_creds.get("github-integration", {}).get("GITHUB_TOKEN") == "ghp_alice_real_token"
+        assert alice_creds.get("github-integration", {}).get("GITHUB_TOKEN") == "example-github-alice_real_token"
         assert not bob_creds.get("github-integration", {}).get("GITHUB_TOKEN")
 
 
@@ -585,7 +585,7 @@ async def test_cross_user_skills_remove_blocked():
         assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
         assert "wait" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
-        alice_msg = FakeMessage(chat=chat, text="ghp_alice_real_token")
+        alice_msg = FakeMessage(chat=chat, text="example-github-alice_real_token")
         await _th.handle_message(FakeUpdate(message=alice_msg, user=FakeUser(uid=100, username="alice"), chat=chat), FakeContext())
         assert alice_msg.deleted
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
@@ -620,7 +620,7 @@ async def test_cross_user_skills_clear_blocked():
         assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
         assert "wait" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
-        alice_msg = FakeMessage(chat=chat, text="ghp_alice_real_token")
+        alice_msg = FakeMessage(chat=chat, text="example-github-alice_real_token")
         await _th.handle_message(FakeUpdate(message=alice_msg, user=FakeUser(uid=100, username="alice"), chat=chat), FakeContext())
         assert alice_msg.deleted
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
@@ -656,7 +656,7 @@ async def test_cross_user_new_blocked():
         assert session["provider_state"].get("started")
         assert "wait" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
-        alice_msg = FakeMessage(chat=chat, text="ghp_alice_real_token")
+        alice_msg = FakeMessage(chat=chat, text="example-github-alice_real_token")
         await _th.handle_message(FakeUpdate(message=alice_msg, user=FakeUser(uid=100, username="alice"), chat=chat), FakeContext())
         assert alice_msg.deleted
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)

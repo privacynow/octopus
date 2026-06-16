@@ -1,10 +1,19 @@
 const fs = require('fs');
+const path = require('path');
 const { expect } = require('../playwright-runtime');
+
+const REPO_ROOT = path.resolve(__dirname, '../../../..');
+
+function registryEnvPath() {
+  const explicit = String(process.env.REGISTRY_ENV_FILE || process.env.OCTOPUS_REGISTRY_ENV_FILE || '').trim();
+  return explicit || path.join(REPO_ROOT, '.deploy', 'registry', '.env');
+}
 
 function registryUiToken() {
   const direct = String(process.env.REGISTRY_UI_TOKEN || '').trim();
   if (direct) return direct;
-  const envPath = '/Users/tinker/octopus/.deploy/registry/.env';
+  const envPath = registryEnvPath();
+  if (!fs.existsSync(envPath)) return '';
   const text = fs.readFileSync(envPath, 'utf8');
   for (const line of text.split(/\r?\n/)) {
     if (line.startsWith('REGISTRY_UI_TOKEN=')) {
@@ -12,6 +21,13 @@ function registryUiToken() {
     }
   }
   return '';
+}
+
+function capturePath(fileName) {
+  const baseDir = String(process.env.PLAYWRIGHT_OUTPUT_DIR || '').trim()
+    || path.join(REPO_ROOT, '.tmp', 'playwright');
+  fs.mkdirSync(baseDir, { recursive: true });
+  return path.join(baseDir, fileName);
 }
 
 function protocolIdFromUrl(urlText) {
@@ -60,6 +76,7 @@ async function firstExecutionReadyAgent(page, { preferredProvider = 'codex' } = 
       return {
         agentId: String(agent?.agent_id || ''),
         slug: String(agent?.slug || ''),
+        displayName: String(agent?.display_name || agent?.name || agent?.slug || ''),
         provider: String(agent?.provider || '').trim().toLowerCase(),
         connectivityState: String(agent?.connectivity_state || '').trim().toLowerCase(),
         executionState: String(agent?.execution_state || 'healthy').trim().toLowerCase(),
@@ -489,6 +506,7 @@ module.exports = {
   assertStandardAuthoringSurface,
   attachErrorCapture,
   backToWorkflow,
+  capturePath,
   connectStep,
   createStep,
   discardDraft,

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -22,10 +23,19 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "[docs/SKILLS_MODEL.md](docs/SKILLS_MODEL.md)" in readme
     assert "[docs/PROTOCOL_ASSIGNMENT_AUDIT.md](docs/PROTOCOL_ASSIGNMENT_AUDIT.md)" in readme
     assert "[docs/registry-openapi.json](docs/registry-openapi.json)" in readme
+    assert "[SECURITY.md](SECURITY.md)" in readme
+    assert "[CONTRIBUTING.md](CONTRIBUTING.md)" in readme
+    assert re.search(r"\bplan_(java|auto_protocol)\.md\b", readme) is None
+    assert "## Fresh Deployments" in readme
+    assert "## Reviewer Path" in readme
 
     assert "## Mac Setup" in getting_started
     assert "## Windows Setup" in getting_started
     assert "## Linux Or Ubuntu Setup" in getting_started
+    assert "## Fresh Public Host Setup" in getting_started
+    assert "Python 3.12 through 3.14" in getting_started
+    assert ".deploy/bots/.env.example" in getting_started
+    assert "`0.0.0.0` is only a listen address" in getting_started
     assert "Diagnose -> Provider auth" in getting_started
     assert "Docker Desktop" in getting_started
     assert "Provider authentication means" in getting_started
@@ -55,6 +65,11 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "Overwrite existing draft" in protocol_guide
 
     assert "[GETTING_STARTED.md](GETTING_STARTED.md)" in operations_guide
+    assert "## Deployment State" in operations_guide
+    assert "## Fresh Clone Vs Existing Host" in operations_guide
+    assert "## Deployment Cleanup Before Public Handoff" in operations_guide
+    assert "`Bot workspace cleanup` is the product-safe file cleanup path" in operations_guide
+    assert "`Reset registry workspace data` is a Registry-record reset" in operations_guide
     assert "./octopus status" in operations_guide
     assert "./octopus doctor <bot>" in operations_guide
     assert "Diagnose -> Provider auth" in operations_guide
@@ -80,6 +95,7 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert (manufacturing_walkthrough / "assets" / "16-artifact-generated-narrow.png").is_file()
 
     assert "`docs/registry-openapi.json`" in architecture
+    assert "`.deploy/` is generated operational state, not source." in architecture
     assert "`docs/GETTING_STARTED.md`" in architecture
     assert "`octopus_sdk/protocols/engine.py`" in architecture
     assert "kind = \"octopus.protocol_package\"" in architecture
@@ -91,6 +107,52 @@ def test_public_docs_are_progressive_and_link_current_artifacts() -> None:
     assert "`docs/PROTOCOL_ASSIGNMENT_AUDIT.md`" in architecture
     assert "`octopus_sdk/protocol_engine.py`" not in architecture
     assert "`octopus_sdk/protocol_bootstrap.py`" not in architecture
+
+
+def test_publication_metadata_and_live_test_paths_are_portable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    for rel in (
+        "LICENSE",
+        "NOTICE",
+        "SECURITY.md",
+        "CONTRIBUTING.md",
+        "CODE_OF_CONDUCT.md",
+        "constraints.txt",
+        ".github/workflows/ci.yml",
+    ):
+        assert (repo_root / rel).is_file(), rel
+
+    assert "All rights reserved." in (repo_root / "LICENSE").read_text(encoding="utf-8")
+    assert "Bundled browser dependencies" in (repo_root / "NOTICE").read_text(encoding="utf-8")
+    assert "Generated `.deploy/` contents are private operational state" in (
+        repo_root / "SECURITY.md"
+    ).read_text(encoding="utf-8")
+    assert "pip install -c constraints.txt" in (repo_root / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+    e2e_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (repo_root / "tests" / "e2e" / "playwright").rglob("*.js")
+    )
+    assert re.search(r"/Users/[^/\s]+/", e2e_text) is None
+    assert re.search(r"lift-and-shift-[a-z0-9-]*bot", e2e_text) is None
+    assert "REGISTRY_ENV_FILE" in e2e_text
+    assert "PLAYWRIGHT_OUTPUT_DIR" in e2e_text
+
+
+def test_public_dependency_defaults_are_pinned() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    constraints = (repo_root / "constraints.txt").read_text(encoding="utf-8")
+    dockerfile = (repo_root / "infra" / "docker" / "Dockerfile.bot").read_text(encoding="utf-8")
+    codex_installer = (repo_root / "scripts" / "provider" / "install_provider_codex.sh").read_text(encoding="utf-8")
+    claude_installer = (repo_root / "scripts" / "provider" / "install_provider_claude.sh").read_text(encoding="utf-8")
+
+    assert "fastapi==0.135.1" in constraints
+    assert "pytest==9.0.2" in constraints
+    assert "@openai/codex@0.36.0" in dockerfile
+    assert "@openai/codex@0.36.0" in codex_installer
+    assert "@anthropic-ai/claude-code@2.1.7" in dockerfile
+    assert "@anthropic-ai/claude-code@2.1.7" in claude_installer
 
 
 def test_top_level_doc_names_are_consistent() -> None:

@@ -268,14 +268,14 @@ def test_connect_targets_default_to_all_eligible_registry_bots(tmp_path: Path) -
 
 
 def test_resolve_bot_accepts_unique_display_name_alias(tmp_path: Path) -> None:
-    _write_registry_bot_env(tmp_path, "lift-and-shift-m1-bot", "M1")
-    _write_registry_bot_env(tmp_path, "lift-and-shift-m2-bot", "M2")
+    _write_registry_bot_env(tmp_path, "review-codex-primary", "M1")
+    _write_registry_bot_env(tmp_path, "review-codex-secondary", "M2")
     manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
     state = manager.inspect_state()
 
     bot = manager.resolve_bot("m1", state)
 
-    assert bot.slug == "lift-and-shift-m1-bot"
+    assert bot.slug == "review-codex-primary"
 
 
 def test_start_bot_rebuilds_provider_image_before_start(tmp_path: Path, monkeypatch) -> None:

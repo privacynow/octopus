@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fast-gate:
+    name: Fast gate / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt -r requirements.txt -r requirements-dev.txt
+
+      - name: Shell syntax
+        run: git ls-files '*.sh' | xargs bash -n
+
+      - name: Collect tests
+        run: python -m pytest --collect-only -q
+
+      - name: Focused deterministic tests
+        run: >
+          python -m pytest -q
+          tests/test_protocol_docs.py
+          tests/test_startup_diagnostics.py
+          tests/test_octopus_cli.py
+          tests/test_octopus_cli_manager.py
+          tests/test_registry_service.py::test_registry_openapi_asset_matches_generated_schema

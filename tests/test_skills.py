@@ -507,7 +507,7 @@ def test_encryption_roundtrip():
     assert len(enc_key) == 44  # Fernet base64
 
     # Round-trip: encrypt then decrypt
-    secret = "ghp_abc123_my_secret_token"
+    secret = "example-github-abc123_my_secret_token"
     encrypted = _encrypt(secret, enc_key)
     assert encrypted != secret
     decrypted = _decrypt(encrypted, enc_key)
@@ -548,18 +548,18 @@ def test_per_user_credential_storage():
         key = derive_encryption_key("test-bot-token")
 
         # Save credentials for user 111
-        save_user_credential(data_dir, 111, "github", "GITHUB_TOKEN", "ghp_alice", key)
+        save_user_credential(data_dir, 111, "github", "GITHUB_TOKEN", "example-github-alice", key)
         save_user_credential(data_dir, 111, "github", "GITHUB_ORG", "acme-corp", key)
         save_user_credential(data_dir, 111, "jira", "JIRA_TOKEN", "jira_alice", key)
 
         # Save credentials for user 222
-        save_user_credential(data_dir, 222, "github", "GITHUB_TOKEN", "ghp_bob", key)
+        save_user_credential(data_dir, 222, "github", "GITHUB_TOKEN", "example-github-bob", key)
 
         # Load user 111's credentials
         creds_111 = load_user_credentials(data_dir, 111, key)
         assert "github" in creds_111
         assert "jira" in creds_111
-        assert creds_111["github"]["GITHUB_TOKEN"] == "ghp_alice"
+        assert creds_111["github"]["GITHUB_TOKEN"] == "example-github-alice"
         assert creds_111["github"]["GITHUB_ORG"] == "acme-corp"
         assert creds_111["jira"]["JIRA_TOKEN"] == "jira_alice"
 
@@ -567,16 +567,16 @@ def test_per_user_credential_storage():
         creds_222 = load_user_credentials(data_dir, 222, key)
         assert "github" in creds_222
         assert "jira" not in creds_222
-        assert creds_222["github"]["GITHUB_TOKEN"] == "ghp_bob"
+        assert creds_222["github"]["GITHUB_TOKEN"] == "example-github-bob"
 
         # Nonexistent user returns empty
         creds_999 = load_user_credentials(data_dir, 999, key)
         assert creds_999 == {}
 
         # Overwrite existing credential
-        save_user_credential(data_dir, 111, "github", "GITHUB_TOKEN", "ghp_alice_new", key)
+        save_user_credential(data_dir, 111, "github", "GITHUB_TOKEN", "example-github-alice_new", key)
         creds_111_new = load_user_credentials(data_dir, 111, key)
-        assert creds_111_new["github"]["GITHUB_TOKEN"] == "ghp_alice_new"
+        assert creds_111_new["github"]["GITHUB_TOKEN"] == "example-github-alice_new"
         # Other credentials not affected
         assert creds_111_new["github"]["GITHUB_ORG"] == "acme-corp"
 
@@ -687,14 +687,14 @@ def test_check_credentials():
 
 def test_build_credential_env():
     user_creds = {
-        "github": {"GITHUB_TOKEN": "ghp_123", "GITHUB_ORG": "acme"},
+        "github": {"GITHUB_TOKEN": "example-github-123", "GITHUB_ORG": "acme"},
         "jira": {"JIRA_TOKEN": "jira_abc"},
         "unused-skill": {"UNUSED_KEY": "val"},
     }
 
     # Only active skills' creds are included
     env = build_credential_env(["github", "jira"], user_creds)
-    assert env.get("GITHUB_TOKEN") == "ghp_123"
+    assert env.get("GITHUB_TOKEN") == "example-github-123"
     assert env.get("GITHUB_ORG") == "acme"
     assert env.get("JIRA_TOKEN") == "jira_abc"
     assert "UNUSED_KEY" not in env
@@ -751,9 +751,9 @@ def test_awaiting_skill_setup_persistence():
 def test_run_context_with_credential_env():
     ctx_with_creds = build_run_context(
         "engineer", ["code-review"], ["/tmp/uploads/123"],
-        credential_env={"GITHUB_TOKEN": "ghp_test", "API_KEY": "secret"},
+        credential_env={"GITHUB_TOKEN": "example-github-test", "API_KEY": "secret"},
     )
-    assert ctx_with_creds.credential_env["GITHUB_TOKEN"] == "ghp_test"
+    assert ctx_with_creds.credential_env["GITHUB_TOKEN"] == "example-github-test"
     assert ctx_with_creds.credential_env["API_KEY"] == "secret"
     assert "engineer" in ctx_with_creds.system_prompt
 
@@ -807,12 +807,12 @@ config_overrides:
 def test_placeholder_resolution():
     from tests.support.skill_test_helpers import _resolve_placeholders
 
-    env = {"GITHUB_TOKEN": "ghp_test123", "API_KEY": "secret"}
-    assert _resolve_placeholders("${GITHUB_TOKEN}", env) == "ghp_test123"
+    env = {"GITHUB_TOKEN": "example-github-test123", "API_KEY": "secret"}
+    assert _resolve_placeholders("${GITHUB_TOKEN}", env) == "example-github-test123"
     assert _resolve_placeholders("hello", env) == "hello"
     assert _resolve_placeholders("${UNKNOWN}", env) == "${UNKNOWN}"
     assert _resolve_placeholders({"key": "${API_KEY}"}, env) == {"key": "secret"}
-    assert _resolve_placeholders(["${GITHUB_TOKEN}", "static"], env) == ["ghp_test123", "static"]
+    assert _resolve_placeholders(["${GITHUB_TOKEN}", "static"], env) == ["example-github-test123", "static"]
     assert _resolve_placeholders({"a": ["${API_KEY}"]}, env) == {"a": ["secret"]}
 
 
@@ -822,12 +822,12 @@ def test_placeholder_resolution():
 
 def test_build_provider_config():
     # Claude config for github-integration
-    claude_config = build_provider_config("claude", ["github-integration"], {"GITHUB_TOKEN": "ghp_real"})
+    claude_config = build_provider_config("claude", ["github-integration"], {"GITHUB_TOKEN": "example-github-real"})
     assert "mcp_servers" in claude_config
     assert "allowed_tools" in claude_config
     # Placeholder should be resolved
     mcp_env = claude_config.get("mcp_servers", {}).get("github", {}).get("env", {})
-    assert mcp_env.get("GITHUB_PERSONAL_ACCESS_TOKEN") == "ghp_real"
+    assert mcp_env.get("GITHUB_PERSONAL_ACCESS_TOKEN") == "example-github-real"
 
     # Codex config for github-integration
     codex_config = build_provider_config("codex", ["github-integration"], {})
@@ -940,11 +940,11 @@ def test_codex_provider_config_cli_flags():
 def test_run_context_with_provider_config():
     ctx_p3 = build_run_context(
         "engineer", ["github-integration"], ["/tmp/test"],
-        provider_name="claude", credential_env={"GITHUB_TOKEN": "ghp_xxx"},
+        provider_name="claude", credential_env={"GITHUB_TOKEN": "example-github-xxx"},
     )
     assert bool(ctx_p3.provider_config)
     assert "MCP server" in ctx_p3.active_skill_tools_summary
-    assert ctx_p3.credential_env.get("GITHUB_TOKEN") == "ghp_xxx"
+    assert ctx_p3.credential_env.get("GITHUB_TOKEN") == "example-github-xxx"
 
     # PreflightContext includes active_skill_tools_summary but no secrets
     pf_p3 = build_preflight_context(

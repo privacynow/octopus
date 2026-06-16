@@ -4,6 +4,7 @@ const {
   createStep,
   discardDraft,
   login,
+  capturePath,
   outlineStepNode,
   openBlankDraft,
   openStagePanel,
@@ -33,10 +34,10 @@ test('capture protocol authoring states', async ({ page }) => {
 
   await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Protocols', exact: true })).toBeVisible();
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-list-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-list-page.png'), fullPage: true });
 
   await openBlankDraft(page);
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-blank-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-blank-page.png'), fullPage: true });
 
   const lifecycle = page.locator('.kit-lifecycle-header');
   await lifecycle.getByLabel('Name').fill(`Visual Review ${Date.now()}`);
@@ -51,7 +52,7 @@ test('capture protocol authoring states', async ({ page }) => {
   });
   await stepBasics.getByLabel('Name').fill('Plan');
   await stepBasics.getByLabel('Role name').fill('Planner');
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-step-create-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-step-create-page.png'), fullPage: true });
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   const planKey = await createStep(page, {
@@ -79,54 +80,54 @@ test('capture protocol authoring states', async ({ page }) => {
   await selectStep(page, reviewKey);
   await expect(page.getByTestId('stage-route-review::accept')).toBeVisible();
 
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-detail-page.png'), fullPage: true });
   await page.locator('.kit-authoring-primary-column').screenshot({
-    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-detail-focus.png',
+    path: capturePath('protocol-detail-focus.png'),
   });
 
   await discardDraft(page);
 
   await openTemplateDraft(page, 'Software Engineering', { expectedStageKeys: SOFTWARE_ENGINEERING_STAGE_KEYS });
   await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-overview-page.png'), fullPage: true });
   await page.locator('.kit-authoring-primary-column').screenshot({
-    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-overview-focus.png',
+    path: capturePath('protocol-overview-focus.png'),
   });
 
   await page.getByTestId('workflow-stage-planning').click();
   await expect(page.locator('.kit-stage-editor').getByLabel('Name').first()).toHaveValue('Planning');
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-focus-page.png'), fullPage: true });
   await page.locator('.kit-authoring-primary-column').screenshot({
-    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-focus-detail.png',
+    path: capturePath('protocol-focus-detail.png'),
   });
 
   await selectStep(page, 'planning');
   await expect(page.locator('.kit-stage-editor')).toBeVisible();
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-full-page.png'), fullPage: true });
   await page.getByRole('button', { name: 'Show workflow map', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Hide workflow map', exact: true })).toBeVisible();
   await page.locator('.kit-workflow-canvas').first().screenshot({
-    path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-full-graph.png',
+    path: capturePath('protocol-full-graph.png'),
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator('.kit-workflow-viewbar')).toContainText('Workflow stages');
   await expect(page.getByRole('button', { name: 'Topology' })).toHaveCount(0);
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-process-page.png' });
+  await page.screenshot({ path: capturePath('protocol-mobile-process-page.png') });
   await selectStep(page, 'planning');
   await expect(page.locator('.kit-stage-editor').getByLabel('Name').first()).toHaveValue('Planning');
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-mobile-focus-page.png' });
+  await page.screenshot({ path: capturePath('protocol-mobile-focus-page.png') });
 
   await discardDraft(page);
 
   await openTemplateDraft(page, 'Document Approval', { expectedStageKeys: DOCUMENT_APPROVAL_STAGE_KEYS });
   await expect(page.getByTestId('workflow-stage-draft_document')).toBeVisible();
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-document-approval-page.png'), fullPage: true });
   await page.getByTestId('workflow-stage-draft_document').click();
   await expect(await outlineStepNode(page, 'draft_document')).toBeVisible();
   await selectStep(page, 'draft_document');
   await expect(page.locator('.kit-stage-editor').first().getByRole('tab', { name: 'Assignment', exact: true })).toBeVisible();
-  await page.screenshot({ path: '/Users/tinker/output/bots/telegram-agent-bot/.tmp/playwright/protocol-document-approval-participant-page.png', fullPage: true });
+  await page.screenshot({ path: capturePath('protocol-document-approval-participant-page.png'), fullPage: true });
 
   await discardDraft(page);
 });

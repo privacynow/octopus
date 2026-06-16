@@ -1,0 +1,32 @@
+Octopus Agent Platform
+Copyright (c) 2026 PrivacyNow. All rights reserved.
+
+Bundled browser dependencies
+============================
+
+The Registry UI vendors a small number of browser-side dependencies so the
+local UI can run without a JavaScript package installation step.
+
+- Cytoscape.js
+  - File: octopus_registry/ui/vendor/cytoscape.umd.js
+  - License: MIT
+  - Copyright: The Cytoscape Consortium
+
+- Eclipse Layout Kernel for JavaScript
+  - File: octopus_registry/ui/vendor/elk.bundled.js
+  - License: Eclipse Public License 2.0
+  - Copyright: Kiel University and others
+
+- Fuse.js
+  - File: octopus_registry/ui/vendor/fuse.min.js
+  - License: Apache License 2.0
+  - Copyright: Kiro Risk
+
+- morphdom
+  - File: octopus_registry/ui/vendor/morphdom.min.js
+  - License: MIT
+
+The files octopus_registry/ui/vendor/purify.min.js and
+octopus_registry/ui/vendor/marked.min.js are local minimal compatibility
+implementations for the Registry UI sanitizer and Markdown-rendering surfaces.
+They are not full upstream DOMPurify or marked.js distributions.

@@ -28,7 +28,6 @@ from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
     ProtocolAutoDesignEventSummaryRecord,
-    ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
@@ -77,8 +76,6 @@ from octopus_sdk.protocols import (
     stage_target_for_decision,
     auto_protocol_event_summary,
     auto_protocol_runtime_expected_from_text,
-    generate_auto_protocol_session,
-    revise_auto_protocol_session,
     validate_protocol_document,
 )
 from octopus_sdk.protocols.documents import draft_protocol_document_data, protocol_materialize_artifact_path
@@ -3844,25 +3841,6 @@ class ProtocolPostgresAdapter:
             payload_map.setdefault("created_at", row.get("created_at", ""))
             events.append(record(ProtocolAutoDesignEventSummaryRecord, payload_map))
         return events
-
-    def create_protocol_auto_design_session(
-        self,
-        payload: ProtocolAutoDesignRequestRecord,
-        *,
-        access: ProtocolAccessContextRecord,
-    ) -> ProtocolAutoDesignSessionRecord:
-        if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
-            raise PermissionError("Auto Protocol requires agent or author access.")
-        session_id = uuid.uuid4().hex
-        now = utcnow_iso()
-        request = payload.model_copy(update={
-            "actor_ref": payload.actor_ref or self._access_actor_ref(access),
-        })
-        if request.mode == "revise":
-            session = revise_auto_protocol_session(request, session_id=session_id, created_at=now, updated_at=now)
-        else:
-            session = generate_auto_protocol_session(request, session_id=session_id, created_at=now, updated_at=now)
-        return self.update_protocol_auto_design_session(session, access=access, event_kind="created")
 
     def save_protocol_draft(
         self,

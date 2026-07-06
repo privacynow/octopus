@@ -38,6 +38,7 @@ from octopus_sdk.protocols import (
     resolve_launchable_protocol,
     runtime_manifest_run_ready_blockers,
     validate_protocol_document,
+    generate_auto_protocol_session,
 )
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.protocols.launch import ProtocolConversationLaunchRequestRecord
@@ -4104,7 +4105,7 @@ def test_protocol_fork_missing_snapshot_blocks_with_actionable_list(
 
 def test_auto_protocol_run_lessons_round_trip(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
-    session = store.create_protocol_auto_design_session(
+    generated = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord.model_validate(
             {
                 "mode": "create",
@@ -4119,8 +4120,11 @@ def test_auto_protocol_run_lessons_round_trip(postgres_registry_truncated: str) 
                 ],
             }
         ),
-        access=operator_access(),
+        session_id="auto-run-lessons",
+        created_at="2026-04-16T00:00:00+00:00",
+        updated_at="2026-04-16T00:00:00+00:00",
     )
+    session = store.update_protocol_auto_design_session(generated, access=operator_access(), event_kind="generated")
 
     fetched = store.get_protocol_auto_design_session(session.session_id, access=operator_access())
     assert fetched.run_lessons[0].category == "journey_failure"

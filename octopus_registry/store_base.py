@@ -21,7 +21,6 @@ from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
     ProtocolAutoDesignEventSummaryRecord,
-    ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolAccessContextRecord,
     ProtocolDefinitionDocumentRecord,
@@ -910,14 +909,6 @@ class AbstractRegistryStore(Protocol):
         format: str = "json",
     ) -> ProtocolDefinitionDiffRecord:
         """Return a unified diff between the current draft and the latest published version."""
-
-    def create_protocol_auto_design_session(
-        self,
-        payload: ProtocolAutoDesignRequestRecord,
-        *,
-        access: ProtocolAccessContextRecord,
-    ) -> ProtocolAutoDesignSessionRecord:
-        """Create a generated or revision Auto Protocol session."""
 
     def get_protocol_auto_design_session(
         self,

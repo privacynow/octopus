@@ -280,6 +280,14 @@ class DockerRunner:
     def ensure_provider_auth_dir(self, provider: str) -> Path:
         return ensure_provider_auth_dir(self.repo_dir, provider)
 
+    def provider_env_files(self, provider: str) -> list[Path]:
+        env_files: list[Path] = []
+        for env_file in sorted((self.repo_dir / ".deploy" / "bots").glob("*/.env")):
+            values = parse_env_file(env_file)
+            if values.get("BOT_PROVIDER", "claude") == provider:
+                env_files.append(env_file)
+        return env_files or [Path("/dev/null")]
+
     def bot_compose_command(self, slug: str, *args: str, shared: bool = False) -> tuple[list[str], dict[str, str]]:
         env_file = self.repo_dir / ".deploy" / "bots" / slug / ".env"
         values = parse_env_file(env_file)
@@ -318,8 +326,13 @@ class DockerRunner:
         }
         return command, env
 
-    def provider_compose_command(self, provider: str, *args: str) -> tuple[list[str], dict[str, str]]:
+    def provider_compose_command(self, provider: str, *args: str, env_file: Path | None = None) -> tuple[list[str], dict[str, str]]:
         auth_dir = str(self.ensure_provider_auth_dir(provider))
+        selected_env_file = env_file or self.provider_env_files(provider)[0]
+        if selected_env_file == Path("/dev/null"):
+            bot_env_file = "/dev/null"
+        else:
+            bot_env_file = str(selected_env_file.relative_to(self.repo_dir))
         command = [
             "docker",
             "compose",
@@ -338,7 +351,7 @@ class DockerRunner:
             "BOT_PROVIDER": provider,
             "OCTOPUS_RUNTIME_IMAGE": f"octopus-agent:{provider}",
             "PROVIDER_AUTH_DIR": auth_dir,
-            "BOT_ENV_FILE": "/dev/null",
+            "BOT_ENV_FILE": bot_env_file,
             "REGISTRY_ENROLL_TOKEN": os.environ.get("REGISTRY_ENROLL_TOKEN", "placeholder-registry-enroll"),
             "REGISTRY_UI_TOKEN": os.environ.get("REGISTRY_UI_TOKEN", "placeholder-registry-ui"),
         }
@@ -375,9 +388,16 @@ class DockerRunner:
         command, env = self.bot_compose_command(slug, *args)
         return self.run(command, env=env, capture_output=capture_output, check=check)
 
-    def provider_compose(self, provider: str, *args: str, capture_output: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def provider_compose(
+        self,
+        provider: str,
+        *args: str,
+        env_file: Path | None = None,
+        capture_output: bool = True,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
         self.ensure_network()
-        command, env = self.provider_compose_command(provider, *args)
+        command, env = self.provider_compose_command(provider, *args, env_file=env_file)
         return self.run(command, env=env, capture_output=capture_output, check=check)
 
     def registry_compose(self, *args: str, capture_output: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -1104,21 +1124,31 @@ class OctopusManager:
                 freshness = self.image_freshness().get(f"bot:{provider}")
                 if freshness is not None and not freshness.image_exists:
                     return None, "Provider image is missing."
-            result = self.docker.provider_compose(
-                provider,
-                "run",
-                "--rm",
-                "bot-provider",
-                "python",
-                "-m",
-                "app.main",
-                "--provider-health",
-                check=False,
-            )
+            results: list[str] = []
+            healthy = True
+            for env_file in self.docker.provider_env_files(provider):
+                result = self.docker.provider_compose(
+                    provider,
+                    "run",
+                    "--rm",
+                    "bot-provider",
+                    "python",
+                    "-m",
+                    "app.main",
+                    "--provider-health",
+                    env_file=env_file,
+                    check=False,
+                )
+                label = "/dev/null" if env_file == Path("/dev/null") else str(env_file.relative_to(self.repo_dir))
+                output = ((result.stdout or "") + (result.stderr or "")).strip()
+                if result.returncode != 0:
+                    healthy = False
+                    results.append(f"{label}: {output}" if output else f"{label}: failed")
+                elif output:
+                    results.append(f"{label}: {output}")
         except (OSError, subprocess.SubprocessError) as exc:
             return None, str(exc)
-        output = ((result.stdout or "") + (result.stderr or "")).strip()
-        return result.returncode == 0, output
+        return healthy, "\n".join(results)
 
     def ensure_provider_auth_ready(self, provider: str) -> None:
         if provider_has_auth_files(self.repo_dir, provider):
@@ -1131,6 +1161,17 @@ class OctopusManager:
         else:
             self.io.error("Provider authentication is required. Starting the login flow now.")
         self.ensure_provider_image_ready(provider)
+        if provider == "codex":
+            result = self.docker.run(
+                ["./scripts/provider/provider_login.sh", "codex"],
+                capture_output=False,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise OctopusError(
+                    "Provider login did not complete for codex. Finish login, then run ./octopus again."
+                )
+            return
         result = self.docker.provider_compose(
             provider,
             "run",

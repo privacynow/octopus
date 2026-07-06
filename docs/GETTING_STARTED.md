@@ -267,7 +267,8 @@ What to expect:
   `CODEX_HOME` pointed at `.deploy/provider-auth/codex/.codex`. This keeps the
   browser callback on the same host as the login server. Follow the CLI
   instructions, sign in, approve access, and wait for the command to return
-  successfully. Octopus then verifies the saved auth from inside the bot image.
+  successfully. Octopus then verifies the saved auth from inside the bot image
+  using the configured Codex bot environment.
 - Claude-backed agents usually open an interactive Claude session. If it is not
   already logged in, run `/login`, finish the browser or token flow, then run
   `/exit`.

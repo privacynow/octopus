@@ -16,6 +16,16 @@ def test_provider_auth_scripts_export_runtime_image_for_compose_interpolation() 
         assert text.index('OCTOPUS_RUNTIME_IMAGE="octopus-agent:$provider" \\') < text.index("docker compose")
 
 
+def test_provider_status_checks_configured_bot_env_files() -> None:
+    script = REPO_ROOT / "scripts" / "provider" / "provider_status.sh"
+    text = script.read_text(encoding="utf-8")
+
+    assert "for candidate in .deploy/bots/*/.env" in text
+    assert 'if [ "$candidate_provider" = "$provider" ]; then' in text
+    assert 'BOT_ENV_FILE="$bot_env_file" \\' in text
+    assert 'BOT_ENV_FILE="/dev/null" \\' not in text
+
+
 def test_container_provider_login_rejects_codex_interactive_login() -> None:
     result = subprocess.run(
         ["bash", str(REPO_ROOT / "scripts" / "provider" / "container_provider_login.sh")],

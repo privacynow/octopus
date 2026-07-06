@@ -37,6 +37,8 @@ from octopus_sdk.protocols import (
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
+    ProtocolRunForkRequestRecord,
+    ProtocolRunForkResultRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
@@ -962,6 +964,16 @@ class AbstractRegistryStore(Protocol):
         idempotency_key: str = "",
     ) -> ProtocolRunMutationRecord:
         """Create a protocol run and dispatch its first stage."""
+
+    def fork_protocol_run_from_stage(
+        self,
+        run_id: str,
+        payload: ProtocolRunForkRequestRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunForkResultRecord:
+        """Create a new protocol run from a selected stage boundary."""
 
     def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
         """Return one protocol run with participants, stages, artifacts, and transitions."""

@@ -93,6 +93,13 @@ function _protocolRunTaskHref(runId, routedTaskId) {
     return query ? `/ui/tasks?${query}` : '/ui/tasks';
 }
 
+function _protocolRunHref(runId) {
+    const params = new URLSearchParams();
+    if (runId) params.set('run_id', String(runId));
+    const query = params.toString();
+    return query ? `/ui/runs?${query}` : '/ui/runs';
+}
+
 function _protocolArtifactDisplayPath(item) {
     return String(item?.location || item?.workspace_path || '').trim();
 }
@@ -8993,6 +9000,76 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _openForkRunDialog(stageExecution, mode = 'rerun_selected') {
+        if (!currentRun?.run?.protocol_run_id || !stageExecution?.protocol_stage_execution_id) {
+            UI.notify('Select a stage before forking this run.', 'warning');
+            return;
+        }
+        const normalizedMode = mode === 'continue_after' ? 'continue_after' : 'rerun_selected';
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = normalizedMode === 'continue_after'
+            ? 'Create a new run, copy snapshots through this stage, seed the prior context, and continue at the next stage.'
+            : 'Create a new run, copy snapshots before this stage, and rerun this selected stage in a separate workspace prefix.';
+        form.appendChild(note);
+        const reasonInput = document.createElement('textarea');
+        reasonInput.className = 'guidance-textarea';
+        reasonInput.rows = 4;
+        reasonInput.placeholder = 'Optional reason for the fork audit trail';
+        form.appendChild(reasonInput);
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = 'btn btn-primary';
+        confirmBtn.textContent = normalizedMode === 'continue_after' ? 'Continue in new run' : 'Rerun stage in new run';
+        const view = UI.showDialog(normalizedMode === 'continue_after' ? 'Continue after stage' : 'Rerun selected stage', form, {
+            actions: [cancelBtn, confirmBtn],
+            maxWidth: '620px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        confirmBtn.addEventListener('click', async () => {
+            confirmBtn.disabled = true;
+            try {
+                const result = await API.forkProtocolRunFromStage(
+                    currentRun.run.protocol_run_id,
+                    {
+                        stage_execution_id: stageExecution.protocol_stage_execution_id,
+                        fork_mode: normalizedMode,
+                        fork_reason: String(reasonInput.value || '').trim(),
+                    },
+                    {
+                        idempotencyKey: (window.crypto && typeof window.crypto.randomUUID === 'function')
+                            ? window.crypto.randomUUID().replace(/-/g, '')
+                            : `${Date.now()}${Math.random().toString(16).slice(2)}`,
+                    },
+                );
+                view.close();
+                await loadRuns();
+                if (result?.run?.protocol_run_id) {
+                    _setRunSelection(result.run.protocol_run_id);
+                }
+                UI.notify('Forked protocol run created.', 'success');
+                renderRunsRoute();
+            } catch (err) {
+                if (String(err?.errorCode || '') === 'PROTOCOL_FORK_SNAPSHOTS_MISSING') {
+                    const missing = Array.isArray(err?.details?.missing_snapshots)
+                        ? err.details.missing_snapshots.join(', ')
+                        : '';
+                    UI.notify(missing ? `Fork needs snapshots: ${missing}` : 'Fork needs durable artifact snapshots before it can continue.', 'warning', { timeout: 0 });
+                } else {
+                    UI.reportError('Fork run failed', err, { context: 'Protocol fork failed' });
+                }
+            } finally {
+                confirmBtn.disabled = false;
+            }
+        });
+    }
+
     function _openImproveRunDialog() {
         if (!currentRun?.run?.protocol_id) {
             UI.notify('Select a run with a protocol before improving it.', 'warning');
@@ -9110,6 +9187,7 @@ function renderProtocolRuns(container) {
                     mode: 'revise',
                     surface: 'registry',
                     target_protocol_id: sourceRun.run.protocol_id,
+                    source_run_id: sourceRun.run.protocol_run_id,
                     requirement_text: _runImprovementRequirement(sourceRun, changeRequest),
                     constraints_text: _runImprovementContext(sourceRun),
                     resource_refs: resourcePicker.resourceRefs(),
@@ -9945,6 +10023,32 @@ function renderProtocolRuns(container) {
                 problem.textContent = _compactRunText(run.problem_statement, 220);
                 main.appendChild(problem);
             }
+            const parentRunId = String(run.parent_protocol_run_id || '').trim();
+            const childRuns = (runs || [])
+                .filter((item) => String(item.parent_protocol_run_id || '').trim() === String(run.protocol_run_id || '').trim())
+                .slice(0, 4);
+            if (parentRunId || childRuns.length) {
+                const lineage = document.createElement('div');
+                lineage.className = 'run-focus-lineage';
+                if (parentRunId) {
+                    const parent = document.createElement('a');
+                    parent.href = _protocolRunHref(parentRunId);
+                    parent.textContent = `Forked from ${parentRunId.slice(0, 8)}`;
+                    lineage.appendChild(parent);
+                    if (run.fork_mode) {
+                        const mode = document.createElement('span');
+                        mode.textContent = String(run.fork_mode || '').replace(/_/g, ' ');
+                        lineage.appendChild(mode);
+                    }
+                }
+                childRuns.forEach((child) => {
+                    const childLink = document.createElement('a');
+                    childLink.href = _protocolRunHref(child.protocol_run_id);
+                    childLink.textContent = `Child ${String(child.protocol_run_id || '').slice(0, 8)}`;
+                    lineage.appendChild(childLink);
+                });
+                main.appendChild(lineage);
+            }
             hero.appendChild(main);
 
             const state = document.createElement('div');
@@ -10294,6 +10398,18 @@ function renderProtocolRuns(container) {
                 openConversation.textContent = 'Open activity';
                 actions.appendChild(openConversation);
             }
+            const rerunFork = document.createElement('button');
+            rerunFork.type = 'button';
+            rerunFork.className = 'btn btn-sm';
+            rerunFork.textContent = 'Rerun from here';
+            rerunFork.addEventListener('click', () => _openForkRunDialog(item, 'rerun_selected'));
+            actions.appendChild(rerunFork);
+            const continueFork = document.createElement('button');
+            continueFork.type = 'button';
+            continueFork.className = 'btn btn-sm';
+            continueFork.textContent = 'Continue after';
+            continueFork.addEventListener('click', () => _openForkRunDialog(item, 'continue_after'));
+            actions.appendChild(continueFork);
             if (actions.childElementCount) {
                 card.appendChild(actions);
             }

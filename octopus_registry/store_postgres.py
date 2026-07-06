@@ -36,6 +36,8 @@ from octopus_sdk.protocols import (
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
+    ProtocolRunForkRequestRecord,
+    ProtocolRunForkResultRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
@@ -1457,6 +1459,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
         idempotency_key: str = "",
     ) -> ProtocolRunMutationRecord:
         return self._protocol_store.create_protocol_run(
+            payload,
+            access=access,
+            idempotency_key=idempotency_key,
+        )
+
+    def fork_protocol_run_from_stage(
+        self,
+        run_id: str,
+        payload: ProtocolRunForkRequestRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunForkResultRecord:
+        return self._protocol_store.fork_protocol_run_from_stage(
+            run_id,
             payload,
             access=access,
             idempotency_key=idempotency_key,

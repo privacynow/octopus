@@ -32,6 +32,7 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "available_agents": agents,
         "available_skills": skills,
         "workspace_ref": request.workspace_ref,
+        "run_lessons": [item.model_dump(mode="json") for item in request.run_lessons or []],
     }
     return (
         "You are designing an Octopus Auto Protocol plan. Return only valid JSON. "

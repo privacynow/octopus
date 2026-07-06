@@ -36,6 +36,7 @@ from octopus_sdk.protocols import (
     ProtocolPackageSkillPlanRecord,
     ProtocolPackageStageMappingPlanRecord,
     ProtocolRunCreateRecord,
+    ProtocolRunForkRequestRecord,
     ProtocolRuntimeCapabilityExchangeRecord,
     ProtocolRuntimeJourneyResultRecord,
     ProtocolRuntimeJourneySpecRecord,
@@ -433,6 +434,13 @@ def build_protocol_router(
             return _protocol_http_error(409, error_code="IDEMPOTENCY_REPLAY", message=message)
         if status == "concurrent_modification":
             return _protocol_http_error(409, error_code="CONCURRENT_MODIFICATION", message=message)
+        if status == "missing_snapshots":
+            return _protocol_http_error(
+                409,
+                error_code="PROTOCOL_FORK_SNAPSHOTS_MISSING",
+                message=message,
+                details={"missing_snapshots": list(getattr(result, "missing_snapshots", []) or [])},
+            )
         if status == "duplicate_slug":
             return _protocol_http_error(409, error_code="PROTOCOL_DUPLICATE_SLUG", message=message)
         if status == "invalid_action":
@@ -593,6 +601,61 @@ def build_protocol_router(
             "enabled": row.get("enabled"),
         }
 
+    def _auto_protocol_run_lessons(store: AbstractRegistryStore, run_id: str, access: ProtocolAccessContextRecord) -> list[dict[str, str]]:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return []
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+        except Exception:
+            return []
+        lessons: list[dict[str, str]] = []
+
+        def add(category: str, summary: str, source_ref: str) -> None:
+            text = re.sub(r"\s+", " ", str(summary or "")).strip()
+            if not text:
+                return
+            key = (category, text.lower(), source_ref)
+            if any((item["category"], item["summary"].lower(), item["source_ref"]) == key for item in lessons):
+                return
+            lessons.append({
+                "category": category,
+                "summary": text[:500],
+                "source_ref": source_ref,
+            })
+
+        run = detail.run
+        if run.blocked_code:
+            add("blocked", f"Prior run blocked with {run.blocked_code}: {run.blocked_detail}", f"protocol-run:{run.protocol_run_id}")
+        for stage in detail.stage_executions:
+            if stage.failure_code:
+                add(
+                    "stage_failure",
+                    f"Stage {stage.stage_key} failed or blocked with {stage.failure_code}: {stage.failure_detail}",
+                    f"stage:{stage.protocol_stage_execution_id}",
+                )
+            elif stage.decision_summary:
+                add("decision", f"Stage {stage.stage_key} recorded: {stage.decision_summary}", f"stage:{stage.protocol_stage_execution_id}")
+        for event in detail.runtime_events:
+            kind = str(event.event_kind or "")
+            if kind in {"journey_failed", "client_error", "health_checked", "runtime_error"}:
+                add("runtime", f"Runtime event {kind}: {event.summary}", f"runtime-event:{event.runtime_event_id}")
+        for transition in detail.transitions:
+            if transition.error_code or transition.transition_kind in {"late_result", "runtime_evidence_auto_accept", "task_cancel_requested"}:
+                add(
+                    "transition",
+                    f"{transition.transition_kind}: {transition.reason or transition.error_code}",
+                    f"transition:{transition.protocol_transition_id}",
+                )
+        for artifact in detail.artifacts:
+            if artifact.exists is False or str(artifact.verification_state or "") in {"missing", "declared"}:
+                add(
+                    "artifact",
+                    f"Artifact {artifact.artifact_key} was not proved available at {artifact.workspace_path or artifact.location}.",
+                    f"artifact:{artifact.artifact_key}",
+                )
+        return lessons[:20]
+
     def _auto_protocol_request(
         payload: dict[str, Any],
         *,
@@ -653,6 +716,10 @@ def build_protocol_router(
                     error_code="RESOURCE_NOT_FOUND",
                     message=f"Attached resource was not found: {resource_id}",
                 ) from exc
+        explicit_lessons = payload.get("run_lessons", []) if isinstance(payload.get("run_lessons", []), list) else []
+        source_run_id = str(payload.get("source_run_id") or "").strip()
+        run_lessons = [item for item in explicit_lessons if isinstance(item, Mapping)]
+        run_lessons.extend(_auto_protocol_run_lessons(store, source_run_id, access))
         return ProtocolAutoDesignRequestRecord.model_validate({
             "mode": mode,
             "surface": str(payload.get("surface") or ("telegram" if auth.is_agent else "registry")),
@@ -669,6 +736,7 @@ def build_protocol_router(
             "actor_ref": access.actor_ref,
             "chat_ref": str(payload.get("chat_ref") or ""),
             "resource_refs": resource_refs,
+            "run_lessons": run_lessons,
             "idempotency_key": str(payload.get("idempotency_key") or ""),
         })
 
@@ -714,6 +782,7 @@ def build_protocol_router(
                     actor_ref=request_payload.actor_ref,
                     chat_ref=request_payload.chat_ref,
                     resource_refs=request_payload.resource_refs,
+                    run_lessons=request_payload.run_lessons,
                 ),
             ),
             timeout_seconds=90,
@@ -3683,6 +3752,39 @@ def build_protocol_router(
             run_id=run_id,
             event_kind="protocol_run.terminal" if str(result.run.status if result.run is not None else "") in {"completed", "failed", "cancelled"} else "protocol_run.updated",
             reason=f"protocol.run.{action}",
+        )
+        return _json_payload(result)
+
+    @router.post("/v1/protocol-runs/{run_id}/fork-from-stage")
+    async def resource_fork_protocol_run_from_stage(
+        run_id: str,
+        payload: ProtocolRunForkRequestRecord,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.fork_protocol_run_from_stage(
+            run_id,
+            payload,
+            access=protocol_access(auth),
+            idempotency_key=str(idempotency_key or "").strip(),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        topics = {"protocols", "summary", f"protocol-run:{run_id}"}
+        if result.run is not None:
+            topics.add(f"protocol-run:{result.run.protocol_run_id}")
+        await broadcast_invalidations(topics=topics, reason="protocol.run.forked")
+        if result.run is not None:
+            await broadcast_topic_event(
+                run_id=result.run.protocol_run_id,
+                event_kind="protocol_run.updated",
+                reason="protocol.run.forked",
+            )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_run.updated",
+            reason="protocol.run.fork_child_created",
         )
         return _json_payload(result)
 

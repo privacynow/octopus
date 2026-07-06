@@ -299,6 +299,13 @@ build run-context requirement text from the selected run, then create a
 separate artifact patcher, run-specific generator, or Telegram-only protocol
 revision path.
 
+Run improvement also carries structured `run_lessons` alongside the compacted
+run context. Lessons are harvested from blocker codes, transitions, runtime
+events, review decisions, missing artifacts, and operator feedback, then merged
+into the revised protocol metadata so the next generated draft can strengthen
+stages, hooks, acceptance contracts, and reviewer instructions without changing
+the historical run.
+
 Auto Protocol surface parity is an architecture rule. Registry UI and Telegram
 must render the same session state, warnings, primary artifact contract, and
 available actions from the same Registry API records. Telegram may compress the
@@ -744,10 +751,20 @@ Operator actions are versioned run mutations:
 | `retry` | Re-dispatch the current failed/blocked stage. |
 | `accept` | Accept current stage outcome when the run is waiting for operator decision. |
 | `send-back` | Send a review/acceptance stage back for more work. |
+| `interrupt` | Block the active stage with `operator_interrupted` and request provider cancellation for the assigned task. |
 | `cancel` | Stop the run and write terminal audit state. |
 
 Run actions use `If-Match` and `Idempotency-Key` where applicable. This prevents
 duplicate operator mutations and stale UI writes from corrupting run state.
+Run mutations, routed result application, and blocked-runtime auto-accept
+rechecks lock the protocol run row while applying state transitions.
+
+Provider cancellation is delivered through the existing Registry management
+bridge. Protocol `cancel` and `interrupt` create a targeted management request
+for the routed task's assigned agent. The bot runtime maps that request to its
+local provider subprocess when the subprocess is still running. Late provider
+results after terminal or blocked stage state are preserved in task/audit
+metadata and do not advance the engine or update protocol artifact rows.
 
 Rehearsal runs use `REHEARSAL_AUTHORITY_REF = "rehearsal"` and resolve stages to
 rehearsal agents/sessions. Rehearsal is dry-run execution for protocol behavior,
@@ -790,6 +807,12 @@ Artifact resolution rules:
   expose file contents except through explicit content routes. Runtime
   instances and runtime events are part of the run export so reviewer evidence,
   health checks, starts/stops, and routed UI/API exercises are auditable.
+- Protocol run artifact paths are materialized under run-scoped workspace
+  prefixes so child runs created by fork/resume do not write to the parent run's
+  artifact paths.
+- Artifact snapshots include the producing stage execution when available. Fork
+  and resume use that linkage, plus retained snapshot content, to reconstruct
+  the selected stage boundary deterministically before dispatching a child run.
 - Protocol package export is a definition-sharing path. It includes the
   protocol document and required skill package documents, not produced run
   artifacts.
@@ -1021,6 +1044,7 @@ Security boundaries in the current runtime:
 | UI login | Session middleware, password/token validation, auth attempt limiting. |
 | UI mutations | CSRF token from `/v1/auth/csrf`, `X-CSRF-Token` on mutating requests. |
 | Agent API | Enrollment token for first enroll, issued agent token for runtime calls. |
+| Scoped runtime and journey routes | Per-stage capability refs exchanged by enrolled bots for short-lived scoped bearers; full agent tokens stay on retained internal management/exchange paths. |
 | Registry UI shell | CSP, no framing, nosniff, referrer policy. |
 | Protocol authoring internals | Skill/role checks in the registry store, not just hidden UI. |
 | Artifact paths | Safe path validation and workspace-root checks. |

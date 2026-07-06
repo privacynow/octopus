@@ -431,6 +431,11 @@ const API = (() => {
             }),
         getProtocolRun: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}`),
+        forkProtocolRunFromStage: (id, body = {}, opts = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/fork-from-stage`, {
+                body,
+                headers: opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : undefined,
+            }),
         getProtocolRunParticipants: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
         getProtocolRunArtifacts: (id) =>

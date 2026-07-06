@@ -65,6 +65,7 @@ ProtocolArtifactSnapshotKind = Literal["file", "directory", "text", "external"]
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back", "interrupt"]
 ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
+ProtocolRunForkMode = Literal["rerun_selected", "continue_after"]
 ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
 ProtocolValidationMode = Literal["strict", "draft"]
 ProtocolAuthoringSurface = Literal["standard", "operator"]
@@ -547,6 +548,10 @@ class ProtocolRunRecord(RegistryRecordModel):
     created_at: str = ""
     updated_at: str = ""
     completed_at: str = ""
+    parent_protocol_run_id: str = ""
+    parent_stage_execution_id: str = ""
+    fork_mode: str = ""
+    fork_reason: str = ""
 
 
 class ProtocolRunParticipantRecord(RegistryRecordModel):
@@ -623,6 +628,22 @@ class ProtocolArtifactSnapshotRecord(RegistryRecordModel):
     created_by: str = ""
     deleted_at: str = ""
     deleted_by: str = ""
+    produced_by_stage_execution_id: str = ""
+
+
+class ProtocolRunForkRequestRecord(RegistryRecordModel):
+    stage_execution_id: str = ""
+    fork_mode: ProtocolRunForkMode = "rerun_selected"
+    fork_reason: str = ""
+
+
+class ProtocolRunForkResultRecord(RegistryRecordModel):
+    ok: bool = False
+    status: str = ""
+    message: str = ""
+    run: ProtocolRunRecord | None = None
+    stage_execution: ProtocolStageExecutionRecord | None = None
+    missing_snapshots: list[str] = Field(default_factory=list)
 
 
 class ProtocolArtifactRuntimeEndpointRecord(RegistryRecordModel):

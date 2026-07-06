@@ -269,10 +269,18 @@ A long-running stage is not automatically stuck. It should show enough progress
 or state for a user to understand whether work is still moving.
 
 When a completed run needs to be improved, select it and use `Improve this run`.
-Octopus sends the run objective, status, primary artifact, and produced artifact
-summary through Auto Protocol and creates a normal revision of the original
-protocol. The previous artifact remains audit evidence; the improvement creates
-a new draft, publish, and run path.
+Octopus sends the run objective, status, primary artifact, produced artifact
+summary, blockers, runtime events, review notes, and structured lessons through
+Auto Protocol and creates a normal revision of the original protocol. The
+previous artifact remains audit evidence; the improvement creates a new draft,
+publish, and run path.
+
+When a run is broken or you want to explore a different path from the same
+work, open the stage menu and choose `Rerun from here` or `Continue after`.
+Octopus creates a child run, copies retained snapshots into a new workspace
+prefix, and links the parent and child in the run detail. Forking requires
+retained snapshots for the selected boundary; if they are missing, the UI shows
+which artifacts need to be retained or reproduced.
 
 ## Open Artifacts
 
@@ -308,6 +316,17 @@ The reviewer must exercise representative user journeys through the Registry,
 record visible results, complete an outcome-readiness matrix, and confirm that
 the artifact's customer-facing UI/API does not use Octopus as the product brand
 unless that branding was requested.
+
+If acceptance is blocked, the dialog stays open with the missing evidence. For
+contract-bearing runs, Octopus checks structured journey results and reviewer
+evidence manifests instead of accepting prose-only claims. A missing hook,
+failed journey, unhealthy runtime, or absent reviewer manifest remains visible
+until fixed, re-run, accepted by the correct path, or sent back.
+
+Use `Interrupt` when a running stage is clearly on the wrong path or the
+provider is stuck and you want to stop it without losing the run history.
+Interrupt blocks the current stage and asks the bot to stop active provider
+work where possible. Use `Cancel` only when the whole run should end.
 
 ## Archive, Delete, And Cleanup
 

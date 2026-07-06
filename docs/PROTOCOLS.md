@@ -98,9 +98,10 @@ revision that affects only future runs after publish.
 
 Auto Protocol can also improve from an existing run. Open `Work -> Runs`, select
 the run, and choose `Improve this run`. Octopus includes the run objective,
-status, primary artifact, and produced artifacts as context, then creates a
-normal Auto Protocol revision of the underlying protocol. This is the path to
-bring an older run up to the current bar without manually patching the artifact.
+status, primary artifact, produced artifacts, blocker reasons, runtime events,
+review decisions, and structured run lessons as context, then creates a normal
+Auto Protocol revision of the underlying protocol. This is the path to bring an
+older run up to the current bar without manually patching the artifact.
 
 The generated result is not a separate format. It is the same canonical
 protocol document used by manual authoring, export/import, publish, and run
@@ -294,6 +295,7 @@ Process-backed packages should declare:
 - an outcome-readiness matrix in release evidence, and preferably
   `metadata.outcome_readiness_checks` in the manifest for representative
   journeys or scenarios
+- `test_hooks` when a protocol carries a structured acceptance contract
 
 The `start_command` must launch an already prepared artifact. Registry rejects
 process-backed runtime starts that try to install dependencies, build, package,
@@ -328,6 +330,22 @@ artifact evidence, and runtime events. Manifest policy is generic: process
 runtimes must start prepared artifacts and may be rejected for dependency
 install, build, package, test, or developer-mode commands; Maven is only one
 example of that broader policy.
+
+When a protocol version includes
+`metadata.auto_protocol.acceptance_contract`, final acceptance uses structured
+runtime evidence instead of prose-only claims. The contract names required
+journeys in terms of stable hook ids. The artifact must expose those hooks in
+`octopus-runtime.json.test_hooks`, typically as `data-testid` locators. Missing
+or unmapped hooks are artifact contract failures. The bot-side journey runner
+executes only Registry-routed artifact URLs, sends its scoped runtime token in
+headers, blocks arbitrary external navigation unless the contract allows it,
+and posts structured pass/fail results back to Registry. Protocols without an
+acceptance contract keep the legacy runtime/prose evidence gate.
+
+The evidence manifest artifact keys are `producer_evidence_manifest` and
+`reviewer_evidence_manifest`. They are normal protocol artifacts and are read
+from the latest retained snapshot when the acceptance gate evaluates a
+contract-bearing run.
 
 ## Starting A Run
 
@@ -388,10 +406,43 @@ Supported run actions include:
 - `retry`
 - `accept`
 - `send-back`
+- `interrupt`
 - `cancel`
 
 Actions are permission-gated, version checked, and recorded in run history.
 Corrective or destructive actions should require a reason where applicable.
+
+`interrupt` stops the active stage from the operator side, marks the stage
+blocked with `operator_interrupted`, and asks the assigned bot to cancel the
+running provider subprocess when it can. `cancel` ends the whole run and also
+requests provider cancellation when work is still running. Late provider
+results after an interrupted, timed-out, blocked, or canceled stage are kept as
+task/audit metadata only; they do not advance the run or overwrite artifact
+records or retained snapshots.
+
+When a stage issue says `Expired write lease`, it means the Registry has not
+heard a lease-renewing task update before the lease expiry. It is not proof the
+provider process died. Check task age, timeout, stage status, and latest task
+update before retrying or interrupting.
+
+## Fork And Resume
+
+Runs can be forked from a selected stage when an operator wants to preserve
+earlier work but continue as a separate run. A fork never mutates the parent
+run. Octopus materializes retained snapshots into a new run-scoped workspace
+prefix and records parent/child lineage on the run detail.
+
+Fork modes:
+
+- `Rerun selected`: copy snapshots before the selected stage, seed prior stage
+  history, then dispatch the selected stage again.
+- `Continue after`: copy snapshots through the selected stage, seed prior
+  stage results, decisions, summaries, and previous feedback, then dispatch the
+  next stage.
+
+If required snapshots are missing, the fork is blocked with a list of missing
+artifacts. Retain packages before cleanup when a run may need to be forked or
+resumed later.
 
 ## Export And Import
 

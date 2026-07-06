@@ -217,6 +217,18 @@ For a protocol run, inspect:
 The user should be able to understand what ran, who executed each stage, which
 files were expected, which files were produced, and what remains blocked.
 
+For recovery checks, also verify:
+
+- blocked acceptance shows a persistent missing-evidence panel instead of a
+  disappearing success toast
+- `Expired write lease` is shown as lease expiry, not provider death
+- `Interrupt` blocks the current stage and queues provider cancellation for the
+  assigned bot when work is running
+- late provider results after interrupt, timeout, or cancel appear as audit/task
+  metadata only
+- forked child runs show parent links, run-scoped workspace paths, and copied
+  snapshot artifacts
+
 ## Artifact Handoff
 
 For every customer-relevant artifact:
@@ -286,9 +298,26 @@ Common issue responses:
 | `artifact_missing` | Inspect producing stage output and artifact metadata. |
 | `artifact_integrity_failed` | Inspect hash, path, and verification. |
 | `participant_resolution_failed` | Inspect stage assignment and connected agents. |
+| `stuck_lease` | Inspect lease expiry, task age, timeout, and latest task update. The UI label is `Expired write lease`. |
 | `lease_held` | Inspect active or stale work lease. |
 | `stage_timeout` | Inspect worker health and provider result. |
 | `max_review_rounds_exceeded` | Decide whether to accept, send back, or cancel. |
+| `runtime_evidence_required` | Start or open the runtime, run health, exercise required journeys, and inspect missing evidence. |
+| `operator_interrupted` | Retry, send back, cancel, or fork after confirming whether cancellation reached the bot. |
+
+Scoped runtime capability tokens are internal execution credentials. Stage
+prompts carry a `capability_ref` and `$OCTOPUS_CAPABILITY_TOKEN` placeholders,
+not plaintext bearer tokens. Bots exchange the reference with their enrolled
+agent token when the stage starts, inject the scoped bearer into the provider
+subprocess environment, and revoke it on stage completion, retry, interrupt, or
+cancel. Full agent tokens should not directly authorize scoped runtime or
+journey routes outside retained internal management/exchange paths.
+
+For structured journey evidence, verify that the bot image contains the browser
+runtime, the artifact has `octopus-runtime.json.test_hooks`, the runner targets
+the Registry-routed artifact origin, and journey result events appear on the
+run before final acceptance. Contract-bearing protocols should not complete
+from reviewer prose alone.
 
 ## Cleanup
 

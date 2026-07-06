@@ -13,12 +13,14 @@ import pytest
 from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
     ProtocolAccessContextRecord,
+    ProtocolAutoDesignRequestRecord,
     ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeEventRecord,
     ProtocolArtifactRuntimeInstanceRecord,
     ProtocolArtifactRuntimeManifestRecord,
     ProtocolDraftCreateRecord,
     ProtocolRunRecord,
+    ProtocolRunForkRequestRecord,
     ProtocolStageExecutionRecord,
     ProtocolStageDefinitionRecord,
     TargetSelector,
@@ -3904,6 +3906,7 @@ def test_protocol_run_detail_and_task_payloads_include_lineage_and_artifact_loca
     enroll, _published, created, detail = running_protocol_run(store)
     first_stage = detail.stage_executions[0]
     working_dir = "/tmp/protocol-run-artifacts"
+    scoped_plan_path = f"protocol-runs/{created.run.protocol_run_id}/protocol/plan.md"
 
     store.update_routed_task_result(
         enroll.agent_token,
@@ -3918,7 +3921,7 @@ def test_protocol_run_detail_and_task_payloads_include_lineage_and_artifact_loca
                 {
                     "artifact_key": "plan",
                     "artifact_kind": "workspace_file",
-                    "path": "protocol/plan.md",
+                    "path": scoped_plan_path,
                     "exists": True,
                     "size_bytes": 128,
                     "content_hash": "abc123",
@@ -3957,5 +3960,170 @@ def test_protocol_run_detail_and_task_payloads_include_lineage_and_artifact_loca
     linked = next(item for item in refreshed.tasks if item.routed_task_id == first_stage.routed_task_id)
     assert linked.stage_key == "planning"
     artifact = next(item for item in refreshed.artifacts if item.artifact_key == "plan")
-    assert artifact.workspace_path == "protocol/plan.md"
-    assert Path(artifact.location).resolve() == (Path(working_dir) / "protocol/plan.md").resolve()
+    assert artifact.workspace_path == scoped_plan_path
+    assert Path(artifact.location).resolve() == (Path(working_dir) / scoped_plan_path).resolve()
+
+
+def test_protocol_run_declared_artifacts_are_run_scoped(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, created, detail = running_protocol_run(store)
+
+    artifact = next(item for item in detail.artifacts if item.artifact_key == "plan")
+    assert artifact.workspace_path == f"protocol-runs/{created.run.protocol_run_id}/protocol/plan.md"
+    assert artifact.location == artifact.workspace_path
+
+
+def test_protocol_fork_continue_after_materializes_snapshots_and_lineage(
+    postgres_registry_truncated: str,
+    tmp_path: Path,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    parent_workspace = tmp_path / "parent-workspace"
+    parent_workspace.mkdir()
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_registry.protocol_runs SET workspace_ref = %s WHERE protocol_run_id = %s",
+                (str(parent_workspace), created.run.protocol_run_id),
+            )
+        conn.commit()
+    first_stage = detail.stage_executions[0]
+    parent_scoped_path = f"protocol-runs/{created.run.protocol_run_id}/protocol/plan.md"
+    parent_file = parent_workspace / parent_scoped_path
+    parent_file.parent.mkdir(parents=True)
+    parent_file.write_text("parent plan", encoding="utf-8")
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "fork-parent-plan",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "working_dir": str(parent_workspace),
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": parent_scoped_path,
+                    "exists": True,
+                    "size_bytes": parent_file.stat().st_size,
+                    "content_hash": "parent-plan-hash",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    parent_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    parent_stage = next(item for item in parent_detail.stage_executions if item.stage_key == "planning")
+    parent_snapshot = next(item for item in parent_detail.artifact_snapshots if item.artifact_key == "plan")
+    assert parent_snapshot.produced_by_stage_execution_id == parent_stage.protocol_stage_execution_id
+
+    forked = store.fork_protocol_run_from_stage(
+        created.run.protocol_run_id,
+        ProtocolRunForkRequestRecord(
+            stage_execution_id=parent_stage.protocol_stage_execution_id,
+            fork_mode="continue_after",
+            fork_reason="Continue with the parent plan as a new run.",
+        ),
+        access=operator_access(),
+    )
+
+    assert forked.ok is True
+    assert forked.run is not None
+    child_detail = store.get_protocol_run(forked.run.protocol_run_id, access=operator_access())
+    assert child_detail.run.parent_protocol_run_id == created.run.protocol_run_id
+    assert child_detail.run.parent_stage_execution_id == parent_stage.protocol_stage_execution_id
+    assert child_detail.run.fork_mode == "continue_after"
+    assert child_detail.run.current_stage_key == "review"
+    seeded_stage = next(item for item in child_detail.stage_executions if item.stage_key == "planning")
+    assert seeded_stage.status == "completed"
+    assert seeded_stage.routed_task_id == ""
+    child_artifact = next(item for item in child_detail.artifacts if item.artifact_key == "plan")
+    assert child_artifact.workspace_path == f"protocol-runs/{child_detail.run.protocol_run_id}/protocol/plan.md"
+    assert Path(child_artifact.location).read_text(encoding="utf-8") == "parent plan"
+    assert Path(child_artifact.location).resolve() != parent_file.resolve()
+    assert parent_file.read_text(encoding="utf-8") == "parent plan"
+    child_snapshot = next(item for item in child_detail.artifact_snapshots if item.artifact_key == "plan")
+    assert child_snapshot.produced_by_stage_execution_id == seeded_stage.protocol_stage_execution_id
+
+
+def test_protocol_fork_missing_snapshot_blocks_with_actionable_list(
+    postgres_registry_truncated: str,
+    tmp_path: Path,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    first_stage = detail.stage_executions[0]
+    scoped_path = f"protocol-runs/{created.run.protocol_run_id}/protocol/plan.md"
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "fork-missing-snapshot",
+            "summary": "Plan reported but file was absent.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan reported.",
+            "working_dir": str(workspace),
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": scoped_path,
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "missing-snapshot-hash",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    parent_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    parent_stage = next(item for item in parent_detail.stage_executions if item.stage_key == "planning")
+
+    forked = store.fork_protocol_run_from_stage(
+        created.run.protocol_run_id,
+        ProtocolRunForkRequestRecord(
+            stage_execution_id=parent_stage.protocol_stage_execution_id,
+            fork_mode="continue_after",
+        ),
+        access=operator_access(),
+    )
+
+    assert forked.ok is False
+    assert forked.status == "missing_snapshots"
+    assert any("plan" in item for item in forked.missing_snapshots)
+
+
+def test_auto_protocol_run_lessons_round_trip(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    session = store.create_protocol_auto_design_session(
+        ProtocolAutoDesignRequestRecord.model_validate(
+            {
+                "mode": "create",
+                "surface": "registry",
+                "requirement_text": "Build a small workflow that records evidence.",
+                "run_lessons": [
+                    {
+                        "category": "journey_failure",
+                        "summary": "The prior run missed a visible result assertion.",
+                        "source_ref": "runtime-event:abc",
+                    }
+                ],
+            }
+        ),
+        access=operator_access(),
+    )
+
+    fetched = store.get_protocol_auto_design_session(session.session_id, access=operator_access())
+    assert fetched.run_lessons[0].category == "journey_failure"
+    assert fetched.draft_definition_json.as_dict()["metadata"]["auto_protocol"]["run_lessons"][0]["summary"] == (
+        "The prior run missed a visible result assertion."
+    )

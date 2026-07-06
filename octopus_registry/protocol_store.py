@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 import re
 import secrets
+import shutil
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,8 @@ from octopus_sdk.protocols import (
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
+    ProtocolRunForkRequestRecord,
+    ProtocolRunForkResultRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
@@ -78,14 +81,14 @@ from octopus_sdk.protocols import (
     revise_auto_protocol_session,
     validate_protocol_document,
 )
-from octopus_sdk.protocols.documents import draft_protocol_document_data
+from octopus_sdk.protocols.documents import draft_protocol_document_data, protocol_materialize_artifact_path
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
 from octopus_sdk.registry.management import CancelRoutedTaskRequest, ManagementRequest
 
 from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_snapshot
 from .config import RegistryConfig, load_registry_config
-from .artifact_paths import resolve_protocol_artifact_path
+from .artifact_paths import clear_mounted_workspace_roots_cache, resolve_protocol_artifact_path
 from .postgres import get_connection
 from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
 from .protocol_runtime import evaluate_protocol_dispatch
@@ -539,6 +542,10 @@ class ProtocolPostgresAdapter:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "completed_at": row["completed_at"],
+                "parent_protocol_run_id": row.get("parent_protocol_run_id", ""),
+                "parent_stage_execution_id": row.get("parent_stage_execution_id", ""),
+                "fork_mode": row.get("fork_mode", ""),
+                "fork_reason": row.get("fork_reason", ""),
             },
         )
 
@@ -675,6 +682,7 @@ class ProtocolPostgresAdapter:
                 "created_by": row.get("created_by", ""),
                 "deleted_at": row.get("deleted_at", ""),
                 "deleted_by": row.get("deleted_by", ""),
+                "produced_by_stage_execution_id": row.get("produced_by_stage_execution_id", ""),
             },
         )
 
@@ -1091,6 +1099,78 @@ class ProtocolPostgresAdapter:
         encoded = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _run_scoped_artifact_path(run_id: str, artifact_path: str) -> str:
+        run_token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(run_id or "").strip()).strip(".-/") or "run"
+        normalized = str(artifact_path or "").strip().replace("\\", "/").strip("/")
+        if not normalized:
+            normalized = "artifact"
+        prefix = f"protocol-runs/{run_token}/"
+        if normalized == f"protocol-runs/{run_token}" or normalized.startswith(prefix):
+            return normalized
+        if normalized.startswith("protocol-runs/"):
+            normalized = normalized.split("/", 2)[-1] if normalized.count("/") >= 2 else "artifact"
+        return f"{prefix}{normalized}"
+
+    def _materialize_protocol_artifact_path(
+        self,
+        *,
+        document: ProtocolDefinitionDocumentRecord,
+        run_row: Mapping[str, object],
+        artifact_path: str,
+        stage_execution_id: str = "",
+    ) -> str:
+        run = self._protocol_run_from_row(run_row)
+        materialized = protocol_materialize_artifact_path(
+            artifact_path,
+            document=document,
+            run=run,
+            stage_execution_id=stage_execution_id,
+        )
+        return self._run_scoped_artifact_path(str(run_row.get("protocol_run_id", "") or ""), materialized)
+
+    def _fork_workspace_root(self, run_id: str, workspace_ref: str) -> Path:
+        raw = str(workspace_ref or "").strip()
+        if raw:
+            candidate = Path(raw).expanduser()
+            if candidate.is_absolute():
+                candidate.mkdir(parents=True, exist_ok=True)
+                return candidate.resolve()
+            mounted = Path("/workspace") / raw
+            if mounted.exists() or Path("/workspace").is_dir():
+                mounted.mkdir(parents=True, exist_ok=True)
+                clear_mounted_workspace_roots_cache()
+                return mounted.resolve()
+        fallback = (Path(load_registry_config().artifact_store_dir).expanduser() / "fork-workspaces" / str(run_id)).resolve()
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+    def _copy_snapshot_to_workspace(
+        self,
+        *,
+        snapshot: ProtocolArtifactSnapshotRecord,
+        workspace_root: Path,
+        workspace_path: str,
+    ) -> Path:
+        source = artifact_snapshot_storage_path(load_registry_config().artifact_store_dir, snapshot)
+        if source is None or not source.exists():
+            raise FileNotFoundError(f"Snapshot content is missing for {snapshot.artifact_key}.")
+        relative = Path(str(workspace_path or "").strip().replace("\\", "/"))
+        if relative.is_absolute():
+            raise ValueError("Fork materialization path must be relative to the run workspace.")
+        target = (workspace_root / relative).resolve()
+        target.relative_to(workspace_root.resolve())
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target, symlinks=False)
+        else:
+            if target.exists() and target.is_dir():
+                shutil.rmtree(target)
+            shutil.copy2(source, target)
+        return target
+
     def _protocol_idempotency_row(
         self,
         conn,
@@ -1172,7 +1252,7 @@ class ProtocolPostgresAdapter:
             SELECT *
             FROM {SCHEMA}.protocol_artifacts
             WHERE protocol_run_id = %s
-            ORDER BY artifact_key, created_at DESC
+            ORDER BY artifact_key, created_at DESC, exists DESC, state DESC
             """,
             (run_id,),
         )
@@ -1235,10 +1315,12 @@ class ProtocolPostgresAdapter:
                 INSERT INTO {SCHEMA}.protocol_artifact_snapshots (
                     artifact_snapshot_id, protocol_artifact_id, protocol_run_id, artifact_key,
                     snapshot_kind, storage_uri, content_hash, size_bytes, manifest_json,
-                    retention_state, retention_until, created_at, created_by, deleted_at, deleted_by
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    retention_state, retention_until, created_at, created_by, deleted_at, deleted_by,
+                    produced_by_stage_execution_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (artifact_snapshot_id) DO UPDATE SET
                     protocol_artifact_id = EXCLUDED.protocol_artifact_id,
+                    produced_by_stage_execution_id = EXCLUDED.produced_by_stage_execution_id,
                     storage_uri = EXCLUDED.storage_uri,
                     content_hash = EXCLUDED.content_hash,
                     size_bytes = EXCLUDED.size_bytes,
@@ -1264,6 +1346,7 @@ class ProtocolPostgresAdapter:
                     snapshot.created_by or actor_ref,
                     snapshot.deleted_at,
                     snapshot.deleted_by,
+                    snapshot.produced_by_stage_execution_id,
                 ),
             )
             db_cur.execute(
@@ -2243,6 +2326,26 @@ class ProtocolPostgresAdapter:
             full_text = str(result_json.get("full_text", "") or "").strip()
             if full_text and "PROTOCOL_DECISION" in full_text:
                 return full_text
+        seeded_rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT stage_key, decision, decision_summary, input_snapshot_json, completed_at, started_at
+            FROM {SCHEMA}.protocol_stage_executions
+            WHERE protocol_run_id = %s
+              AND status = 'completed'
+              AND stage_key <> %s
+              AND routed_task_id = ''
+              AND decision_summary <> ''
+            ORDER BY completed_at DESC, started_at DESC
+            LIMIT 5
+            """,
+            (run_id, current_stage_key),
+        )
+        for row in seeded_rows:
+            decision = str(row.get("decision", "") or "completed").strip() or "completed"
+            summary = str(row.get("decision_summary", "") or "").strip()
+            if summary:
+                return f"Forked prior stage {row.get('stage_key', '')}:\nPROTOCOL_DECISION: {decision}\nPROTOCOL_SUMMARY: {summary}"
         return ""
 
     def _insert_protocol_transition(
@@ -2688,6 +2791,12 @@ class ProtocolPostgresAdapter:
                             artifact_key=observation.artifact_key,
                             created_by="protocol_engine",
                             retention_until=str(run_row.get("retention_until", "") or ""),
+                        ).model_copy(
+                            update={
+                                "produced_by_stage_execution_id": str(
+                                    stage_execution_row["protocol_stage_execution_id"] or ""
+                                )
+                            }
                         )
                         self._insert_protocol_artifact_snapshot_in_tx(
                             conn,
@@ -2988,6 +3097,27 @@ class ProtocolPostgresAdapter:
             result_json = task_row.get("result_json") if isinstance(task_row, Mapping) else {}
             if not isinstance(result_json, dict):
                 result_json = {}
+            existing_task_transition = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT protocol_transition_id
+                FROM {SCHEMA}.protocol_transitions
+                WHERE protocol_run_id = %s
+                  AND from_stage_execution_id = %s
+                  AND actor_type = 'protocol_engine'
+                  AND actor_ref = %s
+                  AND transition_kind <> 'late_result'
+                ORDER BY created_at DESC, protocol_transition_id DESC
+                LIMIT 1
+                """,
+                (
+                    str(stage_execution_row.get("protocol_run_id", "") or ""),
+                    str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                    routed_task_id,
+                ),
+            )
+            if existing_task_transition is not None:
+                return
             late_delivery = {
                 "status": "late_result_preserved",
                 "stage_status": stage_status,
@@ -3452,6 +3582,7 @@ class ProtocolPostgresAdapter:
                 "requirement_text": row.get("requirement_text", ""),
                 "constraints_text": row.get("constraints_text", ""),
                 "resource_refs": row.get("resource_refs_json") or [],
+                "run_lessons": row.get("run_lessons_json") or [],
                 "model_response": row.get("planner_response_json") or None,
                 "analysis": row.get("analysis_json") or {},
                 "plan": row.get("plan_json") or {},
@@ -3492,6 +3623,7 @@ class ProtocolPostgresAdapter:
             "requirement_text": session.requirement_text,
             "constraints_text": session.constraints_text,
             "resource_refs_json": list(session.resource_refs or []),
+            "run_lessons_json": [item.model_dump(mode="json") for item in session.run_lessons or []],
             "planner_response_json": session.model_response.model_dump(mode="json") if session.model_response is not None else {},
             "analysis_json": session.analysis.model_dump(mode="json"),
             "plan_json": session.plan.model_dump(mode="json"),
@@ -3566,12 +3698,12 @@ class ProtocolPostgresAdapter:
                     INSERT INTO {SCHEMA}.protocol_auto_sessions (
                         session_id, status, mode, surface, actor_ref, chat_ref,
                         source_protocol_id, source_version_id, source_draft_revision,
-                        target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json,
+                        target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
                         planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                         warnings_json, unresolved_decisions_json, change_summary_json,
                         applied_protocol_json, run_result_json, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (session_id) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -3587,6 +3719,7 @@ class ProtocolPostgresAdapter:
                         requirement_text = EXCLUDED.requirement_text,
                         constraints_text = EXCLUDED.constraints_text,
                         resource_refs_json = EXCLUDED.resource_refs_json,
+                        run_lessons_json = EXCLUDED.run_lessons_json,
                         planner_response_json = EXCLUDED.planner_response_json,
                         analysis_json = EXCLUDED.analysis_json,
                         plan_json = EXCLUDED.plan_json,
@@ -3616,6 +3749,7 @@ class ProtocolPostgresAdapter:
                         payload["requirement_text"],
                         payload["constraints_text"],
                         jsonb(payload["resource_refs_json"]),
+                        jsonb(payload["run_lessons_json"]),
                         jsonb(payload["planner_response_json"]),
                         jsonb(payload["analysis_json"]),
                         jsonb(payload["plan_json"]),
@@ -4795,6 +4929,11 @@ class ProtocolPostgresAdapter:
                         ),
                     )
                 for artifact in document.artifacts:
+                    artifact_path = self._materialize_protocol_artifact_path(
+                        document=document,
+                        run_row=run_row,
+                        artifact_path=artifact.path,
+                    )
                     db_cur.execute(
                         f"""
                         INSERT INTO {SCHEMA}.protocol_artifacts (
@@ -4809,8 +4948,8 @@ class ProtocolPostgresAdapter:
                             run_id,
                             artifact.artifact_key,
                             artifact.kind,
-                            artifact.path,
-                            artifact.path,
+                            artifact_path,
+                            artifact_path,
                             now,
                         ),
                     )
@@ -4848,6 +4987,493 @@ class ProtocolPostgresAdapter:
                 scope_kind="protocol_runs",
                 scope_ref=str(request.protocol_definition_version_id or request.protocol_id or ""),
                 action_name="create",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                response_json=json_ready(result.model_dump(mode="json")),
+                now=now,
+            )
+            return result
+
+    def fork_protocol_run_from_stage(
+        self,
+        run_id: str,
+        payload: ProtocolRunForkRequestRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunForkResultRecord:
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin")):
+            return ProtocolRunForkResultRecord(ok=False, status="forbidden", message="Protocol fork requires operator access.")
+        request = payload if isinstance(payload, ProtocolRunForkRequestRecord) else ProtocolRunForkRequestRecord.model_validate(payload or {})
+        parent_run_id = str(run_id or "").strip()
+        selected_stage_id = str(request.stage_execution_id or "").strip()
+        if not parent_run_id or not selected_stage_id:
+            return ProtocolRunForkResultRecord(ok=False, status="invalid", message="stage_execution_id is required.")
+        mode = str(request.fork_mode or "rerun_selected").strip()
+        if mode not in {"rerun_selected", "continue_after"}:
+            return ProtocolRunForkResultRecord(ok=False, status="invalid", message="fork_mode must be rerun_selected or continue_after.")
+        request_hash = self._request_hash(
+            {
+                "run_id": parent_run_id,
+                "payload": request.model_dump(mode="json"),
+                "actor_ref": self._access_actor_ref(access),
+                "org_id": self._access_org_id(access),
+            }
+        )
+        now = utcnow_iso()
+        with self._connect() as conn, write_tx(conn):
+            existing_idempotency = self._protocol_idempotency_row(
+                conn,
+                scope_kind="protocol_run",
+                scope_ref=parent_run_id,
+                action_name="fork_from_stage",
+                idempotency_key=idempotency_key,
+            )
+            if existing_idempotency is not None:
+                existing_hash = str(existing_idempotency.get("request_hash", "") or "")
+                if existing_hash and existing_hash != request_hash:
+                    return ProtocolRunForkResultRecord(
+                        ok=False,
+                        status="idempotency_conflict",
+                        message="Idempotency key was already used for a different fork request.",
+                    )
+                return ProtocolRunForkResultRecord.model_validate(existing_idempotency.get("response_json", {}))
+
+            parent_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
+                (parent_run_id,),
+            )
+            visibility = self._protocol_run_visibility_status(parent_row, access=access)
+            if visibility == "missing" or parent_row is None:
+                return ProtocolRunForkResultRecord(ok=False, status="not_found", message="Protocol run not found.")
+            if visibility == "not_visible":
+                return ProtocolRunForkResultRecord(ok=False, status="not_visible", message="Protocol run is not visible to this actor.")
+            protocol_row = self._protocol_row(conn, str(parent_row.get("protocol_id", "") or ""))
+            version_row = self._protocol_version_row(conn, str(parent_row.get("protocol_definition_version_id", "") or ""))
+            if protocol_row is None or version_row is None:
+                return ProtocolRunForkResultRecord(ok=False, status="not_found", message="Protocol definition for the source run was not found.")
+            if not shared_agent_exists(conn, dialect=POSTGRES_STORE_DIALECT, agent_id=str(parent_row.get("entry_agent_id", "") or "")):
+                return ProtocolRunForkResultRecord(ok=False, status="invalid", message="The source run entry agent is no longer available.")
+
+            document = canonical_protocol_document(version_row["definition_json"])
+            parent_stage_rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_stage_executions
+                WHERE protocol_run_id = %s
+                ORDER BY started_at ASC, protocol_stage_execution_id ASC
+                """,
+                (parent_run_id,),
+            )
+            selected_index = next(
+                (
+                    index for index, row in enumerate(parent_stage_rows)
+                    if str(row.get("protocol_stage_execution_id", "") or "") == selected_stage_id
+                ),
+                -1,
+            )
+            if selected_index < 0:
+                return ProtocolRunForkResultRecord(ok=False, status="not_found", message="Selected stage execution was not found on this run.")
+            selected_stage_row = parent_stage_rows[selected_index]
+            try:
+                selected_stage = document.stage(str(selected_stage_row.get("stage_key", "") or ""))
+            except KeyError:
+                return ProtocolRunForkResultRecord(ok=False, status="invalid", message="Selected stage is not present in the protocol definition.")
+
+            boundary_rows = parent_stage_rows[: selected_index if mode == "rerun_selected" else selected_index + 1]
+            if mode == "rerun_selected":
+                dispatch_stage_key = selected_stage.stage_key
+            elif selected_index + 1 < len(parent_stage_rows):
+                dispatch_stage_key = str(parent_stage_rows[selected_index + 1].get("stage_key", "") or "")
+            else:
+                target = stage_target_for_decision(selected_stage, str(selected_stage_row.get("decision", "") or "completed"))
+                dispatch_stage_key = "" if target.startswith("__") else target
+            if not dispatch_stage_key:
+                return ProtocolRunForkResultRecord(
+                    ok=False,
+                    status="invalid",
+                    message="Selected stage has no subsequent stage to continue after.",
+                )
+            try:
+                dispatch_stage = document.stage(dispatch_stage_key)
+            except KeyError:
+                return ProtocolRunForkResultRecord(ok=False, status="invalid", message="Fork target stage is not present in the protocol definition.")
+
+            boundary_parent_stage_ids = {
+                str(row.get("protocol_stage_execution_id", "") or "")
+                for row in boundary_rows
+                if str(row.get("protocol_stage_execution_id", "") or "")
+            }
+            snapshot_rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT s.*, COALESCE(NULLIF(s.produced_by_stage_execution_id, ''), pa.produced_by_stage_execution_id, '') AS boundary_stage_id
+                FROM {SCHEMA}.protocol_artifact_snapshots s
+                LEFT JOIN {SCHEMA}.protocol_artifacts pa
+                  ON pa.protocol_artifact_id = s.protocol_artifact_id
+                WHERE s.protocol_run_id = %s
+                  AND s.retention_state <> 'deleted'
+                ORDER BY s.artifact_key ASC, s.created_at DESC, s.artifact_snapshot_id DESC
+                """,
+                (parent_run_id,),
+            )
+            boundary_snapshots: dict[str, dict[str, object]] = {}
+            missing: list[str] = []
+            for row in snapshot_rows:
+                boundary_stage_id = str(row.get("boundary_stage_id", "") or "")
+                if boundary_stage_id not in boundary_parent_stage_ids:
+                    continue
+                artifact_key = str(row.get("artifact_key", "") or "").strip()
+                if not artifact_key or artifact_key in boundary_snapshots:
+                    continue
+                snapshot = self._protocol_artifact_snapshot_from_row(row)
+                snapshot_path = artifact_snapshot_storage_path(load_registry_config().artifact_store_dir, snapshot)
+                if snapshot_path is None or not snapshot_path.exists():
+                    missing.append(f"{artifact_key}: snapshot content missing")
+                    continue
+                boundary_snapshots[artifact_key] = dict(row)
+            for row in boundary_rows:
+                try:
+                    stage = document.stage(str(row.get("stage_key", "") or ""))
+                except KeyError:
+                    continue
+                for artifact_key in stage.outputs:
+                    if artifact_key in boundary_snapshots:
+                        continue
+                    parent_artifact = POSTGRES_STORE_DIALECT.fetchone(
+                        conn,
+                        f"""
+                        SELECT *
+                        FROM {SCHEMA}.protocol_artifacts
+                        WHERE protocol_run_id = %s
+                          AND artifact_key = %s
+                          AND produced_by_stage_execution_id = %s
+                          AND exists = TRUE
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        (parent_run_id, artifact_key, row.get("protocol_stage_execution_id", "")),
+                    )
+                    if parent_artifact is not None:
+                        missing.append(f"{artifact_key}: durable snapshot is missing")
+            if missing:
+                result = ProtocolRunForkResultRecord(
+                    ok=False,
+                    status="missing_snapshots",
+                    message="Fork cannot continue until required artifact snapshots exist.",
+                    missing_snapshots=list(dict.fromkeys(missing)),
+                )
+                self._store_protocol_idempotency(
+                    conn,
+                    scope_kind="protocol_run",
+                    scope_ref=parent_run_id,
+                    action_name="fork_from_stage",
+                    idempotency_key=idempotency_key,
+                    request_hash=request_hash,
+                    response_json=json_ready(result.model_dump(mode="json")),
+                    now=now,
+                )
+                return result
+
+            child_run_id = uuid.uuid4().hex
+            parent_workspace_ref = str(parent_row.get("workspace_ref", "") or "")
+            workspace_root = self._fork_workspace_root(child_run_id, parent_workspace_ref)
+            child_workspace_ref = parent_workspace_ref
+            if not child_workspace_ref or (
+                not Path(child_workspace_ref).expanduser().is_absolute()
+                and not (Path("/workspace") / child_workspace_ref).exists()
+            ):
+                child_workspace_ref = str(workspace_root)
+            root_conversation_id = str(parent_row.get("root_conversation_id", "") or "").strip()
+            if not root_conversation_id:
+                created = shared_create_conversation(
+                    conn,
+                    dialect=POSTGRES_STORE_DIALECT,
+                    target_agent_id=str(parent_row.get("entry_agent_id", "") or ""),
+                    title=document.display_name or document.slug or "Protocol run",
+                    origin_channel="registry",
+                    external_conversation_ref=f"protocol-run:{child_run_id}",
+                    source_kind="protocol_run",
+                    hidden_from_default_views=False,
+                    now=now,
+                )
+                root_conversation_id = str(created.conversation_id or "")
+            constraints_payload = dict(parent_row.get("constraints_json") or {})
+            constraints_payload.setdefault("forked_from_run_id", parent_run_id)
+            constraints_payload.setdefault("forked_from_stage_execution_id", selected_stage_id)
+            constraints_payload.setdefault("fork_mode", mode)
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_runs (
+                        protocol_run_id, protocol_id, protocol_definition_version_id,
+                        source_kind, hidden_from_default_views,
+                        entry_agent_id, entry_authority_ref, is_rehearsal, root_conversation_id,
+                        origin_channel, workspace_ref, repo_ref, branch_ref,
+                        problem_statement, constraints_json, status,
+                        current_stage_execution_id, current_stage_key, termination_summary,
+                        blocked_code, blocked_detail, run_org_id, started_by, version,
+                        retention_until, last_transition_at, created_at, updated_at, completed_at,
+                        parent_protocol_run_id, parent_stage_execution_id, fork_mode, fork_reason
+                    ) VALUES (%s, %s, %s, 'protocol_run', false, %s, %s, false, %s, %s, %s, %s, %s, %s, %s, 'queued', '', '', '', '', '', %s, %s, 1, %s, '', %s, %s, '', %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        child_run_id,
+                        protocol_row["protocol_id"],
+                        version_row["protocol_definition_version_id"],
+                        parent_row.get("entry_agent_id", ""),
+                        parent_row.get("entry_authority_ref", ""),
+                        root_conversation_id,
+                        parent_row.get("origin_channel", "registry") or "registry",
+                        child_workspace_ref,
+                        parent_row.get("repo_ref", ""),
+                        parent_row.get("branch_ref", ""),
+                        parent_row.get("problem_statement", ""),
+                        jsonb(constraints_payload),
+                        self._access_org_id(access),
+                        self._access_actor_ref(access),
+                        protocol_retention_until(now, days=PROTOCOL_DEFAULT_RETENTION_DAYS),
+                        now,
+                        now,
+                        parent_run_id,
+                        selected_stage_id,
+                        mode,
+                        str(request.fork_reason or "").strip(),
+                    ),
+                )
+                child_run_row = db_cur.fetchone()
+                if child_run_row is None:
+                    raise RuntimeError("Failed to create forked protocol run")
+                for participant in document.participants:
+                    participant_selector, required_skills = _participant_assignment_projection(document, participant.participant_key)
+                    db_cur.execute(
+                        f"""
+                        INSERT INTO {SCHEMA}.protocol_run_participants (
+                            protocol_run_participant_id, protocol_run_id, participant_key,
+                            display_name, required_skills_json, target_selector_json,
+                            resolved_agent_id, resolved_authority_ref, session_key, state,
+                            resolution_outcome, resolution_reason, selector_snapshot_json,
+                            created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, '', '', %s, 'queued', 'queued', '', %s, %s, %s)
+                        """,
+                        (
+                            uuid.uuid4().hex,
+                            child_run_id,
+                            participant.participant_key,
+                            participant.display_name or participant.participant_key,
+                            jsonb(required_skills),
+                            jsonb(participant_selector.model_dump(mode="json") if participant_selector is not None else {}),
+                            protocol_participant_session_key(child_run_id, participant.participant_key),
+                            jsonb({}),
+                            now,
+                            now,
+                        ),
+                    )
+                child_declared_artifact_ids: dict[str, str] = {}
+                child_artifact_paths: dict[str, str] = {}
+                for artifact in document.artifacts:
+                    artifact_path = self._materialize_protocol_artifact_path(
+                        document=document,
+                        run_row=child_run_row,
+                        artifact_path=artifact.path,
+                    )
+                    artifact_id = uuid.uuid4().hex
+                    child_declared_artifact_ids[artifact.artifact_key] = artifact_id
+                    child_artifact_paths[artifact.artifact_key] = artifact_path
+                    db_cur.execute(
+                        f"""
+                        INSERT INTO {SCHEMA}.protocol_artifacts (
+                            protocol_artifact_id, protocol_run_id, artifact_key, artifact_kind,
+                            location, workspace_path, content_hash, size_bytes, exists,
+                            modified_at, observed_at, verification_state,
+                            produced_by_stage_execution_id, state, supersedes_protocol_artifact_id, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, '', 0, false, '', '', 'declared', '', 'declared', '', %s)
+                        """,
+                        (
+                            artifact_id,
+                            child_run_id,
+                            artifact.artifact_key,
+                            artifact.kind,
+                            artifact_path,
+                            artifact_path,
+                            now,
+                        ),
+                    )
+
+            parent_to_child_stage_id: dict[str, str] = {}
+            for row in boundary_rows:
+                child_stage_id = uuid.uuid4().hex
+                parent_to_child_stage_id[str(row.get("protocol_stage_execution_id", "") or "")] = child_stage_id
+                input_snapshot = dict(row.get("input_snapshot_json") or {})
+                input_snapshot.update({
+                    "forked_from_run_id": parent_run_id,
+                    "forked_from_stage_execution_id": selected_stage_id,
+                    "fork_mode": mode,
+                })
+                POSTGRES_STORE_DIALECT.execute(
+                    conn,
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_stage_executions (
+                        protocol_stage_execution_id, protocol_run_id, stage_key, participant_key,
+                        attempt, loop_iteration, status, decision, decision_summary,
+                        input_snapshot_json, routed_task_id, failure_code, failure_detail,
+                        timeout_at, lease_owner, lease_expires_at, started_at, completed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, 'completed', %s, %s, %s, '', '', '', '', '', '', %s, %s)
+                    """,
+                    (
+                        child_stage_id,
+                        child_run_id,
+                        row.get("stage_key", ""),
+                        row.get("participant_key", ""),
+                        int(row.get("attempt", 1) or 1),
+                        int(row.get("loop_iteration", 1) or 1),
+                        row.get("decision", "") or "completed",
+                        row.get("decision_summary", "") or f"Seeded from parent run stage {row.get('stage_key', '')}.",
+                        jsonb(input_snapshot),
+                        now,
+                        now,
+                    ),
+                )
+                self._insert_protocol_transition(
+                    conn,
+                    run_id=child_run_id,
+                    from_stage_execution_id=child_stage_id,
+                    to_stage_execution_id="",
+                    transition_kind="fork_seed",
+                    decision="seeded",
+                    reason=f"Seeded stage {row.get('stage_key', '')} from parent run.",
+                    error_code="",
+                    metadata={
+                        "parent_protocol_run_id": parent_run_id,
+                        "parent_stage_execution_id": str(row.get("protocol_stage_execution_id", "") or ""),
+                        "fork_mode": mode,
+                    },
+                    actor_type="protocol_engine",
+                    actor_ref="fork_from_stage",
+                    now=now,
+                )
+
+            for artifact_key, row in boundary_snapshots.items():
+                snapshot = self._protocol_artifact_snapshot_from_row(row)
+                child_path = child_artifact_paths.get(artifact_key)
+                if not child_path:
+                    continue
+                target_path = self._copy_snapshot_to_workspace(
+                    snapshot=snapshot,
+                    workspace_root=workspace_root,
+                    workspace_path=child_path,
+                )
+                parent_stage_id = str(row.get("boundary_stage_id", "") or snapshot.produced_by_stage_execution_id or "")
+                child_stage_id = parent_to_child_stage_id.get(parent_stage_id, "")
+                artifact_id = uuid.uuid4().hex
+                POSTGRES_STORE_DIALECT.execute(
+                    conn,
+                    f"""
+                    INSERT INTO {SCHEMA}.protocol_artifacts (
+                        protocol_artifact_id, protocol_run_id, artifact_key, artifact_kind,
+                        location, workspace_path, content_hash, size_bytes, exists,
+                        modified_at, observed_at, verification_state,
+                        produced_by_stage_execution_id, state, supersedes_protocol_artifact_id, created_at
+                    ) VALUES (%s, %s, %s, 'workspace_file', %s, %s, %s, %s, true, %s, %s, 'verified', %s, 'available', %s, %s)
+                    """,
+                    (
+                        artifact_id,
+                        child_run_id,
+                        artifact_key,
+                        str(target_path),
+                        child_path,
+                        snapshot.content_hash,
+                        int(snapshot.size_bytes or 0),
+                        now,
+                        now,
+                        child_stage_id,
+                        child_declared_artifact_ids.get(artifact_key, ""),
+                        now,
+                    ),
+                )
+                child_snapshot = create_artifact_snapshot(
+                    artifact_store_dir=load_registry_config().artifact_store_dir,
+                    source_path=target_path,
+                    protocol_artifact_id=artifact_id,
+                    protocol_run_id=child_run_id,
+                    artifact_key=artifact_key,
+                    created_by="fork_from_stage",
+                    retention_until=str(child_run_row.get("retention_until", "") or ""),
+                ).model_copy(update={"produced_by_stage_execution_id": child_stage_id})
+                self._insert_protocol_artifact_snapshot_in_tx(
+                    conn,
+                    child_snapshot,
+                    actor_ref="fork_from_stage",
+                    now=now,
+                )
+
+            dispatch_execution_row = self._create_protocol_stage_execution_in_tx(
+                conn,
+                run_row=child_run_row,
+                stage_key=dispatch_stage.stage_key,
+                participant_key=dispatch_stage.participant_key,
+                input_snapshot={
+                    "problem_statement": parent_row.get("problem_statement", ""),
+                    "workspace_ref": child_workspace_ref,
+                    "forked_from_run_id": parent_run_id,
+                    "forked_from_stage_execution_id": selected_stage_id,
+                    "fork_mode": mode,
+                    "seeded_stage_count": len(boundary_rows),
+                },
+                timeout_at="",
+                now=now,
+            )
+            self._insert_protocol_transition(
+                conn,
+                run_id=child_run_id,
+                from_stage_execution_id="",
+                to_stage_execution_id=str(dispatch_execution_row.get("protocol_stage_execution_id", "") or ""),
+                transition_kind="fork_created",
+                decision=mode,
+                reason=str(request.fork_reason or "Forked from selected protocol stage.").strip(),
+                error_code="",
+                metadata={
+                    "parent_protocol_run_id": parent_run_id,
+                    "parent_stage_execution_id": selected_stage_id,
+                    "fork_mode": mode,
+                    "dispatch_stage_key": dispatch_stage.stage_key,
+                    "materialized_artifacts": sorted(boundary_snapshots),
+                },
+                actor_type="operator",
+                actor_ref=self._access_actor_ref(access),
+                now=now,
+            )
+            self._dispatch_protocol_stage_in_tx(
+                conn,
+                run_row=child_run_row,
+                stage_execution_row=dispatch_execution_row,
+                now=now,
+            )
+            detail = self._protocol_run_detail_in_tx(conn, child_run_id, access=access)
+            if detail is None:
+                raise RuntimeError("Failed to load forked protocol run detail")
+            active_stage = next(
+                (
+                    item for item in detail.stage_executions
+                    if item.protocol_stage_execution_id == detail.run.current_stage_execution_id
+                ),
+                detail.stage_executions[-1] if detail.stage_executions else None,
+            )
+            result = ProtocolRunForkResultRecord(
+                ok=True,
+                status="created",
+                message="Forked protocol run created.",
+                run=detail.run,
+                stage_execution=active_stage,
+            )
+            self._store_protocol_idempotency(
+                conn,
+                scope_kind="protocol_run",
+                scope_ref=parent_run_id,
+                action_name="fork_from_stage",
                 idempotency_key=idempotency_key,
                 request_hash=request_hash,
                 response_json=json_ready(result.model_dump(mode="json")),

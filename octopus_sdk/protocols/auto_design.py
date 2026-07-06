@@ -594,6 +594,7 @@ class ProtocolAutoDesignModelRequestRecord(RegistryRecordModel):
     actor_ref: str = ""
     chat_ref: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
 
     @field_validator("available_agents", "available_skills", mode="before")
     @classmethod
@@ -661,6 +662,12 @@ class ProtocolAutoDesignChangeSummaryRecord(RegistryRecordModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ProtocolRunLessonRecord(RegistryRecordModel):
+    category: str = ""
+    summary: str = ""
+    source_ref: str = ""
+
+
 class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     mode: ProtocolAutoDesignMode = "create"
     surface: ProtocolAutoDesignSurface = "api"
@@ -677,6 +684,7 @@ class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     actor_ref: str = ""
     chat_ref: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
     idempotency_key: str = ""
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
 
@@ -701,6 +709,7 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     requirement_text: str = ""
     constraints_text: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
     analysis: ProtocolAutoDesignAnalysisRecord = Field(default_factory=ProtocolAutoDesignAnalysisRecord)
     plan: ProtocolAutoDesignPlanRecord = Field(default_factory=ProtocolAutoDesignPlanRecord)
@@ -2423,6 +2432,7 @@ def compile_auto_protocol_plan(
     *,
     requirement_text: str = "",
     constraints_text: str = "",
+    run_lessons: list[ProtocolRunLessonRecord] | None = None,
 ) -> dict[str, object]:
     role_by_key = {role.role_key: role for role in plan.roles}
     stages: list[dict[str, object]] = []
@@ -2496,6 +2506,11 @@ def compile_auto_protocol_plan(
         },
         "run_inputs": plan.run_profile.run_inputs,
     }
+    lessons_payload = [item.model_dump(mode="json") for item in run_lessons or []]
+    if lessons_payload:
+        auto_protocol = metadata["auto_protocol"]
+        if isinstance(auto_protocol, dict):
+            auto_protocol["run_lessons"] = lessons_payload
     primary_behavior = str(plan.primary_artifact.open_behavior or "").strip().lower()
     if primary_behavior in _AUTO_RUNTIME_OPEN_BEHAVIORS:
         auto_protocol = metadata["auto_protocol"]
@@ -3096,6 +3111,7 @@ def generate_auto_protocol_session(
         plan,
         requirement_text=request.requirement_text,
         constraints_text=request.constraints_text,
+        run_lessons=list(request.run_lessons or []),
     )
     draft, validation, repair_notes = _validate_and_repair_protocol_document(draft, request)
     warnings, unresolved = _warnings_for_session(request, validation)
@@ -3151,6 +3167,7 @@ def generate_auto_protocol_session(
         requirement_text=request.requirement_text,
         constraints_text=request.constraints_text,
         resource_refs=list(request.resource_refs or []),
+        run_lessons=list(request.run_lessons or []),
         model_response=request.model_response,
         analysis=analysis,
         plan=plan,
@@ -3231,6 +3248,7 @@ def revise_auto_protocol_session(
         "revision_of_protocol_id": str(request.target_protocol_id or ""),
         "revision_of_version_id": str(request.target_version_id or ""),
         "revision_requests": revisions[-_AUTO_REVISION_HISTORY_MAX:],
+        "run_lessons": [item.model_dump(mode="json") for item in request.run_lessons or []],
     })
     regenerated_metadata["auto_protocol"] = regenerated_auto_meta
     compact_profile = _run_profile_with_problem_statement(session.run_profile, canonical_requirement)
@@ -3269,6 +3287,7 @@ def revise_auto_protocol_session(
         "requirement_text": request.requirement_text,
         "constraints_text": request.constraints_text,
         "resource_refs": list(request.resource_refs or []),
+        "run_lessons": list(request.run_lessons or []),
         "plan": compact_plan,
         "run_profile": compact_profile,
         "draft_definition_json": RegistryJsonRecord.model_validate(regenerated_draft),
@@ -3278,6 +3297,7 @@ def revise_auto_protocol_session(
         "change_summary": [
             "Regenerated the selected protocol through the canonical requirement-specific compiler.",
             "Preserved the target protocol identity for apply, publish, and run.",
+            *([f"Carried forward {len(request.run_lessons)} structured run lessons."] if request.run_lessons else []),
             *repair_notes,
         ],
     })
@@ -3380,6 +3400,7 @@ __all__ = [
     "ProtocolAutoDesignModelResponseRecord",
     "ProtocolAutoDesignEventSummaryRecord",
     "ProtocolAutoDesignChangeSummaryRecord",
+    "ProtocolRunLessonRecord",
     "ProtocolAutoDesignRequestRecord",
     "ProtocolAutoDesignSessionRecord",
     "ProtocolAutoDesignRenderCardRecord",

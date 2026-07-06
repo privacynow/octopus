@@ -29,6 +29,7 @@ fi
 echo "Clearing provider auth state from shared provider-auth storage..."
 OCTOPUS_NETWORK="octopus-net" \
 BOT_PROVIDER="$provider" \
+OCTOPUS_RUNTIME_IMAGE="octopus-agent:$provider" \
 PROVIDER_AUTH_DIR="$auth_dir" \
 BOT_ENV_FILE="/dev/null" \
 REGISTRY_ENROLL_TOKEN="${REGISTRY_ENROLL_TOKEN:-placeholder-registry-enroll}" \

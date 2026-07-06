@@ -29,6 +29,7 @@ fi
 echo "Provider auth and runtime only (no DB/Telegram checks)."
 if OCTOPUS_NETWORK="octopus-net" \
   BOT_PROVIDER="$provider" \
+  OCTOPUS_RUNTIME_IMAGE="octopus-agent:$provider" \
   PROVIDER_AUTH_DIR="$auth_dir" \
   BOT_ENV_FILE="/dev/null" \
   REGISTRY_ENROLL_TOKEN="${REGISTRY_ENROLL_TOKEN:-placeholder-registry-enroll}" \
@@ -46,4 +47,3 @@ else
   rm -f "$auth_dir/.authed"
   exit 1
 fi
-

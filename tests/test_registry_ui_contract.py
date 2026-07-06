@@ -1177,6 +1177,28 @@ def test_conversation_protocol_launch_is_browser_native_and_restorable() -> None
     assert "value === 'skills' || value === 'settings' || value === 'protocols'" in detail
 
 
+def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "function _autoProtocolErrorMessage(label, err)" in workspace
+    assert "function _setAutoProtocolDialogError(preview, status, label, err, retryFn)" in workspace
+    assert "UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);" in workspace
+    assert "card.setAttribute('role', 'alert');" in workspace
+    assert "closeOnOverlay: false" in workspace
+    assert workspace.count("closeOnOverlay: false") >= 2
+    assert "UI.reportError('Failed to generate protocol'" not in workspace
+    assert "UI.reportError('Failed to generate the run improvement'" not in workspace
+    assert "status.textContent = 'Generation failed.'" not in workspace
+    assert ".protocol-auto-error-note" in css
+    assert ".protocol-auto-error.error-card" in css
+
+
 def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = (

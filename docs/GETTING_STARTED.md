@@ -280,9 +280,9 @@ After login, run `./octopus status` again and confirm the provider no longer
 shows as unconfigured.
 
 For Codex bots, set the model with `BOT_MODEL` in the bot `.env` file. Set
-`CODEX_REASONING_EFFORT` to `minimal`, `low`, `medium`, or `high` when you need
-to control Codex reasoning effort for that bot. Unsupported values fail startup
-instead of reaching the provider CLI.
+`CODEX_REASONING_EFFORT` to `minimal`, `low`, `medium`, `high`, or `xhigh` when
+you need to control Codex reasoning effort for that bot. Unsupported values
+fail startup instead of reaching the provider CLI.
 
 ## Check Status
 

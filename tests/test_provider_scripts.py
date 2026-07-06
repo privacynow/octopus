@@ -26,7 +26,13 @@ def test_provider_status_checks_configured_bot_env_files() -> None:
     assert 'BOT_ENV_FILE="/dev/null" \\' not in text
 
 
-def test_container_provider_login_rejects_codex_interactive_login() -> None:
+def test_container_provider_login_requires_codex_device_auth_support() -> None:
+    script = REPO_ROOT / "scripts" / "provider" / "container_provider_login.sh"
+    text = script.read_text(encoding="utf-8")
+
+    assert "codex login --help" in text
+    assert "codex login --device-auth" in text
+
     result = subprocess.run(
         ["bash", str(REPO_ROOT / "scripts" / "provider" / "container_provider_login.sh")],
         capture_output=True,
@@ -35,20 +41,21 @@ def test_container_provider_login_rejects_codex_interactive_login() -> None:
     )
 
     assert result.returncode == 2
-    assert "Codex interactive login must run on the host" in result.stderr
+    assert "does not support container-safe device auth" in result.stderr
     assert "browser callback to localhost reaches the login server" in result.stderr
 
 
-def test_provider_login_runs_codex_login_on_host_with_shared_codex_home() -> None:
+def test_provider_login_prefers_host_codex_and_falls_back_to_container_device_auth() -> None:
     script = REPO_ROOT / "scripts" / "provider" / "provider_login.sh"
     text = script.read_text(encoding="utf-8")
 
     assert 'if [ "$provider" = "codex" ]; then' in text
     assert 'codex_home="$REPO_DIR/$auth_dir/.codex"' in text
+    assert "if command -v codex" in text
     assert 'CODEX_HOME="$codex_home" codex login' in text
     assert 'CODEX_HOME="$codex_home" python3 -m app.provider_auth has-runtime-artifacts codex "$HOME"' in text
     assert text.index('CODEX_HOME="$codex_home" codex login') < text.index("docker compose")
-    assert "--device-auth" not in text
+    assert "Falling back to container device auth" in text
 
 
 def test_provider_login_runs_live_health_check_after_interactive_login() -> None:

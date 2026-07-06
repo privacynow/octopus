@@ -9,11 +9,40 @@ provider="${BOT_PROVIDER:-claude}"
 
 case "$provider" in
   codex)
-    echo "Codex interactive login must run on the host, not inside the bot container." >&2
-    echo "Run ./scripts/provider/provider_login.sh codex from the Octopus checkout." >&2
-    echo "That command points host-side CODEX_HOME at .deploy/provider-auth/codex/.codex" >&2
-    echo "so the browser callback to localhost reaches the login server." >&2
-    exit 2
+    if ! codex login --help 2>&1 | grep -q -- "--device-auth"; then
+      echo "This Codex CLI does not support container-safe device auth." >&2
+      echo "Run ./scripts/provider/provider_login.sh codex from a host with the Codex CLI installed." >&2
+      echo "That command points host-side CODEX_HOME at .deploy/provider-auth/codex/.codex" >&2
+      echo "so the browser callback to localhost reaches the login server." >&2
+      exit 2
+    fi
+    cat <<'BANNER'
+╔══════════════════════════════════════════════════════════════╗
+║  ACTION REQUIRED — CODEX DEVICE LOGIN                       ║
+║                                                              ║
+║  The container Codex CLI supports device auth. Follow the    ║
+║  printed URL/code instructions in any browser, then wait for ║
+║  this command to return successfully.                        ║
+║                                                              ║
+║  Do not run the removed flag:  codex --login                 ║
+╚══════════════════════════════════════════════════════════════╝
+BANNER
+    set +e
+    codex login --device-auth
+    exit_code=$?
+    set -e
+    if [ "$exit_code" -ne 0 ]; then
+      echo "✗ Codex device login command failed." >&2
+      echo "  codex login exit code: $exit_code" >&2
+      exit "$exit_code"
+    fi
+    if python -m app.provider_auth has-runtime-artifacts codex "${HOME:-/home/bot}"; then
+      echo "✓ Codex authentication complete. Returning to setup..."
+    else
+      echo "✗ Codex authentication is still incomplete." >&2
+      echo "  Complete Codex login, wait for the CLI to finish, then run ./octopus again." >&2
+      exit 1
+    fi
     ;;
   claude)
     cat <<'BANNER'

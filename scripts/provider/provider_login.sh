@@ -30,15 +30,8 @@ if [ "$provider" = "codex" ]; then
   codex_home="$REPO_DIR/$auth_dir/.codex"
   mkdir -p "$codex_home"
   chmod 700 "$codex_home"
-  if ! command -v codex >/dev/null 2>&1; then
-    echo "Codex CLI was not found on this host." >&2
-    echo "Install the Codex CLI on the host, then rerun:" >&2
-    echo "  ./scripts/provider/provider_login.sh codex" >&2
-    echo "Octopus stores Codex auth for bots in:" >&2
-    echo "  $codex_home" >&2
-    exit 127
-  fi
-  cat <<BANNER
+  if command -v codex >/dev/null 2>&1; then
+    cat <<BANNER
 ╔══════════════════════════════════════════════════════════════╗
 ║  ACTION REQUIRED — CODEX LOGIN                              ║
 ║                                                              ║
@@ -49,24 +42,40 @@ if [ "$provider" = "codex" ]; then
 ║  Do not run the removed flag:  codex --login                 ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
-  echo "Running: CODEX_HOME=$codex_home codex login"
-  set +e
-  CODEX_HOME="$codex_home" codex login
-  exit_code=$?
-  set -e
-  if [ "$exit_code" -ne 0 ]; then
-    echo "✗ Codex login command failed." >&2
-    echo "  codex login exit code: $exit_code" >&2
-    echo "  Run ./scripts/provider/provider_login.sh codex again after fixing the login error." >&2
-    exit "$exit_code"
-  fi
-  if CODEX_HOME="$codex_home" python3 -m app.provider_auth has-runtime-artifacts codex "$HOME"; then
-    echo "✓ Codex authentication files were saved for Octopus."
+    echo "Running: CODEX_HOME=$codex_home codex login"
+    set +e
+    CODEX_HOME="$codex_home" codex login
+    exit_code=$?
+    set -e
+    if [ "$exit_code" -ne 0 ]; then
+      echo "✗ Codex login command failed." >&2
+      echo "  codex login exit code: $exit_code" >&2
+      echo "  Run ./scripts/provider/provider_login.sh codex again after fixing the login error." >&2
+      exit "$exit_code"
+    fi
+    if CODEX_HOME="$codex_home" python3 -m app.provider_auth has-runtime-artifacts codex "$HOME"; then
+      echo "✓ Codex authentication files were saved for Octopus."
+    else
+      echo "✗ Codex authentication is still incomplete." >&2
+      echo "  The login command returned success, but no Codex auth.json was written under:" >&2
+      echo "  $codex_home" >&2
+      exit 1
+    fi
   else
-    echo "✗ Codex authentication is still incomplete." >&2
-    echo "  The login command returned success, but no Codex auth.json was written under:" >&2
-    echo "  $codex_home" >&2
-    exit 1
+    echo "Host Codex CLI was not found. Falling back to container device auth."
+    OCTOPUS_NETWORK="octopus-net" \
+    BOT_PROVIDER="$provider" \
+    OCTOPUS_RUNTIME_IMAGE="octopus-agent:$provider" \
+    PROVIDER_AUTH_DIR="$auth_dir" \
+    BOT_ENV_FILE="/dev/null" \
+    REGISTRY_ENROLL_TOKEN="${REGISTRY_ENROLL_TOKEN:-placeholder-registry-enroll}" \
+    REGISTRY_UI_TOKEN="${REGISTRY_UI_TOKEN:-placeholder-registry-ui}" \
+    docker compose \
+      --project-directory . \
+      -p "octopus-auth-${provider}" \
+      -f infra/compose/docker-compose.yml \
+      --profile bot \
+      run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh
   fi
 else
   OCTOPUS_NETWORK="octopus-net" \

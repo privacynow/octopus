@@ -213,8 +213,12 @@ def test_validate_config_rejects_invalid_codex_sandbox():
 
 
 def test_validate_config_rejects_invalid_codex_reasoning_effort():
-    errors = validate_config(make_config(codex_reasoning_effort="xhigh"))
+    errors = validate_config(make_config(codex_reasoning_effort="maximum"))
     assert any("CODEX_REASONING_EFFORT" in e for e in errors)
+
+
+def test_validate_config_accepts_xhigh_codex_reasoning_effort(tmp_path: Path):
+    assert validate_config(make_config(codex_reasoning_effort="xhigh", working_dir=tmp_path)) == []
 
 
 def test_load_config_rejects_invalid_codex_sandbox(tmp_path: Path):

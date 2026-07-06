@@ -109,11 +109,11 @@ def test_command_building_profile():
 
 
 def test_command_building_reasoning_effort():
-    provider = CodexProvider(make_config(codex_reasoning_effort="high"))
+    provider = CodexProvider(make_config(codex_reasoning_effort="xhigh"))
     cmd = provider._build_new_cmd("test", [])
 
     assert "-c" in cmd
-    assert 'model_reasoning_effort="high"' in cmd
+    assert 'model_reasoning_effort="xhigh"' in cmd
 
 
 def test_effective_model_overrides_config_model():

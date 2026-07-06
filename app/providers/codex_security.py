@@ -26,6 +26,7 @@ ALLOWED_CODEX_REASONING_EFFORTS = frozenset(
         "low",
         "medium",
         "high",
+        "xhigh",
     }
 )
 

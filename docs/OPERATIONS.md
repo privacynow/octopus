@@ -131,7 +131,7 @@ environment for that provider.
 
 Codex model selection is controlled per bot. Set `BOT_MODEL` in
 `.deploy/bots/<bot>/.env` for the model id. Set `CODEX_REASONING_EFFORT` to one
-of `minimal`, `low`, `medium`, or `high` to pass Codex CLI
+of `minimal`, `low`, `medium`, `high`, or `xhigh` to pass Codex CLI
 `model_reasoning_effort` for every request from that bot.
 
 If the host URL or public URL is wrong, redeploy the Registry with the intended

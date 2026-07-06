@@ -723,9 +723,6 @@ CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_run
 CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_hash
     ON agent_registry.protocol_artifact_snapshots (content_hash, created_at DESC)
     WHERE retention_state <> 'deleted';
-CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_stage
-    ON agent_registry.protocol_artifact_snapshots (produced_by_stage_execution_id, artifact_key, created_at DESC)
-    WHERE produced_by_stage_execution_id <> '' AND retention_state <> 'deleted';
 
 CREATE TABLE IF NOT EXISTS agent_registry.workspace_cleanup_inventory (
     inventory_id TEXT PRIMARY KEY,
@@ -871,6 +868,9 @@ ALTER TABLE agent_registry.protocol_artifacts
 
 ALTER TABLE agent_registry.protocol_artifact_snapshots
     ADD COLUMN IF NOT EXISTS produced_by_stage_execution_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_stage
+    ON agent_registry.protocol_artifact_snapshots (produced_by_stage_execution_id, artifact_key, created_at DESC)
+    WHERE produced_by_stage_execution_id <> '' AND retention_state <> 'deleted';
 
 ALTER TABLE agent_registry.protocol_transitions
     ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT '',

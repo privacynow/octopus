@@ -1,48 +1,19 @@
 #!/usr/bin/env bash
 # Run inside the bot container with bot-home volume mounted at /home/bot.
-# Performs provider-specific interactive login then verifies the local CLI
-# still works without doing a live provider runtime probe.
+# Performs provider-specific interactive login when that flow can safely run in
+# a container. Codex OAuth login runs host-side because its localhost callback
+# server must be reachable by the host browser.
 set -euo pipefail
 
 provider="${BOT_PROVIDER:-claude}"
 
 case "$provider" in
   codex)
-    codex_login_args="login"
-    if codex login --help 2>&1 | grep -q -- "--device-auth"; then
-      codex_login_args="login --device-auth"
-    fi
-    cat <<'BANNER'
-╔══════════════════════════════════════════════════════════════╗
-║  ACTION REQUIRED — CODex LOGIN                              ║
-║                                                              ║
-║  The script runs the login command supported by this image.  ║
-║  Follow the CLI instructions to complete sign-in.            ║
-║  The command must return successfully before setup continues.║
-║                                                              ║
-║  Do not run the removed flag:  codex --login                 ║
-╚══════════════════════════════════════════════════════════════╝
-BANNER
-    echo "Running: codex $codex_login_args"
-    set +e
-    # shellcheck disable=SC2086
-    codex $codex_login_args
-    exit_code=$?
-    set -e
-    if [ "$exit_code" -ne 0 ]; then
-      echo "✗ Codex login command failed." >&2
-      echo "  codex login exit code: $exit_code" >&2
-      echo "  Run ./scripts/provider/provider_login.sh codex again after fixing the login error." >&2
-      exit "$exit_code"
-    fi
-    if python -m app.provider_auth has-runtime-artifacts codex "${HOME:-/home/bot}"; then
-      echo "✓ Codex authentication complete. Returning to setup..."
-    else
-      echo "✗ Codex authentication is still incomplete." >&2
-      echo "  Complete Codex login, wait for the CLI to finish, then run ./octopus again." >&2
-      echo "  codex login exit code: $exit_code" >&2
-      exit 1
-    fi
+    echo "Codex interactive login must run on the host, not inside the bot container." >&2
+    echo "Run ./scripts/provider/provider_login.sh codex from the Octopus checkout." >&2
+    echo "That command points host-side CODEX_HOME at .deploy/provider-auth/codex/.codex" >&2
+    echo "so the browser callback to localhost reaches the login server." >&2
+    exit 2
     ;;
   claude)
     cat <<'BANNER'

@@ -263,9 +263,11 @@ provider's login flow.
 
 What to expect:
 
-- Codex-backed agents run the login command supported by the Codex CLI installed
-  in the bot image. Follow the CLI instructions, sign in, approve access, and
-  wait for the command to return successfully.
+- Codex-backed agents use the host `codex` CLI for interactive login, with
+  `CODEX_HOME` pointed at `.deploy/provider-auth/codex/.codex`. This keeps the
+  browser callback on the same host as the login server. Follow the CLI
+  instructions, sign in, approve access, and wait for the command to return
+  successfully. Octopus then verifies the saved auth from inside the bot image.
 - Claude-backed agents usually open an interactive Claude session. If it is not
   already logged in, run `/login`, finish the browser or token flow, then run
   `/exit`.

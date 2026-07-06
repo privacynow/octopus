@@ -122,6 +122,12 @@ Diagnose -> Provider auth
 
 Authenticate only the provider you intend to use for the ready path.
 
+Codex interactive login runs on the host `codex` CLI with `CODEX_HOME` pointed
+at `.deploy/provider-auth/codex/.codex`. That is intentional: current Codex CLI
+login starts a localhost browser callback server, and that callback must be
+reachable from the host browser. After login, Octopus runs a containerized live
+provider check against the same shared auth directory.
+
 Codex model selection is controlled per bot. Set `BOT_MODEL` in
 `.deploy/bots/<bot>/.env` for the model id. Set `CODEX_REASONING_EFFORT` to one
 of `minimal`, `low`, `medium`, or `high` to pass Codex CLI

@@ -342,10 +342,15 @@ runtime evidence instead of prose-only claims. The contract names required
 journeys in terms of stable hook ids. The artifact must expose those hooks in
 `octopus-runtime.json.test_hooks`, typically as `data-testid` locators. Missing
 or unmapped hooks are artifact contract failures. The bot-side journey runner
-executes only Registry-routed artifact URLs, sends its scoped runtime token in
-headers, blocks arbitrary external navigation unless the contract allows it,
-and posts structured pass/fail results back to Registry. Protocols without an
-acceptance contract keep the legacy runtime/prose evidence gate.
+executes only Registry-routed artifact URLs, sends its scoped runtime token only
+to the Registry origin, blocks arbitrary external navigation unless the
+contract allows it, and posts structured pass/fail results back to Registry.
+Journey results count only when they reference a Registry-issued
+`journey_run_id` for the current runtime instance and retained artifact
+snapshot. Producer and planning stages do not receive journey-result
+capabilities; structured acceptance evidence must come from the acceptance
+runner or an operator-requested re-run. Protocols without an acceptance contract
+keep the legacy runtime/prose evidence gate.
 
 The evidence manifest artifact keys are `producer_evidence_manifest` and
 `reviewer_evidence_manifest`. They are normal protocol artifacts and are read
@@ -419,8 +424,10 @@ Corrective or destructive actions should require a reason where applicable.
 
 `interrupt` stops the active stage from the operator side, marks the stage
 blocked with `operator_interrupted`, and asks the assigned bot to cancel the
-running provider subprocess when it can. `cancel` ends the whole run and also
-requests provider cancellation when work is still running. Late provider
+running provider subprocess when it can. The server rejects interrupt attempts
+against terminal runs or completed stages with a conflict response; hiding the
+button in the UI is not the correctness rule. `cancel` ends the whole run and
+also requests provider cancellation when work is still running. Late provider
 results after an interrupted, timed-out, blocked, or canceled stage are kept as
 task/audit metadata only; they do not advance the run or overwrite artifact
 records or retained snapshots.

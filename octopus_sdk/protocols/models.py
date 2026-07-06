@@ -63,7 +63,15 @@ ProtocolArtifactVerificationState = Literal["declared", "available", "verified",
 ProtocolArtifactRetentionState = Literal["active", "archived", "expired", "deleted", "unavailable"]
 ProtocolArtifactSnapshotKind = Literal["file", "directory", "text", "external"]
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back", "interrupt"]
-ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
+ProtocolIssueKind = Literal[
+    "blocked_run",
+    "invalid_contract",
+    "runtime_evidence_required",
+    "operator_interrupted",
+    "acceptance_contract_invalid",
+    "stuck_lease",
+    "expired_timeout",
+]
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
 ProtocolRunForkMode = Literal["rerun_selected", "continue_after"]
 ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
@@ -848,7 +856,7 @@ class ProtocolRuntimeCapabilityTokenRecord(RegistryRecordModel):
     expires_at: str = ""
     revoked_at: str = ""
     exchange_count: int = 0
-    max_exchange_count: int = 2
+    max_exchange_count: int = 5
     created_at: str = ""
     updated_at: str = ""
     actor_ref: str = ""

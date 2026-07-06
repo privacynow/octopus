@@ -330,11 +330,16 @@ contract-bearing runs, Octopus checks structured journey results and reviewer
 evidence manifests instead of accepting prose-only claims. A missing hook,
 failed journey, unhealthy runtime, or absent reviewer manifest remains visible
 until fixed, re-run, accepted by the correct path, or sent back.
+Use `Re-run journeys` from the runtime panel to queue another browser journey
+without re-running the whole stage. The request returns immediately, and the run
+updates when the bot posts the correlated result.
 
 Use `Interrupt` when a running stage is clearly on the wrong path or the
 provider is stuck and you want to stop it without losing the run history.
 Interrupt blocks the current stage and asks the bot to stop active provider
-work where possible. Use `Cancel` only when the whole run should end.
+work where possible. The server rejects interrupt on completed or otherwise
+terminal runs, even if a stale browser still shows the button. Use `Cancel` only
+when the whole run should end.
 
 ## Archive, Delete, And Cleanup
 

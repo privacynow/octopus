@@ -35,6 +35,23 @@ def _hook_selector(spec: ProtocolRuntimeJourneySpecRecord, hook: str) -> str:
     return selector
 
 
+def _headers_for_origin(*, request_origin: str, target_origin: str, bearer_token: str) -> dict[str, str]:
+    if str(request_origin or "").rstrip("/") != str(target_origin or "").rstrip("/") or not str(bearer_token or "").strip():
+        return {}
+    return {"authorization": f"Bearer {bearer_token}"}
+
+
+def _artifact_api_url(spec: ProtocolRuntimeJourneySpecRecord, *, target_origin: str, path: str) -> str:
+    normalized = str(path or "/").strip()
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    api_base = (
+        f"{str(target_origin or '').rstrip('/')}/runtime/protocol-runs/"
+        f"{spec.protocol_run_id}/artifacts/{spec.artifact_key}/api/"
+    )
+    return urljoin(api_base, normalized.lstrip("/"))
+
+
 async def run_browser_journey(
     spec: ProtocolRuntimeJourneySpecRecord,
     *,
@@ -75,9 +92,7 @@ async def run_browser_journey(
             if executable_path:
                 launch_kwargs["executable_path"] = executable_path
             browser = await playwright.chromium.launch(**launch_kwargs)
-            context = await browser.new_context(
-                extra_http_headers={"Authorization": f"Bearer {bearer_token}"} if bearer_token else {},
-            )
+            context = await browser.new_context()
             page = await context.new_page()
 
             page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
@@ -86,7 +101,21 @@ async def run_browser_journey(
             async def route_guard(route, request):
                 request_url = str(request.url or "")
                 request_origin = _origin(request_url)
-                if request_url.startswith(("data:", "blob:", "about:")) or request_origin in allowed_origins:
+                if request_url.startswith(("data:", "blob:", "about:")):
+                    await route.continue_()
+                    return
+                if request_origin == target_origin:
+                    headers = dict(request.headers)
+                    headers.update(
+                        _headers_for_origin(
+                            request_origin=request_origin,
+                            target_origin=target_origin,
+                            bearer_token=bearer_token,
+                        )
+                    )
+                    await route.continue_(headers=headers)
+                    return
+                if request_origin in allowed_origins:
                     await route.continue_()
                     return
                 await route.abort()
@@ -127,9 +156,8 @@ async def run_browser_journey(
                         raise AssertionError(f"Hook {hook} value did not match expected value.")
                 elif action == "api_status":
                     path = str(step.get("path", "") or "/").strip()
-                    if not path.startswith("/"):
-                        path = f"/{path}"
-                    response = await page.request.get(urljoin(target_origin, path.lstrip("/")))
+                    headers = {"Authorization": f"Bearer {bearer_token}"} if bearer_token else {}
+                    response = await page.request.get(_artifact_api_url(spec, target_origin=target_origin, path=path), headers=headers)
                     expected_status = int(step.get("status", 200) or 200)
                     ok = int(response.status) == expected_status
                     assertions.append(RegistryJsonRecord({"action": action, "path": path, "ok": ok, "status": response.status, "expected_status": expected_status}))

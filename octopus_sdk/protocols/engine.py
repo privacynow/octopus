@@ -535,6 +535,23 @@ class ProtocolRunEngine:
                 retention_until=retention_until,
             )
         if action == "interrupt":
+            run_status = str(run.status or "").strip().lower()
+            stage_status = str(stage_execution.status or "").strip().lower()
+            if run_status not in {"queued", "running"} or stage_status not in {"queued", "running"}:
+                detail = (
+                    f"Stage {stage.stage_key} cannot be interrupted from run status "
+                    f"{run.status} and stage status {stage_execution.status}."
+                )
+                return ProtocolEngineDecisionRecord(
+                    run_status=run.status,
+                    stage_status=stage_execution.status,
+                    failure_code="invalid_interrupt_state",
+                    failure_detail=detail,
+                    transition_kind="invalid",
+                    transition_reason=detail,
+                    transition_error_code="INVALID_INTERRUPT_STATE",
+                    retention_until=retention_until,
+                )
             return ProtocolEngineDecisionRecord(
                 run_status="blocked",
                 stage_status="blocked",

@@ -49,6 +49,7 @@ from octopus_sdk.inbound_types import (
 from octopus_sdk.providers import Provider
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.protocols import ProtocolRuntimeJourneyResultRecord
 from octopus_sdk.registry.management import (
     ArtifactRuntimeFetchRequest,
     ArtifactRuntimeHealthRequest,
@@ -813,20 +814,80 @@ async def handle_registry_delivery(
 
                     payload = await workspace_hygiene.workspace_cleanup(request.payload, config=config)
                 elif isinstance(request.payload, RunArtifactJourneyRequest):
-                    from app.runtime.browser_journey import run_browser_journey
+                    async def _run_and_post_journey(
+                        *,
+                        registry_url: str,
+                        agent_token: str,
+                        journey_request: RunArtifactJourneyRequest,
+                    ) -> None:
+                        from app.runtime.browser_journey import run_browser_journey
 
-                    registry_client = RegistryClient(registry.url, agent_token=state.agent_token)
-                    exchange = await registry_client.exchange_runtime_capability(request.payload.capability_ref)
-                    bearer = str(exchange.get("bearer_token", "") or "").strip()
-                    if not bearer:
-                        raise RuntimeError(str(exchange.get("message", "") or "Runtime capability exchange failed."))
-                    journey_result = await run_browser_journey(
-                        request.payload.spec,
-                        registry_url=request.payload.registry_url or registry.url,
-                        bearer_token=bearer,
-                        journey_run_id=request.payload.journey_run_id,
+                        registry_client = RegistryClient(registry_url, agent_token=agent_token)
+                        result: ProtocolRuntimeJourneyResultRecord
+                        bearer = ""
+                        try:
+                            exchange = await registry_client.exchange_runtime_capability(journey_request.capability_ref)
+                            bearer = str(exchange.get("bearer_token", "") or "").strip()
+                            if not bearer:
+                                raise RuntimeError(str(exchange.get("message", "") or "Runtime capability exchange failed."))
+                            result = await run_browser_journey(
+                                journey_request.spec,
+                                registry_url=journey_request.registry_url or registry_url,
+                                bearer_token=bearer,
+                                journey_run_id=journey_request.journey_run_id,
+                            )
+                        except Exception as exc:
+                            result = ProtocolRuntimeJourneyResultRecord(
+                                protocol_run_id=journey_request.protocol_run_id,
+                                artifact_key=journey_request.artifact_key,
+                                journey_key=journey_request.journey_key,
+                                journey_run_id=journey_request.journey_run_id,
+                                ok=False,
+                                status="failed",
+                                summary=str(exc),
+                            )
+                        if not bearer:
+                            log.warning(
+                                "runtime journey %s for run %s could not post result because capability exchange failed: %s",
+                                journey_request.journey_key,
+                                journey_request.protocol_run_id,
+                                result.summary,
+                            )
+                            return
+                        try:
+                            await RegistryClient(registry_url).protocol_runtime_journey_result(
+                                run_id=journey_request.protocol_run_id,
+                                artifact_key=journey_request.artifact_key,
+                                journey_key=journey_request.journey_key,
+                                bearer_token=bearer,
+                                result=result,
+                            )
+                        except Exception:
+                            log.warning(
+                                "runtime journey %s for run %s failed to post result",
+                                journey_request.journey_key,
+                                journey_request.protocol_run_id,
+                                exc_info=True,
+                            )
+
+                    asyncio.create_task(
+                        _run_and_post_journey(
+                            registry_url=registry.url,
+                            agent_token=state.agent_token,
+                            journey_request=request.payload,
+                        )
                     )
-                    payload = RunArtifactJourneyResult(result=journey_result)
+                    payload = RunArtifactJourneyResult(
+                        result=ProtocolRuntimeJourneyResultRecord(
+                            protocol_run_id=request.payload.protocol_run_id,
+                            artifact_key=request.payload.artifact_key,
+                            journey_key=request.payload.journey_key,
+                            journey_run_id=request.payload.journey_run_id,
+                            ok=False,
+                            status="queued",
+                            summary="Journey queued on bot runner.",
+                        )
+                    )
                 elif isinstance(request.payload, CancelRoutedTaskRequest):
                     matched_item = None
                     for item in work_queue.list_incomplete_work_items(config.data_dir):

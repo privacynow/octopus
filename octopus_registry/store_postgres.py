@@ -49,7 +49,7 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.protocols.engine import DEFAULT_PROTOCOL_RUN_ENGINE, ProtocolRunEngine
 from octopus_sdk.resources import ResourceAttachmentRecord, ResourceRecord
-from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
+from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, run_write_tx_with_retry, write_tx
 from .protocol_store import ProtocolPostgresAdapter
 from .routing_skill_service import (
     requested_routed_skills,
@@ -761,7 +761,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: RegistryRecordModel,
     ) -> TaskRecord:
         now = utcnow_iso()
-        with self._connect() as conn, _write_tx(conn):
+        def _operation(conn):
             result = shared_update_routed_task_result(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
@@ -783,6 +783,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now=now,
             )
             return result
+        return run_write_tx_with_retry(self._connect, _operation)
 
     def report_management_result(
         self,
@@ -1555,12 +1556,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         access: ProtocolAccessContextRecord,
         limit: int = 50,
+        event_kind: str | None = None,
     ) -> list[ProtocolArtifactRuntimeEventRecord]:
         return self._protocol_store.list_protocol_artifact_runtime_events(
             run_id,
             artifact_key,
             access=access,
             limit=limit,
+            event_kind=event_kind,
         )
 
     def mint_runtime_capability_token(

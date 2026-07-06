@@ -3,7 +3,10 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'all', label: 'All issues' },
     { value: 'blocked_run', label: 'Blocked runs' },
     { value: 'invalid_contract', label: 'Contract errors' },
-    { value: 'stuck_lease', label: 'Expired write leases' },
+    { value: 'stuck_lease', label: 'Expired write lease' },
+    { value: 'runtime_evidence_required', label: 'Runtime evidence' },
+    { value: 'operator_interrupted', label: 'Operator interrupted' },
+    { value: 'acceptance_contract_invalid', label: 'Invalid acceptance contract' },
     { value: 'expired_timeout', label: 'Expired timeouts' },
 ];
 
@@ -231,6 +234,18 @@ async function _artifactRuntimeSnapshot(runId, artifactKey) {
     };
 }
 
+function _contractJourneyKeysForArtifact(artifactKey) {
+    const key = String(artifactKey || '').trim();
+    const autoMeta = currentRun?.version?.definition_json?.metadata?.auto_protocol || {};
+    const primaryKey = String(autoMeta.primary_artifact?.artifact_key || autoMeta.primary_artifact_key || '').trim();
+    if (primaryKey && key && primaryKey !== key) return [];
+    const contract = autoMeta.acceptance_contract || {};
+    const journeys = Array.isArray(contract.required_journeys) ? contract.required_journeys : [];
+    return journeys
+        .map((item) => String(item?.journey_key || '').trim())
+        .filter(Boolean);
+}
+
 function _renderArtifactRuntimeDialogBody({
     runId,
     artifactKey,
@@ -361,6 +376,10 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     logsBtn.type = 'button';
     logsBtn.className = 'btn';
     logsBtn.textContent = 'Logs';
+    const journeyBtn = document.createElement('button');
+    journeyBtn.type = 'button';
+    journeyBtn.className = 'btn';
+    journeyBtn.textContent = 'Re-run journeys';
     const startBtn = document.createElement('button');
     startBtn.type = 'button';
     startBtn.className = 'btn btn-primary';
@@ -383,13 +402,13 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     deleteBtn.type = 'button';
     deleteBtn.className = 'btn btn-danger';
     deleteBtn.textContent = 'Delete';
-    for (const action of [startBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn]) {
+    for (const action of [startBtn, healthBtn, logsBtn, journeyBtn, stopBtn, archiveBtn, deleteBtn]) {
         action.hidden = true;
     }
     openBtn.hidden = true;
 
     const view = UI.showDialog(`Runtime: ${artifactLabel || artifactKey}`, body, {
-        actions: [startBtn, openBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn, closeBtn],
+        actions: [startBtn, openBtn, healthBtn, logsBtn, journeyBtn, stopBtn, archiveBtn, deleteBtn, closeBtn],
         maxWidth: '820px',
     });
 
@@ -443,6 +462,7 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
         stopBtn.hidden = !['running', 'starting'].includes(status);
         healthBtn.hidden = !manifestAvailable || !['running', 'starting'].includes(status);
         logsBtn.hidden = !manifestAvailable;
+        journeyBtn.hidden = !_contractJourneyKeysForArtifact(artifactKey).length || !['running', 'starting'].includes(status);
         archiveBtn.hidden = !manifestAvailable || status === 'running';
         deleteBtn.hidden = !manifestAvailable || status === 'running';
         if (!runtimeNeedsPolling()) stopAutoPoll();
@@ -480,6 +500,25 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
 
     healthBtn.addEventListener('click', () => void refresh({ health: true }));
     logsBtn.addEventListener('click', () => void refresh({ logs: true }));
+    journeyBtn.addEventListener('click', async () => {
+        const journeys = _contractJourneyKeysForArtifact(artifactKey);
+        if (!journeys.length) {
+            UI.notify('This artifact has no declared runtime journeys.', 'warning');
+            return;
+        }
+        journeyBtn.disabled = true;
+        try {
+            for (const journeyKey of journeys) {
+                await API.runProtocolRunArtifactRuntimeJourney(runId, artifactKey, journeyKey);
+            }
+            UI.notify(`${journeys.length} journey${journeys.length === 1 ? '' : 'ies'} queued. Results will appear in runtime events.`, 'success');
+            await refresh();
+        } catch (err) {
+            UI.reportError('Failed to queue runtime journey', err, { context: 'Artifact runtime journey failed' });
+        } finally {
+            journeyBtn.disabled = false;
+        }
+    });
     startBtn.addEventListener('click', async () => {
         startBtn.disabled = true;
         try {
@@ -8356,12 +8395,11 @@ function renderProtocolRuns(container) {
         const stageId = String(detail?.run?.current_stage_execution_id || '').trim();
         return transitions.find((item) => {
             const kind = String(item?.transition_kind || '').trim().toLowerCase();
-            const code = String(item?.error_code || '').trim().toLowerCase();
             const fromStage = String(item?.from_stage_execution_id || '').trim();
             const toStage = String(item?.to_stage_execution_id || '').trim();
             const stageMatches = !stageId || !fromStage || fromStage === stageId || toStage === stageId;
-            return stageMatches && (kind === 'blocked' || code.includes('runtime') || code.includes('evidence'));
-        }) || transitions.find((item) => String(item?.transition_kind || '').trim().toLowerCase() === 'blocked') || null;
+            return stageMatches && kind === 'blocked';
+        }) || null;
     }
 
     function _missingEvidenceList(detail = currentRun) {
@@ -9022,6 +9060,8 @@ function renderProtocolRuns(container) {
             role: 'alertdialog',
             initialFocus: reasonInput,
             maxWidth: '680px',
+            closeOnOverlay: false,
+            closeOnEscape: false,
         });
         cancelBtn.addEventListener('click', () => view.close());
         confirmBtn.addEventListener('click', async () => {
@@ -9031,8 +9071,9 @@ function renderProtocolRuns(container) {
                 return;
             }
             confirmBtn.disabled = true;
+            let mutation = null;
             try {
-                const mutation = await API.actOnProtocolRun(
+                mutation = await API.actOnProtocolRun(
                     currentRun.run.protocol_run_id,
                     spec.action,
                     { reason },
@@ -9043,30 +9084,38 @@ function renderProtocolRuns(container) {
                             : `${Date.now()}${Math.random().toString(16).slice(2)}`,
                     },
                 );
-                await loadRuns();
-                await loadIssues({ rerender: false });
-                await loadRunDetail();
-                const resultRun = currentRun?.run || mutation?.run || {};
-                if (String(resultRun.status || '').trim().toLowerCase() === 'blocked') {
-                    UI.reconcileChildren(resultPanel, [_renderRunActionBlockedResult(mutation, currentRun)]);
-                    resultPanel.hidden = false;
-                    reasonInput.disabled = true;
-                    confirmBtn.hidden = true;
-                    cancelBtn.textContent = 'Close';
-                    return;
-                }
-                view.close();
-                UI.notify(spec.successMessage, 'success');
             } catch (err) {
                 if (Number(err?.status || 0) === 409 || String(err?.errorCode || '').includes('CONCURRENT')) {
                     await loadRunDetail();
-                    UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning');
+                    UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning', { timeout: 0 });
                 } else {
-                    UI.reportError(`Failed to ${spec.action.replace('-', ' ')} the protocol run`, err, {
-                        context: 'Protocol run action failed',
-                    });
+                    const message = err && err.message ? err.message : String(err || 'Unknown error');
+                    UI.notify(`Failed to ${spec.action.replace('-', ' ')} the protocol run: ${message}`, 'danger', { timeout: 0 });
+                    console.error('Protocol run action failed', err);
                 }
+                confirmBtn.disabled = false;
+                return;
             }
+            try {
+                await loadRuns();
+                await loadIssues({ rerender: false });
+                await loadRunDetail();
+            } catch (err) {
+                UI.notify('The action was applied, but the refreshed run detail could not be loaded. Reload the run before taking another action.', 'warning', { timeout: 0 });
+                console.error('Protocol run refresh after action failed', err);
+            }
+            const resultRun = currentRun?.run || mutation?.run || {};
+            if (String(resultRun.status || '').trim().toLowerCase() === 'blocked') {
+                UI.reconcileChildren(resultPanel, [_renderRunActionBlockedResult(mutation, currentRun)]);
+                resultPanel.hidden = false;
+                reasonInput.disabled = true;
+                confirmBtn.hidden = true;
+                cancelBtn.textContent = 'Close';
+                confirmBtn.disabled = false;
+                return;
+            }
+            view.close();
+            UI.notify(spec.successMessage, 'success');
             confirmBtn.disabled = false;
         });
     }

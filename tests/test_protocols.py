@@ -1626,6 +1626,62 @@ def test_registry_store_operator_interrupt_blocks_stage_and_queues_cancel_reques
     assert payload["protocol_stage_execution_id"] == stage.protocol_stage_execution_id
 
 
+def test_registry_store_operator_interrupt_rejects_terminal_run(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "terminal-interrupt-plan",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "content_hash": "terminal-interrupt-plan",
+                }
+            ],
+        },
+    )
+    review_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    review_stage = next(item for item in review_detail.stage_executions if item.stage_key == "review")
+    store.update_routed_task_result(
+        enroll.agent_token,
+        review_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "terminal-interrupt-review",
+            "summary": "Accepted.",
+            "full_text": "Looks good.\nPROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Accepted.",
+        },
+    )
+    completed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert completed.run.status == "completed"
+
+    interrupted = store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="interrupt",
+        reason="Should not reopen.",
+    )
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+
+    assert interrupted.ok is False
+    assert interrupted.status == "concurrent_modification"
+    assert refreshed.run.status == "completed"
+    assert refreshed.run.blocked_code == ""
+    assert refreshed.stage_executions[0].status == "completed"
+
+
 def test_registry_store_operator_interrupt_cancel_delivery_reaches_coordination_agent(
     postgres_registry_truncated: str,
 ) -> None:
@@ -2887,24 +2943,68 @@ def test_registry_store_contract_runtime_gate_requires_hooks_and_structured_jour
             artifact_key="produced_outcome",
             event_kind="journey_completed",
             actor_ref="runtime-capability:cap-1:stage-1:acceptor",
-            summary="Journey completed.",
+            summary="Forged journey completed.",
             metadata_json=RegistryJsonRecord.model_validate({
                 "journey_key": "primary_happy_path",
-                "journey_run_id": "journey-1",
+                "journey_run_id": "forged-journey-1",
                 "ok": True,
                 "status": "passed",
             }),
         ),
         access=operator_access(),
     )
-    accepted = store.act_on_protocol_run(
+    still_blocked = store.act_on_protocol_run(
         created_2.run.protocol_run_id,
         access=operator_access(),
         action="accept",
-        reason="Structured journey evidence is present.",
+        reason="Forged structured journey evidence should not count.",
     )
-    assert accepted.ok is True
-    assert accepted.run is not None
+    assert still_blocked.ok is True
+    assert still_blocked.run is not None
+    assert still_blocked.run.status == "blocked"
+    assert "structured journey result: primary_happy_path" in still_blocked.run.blocked_detail
+
+    requested_event = store.append_protocol_artifact_runtime_event(
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id=created_2.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            event_kind="journey_requested",
+            actor_ref="operator-session",
+            summary="Journey requested.",
+            metadata_json=RegistryJsonRecord.model_validate({
+                "journey_key": "primary_happy_path",
+                "journey_run_id": "journey-1",
+                "source": "operator_journey_run",
+                "runtime_instance_id": runtime.runtime_instance_id,
+                "artifact_content_hash": "structured-runtime-fixed",
+            }),
+        ),
+        access=operator_access(),
+    )
+    store.append_protocol_artifact_runtime_event(
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id=created_2.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            event_kind="journey_completed",
+            actor_ref=f"runtime-capability:cap-1:{second_final.protocol_stage_execution_id}:acceptor",
+            summary="Journey completed.",
+            metadata_json=RegistryJsonRecord.model_validate({
+                "journey_key": "primary_happy_path",
+                "journey_run_id": "journey-1",
+                "ok": True,
+                "status": "passed",
+                "source": "registry_journey_runner",
+                "requested_event_id": requested_event.runtime_event_id,
+                "runtime_instance_id": runtime.runtime_instance_id,
+                "artifact_content_hash": "structured-runtime-fixed",
+                "actor_stage_execution_id": second_final.protocol_stage_execution_id,
+            }),
+        ),
+        access=operator_access(),
+    )
+    accepted = store.get_protocol_run(created_2.run.protocol_run_id, access=operator_access())
     assert accepted.run.status == "completed", accepted.run.blocked_detail
 
 
@@ -3780,6 +3880,12 @@ def test_protocol_stage_runtime_capability_exchange_is_scoped_and_revoked(
         artifact_key="plan",
         action="runtime:delete",
     ) is None
+    assert store.validate_runtime_capability_token(
+        bearer_token=exchanged.bearer_token,
+        protocol_run_id=detail.run.protocol_run_id,
+        artifact_key="plan",
+        action="journey:result",
+    ) is None
 
     store.update_routed_task_result(
         enroll.agent_token,
@@ -3805,6 +3911,37 @@ def test_protocol_stage_runtime_capability_exchange_is_scoped_and_revoked(
         artifact_key="plan",
         action="runtime:read",
     ) is None
+
+
+def test_routed_protocol_result_redacts_runtime_tokens(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, _created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "redact-runtime-token",
+            "summary": "Leaked oct-rt-secret-token in summary.",
+            "full_text": "Provider echoed oct-cap-secret-ref and oct-rt-secret-token.\nPROTOCOL_SUMMARY: Done.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": False,
+                }
+            ],
+        },
+    )
+
+    task = store.get_task(first_stage.routed_task_id)
+    result = task.result.as_dict() if task.result is not None else {}
+    assert "oct-rt-secret-token" not in json.dumps(result)
+    assert "oct-cap-secret-ref" not in json.dumps(result)
+    assert "<runtime-token>" in json.dumps(result)
 
 
 def test_protocol_stage_completion_via_routed_task_result_updates_both_sides(

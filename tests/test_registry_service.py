@@ -55,6 +55,7 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunRecord,
     ProtocolRuntimeCapabilityTokenRecord,
+    ProtocolStageExecutionRecord,
     generate_auto_protocol_session,
 )
 from octopus_sdk.registry.management import (
@@ -541,6 +542,7 @@ def test_registry_list_agents_supports_query_and_state_filters(monkeypatch, tmp_
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
     _login_ui(client)
+    csrf = _ui_csrf_token(client)
 
     _alpha_id, _alpha_token = _enroll_and_register(client, "Alpha Reviewer", "alpha-reviewer")
     _beta_id, beta_token = _enroll_and_register(client, "Beta Builder", "beta-builder")
@@ -5618,7 +5620,21 @@ def test_protocol_artifact_runtime_journey_spec_and_result_use_scoped_bearer(mon
         manifest=manifest,
         runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
     )
-    events: list[ProtocolArtifactRuntimeEventRecord] = []
+    events: list[ProtocolArtifactRuntimeEventRecord] = [
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id="run-1",
+            artifact_key="package",
+            event_kind="journey_requested",
+            actor_ref="operator-session",
+            summary="Journey requested.",
+            metadata_json=RegistryJsonRecord.model_validate({
+                "journey_key": "primary_happy_path",
+                "journey_run_id": "journey-1",
+                "source": "operator_journey_run",
+            }),
+        )
+    ]
 
     class _Store:
         def validate_runtime_capability_token(self, *, bearer_token: str, protocol_run_id: str, artifact_key: str, action: str):
@@ -5656,6 +5672,21 @@ def test_protocol_artifact_runtime_journey_spec_and_result_use_scoped_bearer(mon
             assert access.has_role("runtime_capability")
             return runtime
 
+        def list_protocol_artifact_runtime_events(
+            self,
+            run_id: str,
+            artifact_key: str,
+            *,
+            access,
+            limit: int = 50,
+            event_kind: str | None = None,
+        ):
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            assert access.has_role("runtime_capability")
+            matching = [item for item in events if not event_kind or item.event_kind == event_kind]
+            return list(matching[:limit])
+
         def append_protocol_artifact_runtime_event(self, event: ProtocolArtifactRuntimeEventRecord, *, access):
             assert access.has_role("runtime_capability")
             events.append(event)
@@ -5678,6 +5709,16 @@ def test_protocol_artifact_runtime_journey_spec_and_result_use_scoped_bearer(mon
                 "assertions": [{"action": "assert_visible", "hook": "primary_result", "ok": True}],
             },
         )
+        forged_response = client.post(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path/results",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={
+                "journey_run_id": "not-requested",
+                "ok": True,
+                "status": "passed",
+                "summary": "Forged pass.",
+            },
+        )
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
 
@@ -5687,8 +5728,153 @@ def test_protocol_artifact_runtime_journey_spec_and_result_use_scoped_bearer(mon
     assert sorted(spec["hooks"]) == ["primary_action", "primary_result"]
     assert result_response.status_code == 200
     assert result_response.json()["event"]["event_kind"] == "journey_completed"
-    assert events[0].metadata_json.as_dict()["source"] == "agent_runtime_capability"
-    assert events[0].metadata_json.as_dict()["actor_stage_execution_id"] == "stage-1"
+    assert forged_response.status_code == 409
+    assert forged_response.json()["detail"]["error_code"] == "PROTOCOL_RUNTIME_JOURNEY_NOT_REQUESTED"
+    result_event = events[-1]
+    assert result_event.metadata_json.as_dict()["source"] == "registry_journey_runner"
+    assert result_event.metadata_json.as_dict()["actor_stage_execution_id"] == "stage-1"
+
+
+def test_protocol_artifact_runtime_journey_run_queues_management_request(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+    csrf = _ui_csrf_token(client)
+    document = {
+        "schema_version": 1,
+        "metadata": {
+            "slug": "journey-run",
+            "auto_protocol": {
+                "primary_artifact_key": "package",
+                "acceptance_contract": {
+                    "schema_version": 1,
+                    "primary_artifact_key": "package",
+                    "required_journeys": [
+                        {
+                            "journey_key": "primary_happy_path",
+                            "required_hooks": ["primary_action"],
+                            "steps": [{"action": "click", "hook": "primary_action"}],
+                        }
+                    ],
+                },
+            },
+        },
+        "participants": [{"participant_key": "reviewer", "display_name": "Reviewer"}],
+        "artifacts": [{"artifact_key": "package", "kind": "workspace_file", "path": "package"}],
+        "stages": [
+            {
+                "stage_key": "final",
+                "participant_key": "reviewer",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "transitions": {"accept": "__complete__", "revise": "__failed__", "fail": "__failed__"},
+                "instructions": "Review.",
+            }
+        ],
+    }
+    runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-journey-run",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="static",
+            ui_path="/",
+            health_path="/health",
+            test_hooks=[{"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"}],
+        ),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+    )
+    events: list[ProtocolArtifactRuntimeEventRecord] = []
+    requests: list[ManagementRequest] = []
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(
+                    protocol_run_id="run-1",
+                    protocol_id="protocol-1",
+                    entry_agent_id="agent-1",
+                    current_stage_execution_id="stage-1",
+                ),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="ver-1",
+                    protocol_id="protocol-1",
+                    definition_json=RegistryJsonRecord.model_validate(document),
+                ),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(tmp_path),
+                        exists=True,
+                        content_hash="package-hash",
+                    )
+                ],
+                stage_executions=[
+                    ProtocolStageExecutionRecord(
+                        protocol_stage_execution_id="stage-1",
+                        protocol_run_id="run-1",
+                        stage_key="final",
+                        participant_key="reviewer",
+                        status="blocked",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del access
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            return runtime
+
+        def mint_runtime_capability_token(self, **kwargs):
+            assert kwargs["allowed_actions"] == ["runtime:read", "runtime:fetch", "journey:read", "journey:result", "journey:run"]
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                capability_ref="oct-cap-ref",
+                protocol_run_id="run-1",
+                protocol_stage_execution_id="stage-1",
+                artifact_key="package",
+                participant_key="reviewer",
+                target_agent_id="agent-1",
+                allowed_actions=list(kwargs["allowed_actions"]),
+            )
+
+        def append_protocol_artifact_runtime_event(self, event: ProtocolArtifactRuntimeEventRecord, *, access):
+            del access
+            events.append(event)
+            return event
+
+        def create_management_request(self, request: ManagementRequest):
+            requests.append(request)
+            return request
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path/run",
+            headers={"X-CSRF-Token": csrf},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["journey_run_id"]
+    assert len(events) == 1
+    assert events[0].event_kind == "journey_requested"
+    assert events[0].metadata_json.as_dict()["artifact_content_hash"] == "package-hash"
+    assert len(requests) == 1
+    assert requests[0].payload.operation == "run_artifact_journey"
+    assert requests[0].payload.journey_run_id == payload["journey_run_id"]
 
 
 def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_field(monkeypatch, tmp_path: Path):
@@ -5847,11 +6033,20 @@ def test_protocol_artifact_runtime_get_reconcile_preserves_registry_urls_and_ded
             saved_runtime = runtime
             return runtime
 
-        def list_protocol_artifact_runtime_events(self, run_id: str, artifact_key: str, *, access, limit: int = 50):
-            del access, limit
+        def list_protocol_artifact_runtime_events(
+            self,
+            run_id: str,
+            artifact_key: str,
+            *,
+            access,
+            limit: int = 50,
+            event_kind: str | None = None,
+        ):
+            del access
             assert run_id == "run-1"
             assert artifact_key == "package"
-            return list(events)
+            matching = [item for item in events if not event_kind or item.event_kind == event_kind]
+            return list(matching[:limit])
 
         def append_protocol_artifact_runtime_event(self, event: ProtocolArtifactRuntimeEventRecord, *, access):
             del access

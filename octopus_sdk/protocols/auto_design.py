@@ -3245,6 +3245,10 @@ def revise_auto_protocol_session(
     elif canonical_requirement:
         regenerated_metadata["description"] = _sentence(canonical_requirement)
     regenerated_auto_meta = dict(regenerated_metadata.get("auto_protocol") or {})
+    source_auto_meta = metadata.get("auto_protocol") if isinstance(metadata.get("auto_protocol"), dict) else {}
+    source_contract = source_auto_meta.get("acceptance_contract") if isinstance(source_auto_meta, dict) else None
+    if isinstance(source_contract, dict) and source_contract.get("required_journeys"):
+        regenerated_auto_meta["acceptance_contract"] = dict(source_contract)
     regenerated_auto_meta.update({
         "generated": True,
         "requirement": canonical_requirement,

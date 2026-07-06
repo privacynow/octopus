@@ -66,7 +66,6 @@ from octopus_sdk.registry.management import (
     DesignAutoProtocolResult,
     ManagementRequest,
     RunArtifactJourneyRequest,
-    RunArtifactJourneyResult,
     StartArtifactRuntimeRequest,
     StartArtifactRuntimeResult,
     StopArtifactRuntimeRequest,
@@ -610,8 +609,12 @@ def build_protocol_router(
             return []
         try:
             detail = store.get_protocol_run(run_id, access=access)
-        except Exception:
-            return []
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_RUN_NOT_VISIBLE", message="Source protocol run is not visible for lesson harvesting.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Source protocol run was not found for lesson harvesting.") from exc
+        except Exception as exc:
+            raise _protocol_http_error(500, error_code="PROTOCOL_RUN_LESSONS_FAILED", message=f"Failed to harvest source run lessons: {exc}") from exc
         lessons: list[dict[str, str]] = []
 
         def add(category: str, summary: str, source_ref: str) -> None:
@@ -1088,6 +1091,56 @@ def build_protocol_router(
             if str(item.hook or "").strip()
         }
 
+    def _detail_artifact_content_hash(detail, artifact_key: str) -> str:
+        key = str(artifact_key or "").strip()
+        snapshots = [
+            item
+            for item in getattr(detail, "artifact_snapshots", []) or []
+            if str(getattr(item, "artifact_key", "") or "").strip() == key
+            and str(getattr(item, "content_hash", "") or "").strip()
+        ]
+        if snapshots:
+            snapshots.sort(key=lambda item: (str(getattr(item, "created_at", "") or ""), str(getattr(item, "artifact_snapshot_id", "") or "")), reverse=True)
+            return str(snapshots[0].content_hash or "").strip()
+        artifact = next(
+            (
+                item
+                for item in getattr(detail, "artifacts", []) or []
+                if str(getattr(item, "artifact_key", "") or "").strip() == key
+                and str(getattr(item, "content_hash", "") or "").strip()
+            ),
+            None,
+        )
+        return str(getattr(artifact, "content_hash", "") or "").strip() if artifact is not None else ""
+
+    def _matching_journey_request_event(
+        events: list[ProtocolArtifactRuntimeEventRecord],
+        *,
+        journey_key: str,
+        journey_run_id: str,
+        runtime_instance_id: str,
+        artifact_content_hash: str,
+    ) -> ProtocolArtifactRuntimeEventRecord | None:
+        key = str(journey_key or "").strip()
+        run_id = str(journey_run_id or "").strip()
+        runtime_id = str(runtime_instance_id or "").strip()
+        content_hash = str(artifact_content_hash or "").strip()
+        for event in sorted(events, key=lambda item: str(item.created_at or ""), reverse=True):
+            if str(event.event_kind or "") != "journey_requested":
+                continue
+            metadata = event.metadata_json.as_dict()
+            if str(metadata.get("journey_key", "") or "").strip() != key:
+                continue
+            if str(metadata.get("journey_run_id", "") or "").strip() != run_id:
+                continue
+            if runtime_id and str(event.runtime_instance_id or "").strip() != runtime_id:
+                continue
+            requested_hash = str(metadata.get("artifact_content_hash", "") or "").strip()
+            if content_hash and requested_hash != content_hash:
+                continue
+            return event
+        return None
+
     def _runtime_journey_spec(
         *,
         detail,
@@ -1207,7 +1260,8 @@ def build_protocol_router(
                 runtime.protocol_run_id,
                 runtime.artifact_key,
                 access=access,
-                limit=10,
+                limit=1,
+                event_kind="health_checked",
             )
         except (AttributeError, NotImplementedError):
             events = []
@@ -3491,11 +3545,45 @@ def build_protocol_router(
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
         try:
+            detail = store.get_protocol_run(run_id, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        try:
             payload = await request.json()
         except ValueError:
             payload = {}
         if not isinstance(payload, Mapping):
             payload = {}
+        journey_run_id = str(payload.get("journey_run_id", "") or "").strip()
+        if not journey_run_id:
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_RUNTIME_JOURNEY_RUN_ID_REQUIRED",
+                message="Structured journey results must reference a Registry-issued journey_run_id.",
+            )
+        artifact_content_hash = _detail_artifact_content_hash(detail, artifact_key)
+        prior_events = store.list_protocol_artifact_runtime_events(
+            run_id,
+            artifact_key,
+            access=access,
+            limit=200,
+        )
+        requested_event = _matching_journey_request_event(
+            prior_events,
+            journey_key=journey_key,
+            journey_run_id=journey_run_id,
+            runtime_instance_id=runtime.runtime_instance_id,
+            artifact_content_hash=artifact_content_hash,
+        )
+        if requested_event is None:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_RUNTIME_JOURNEY_NOT_REQUESTED",
+                message="Structured journey result does not match an open Registry-issued journey request for the current runtime artifact.",
+                details={"journey_key": journey_key, "journey_run_id": journey_run_id},
+            )
         status = str(payload.get("status", "") or "").strip().lower()
         ok = bool(payload.get("ok")) if "ok" in payload else status in {"passed", "ok", "completed", "success"}
         if not status:
@@ -3515,7 +3603,7 @@ def build_protocol_router(
             protocol_run_id=run_id,
             artifact_key=artifact_key,
             journey_key=journey_key,
-            journey_run_id=str(payload.get("journey_run_id", "") or "").strip() or uuid.uuid4().hex,
+            journey_run_id=journey_run_id,
             ok=ok,
             status=status,
             summary=str(payload.get("summary", "") or ("Journey completed successfully." if ok else "Journey failed."))[:1000],
@@ -3530,6 +3618,10 @@ def build_protocol_router(
             "journey_run_id": result.journey_run_id,
             "ok": result.ok,
             "status": result.status,
+            "source": "registry_journey_runner",
+            "requested_event_id": requested_event.runtime_event_id,
+            "runtime_instance_id": runtime.runtime_instance_id,
+            "artifact_content_hash": artifact_content_hash,
         })
         event = store.append_protocol_artifact_runtime_event(
             _runtime_event(
@@ -3540,6 +3632,15 @@ def build_protocol_router(
                 metadata=metadata,
             ),
             access=access,
+        )
+        await broadcast_invalidations(
+            topics=("protocols", "summary", f"protocol-run:{run_id}"),
+            reason="protocol.runtime.journey_result",
+        )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_runtime.journey_result",
+            reason="protocol.runtime.journey_result",
         )
         return _json_payload({"result": result, "event": event})
 
@@ -3588,51 +3689,54 @@ def build_protocol_router(
             actor_ref=access.actor_ref,
         )
         journey_run_id = uuid.uuid4().hex
+        artifact_content_hash = _detail_artifact_content_hash(detail, artifact_key)
         requested = store.append_protocol_artifact_runtime_event(
             _runtime_event(
                 runtime=runtime,
                 event_kind="journey_requested",
                 actor_ref=access.actor_ref,
                 summary=f"Journey {journey_key} requested.",
-                metadata={"journey_key": journey_key, "journey_run_id": journey_run_id},
+                metadata={
+                    "journey_key": journey_key,
+                    "journey_run_id": journey_run_id,
+                    "source": "operator_journey_run",
+                    "runtime_instance_id": runtime.runtime_instance_id,
+                    "artifact_content_hash": artifact_content_hash,
+                },
             ),
             access=access,
         )
-        result = await RegistryManagementClient(store).send(
-            agent_id=runtime.agent_id,
-            payload=RunArtifactJourneyRequest(
-                runtime_instance_id=runtime.runtime_instance_id,
-                protocol_run_id=run_id,
-                artifact_key=artifact_key,
-                journey_key=journey_key,
-                journey_run_id=journey_run_id,
-                registry_url="",
-                capability_ref=token.capability_ref,
-                spec=spec,
-            ),
-            timeout_seconds=max(30, min(600, int(spec.timeout_ms / 1000) + 15)),
+        management_request = store.create_management_request(
+            ManagementRequest(
+                agent_id=runtime.agent_id,
+                payload=RunArtifactJourneyRequest(
+                    runtime_instance_id=runtime.runtime_instance_id,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact_key,
+                    journey_key=journey_key,
+                    journey_run_id=journey_run_id,
+                    registry_url="",
+                    capability_ref=token.capability_ref,
+                    spec=spec,
+                ),
+                timeout_seconds=max(30, min(600, int(spec.timeout_ms / 1000) + 15)),
+            )
         )
-        if not result.success or not isinstance(result.payload, RunArtifactJourneyResult):
-            raise _protocol_http_error(502, error_code="PROTOCOL_RUNTIME_JOURNEY_RUN_FAILED", message=result.error_detail or "Bot failed to run the runtime journey.")
-        journey_result = result.payload.result
-        metadata = journey_result.model_dump(mode="json")
-        metadata.update({
-            "journey_key": journey_key,
+        await broadcast_invalidations(
+            topics=("protocols", "summary", f"protocol-run:{run_id}"),
+            reason="protocol.runtime.journey_requested",
+        )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_runtime.journey_requested",
+            reason="protocol.runtime.journey_requested",
+        )
+        return _json_payload({
             "journey_run_id": journey_run_id,
-            "ok": journey_result.ok,
-            "status": journey_result.status,
+            "status": "queued",
+            "requested_event": requested,
+            "management_request": management_request,
         })
-        event = store.append_protocol_artifact_runtime_event(
-            _runtime_event(
-                runtime=runtime,
-                event_kind="journey_completed" if journey_result.ok else "journey_failed",
-                actor_ref=access.actor_ref,
-                summary=journey_result.summary,
-                metadata=metadata,
-            ),
-            access=access,
-        )
-        return _json_payload({"journey_run_id": journey_run_id, "requested_event": requested, "result": journey_result, "event": event})
 
     @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/client-event")
     async def resource_record_protocol_artifact_runtime_client_event(

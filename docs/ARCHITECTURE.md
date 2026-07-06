@@ -763,7 +763,11 @@ Operator actions are versioned run mutations:
 Run actions use `If-Match` and `Idempotency-Key` where applicable. This prevents
 duplicate operator mutations and stale UI writes from corrupting run state.
 Run mutations, routed result application, and blocked-runtime auto-accept
-rechecks lock the protocol run row while applying state transitions.
+rechecks lock the protocol run row before stage rows while applying state
+transitions. Postgres deadlock/serialization failures on these mutation paths
+are retried with the same idempotency rules, so concurrent result delivery and
+operator actions resolve to one durable outcome instead of surfacing a transient
+500.
 
 Provider cancellation is delivered through the existing Registry management
 bridge. Protocol `cancel` and `interrupt` create a targeted management request
@@ -771,6 +775,8 @@ for the routed task's assigned agent. The bot runtime maps that request to its
 local provider subprocess when the subprocess is still running. Late provider
 results after terminal or blocked stage state are preserved in task/audit
 metadata and do not advance the engine or update protocol artifact rows.
+`interrupt` is enforced by the protocol engine and store; terminal runs and
+completed stages cannot be reopened by posting the action directly.
 
 Rehearsal runs use `REHEARSAL_AUTHORITY_REF = "rehearsal"` and resolve stages to
 rehearsal agents/sessions. Rehearsal is dry-run execution for protocol behavior,
@@ -1058,6 +1064,14 @@ Security boundaries in the current runtime:
 | Provider credentials | Credential store and provider auth mounts, not prompt-visible secrets. |
 | Bot workspace cleanup | Dry-run inventory persisted by the Registry, typed confirmation, bot-owned execution. |
 | Registry workspace reset | Password-confirmed operator reset of work records; not a file cleanup path. |
+
+Protocol runtime capability grants are role-sensitive. Normal production stages
+receive runtime start/read/fetch/event permissions. Contract-bearing acceptance
+stages may receive journey read/result permissions. Operator journey re-runs
+mint their own short-lived journey-run capability. The acceptance gate accepts a
+journey result only when it correlates with a Registry-issued `journey_requested`
+event for the current runtime instance and artifact snapshot; arbitrary
+`journey_completed` events are audit data, not acceptance proof.
 
 Current role model is simple and should not be overclaimed. `ProtocolAccessContextRecord`
 uses actor ref, org id, and roles such as admin, publisher, author, auditor,

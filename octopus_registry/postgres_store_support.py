@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Callable
+import time
 
+from psycopg import errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -73,6 +76,29 @@ def write_tx(conn):
     except BaseException:
         conn.rollback()
         raise
+
+
+def is_retryable_tx_error(exc: BaseException) -> bool:
+    sqlstate = str(getattr(exc, "sqlstate", "") or "")
+    return isinstance(exc, (errors.DeadlockDetected, errors.SerializationFailure)) or sqlstate in {"40P01", "40001"}
+
+
+def run_write_tx_with_retry(connect: Callable[[], object], operation: Callable[[object], object], *, attempts: int = 3) -> object:
+    last_error: BaseException | None = None
+    for attempt in range(max(1, int(attempts or 1))):
+        try:
+            with connect() as conn, write_tx(conn):
+                return operation(conn)
+        except BaseException as exc:
+            if not is_retryable_tx_error(exc):
+                raise
+            last_error = exc
+            if attempt >= max(1, int(attempts or 1)) - 1:
+                break
+            time.sleep(0.05 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Transaction retry helper exited without running operation.")
 
 
 def jsonb(value: object) -> Jsonb:

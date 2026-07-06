@@ -1245,6 +1245,7 @@ async def cmd_protocol(
                 "mode": "revise",
                 "surface": "telegram",
                 "target_protocol_id": protocol_id,
+                "source_run_id": detail.run.protocol_run_id,
                 "requirement_text": telegram_protocols.protocol_run_improvement_requirement(detail, change_request),
                 "constraints_text": telegram_protocols.protocol_run_improvement_constraints(detail),
                 "preferred_design_agent_id": agent_id,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 
 from octopus_sdk.registry.models import EventRecord, TaskRecord
@@ -14,6 +15,21 @@ from octopus_registry.store_base import (
 from octopus_registry.store_dialect import StoreDialect
 from octopus_registry.store_shared.common import record
 from octopus_registry.store_shared.conversations import touch_conversation
+
+
+_RUNTIME_SECRET_RE = re.compile(r"\boct-(?:rt|cap)-[A-Za-z0-9_-]+\b")
+
+
+def _redact_runtime_secrets(value):
+    if isinstance(value, str):
+        return _RUNTIME_SECRET_RE.sub("<runtime-token>", value)
+    if isinstance(value, list):
+        return [_redact_runtime_secrets(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_runtime_secrets(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _redact_runtime_secrets(item) for key, item in value.items()}
+    return value
 
 
 def _write_task_events(
@@ -386,9 +402,10 @@ def update_routed_task_result(
     recipient_inserted_events: list[EventRecord] = []
     recipient_conversation_id = ""
     if not duplicate:
-        persisted_result = validated_payload.model_dump(mode="json", exclude_none=True)
+        persisted_result = _redact_runtime_secrets(validated_payload.model_dump(mode="json", exclude_none=True))
         persisted_result["completed_at"] = completed_at
         persisted_result["status"] = requested_status
+        redacted_summary = str(_redact_runtime_secrets(validated_payload.summary))
         dialect.execute(
             conn,
             (
@@ -399,7 +416,7 @@ def update_routed_task_result(
             ),
             (
                 decision.new_state,
-                validated_payload.summary,
+                redacted_summary,
                 json_param(persisted_result),
                 completed_at,
                 routed_task_id,
@@ -438,7 +455,11 @@ def update_routed_task_result(
             event_metadata["cost_usd"] = float(validated_payload.cost_usd or 0.0)
         if validated_payload.provider:
             event_metadata["provider"] = validated_payload.provider
-        content = str(validated_payload.summary or validated_payload.full_text or decision.new_state)
+        content = str(
+            redacted_summary
+            or persisted_result.get("full_text")
+            or decision.new_state
+        )
         inserted_events, recipient_conversation_id, recipient_inserted_events = _write_task_events(
             conn,
             dialect=dialect,

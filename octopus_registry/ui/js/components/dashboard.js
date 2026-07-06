@@ -294,7 +294,7 @@ function renderDashboard(container) {
         const visibleRuns = visibleDashboardRuns();
         const visibleProtocols = visibleDashboardProtocols();
         const activeRuns = visibleRuns.filter((run) =>
-            ['queued', 'running', 'blocked'].includes(String(run.status || '').trim().toLowerCase()));
+            ['queued', 'running'].includes(String(run.status || '').trim().toLowerCase()));
         const blockedRuns = visibleRuns.filter((run) => String(run.status || '').trim().toLowerCase() === 'blocked');
         const issueRuns = new Set(coerceList(dashboardState.protocolIssues, 'issues')
             .map((issue) => String(issue.protocol_run_id || '').trim())
@@ -319,7 +319,7 @@ function renderDashboard(container) {
             {
                 key: 'protocol-runs',
                 value: String(activeRuns.length),
-                label: 'Active or lease-expired runs',
+                label: 'Active protocol runs',
                 detail: [
                     `${blockedRuns.length} blocked`,
                     `${activeRuns.filter((run) => issueRuns.has(String(run.protocol_run_id || '').trim())).length} with issues`,

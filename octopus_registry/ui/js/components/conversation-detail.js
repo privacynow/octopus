@@ -551,8 +551,7 @@ function renderConversationDetail(container, params) {
     }
 
     function isSkillUnavailableError(err) {
-        const message = String((err && err.message) || '');
-        return message.startsWith('409:');
+        return Number(err?.status || 0) === 409;
     }
 
     function resetManagementView() {

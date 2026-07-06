@@ -87,7 +87,7 @@ from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_
 from .config import RegistryConfig, load_registry_config
 from .artifact_paths import clear_mounted_workspace_roots_cache, resolve_protocol_artifact_path
 from .postgres import get_connection
-from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
+from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, run_write_tx_with_retry, write_tx
 from .protocol_runtime import evaluate_protocol_dispatch
 from .store_base import RoutingSkillDisabledError
 from .store_shared.common import json_ready, record
@@ -176,7 +176,7 @@ class ProtocolPostgresAdapter:
             expires_at=str(row.get("expires_at", "") or ""),
             revoked_at=str(row.get("revoked_at", "") or ""),
             exchange_count=int(row.get("exchange_count", 0) or 0),
-            max_exchange_count=int(row.get("max_exchange_count", 2) or 2),
+            max_exchange_count=int(row.get("max_exchange_count", 5) or 5),
             created_at=str(row.get("created_at", "") or ""),
             updated_at=str(row.get("updated_at", "") or ""),
             actor_ref=str(row.get("actor_ref", "") or ""),
@@ -207,7 +207,7 @@ class ProtocolPostgresAdapter:
                     protocol_run_id, protocol_stage_execution_id, artifact_key, participant_key,
                     target_agent_id, allowed_actions_json, expires_at, revoked_at,
                     exchange_count, max_exchange_count, created_at, updated_at, actor_ref
-                ) VALUES (%s, %s, '', %s, %s, %s, %s, %s, %s, %s, '', 0, 2, %s, %s, %s)
+                ) VALUES (%s, %s, '', %s, %s, %s, %s, %s, %s, %s, '', 0, 5, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -1679,6 +1679,96 @@ class ProtocolPostgresAdapter:
         }
 
     @staticmethod
+    def _current_artifact_content_hash(detail: ProtocolRunDetailRecord, artifact_key: str) -> str:
+        key = str(artifact_key or "").strip()
+        snapshots = [
+            item
+            for item in detail.artifact_snapshots
+            if str(item.artifact_key or "").strip() == key and str(item.content_hash or "").strip()
+        ]
+        if snapshots:
+            snapshots.sort(key=lambda item: (str(item.created_at or ""), str(item.artifact_snapshot_id or "")), reverse=True)
+            return str(snapshots[0].content_hash or "").strip()
+        artifact = next(
+            (
+                item
+                for item in detail.artifacts
+                if str(item.artifact_key or "").strip() == key and str(item.content_hash or "").strip()
+            ),
+            None,
+        )
+        return str(artifact.content_hash or "").strip() if artifact is not None else ""
+
+    @staticmethod
+    def _current_runtime_instance_id(detail: ProtocolRunDetailRecord, artifact_key: str) -> str:
+        key = str(artifact_key or "").strip()
+        runtimes = [
+            item
+            for item in detail.runtime_instances
+            if str(item.artifact_key or "").strip() == key
+            and str(item.status or "").strip().lower() != "deleted"
+        ]
+        if not runtimes:
+            return ""
+        runtimes.sort(
+            key=lambda item: (
+                str(item.updated_at or ""),
+                str(item.started_at or ""),
+                str(item.created_at or ""),
+                str(item.runtime_instance_id or ""),
+            ),
+            reverse=True,
+        )
+        return str(runtimes[0].runtime_instance_id or "").strip()
+
+    def _artifact_snapshot_json_for_key(
+        self,
+        detail: ProtocolRunDetailRecord,
+        artifact_key: str,
+    ) -> dict[str, object] | None:
+        key = str(artifact_key or "").strip()
+        snapshots = [
+            item
+            for item in detail.artifact_snapshots
+            if str(item.artifact_key or "").strip() == key
+        ]
+        if not snapshots:
+            return None
+        snapshots.sort(key=lambda item: (str(item.created_at or ""), str(item.artifact_snapshot_id or "")), reverse=True)
+        snapshot = snapshots[0]
+        path = artifact_snapshot_storage_path(load_registry_config().artifact_store_dir, snapshot)
+        if path is None:
+            raw_path = Path(str(snapshot.storage_uri or "")).expanduser()
+            if raw_path.exists():
+                path = raw_path
+        if path is None or not path.is_file():
+            return None
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return dict(loaded) if isinstance(loaded, Mapping) else None
+
+    @staticmethod
+    def _manifest_passed_journey_keys(manifest: Mapping[str, object] | None) -> set[str]:
+        if not isinstance(manifest, Mapping):
+            return set()
+        raw_checks = manifest.get("checks")
+        if not isinstance(raw_checks, Sequence) or isinstance(raw_checks, (str, bytes)):
+            return set()
+        passed: set[str] = set()
+        for item in raw_checks:
+            if not isinstance(item, Mapping):
+                continue
+            status = str(item.get("status", "") or "").strip().lower()
+            if status not in {"passed", "pass", "ok", "verified"}:
+                continue
+            key = str(item.get("journey_key", "") or item.get("id", "") or "").strip()
+            if key:
+                passed.add(key)
+        return passed
+
+    @staticmethod
     def _artifact_key_has_snapshot_or_observation(
         conn,
         detail: ProtocolRunDetailRecord,
@@ -1796,12 +1886,55 @@ class ProtocolPostgresAdapter:
             for item in events
         )
         required_journey_keys = {str(item.get("journey_key", "") or "").strip() for item in journeys}
-        completed_journey_keys = {
-            str(item.metadata_json.as_dict().get("journey_key", "") or "").strip()
-            for item in events
-            if str(item.event_kind or "") == "journey_completed"
-            and bool(item.metadata_json.as_dict().get("ok", True))
-        }
+        current_runtime_instance_id = self._current_runtime_instance_id(detail, primary_key)
+        current_artifact_hash = self._current_artifact_content_hash(detail, primary_key)
+        requested_journeys: dict[str, dict[str, object]] = {}
+        for item in events:
+            if str(item.event_kind or "") != "journey_requested":
+                continue
+            metadata = item.metadata_json.as_dict()
+            journey_run_id = str(metadata.get("journey_run_id", "") or "").strip()
+            journey_key = str(metadata.get("journey_key", "") or "").strip()
+            if not journey_run_id or journey_key not in required_journey_keys:
+                continue
+            if current_runtime_instance_id and str(item.runtime_instance_id or "").strip() != current_runtime_instance_id:
+                continue
+            event_hash = str(metadata.get("artifact_content_hash", "") or "").strip()
+            if current_artifact_hash and event_hash != current_artifact_hash:
+                continue
+            requested_journeys[journey_run_id] = {
+                "journey_key": journey_key,
+                "source": str(metadata.get("source", "") or "").strip(),
+                "artifact_content_hash": event_hash,
+                "runtime_instance_id": str(item.runtime_instance_id or "").strip(),
+            }
+        completed_journey_keys: set[str] = set()
+        for item in events:
+            if str(item.event_kind or "") != "journey_completed":
+                continue
+            metadata = item.metadata_json.as_dict()
+            if not bool(metadata.get("ok", True)):
+                continue
+            source = str(metadata.get("source", "") or "").strip()
+            if source not in {"registry_journey_runner", "operator_journey_run"}:
+                continue
+            journey_run_id = str(metadata.get("journey_run_id", "") or "").strip()
+            requested = requested_journeys.get(journey_run_id)
+            if requested is None:
+                continue
+            journey_key = str(metadata.get("journey_key", "") or "").strip()
+            if journey_key != str(requested.get("journey_key", "") or ""):
+                continue
+            if current_runtime_instance_id and str(item.runtime_instance_id or "").strip() != current_runtime_instance_id:
+                continue
+            event_hash = str(metadata.get("artifact_content_hash", "") or "").strip()
+            if current_artifact_hash and event_hash != current_artifact_hash:
+                continue
+            actor_stage_execution_id = str(metadata.get("actor_stage_execution_id", "") or "").strip()
+            current_stage_execution_id = str(stage_execution_row.get("protocol_stage_execution_id", "") or "").strip()
+            if source == "registry_journey_runner" and actor_stage_execution_id and actor_stage_execution_id != current_stage_execution_id:
+                continue
+            completed_journey_keys.add(journey_key)
         completed_journey_keys.discard("")
         failed_journey_keys = {
             str(item.metadata_json.as_dict().get("journey_key", "") or "").strip()
@@ -1810,13 +1943,10 @@ class ProtocolPostgresAdapter:
         }
         failed_journey_keys.discard("")
         reviewer_manifest_key = str(contract.get("reviewer_manifest_artifact_key", "") or "").strip() or "reviewer_evidence_manifest"
-        has_reviewer_manifest = self._artifact_key_has_snapshot_or_observation(
-            conn,
-            detail,
-            artifact_key=reviewer_manifest_key,
-            engine=engine,
-            stage_execution_row=stage_execution_row,
-        )
+        reviewer_manifest = self._artifact_snapshot_json_for_key(detail, reviewer_manifest_key)
+        reviewer_manifest_passed = self._manifest_passed_journey_keys(reviewer_manifest)
+        producer_manifest_key = str(contract.get("producer_manifest_artifact_key", "") or "").strip()
+        producer_manifest = self._artifact_snapshot_json_for_key(detail, producer_manifest_key) if producer_manifest_key else None
         missing: list[str] = []
         if not has_started:
             missing.append("runtime start")
@@ -1824,8 +1954,13 @@ class ProtocolPostgresAdapter:
             missing.append("healthy runtime check")
         for key in sorted(required_journey_keys - completed_journey_keys):
             missing.append(f"structured journey result: {key}")
-        if not has_reviewer_manifest:
+        if reviewer_manifest is None:
             missing.append(f"latest {reviewer_manifest_key} artifact snapshot")
+        else:
+            for key in sorted(required_journey_keys - reviewer_manifest_passed):
+                missing.append(f"{reviewer_manifest_key} passed check: {key}")
+        if producer_manifest_key and producer_manifest is None:
+            missing.append(f"latest {producer_manifest_key} artifact snapshot")
         if not missing:
             return engine
 
@@ -1841,9 +1976,12 @@ class ProtocolPostgresAdapter:
             "required_journeys": sorted(required_journey_keys),
             "completed_journeys": sorted(completed_journey_keys),
             "failed_journeys": sorted(failed_journey_keys),
+            "requested_journeys": sorted(requested_journeys),
             "required_hooks": sorted(required_hooks),
             "manifest_hooks": sorted(manifest_hooks),
             "reviewer_manifest_artifact_key": reviewer_manifest_key,
+            "current_runtime_instance_id": current_runtime_instance_id,
+            "artifact_content_hash": current_artifact_hash,
         })
         return engine.model_copy(update={
             "run_status": "blocked",
@@ -2634,10 +2772,15 @@ class ProtocolPostgresAdapter:
             "runtime:read",
             "runtime:fetch",
             "runtime:event",
-            "journey:read",
-            "journey:result",
-            "journey:run",
         ]
+        try:
+            document = self._protocol_document_for_run(conn, run_row)
+            stage = document.stage(stage_key)
+            has_contract = bool(self._auto_protocol_acceptance_contract(document))
+            if has_contract and stage.stage_kind == "acceptance":
+                allowed_actions.extend(["journey:read", "journey:result"])
+        except Exception:
+            pass
         POSTGRES_STORE_DIALECT.execute(
             conn,
             f"""
@@ -2646,7 +2789,7 @@ class ProtocolPostgresAdapter:
                 protocol_run_id, protocol_stage_execution_id, artifact_key, participant_key,
                 target_agent_id, allowed_actions_json, expires_at, revoked_at,
                 exchange_count, max_exchange_count, created_at, updated_at, actor_ref
-            ) VALUES (%s, %s, '', %s, %s, %s, %s, %s, %s, %s, '', 0, 2, %s, %s, %s)
+            ) VALUES (%s, %s, '', %s, %s, %s, %s, %s, %s, %s, '', 0, 5, %s, %s, %s)
             """,
             (
                 token_id,
@@ -2837,21 +2980,28 @@ class ProtocolPostgresAdapter:
         now: str,
         lease_ttl_seconds: int = 900,
     ) -> None:
-        stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
+        stage_lookup_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s FOR UPDATE",
+            f"SELECT protocol_stage_execution_id, protocol_run_id FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s",
             (routed_task_id,),
         )
-        if stage_execution_row is None:
-            return
-        if str(stage_execution_row.get("status", "") or "") != "running":
+        if stage_lookup_row is None:
             return
         run_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
             f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
-            (stage_execution_row["protocol_run_id"],),
+            (stage_lookup_row["protocol_run_id"],),
         )
         if run_row is None:
+            return
+        stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s FOR UPDATE",
+            (stage_lookup_row["protocol_stage_execution_id"],),
+        )
+        if stage_execution_row is None:
+            return
+        if str(stage_execution_row.get("status", "") or "") != "running":
             return
         document = self._protocol_document_for_run(conn, run_row)
         stage = document.stage(str(stage_execution_row.get("stage_key", "") or ""))
@@ -3077,10 +3227,24 @@ class ProtocolPostgresAdapter:
         routed_task_id: str,
         now: str,
     ) -> None:
+        stage_lookup_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT protocol_stage_execution_id, protocol_run_id FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s",
+            (routed_task_id,),
+        )
+        if stage_lookup_row is None:
+            return
+        run_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
+            (stage_lookup_row["protocol_run_id"],),
+        )
+        if run_row is None:
+            return
         stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s FOR UPDATE",
-            (routed_task_id,),
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s FOR UPDATE",
+            (stage_lookup_row["protocol_stage_execution_id"],),
         )
         if stage_execution_row is None:
             return
@@ -3115,10 +3279,35 @@ class ProtocolPostgresAdapter:
             )
             if existing_task_transition is not None:
                 return
+            transition_id = str(result_json.get("transition_id", "") or "").strip()
+            existing_late_transition = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT protocol_transition_id
+                FROM {SCHEMA}.protocol_transitions
+                WHERE protocol_run_id = %s
+                  AND from_stage_execution_id = %s
+                  AND actor_type = 'protocol_engine'
+                  AND actor_ref = %s
+                  AND transition_kind = 'late_result'
+                  AND metadata_json->>'transition_id' = %s
+                ORDER BY created_at DESC, protocol_transition_id DESC
+                LIMIT 1
+                """,
+                (
+                    str(stage_execution_row.get("protocol_run_id", "") or ""),
+                    str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                    routed_task_id,
+                    transition_id,
+                ),
+            )
+            if transition_id and existing_late_transition is not None:
+                return
             late_delivery = {
                 "status": "late_result_preserved",
                 "stage_status": stage_status,
                 "stage_execution_id": str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                "transition_id": transition_id,
                 "recorded_at": now,
             }
             result_json["late_delivery"] = late_delivery
@@ -3146,17 +3335,12 @@ class ProtocolPostgresAdapter:
                 now=now,
             )
             return
-        run_row = POSTGRES_STORE_DIALECT.fetchone(
-            conn,
-            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
-            (stage_execution_row["protocol_run_id"],),
-        )
         task_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
             f"SELECT * FROM {SCHEMA}.routed_tasks WHERE routed_task_id = %s",
             (routed_task_id,),
         )
-        if run_row is None or task_row is None:
+        if task_row is None:
             return
         document = self._protocol_document_for_run(conn, run_row)
         stage_execution = self._protocol_stage_execution_from_row(stage_execution_row)
@@ -3863,7 +4047,8 @@ class ProtocolPostgresAdapter:
         protocol_key = str(protocol_id or uuid.uuid4().hex).strip()
         raw_definition = draft_protocol_document_data(definition_json.as_dict())
         now = utcnow_iso()
-        with self._connect() as conn, write_tx(conn):
+        def _operation(conn):
+            nonlocal raw_definition
             existing_row = self._protocol_row(conn, protocol_key)
             if existing_row is not None and expected_revision is not None:
                 current_revision = int(existing_row.get("draft_revision", 0) or 0)
@@ -3991,6 +4176,7 @@ class ProtocolPostgresAdapter:
                 draft_document=strict_document,
                 validation=validation,
             )
+        return run_write_tx_with_retry(self._connect, _operation)
 
     def create_protocol_draft(
         self,
@@ -4620,7 +4806,15 @@ class ProtocolPostgresAdapter:
         normalized_kind = str(issue_kind or "").strip().lower()
         normalized_run_id = str(protocol_run_id or "").strip()
         normalized_protocol_id = str(protocol_id or "").strip()
-        known_issue_kinds = {"blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"}
+        known_issue_kinds = {
+            "blocked_run",
+            "invalid_contract",
+            "runtime_evidence_required",
+            "operator_interrupted",
+            "acceptance_contract_invalid",
+            "stuck_lease",
+            "expired_timeout",
+        }
         if normalized_kind and normalized_kind not in known_issue_kinds:
             return []
         now = utcnow_iso()
@@ -4641,6 +4835,12 @@ class ProtocolPostgresAdapter:
             clauses.append("pr.status = 'blocked'")
         elif normalized_kind == "invalid_contract":
             clauses.append("(pr.blocked_code = 'protocol_contract_invalid' OR pse.failure_code = 'protocol_contract_invalid')")
+        elif normalized_kind == "runtime_evidence_required":
+            clauses.append("(pr.blocked_code = 'runtime_evidence_required' OR pse.failure_code = 'runtime_evidence_required')")
+        elif normalized_kind == "operator_interrupted":
+            clauses.append("(pr.blocked_code = 'operator_interrupted' OR pse.failure_code = 'operator_interrupted')")
+        elif normalized_kind == "acceptance_contract_invalid":
+            clauses.append("(pr.blocked_code = 'acceptance_contract_invalid' OR pse.failure_code = 'acceptance_contract_invalid')")
         elif normalized_kind == "stuck_lease":
             params.append(now)
             clauses.append("(pse.status = 'running' AND pse.lease_expires_at <> '' AND pse.lease_expires_at <= %s)")
@@ -4654,6 +4854,12 @@ class ProtocolPostgresAdapter:
                     pr.status = 'blocked'
                     OR pr.blocked_code = 'protocol_contract_invalid'
                     OR pse.failure_code = 'protocol_contract_invalid'
+                    OR pr.blocked_code = 'runtime_evidence_required'
+                    OR pse.failure_code = 'runtime_evidence_required'
+                    OR pr.blocked_code = 'operator_interrupted'
+                    OR pse.failure_code = 'operator_interrupted'
+                    OR pr.blocked_code = 'acceptance_contract_invalid'
+                    OR pse.failure_code = 'acceptance_contract_invalid'
                     OR (pse.status = 'running' AND pse.lease_expires_at <> '' AND pse.lease_expires_at <= %s)
                     OR (pse.status = 'running' AND pse.timeout_at <> '' AND pse.timeout_at <= %s)
                 )"""
@@ -5012,7 +5218,7 @@ class ProtocolPostgresAdapter:
             }
         )
         now = utcnow_iso()
-        with self._connect() as conn, write_tx(conn):
+        def _operation(conn):
             existing_idempotency = self._protocol_idempotency_row(
                 conn,
                 scope_kind="protocol_run",
@@ -5125,6 +5331,11 @@ class ProtocolPostgresAdapter:
                     missing.append(f"{artifact_key}: snapshot content missing")
                     continue
                 boundary_snapshots[artifact_key] = dict(row)
+            if boundary_rows and not boundary_snapshots and any(
+                not str(row.get("boundary_stage_id", "") or "").strip()
+                for row in snapshot_rows
+            ):
+                missing.append("boundary: artifact snapshots do not record the producing stage; create fresh snapshots before forking this historical run")
             for row in boundary_rows:
                 try:
                     stage = document.stage(str(row.get("stage_key", "") or ""))
@@ -5150,23 +5361,12 @@ class ProtocolPostgresAdapter:
                     if parent_artifact is not None:
                         missing.append(f"{artifact_key}: durable snapshot is missing")
             if missing:
-                result = ProtocolRunForkResultRecord(
+                return ProtocolRunForkResultRecord(
                     ok=False,
                     status="missing_snapshots",
                     message="Fork cannot continue until required artifact snapshots exist.",
                     missing_snapshots=list(dict.fromkeys(missing)),
                 )
-                self._store_protocol_idempotency(
-                    conn,
-                    scope_kind="protocol_run",
-                    scope_ref=parent_run_id,
-                    action_name="fork_from_stage",
-                    idempotency_key=idempotency_key,
-                    request_hash=request_hash,
-                    response_json=json_ready(result.model_dump(mode="json")),
-                    now=now,
-                )
-                return result
 
             child_run_id = uuid.uuid4().hex
             parent_workspace_ref = str(parent_row.get("workspace_ref", "") or "")
@@ -5192,9 +5392,6 @@ class ProtocolPostgresAdapter:
                 )
                 root_conversation_id = str(created.conversation_id or "")
             constraints_payload = dict(parent_row.get("constraints_json") or {})
-            constraints_payload.setdefault("forked_from_run_id", parent_run_id)
-            constraints_payload.setdefault("forked_from_stage_execution_id", selected_stage_id)
-            constraints_payload.setdefault("fork_mode", mode)
             with cur(conn) as db_cur:
                 db_cur.execute(
                     f"""
@@ -5295,8 +5492,10 @@ class ProtocolPostgresAdapter:
                     )
 
             parent_to_child_stage_id: dict[str, str] = {}
-            for row in boundary_rows:
+            seed_base = datetime.fromisoformat(now)
+            for seed_index, row in enumerate(boundary_rows):
                 child_stage_id = uuid.uuid4().hex
+                seed_now = (seed_base + timedelta(microseconds=seed_index)).isoformat()
                 parent_to_child_stage_id[str(row.get("protocol_stage_execution_id", "") or "")] = child_stage_id
                 input_snapshot = dict(row.get("input_snapshot_json") or {})
                 input_snapshot.update({
@@ -5324,8 +5523,8 @@ class ProtocolPostgresAdapter:
                         row.get("decision", "") or "completed",
                         row.get("decision_summary", "") or f"Seeded from parent run stage {row.get('stage_key', '')}.",
                         jsonb(input_snapshot),
-                        now,
-                        now,
+                        seed_now,
+                        seed_now,
                     ),
                 )
                 self._insert_protocol_transition(
@@ -5344,7 +5543,7 @@ class ProtocolPostgresAdapter:
                     },
                     actor_type="protocol_engine",
                     actor_ref="fork_from_stage",
-                    now=now,
+                    now=seed_now,
                 )
 
             for artifact_key, row in boundary_snapshots.items():
@@ -5471,6 +5670,7 @@ class ProtocolPostgresAdapter:
                 now=now,
             )
             return result
+        return run_write_tx_with_retry(self._connect, _operation)
 
     def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
         with self._connect() as conn:
@@ -5590,6 +5790,12 @@ class ProtocolPostgresAdapter:
                 )
             if row is None:
                 raise RuntimeError("Failed to persist artifact snapshot.")
+            self._maybe_complete_blocked_runtime_acceptance_in_tx(
+                conn,
+                run_id=snapshot.protocol_run_id,
+                actor_ref=self._access_actor_ref(access),
+                now=now,
+            )
             return self._protocol_artifact_snapshot_from_row(row)
 
     def delete_protocol_artifact_snapshot(
@@ -5845,7 +6051,7 @@ class ProtocolPostgresAdapter:
     ) -> ProtocolArtifactRuntimeEventRecord:
         if not any(self._access_has_role(access, role) for role in ("operator", "admin", "agent", "auditor")):
             raise PermissionError("Protocol runtime event mutation requires protocol access.")
-        with self._connect() as conn, write_tx(conn):
+        def _operation(conn):
             detail = self._protocol_run_detail_in_tx(conn, event.protocol_run_id, access=access)
             if detail is None:
                 raise KeyError(event.protocol_run_id)
@@ -5886,6 +6092,7 @@ class ProtocolPostgresAdapter:
                 now=created_at,
             )
             return saved
+        return run_write_tx_with_retry(self._connect, _operation)
 
     def _maybe_complete_blocked_runtime_acceptance_in_tx(
         self,
@@ -5984,6 +6191,7 @@ class ProtocolPostgresAdapter:
         *,
         access: ProtocolAccessContextRecord,
         limit: int = 50,
+        event_kind: str | None = None,
     ) -> list[ProtocolArtifactRuntimeEventRecord]:
         with self._connect() as conn:
             detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
@@ -6004,19 +6212,23 @@ class ProtocolPostgresAdapter:
             )
             if current_runtime is None:
                 return []
+            normalized_kind = str(event_kind or "").strip()
+            kind_clause = "AND event_kind = %s" if normalized_kind else ""
+            params: list[object] = [str(current_runtime.get("runtime_instance_id", "") or "")]
+            if normalized_kind:
+                params.append(normalized_kind)
+            params.append(max(1, min(int(limit or 50), 200)))
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
                 f"""
                 SELECT *
                 FROM {SCHEMA}.protocol_artifact_runtime_events
                 WHERE runtime_instance_id = %s
+                  {kind_clause}
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (
-                    str(current_runtime.get("runtime_instance_id", "") or ""),
-                    max(1, min(int(limit or 50), 200)),
-                ),
+                tuple(params),
             )
             return [self._protocol_artifact_runtime_event_from_row(row) for row in rows]
 
@@ -6069,7 +6281,8 @@ class ProtocolPostgresAdapter:
             }
         )
         now = utcnow_iso()
-        with self._connect() as conn, write_tx(conn):
+
+        def _operation(conn):
             existing_idempotency = self._protocol_idempotency_row(
                 conn,
                 scope_kind="protocol_run",
@@ -6127,6 +6340,18 @@ class ProtocolPostgresAdapter:
                 )
             if stage_execution_row is None:
                 return ProtocolRunMutationRecord(ok=False, status="invalid", message="Protocol run has no active stage execution.")
+            if normalized_action == "interrupt":
+                run_status = str(run_row.get("status", "") or "").strip().lower()
+                stage_status = str(stage_execution_row.get("status", "") or "").strip().lower()
+                if run_status not in {"queued", "running"} or stage_status not in {"queued", "running"}:
+                    return ProtocolRunMutationRecord(
+                        ok=False,
+                        status="concurrent_modification",
+                        message=(
+                            "Protocol run cannot be interrupted from current state; "
+                            f"run is {run_status or 'unknown'} and current stage is {stage_status or 'unknown'}."
+                        ),
+                    )
             document = self._protocol_document_for_run(conn, run_row)
             if normalized_action in {"accept", "send_back"}:
                 forced_decision = "accept" if normalized_action == "accept" else "revise"
@@ -6210,6 +6435,7 @@ class ProtocolPostgresAdapter:
                 now=now,
             )
             return result
+        return run_write_tx_with_retry(self._connect, _operation)
 
     def _running_runtime_count_for_run(self, conn, run_id: str) -> int:
         row = POSTGRES_STORE_DIALECT.fetchone(

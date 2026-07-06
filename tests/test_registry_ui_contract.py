@@ -243,7 +243,7 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
-    assert "const mutation = await API.actOnProtocolRun(" in workspace
+    assert "mutation = await API.actOnProtocolRun(" in workspace
     assert "_renderRunActionBlockedResult(mutation, currentRun)" in workspace
     assert "Number(err?.status || 0) === 409" in workspace
     assert "btn.dataset.runAction = spec.action;" in workspace
@@ -894,7 +894,7 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "label: 'Agents needing attention'" in dashboard
     assert "function visibleDashboardAgents()" in dashboard
     assert "function dashboardAgentHealth(summary)" in dashboard
-    assert "label: 'Active or lease-expired runs'" in dashboard
+    assert "label: 'Active protocol runs'" in dashboard
     assert "with issues" in dashboard
     assert "label: 'Usage review'" in dashboard
     assert "label: 'Tokens · 24h'" not in dashboard

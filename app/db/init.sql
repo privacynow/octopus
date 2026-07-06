@@ -805,7 +805,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runtime_capability_tokens (
     expires_at TEXT NOT NULL,
     revoked_at TEXT NOT NULL DEFAULT '',
     exchange_count INTEGER NOT NULL DEFAULT 0,
-    max_exchange_count INTEGER NOT NULL DEFAULT 2,
+    max_exchange_count INTEGER NOT NULL DEFAULT 5,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     actor_ref TEXT NOT NULL DEFAULT ''

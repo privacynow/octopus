@@ -1051,6 +1051,7 @@ class AbstractRegistryStore(Protocol):
         *,
         access: ProtocolAccessContextRecord,
         limit: int = 50,
+        event_kind: str | None = None,
     ) -> list[ProtocolArtifactRuntimeEventRecord]:
         """Return runtime lifecycle/audit events for one artifact."""
 

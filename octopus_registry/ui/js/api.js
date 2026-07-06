@@ -496,6 +496,8 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/logs`),
         getProtocolRunArtifactRuntimeEvents: (id, artifactKey, limit = 25) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/events?limit=${encodeURIComponent(limit)}`),
+        runProtocolRunArtifactRuntimeJourney: (id, artifactKey, journeyKey) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/journeys/${encodeURIComponent(journeyKey)}/run`, { body: {}, timeoutMs: 30000 }),
         archiveProtocolRunArtifactRuntime: (id, artifactKey) =>
             request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/archive`, { body: {} }),
         deleteProtocolRunArtifactRuntime: (id, artifactKey) =>

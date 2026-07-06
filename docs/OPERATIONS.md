@@ -325,7 +325,9 @@ For structured journey evidence, verify that the bot image contains the browser
 runtime, the artifact has `octopus-runtime.json.test_hooks`, the runner targets
 the Registry-routed artifact origin, and journey result events appear on the
 run before final acceptance. Contract-bearing protocols should not complete
-from reviewer prose alone.
+from reviewer prose alone or from uncorrelated `journey_completed` events. The
+operator `Re-run journey` control queues bot work and returns immediately; use
+the run updates/runtime event list to confirm the later pass or failure.
 
 ## Cleanup
 

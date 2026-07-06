@@ -1838,10 +1838,6 @@ class BotRuntime:
         item: WorkItemRecord,
         runner: Callable[[asyncio.Event | None], Awaitable[None]],
     ) -> None:
-        if self.config.runtime_mode != "shared":
-            await runner(None)
-            return
-
         cancel_event = asyncio.Event()
 
         async def _poll_cancel_requested() -> None:

@@ -534,6 +534,21 @@ class ProtocolRunEngine:
                 transition_metadata=transition_metadata,
                 retention_until=retention_until,
             )
+        if action == "interrupt":
+            return ProtocolEngineDecisionRecord(
+                run_status="blocked",
+                stage_status="blocked",
+                summary=summary,
+                failure_code="operator_interrupted",
+                failure_detail=summary,
+                transition_kind="blocked",
+                transition_reason=summary,
+                transition_error_code="OPERATOR_INTERRUPTED",
+                run_blocked_code="operator_interrupted",
+                run_blocked_detail=summary,
+                transition_metadata=transition_metadata,
+                retention_until=retention_until,
+            )
         if action == "retry":
             if stage_execution.status not in {"blocked", "failed", "cancelled"}:
                 detail = f"Stage {stage.stage_key} cannot be retried from status {stage_execution.status}."

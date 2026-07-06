@@ -391,7 +391,7 @@ def delivery_kinds_for_registry_scope(registry_scope: str) -> tuple[str, ...] | 
     if scope == "channel":
         return ("channel_input", "channel_action", "management_request")
     if scope == "coordination":
-        return ("routed_task", "routed_result")
+        return ("routed_task", "routed_result", "management_request")
     return None
 
 

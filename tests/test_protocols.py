@@ -1172,9 +1172,18 @@ def test_registry_store_late_result_after_timeout_does_not_reopen_run(postgres_r
     )
 
     refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    task = store.get_task(stage.routed_task_id)
+    task_result = task.result.as_dict() if task.result is not None else {}
     assert maintenance.swept_count == 1
     assert refreshed.run.status == "failed"
-    assert [item.protocol_transition_id for item in refreshed.transitions] == transition_ids
+    assert [
+        item.protocol_transition_id for item in refreshed.transitions
+        if item.transition_kind != "late_result"
+    ] == transition_ids
+    late_transitions = [item for item in refreshed.transitions if item.transition_kind == "late_result"]
+    assert len(late_transitions) == 1
+    assert late_transitions[0].error_code == "LATE_RESULT_PRESERVED"
+    assert task_result.get("late_delivery", {}).get("status") == "late_result_preserved"
     assert [item.protocol_stage_execution_id for item in refreshed.stage_executions] == stage_ids
 
 
@@ -1569,6 +1578,134 @@ def test_registry_store_interrupted_result_blocks_run_and_retry_records_timeline
     assert previous_stage.failure_code == "interrupted"
     assert previous_stage.failure_detail == "Work was interrupted; retry this stage to continue."
     assert any(item.transition_kind == "retry" for item in refreshed.transitions)
+
+
+def test_registry_store_operator_interrupt_blocks_stage_and_queues_cancel_request(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, created, detail = running_protocol_run(store)
+    stage = detail.stage_executions[0]
+
+    interrupted = store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="interrupt",
+        reason="Stop the provider process before retrying.",
+    )
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert interrupted.ok is True
+    assert interrupted.run is not None
+    assert interrupted.run.status == "blocked"
+    assert interrupted.run.blocked_code == "operator_interrupted"
+    assert refreshed.stage_executions[0].status == "blocked"
+    assert refreshed.stage_executions[0].failure_code == "operator_interrupted"
+    assert any(item.transition_kind == "task_cancel_requested" for item in refreshed.transitions)
+    assert any(item.transition_kind == "blocked" and item.error_code == "OPERATOR_INTERRUPTED" for item in refreshed.transitions)
+
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT target_agent_id, operation, payload_json, status
+                FROM agent_registry.management_requests
+                WHERE operation = 'cancel_routed_task'
+                """
+            )
+            rows = cur.fetchall()
+    assert len(rows) == 1
+    target_agent_id, _operation, payload, status = rows[0]
+    assert target_agent_id
+    assert status == "queued"
+    assert payload["routed_task_id"] == stage.routed_task_id
+    assert payload["protocol_run_id"] == created.run.protocol_run_id
+    assert payload["protocol_stage_execution_id"] == stage.protocol_stage_execution_id
+
+
+def test_registry_store_operator_interrupt_cancel_delivery_reaches_coordination_agent(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll = store.enroll(agent_card(bot_key="coordination-m1").model_copy(update={"registry_scope": "coordination"}))
+    published = published_protocol(store)
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": enroll.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    stage = detail.stage_executions[0]
+
+    store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="interrupt",
+        reason="Stop the provider process.",
+    )
+
+    poll = store.poll(enroll.agent_token, cursor=0, limit=10)
+    delivery = next(item for item in poll.deliveries if item.kind == "management_request")
+    assert delivery.payload["payload"]["operation"] == "cancel_routed_task"
+    assert delivery.payload["payload"]["routed_task_id"] == stage.routed_task_id
+
+
+def test_registry_store_late_result_after_operator_interrupt_is_preserved_without_advancing(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    stage = detail.stage_executions[0]
+
+    store.act_on_protocol_run(
+        created.run.protocol_run_id,
+        access=operator_access(),
+        action="interrupt",
+        reason="Stop before retrying.",
+    )
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "late-after-interrupt",
+            "summary": "Late completion after interrupt.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Late completion.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "late-interrupt-content",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    task = store.get_task(stage.routed_task_id)
+    task_result = task.result.as_dict() if task.result is not None else {}
+
+    assert refreshed.run.status == "blocked"
+    assert refreshed.run.blocked_code == "operator_interrupted"
+    assert refreshed.run.current_stage_execution_id == stage.protocol_stage_execution_id
+    assert refreshed.stage_executions[0].status == "blocked"
+    assert refreshed.stage_executions[0].failure_code == "operator_interrupted"
+    assert task_result.get("late_delivery", {}).get("status") == "late_result_preserved"
+    assert task_result.get("late_delivery", {}).get("stage_status") == "blocked"
+    assert any(item.transition_kind == "late_result" for item in refreshed.transitions)
+    assert all(item.content_hash != "late-interrupt-content" for item in refreshed.artifacts)
 
 
 def test_registry_store_stale_operator_send_back_does_not_block_next_stage(

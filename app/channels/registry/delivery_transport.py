@@ -43,6 +43,7 @@ from octopus_sdk.inbound_types import (
     InboundEnvelope,
     InboundMessage,
     InboundUser,
+    deserialize_inbound,
     serialize_inbound,
 )
 from octopus_sdk.providers import Provider
@@ -52,6 +53,8 @@ from octopus_sdk.registry.management import (
     ArtifactRuntimeFetchRequest,
     ArtifactRuntimeHealthRequest,
     ArtifactRuntimeLogsRequest,
+    CancelRoutedTaskRequest,
+    CancelRoutedTaskResult,
     DesignAutoProtocolRequest,
     DesignAutoProtocolResult,
     ManagementRequest,
@@ -782,6 +785,7 @@ async def handle_registry_delivery(
                 ArtifactRuntimeLogsRequest,
                 ArtifactRuntimeFetchRequest,
                 RunArtifactJourneyRequest,
+                CancelRoutedTaskRequest,
                 WorkspaceUsageRequest,
                 WorkspaceCleanupRequest,
             ),
@@ -823,6 +827,37 @@ async def handle_registry_delivery(
                         journey_run_id=request.payload.journey_run_id,
                     )
                     payload = RunArtifactJourneyResult(result=journey_result)
+                elif isinstance(request.payload, CancelRoutedTaskRequest):
+                    matched_item = None
+                    for item in work_queue.list_incomplete_work_items(config.data_dir):
+                        raw_payload = item.payload or work_queue.get_update_payload(config.data_dir, item.event_id) or ""
+                        try:
+                            inbound = deserialize_inbound(item.kind, raw_payload)
+                        except Exception:
+                            continue
+                        if str(getattr(inbound, "routed_task_id", "") or "") == str(request.payload.routed_task_id or ""):
+                            matched_item = item
+                            break
+                    if matched_item is None:
+                        payload = CancelRoutedTaskResult(
+                            routed_task_id=request.payload.routed_task_id,
+                            requested=False,
+                            status="not_found",
+                            message="No active local work item matched this routed task.",
+                        )
+                    else:
+                        result = work_queue.request_cancel(
+                            config.data_dir,
+                            matched_item.conversation_key,
+                            "registry-management",
+                            cancel_request_event_id=f"cancel-routed-task:{request.payload.routed_task_id}:{request.request_id}",
+                        )
+                        payload = CancelRoutedTaskResult(
+                            routed_task_id=request.payload.routed_task_id,
+                            requested=result != work_queue.CancelRequestResult.nothing_to_cancel,
+                            status=str(result.value if hasattr(result, "value") else result),
+                            message="Cancel request recorded for routed task.",
+                        )
                 else:
                     payload = await artifact_runtime.artifact_runtime_fetch(request.payload)
                 result = ManagementResult(
@@ -1054,7 +1089,7 @@ class RegistryDeliveryTransport(TransportImplementation):
         if registry_scope == "channel":
             return ("channel_input", "channel_action", "management_request")
         if registry_scope == "coordination":
-            return ("routed_task", "routed_result")
+            return ("routed_task", "routed_result", "management_request")
         return None
 
 

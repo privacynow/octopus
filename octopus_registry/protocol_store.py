@@ -81,6 +81,7 @@ from octopus_sdk.protocols import (
 from octopus_sdk.protocols.documents import draft_protocol_document_data
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
+from octopus_sdk.registry.management import CancelRoutedTaskRequest, ManagementRequest
 
 from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_snapshot
 from .config import RegistryConfig, load_registry_config
@@ -2285,6 +2286,97 @@ class ProtocolPostgresAdapter:
                 ),
             )
 
+    def _queue_routed_task_cancel_management_request_in_tx(
+        self,
+        conn,
+        *,
+        run_row: Mapping[str, object],
+        stage_execution_row: Mapping[str, object],
+        reason: str,
+        now: str,
+    ) -> None:
+        routed_task_id = str(stage_execution_row.get("routed_task_id", "") or "").strip()
+        if not routed_task_id:
+            return
+        task_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"""
+            SELECT routed_task_id, target_agent_id, status
+            FROM {SCHEMA}.routed_tasks
+            WHERE routed_task_id = %s
+            """,
+            (routed_task_id,),
+        )
+        if task_row is None:
+            return
+        if str(task_row.get("status", "") or "").strip().lower() in {"completed", "failed", "cancelled"}:
+            return
+        target_agent_id = str(task_row.get("target_agent_id", "") or "").strip()
+        if not target_agent_id:
+            return
+        request = ManagementRequest(
+            agent_id=target_agent_id,
+            payload=CancelRoutedTaskRequest(
+                routed_task_id=routed_task_id,
+                protocol_run_id=str(run_row.get("protocol_run_id", "") or ""),
+                protocol_stage_execution_id=str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                reason=str(reason or "").strip(),
+            ),
+            timeout_seconds=15,
+        )
+        delivery_id = uuid.uuid4().hex
+        with cur(conn) as db_cur:
+            db_cur.execute(
+                f"""
+                INSERT INTO {SCHEMA}.management_requests (
+                    request_id, target_agent_id, operation, payload_json,
+                    status, delivery_id, result_json, error_code, error_detail, created_at, completed_at
+                ) VALUES (%s, %s, %s, %s, 'queued', %s, NULL, '', '', %s, '')
+                ON CONFLICT (request_id) DO NOTHING
+                """,
+                (
+                    request.request_id,
+                    request.agent_id,
+                    request.operation,
+                    jsonb(request.payload.model_dump(mode="json")),
+                    delivery_id,
+                    now,
+                ),
+            )
+            db_cur.execute(
+                f"""
+                INSERT INTO {SCHEMA}.deliveries (
+                    delivery_id, target_agent_id, kind, payload_json, state, created_at, updated_at
+                ) VALUES (%s, %s, 'management_request', %s, 'queued', %s, %s)
+                ON CONFLICT (delivery_id) DO NOTHING
+                """,
+                (
+                    delivery_id,
+                    target_agent_id,
+                    jsonb(request.model_dump(mode="json")),
+                    now,
+                    now,
+                ),
+            )
+        self._insert_protocol_transition(
+            conn,
+            run_id=str(run_row.get("protocol_run_id", "") or ""),
+            from_stage_execution_id=str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+            to_stage_execution_id="",
+            transition_kind="task_cancel_requested",
+            decision="cancel_provider_work",
+            reason=str(reason or "Provider work cancellation requested.")[:1000],
+            error_code="",
+            metadata={
+                "routed_task_id": routed_task_id,
+                "target_agent_id": target_agent_id,
+                "management_request_id": request.request_id,
+            },
+            actor_type="registry",
+            actor_ref="protocol_store",
+            now=now,
+        )
+
     def _create_protocol_stage_execution_in_tx(
         self,
         conn,
@@ -2641,7 +2733,7 @@ class ProtocolPostgresAdapter:
     ) -> None:
         stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s",
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s FOR UPDATE",
             (routed_task_id,),
         )
         if stage_execution_row is None:
@@ -2650,7 +2742,7 @@ class ProtocolPostgresAdapter:
             return
         run_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
             (stage_execution_row["protocol_run_id"],),
         )
         if run_row is None:
@@ -2881,16 +2973,55 @@ class ProtocolPostgresAdapter:
     ) -> None:
         stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s",
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s FOR UPDATE",
             (routed_task_id,),
         )
         if stage_execution_row is None:
             return
-        if str(stage_execution_row.get("status", "") or "") in {"completed", "failed", "blocked", "cancelled"}:
+        stage_status = str(stage_execution_row.get("status", "") or "")
+        if stage_status in {"completed", "failed", "blocked", "cancelled"}:
+            task_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT result_json FROM {SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            result_json = task_row.get("result_json") if isinstance(task_row, Mapping) else {}
+            if not isinstance(result_json, dict):
+                result_json = {}
+            late_delivery = {
+                "status": "late_result_preserved",
+                "stage_status": stage_status,
+                "stage_execution_id": str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                "recorded_at": now,
+            }
+            result_json["late_delivery"] = late_delivery
+            POSTGRES_STORE_DIALECT.execute(
+                conn,
+                f"""
+                UPDATE {SCHEMA}.routed_tasks
+                SET result_json = %s
+                WHERE routed_task_id = %s
+                """,
+                (jsonb(result_json), routed_task_id),
+            )
+            self._insert_protocol_transition(
+                conn,
+                run_id=str(stage_execution_row.get("protocol_run_id", "") or ""),
+                from_stage_execution_id=str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                to_stage_execution_id="",
+                transition_kind="late_result",
+                decision="late_result_preserved",
+                reason="Provider result arrived after the protocol stage was already terminal; Registry state and artifact records were not advanced.",
+                error_code="LATE_RESULT_PRESERVED",
+                metadata=late_delivery,
+                actor_type="protocol_engine",
+                actor_ref=str(routed_task_id or ""),
+                now=now,
+            )
             return
         run_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
             (stage_execution_row["protocol_run_id"],),
         )
         task_row = POSTGRES_STORE_DIALECT.fetchone(
@@ -5149,7 +5280,7 @@ class ProtocolPostgresAdapter:
     ) -> None:
         run_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
             (run_id,),
         )
         if run_row is None:
@@ -5163,7 +5294,7 @@ class ProtocolPostgresAdapter:
             return
         stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
             conn,
-            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s",
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s FOR UPDATE",
             (stage_execution_id,),
         )
         if stage_execution_row is None:
@@ -5307,7 +5438,7 @@ class ProtocolPostgresAdapter:
         normalized_action = str(action or "").strip().lower()
         if normalized_action == "send-back":
             normalized_action = "send_back"
-        if normalized_action not in {"cancel", "retry", "accept", "send_back"}:
+        if normalized_action not in {"cancel", "retry", "accept", "send_back", "interrupt"}:
             return ProtocolRunMutationRecord(ok=False, status="invalid_action", message=f"Unsupported protocol action {action!r}.")
         if not any(self._access_has_role(access, role) for role in ("operator", "admin")):
             return ProtocolRunMutationRecord(ok=False, status="forbidden", message="Protocol run intervention requires operator access.")
@@ -5340,7 +5471,7 @@ class ProtocolPostgresAdapter:
                 return ProtocolRunMutationRecord.model_validate(existing_idempotency.get("response_json", {}))
             raw_run_row = POSTGRES_STORE_DIALECT.fetchone(
                 conn,
-                f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+                f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s FOR UPDATE",
                 (run_id,),
             )
             run_visibility = self._protocol_run_visibility_status(raw_run_row, access=access)
@@ -5361,7 +5492,7 @@ class ProtocolPostgresAdapter:
             if current_stage_execution_id:
                 stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
                     conn,
-                    f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s",
+                    f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s FOR UPDATE",
                     (current_stage_execution_id,),
                 )
             if stage_execution_row is None:
@@ -5373,6 +5504,7 @@ class ProtocolPostgresAdapter:
                     WHERE protocol_run_id = %s
                     ORDER BY started_at DESC, protocol_stage_execution_id DESC
                     LIMIT 1
+                    FOR UPDATE
                     """,
                     (run_id,),
                 )
@@ -5408,6 +5540,14 @@ class ProtocolPostgresAdapter:
                 stage_execution_row=stage_execution_row,
                 engine=engine,
             )
+            if normalized_action in {"cancel", "interrupt"}:
+                self._queue_routed_task_cancel_management_request_in_tx(
+                    conn,
+                    run_row=run_row,
+                    stage_execution_row=stage_execution_row,
+                    reason=reason or f"Operator {normalized_action} requested.",
+                    now=now,
+                )
             self._apply_protocol_engine_decision_in_tx(
                 conn,
                 run_row=run_row,

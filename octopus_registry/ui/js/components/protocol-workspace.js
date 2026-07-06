@@ -962,10 +962,12 @@ function _protocolEventKindLabel(value) {
         'protocol.run.send_back': 'Operator sent back',
         'protocol.run.cancel': 'Run cancelled',
         'protocol.run.retry': 'Run retried',
+        'protocol.run.interrupt': 'Stage interrupted',
         operator_accept: 'Operator accepted',
         operator_send_back: 'Operator sent back',
         operator_cancel: 'Run cancelled',
         operator_retry: 'Run retried',
+        operator_interrupt: 'Stage interrupted',
     };
     if (labels[normalized]) return labels[normalized];
     return _titleCaseWords(normalized.replace(/[._]+/g, ' ')) || 'Runtime event';
@@ -8776,6 +8778,17 @@ function renderProtocolRuns(container) {
                 requireReason: true,
                 visible: active,
                 enabled: active,
+            },
+            {
+                action: 'interrupt',
+                label: 'Interrupt',
+                note: 'Interrupt asks the assigned bot to stop the current provider process and blocks this stage so you can retry, send back, or cancel after reading the preserved result state.',
+                confirmLabel: 'Interrupt stage',
+                successMessage: 'Stage interrupt requested.',
+                requireReason: true,
+                visible: active && currentStageBusy,
+                enabled: active && currentStageBusy,
+                intervention: true,
             },
         ];
     }

@@ -49,6 +49,31 @@ function _downloadProtocolText(filename, text, contentType) {
     setTimeout(() => URL.revokeObjectURL(url), 500);
 }
 
+function _autoProtocolErrorMessage(label, err) {
+    const detail = err && err.message ? err.message : String(err || 'Unknown error');
+    return detail && detail !== label ? `${label}: ${detail}` : label;
+}
+
+function _autoProtocolErrorEl(label, err, retryFn) {
+    const card = UI.createErrorCard(_autoProtocolErrorMessage(label, err), retryFn);
+    card.classList.add('protocol-auto-error');
+    card.setAttribute('role', 'alert');
+    return card;
+}
+
+function _setAutoProtocolStatus(status, message) {
+    status.className = 'quiet-note';
+    status.textContent = message;
+}
+
+function _setAutoProtocolDialogError(preview, status, label, err, retryFn) {
+    const message = _autoProtocolErrorMessage(label, err);
+    status.className = 'quiet-note protocol-auto-error-note';
+    status.textContent = message;
+    UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);
+    console.error(label, err);
+}
+
 function _protocolArtifactLabel(item) {
     const parts = [];
     if (item.content_hash) {
@@ -2944,6 +2969,7 @@ function renderProtocolWorkspace(container) {
             actions: [cancelBtn, generateBtn, reviseBtn, applyBtn, publishBtn, runBtn],
             maxWidth: '760px',
             initialFocus: requirement,
+            closeOnOverlay: false,
         });
         view.dialog.classList.add('protocol-auto-modal');
         const syncActions = () => {
@@ -2980,7 +3006,7 @@ function renderProtocolWorkspace(container) {
                 return;
             }
             generateBtn.disabled = true;
-            status.textContent = 'Designing protocol…';
+            _setAutoProtocolStatus(status, 'Designing protocol…');
             UI.reconcileChildren(preview, [_autoProtocolProgressEl()]);
             try {
                 session = await API.createProtocolAutoSession({
@@ -2993,18 +3019,17 @@ function renderProtocolWorkspace(container) {
                     workspace_ref: '',
                 });
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
-                status.textContent = 'Review the generated structure. Apply it to continue in the normal editor.';
+                _setAutoProtocolStatus(status, 'Review the generated structure. Apply it to continue in the normal editor.');
                 syncActions();
             } catch (err) {
-                UI.reportError('Failed to generate protocol', err, { context: 'Auto Protocol generate failed' });
-                status.textContent = 'Generation failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to generate protocol', err, () => generateBtn.click());
             }
             generateBtn.disabled = false;
         });
         reviseBtn.addEventListener('click', async () => {
             if (!session?.session_id || !revise.value.trim()) return;
             reviseBtn.disabled = true;
-            status.textContent = 'Updating generated protocol…';
+            _setAutoProtocolStatus(status, 'Updating generated protocol…');
             try {
                 session = await API.reviseProtocolAutoSession(session.session_id, {
                     mode: 'revise',
@@ -3016,18 +3041,17 @@ function renderProtocolWorkspace(container) {
                 });
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 revise.value = '';
-                status.textContent = 'Updated. Review the changes, then apply the draft.';
+                _setAutoProtocolStatus(status, 'Updated. Review the changes, then apply the draft.');
                 syncActions();
             } catch (err) {
-                UI.reportError('Failed to modify generated protocol', err, { context: 'Auto Protocol revise failed' });
-                status.textContent = 'Modification failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to modify generated protocol', err, () => reviseBtn.click());
             }
             reviseBtn.disabled = false;
         });
         applyBtn.addEventListener('click', async () => {
             if (!session?.session_id) return;
             applyBtn.disabled = true;
-            status.textContent = 'Applying generated draft…';
+            _setAutoProtocolStatus(status, 'Applying generated draft…');
             try {
                 const applied = await API.applyProtocolAutoSession(session.session_id);
                 session = applied;
@@ -3037,27 +3061,25 @@ function renderProtocolWorkspace(container) {
                     UI.notify('Auto Protocol draft applied.', 'success');
                     return;
                 }
-                status.textContent = 'Draft applied, but the protocol id was not returned.';
+                _setAutoProtocolStatus(status, 'Draft applied, but the protocol id was not returned.');
             } catch (err) {
-                UI.reportError('Failed to apply generated protocol', err, { context: 'Auto Protocol apply failed' });
-                status.textContent = 'Apply failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to apply generated protocol', err, () => applyBtn.click());
             }
             applyBtn.disabled = false;
         });
         publishBtn.addEventListener('click', async () => {
             if (!session?.session_id) return;
             publishBtn.disabled = true;
-            status.textContent = 'Publishing generated protocol…';
+            _setAutoProtocolStatus(status, 'Publishing generated protocol…');
             try {
                 session = await API.publishProtocolAutoSession(session.session_id);
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 await _adoptAutoProtocolSession(session);
-                status.textContent = 'Published. You can run it now or continue editing a draft revision later.';
+                _setAutoProtocolStatus(status, 'Published. You can run it now or continue editing a draft revision later.');
                 UI.notify('Auto Protocol published.', 'success');
                 syncActions();
             } catch (err) {
-                UI.reportError('Failed to publish generated protocol', err, { context: 'Auto Protocol publish failed' });
-                status.textContent = 'Publish failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to publish generated protocol', err, () => publishBtn.click());
             }
             publishBtn.disabled = false;
             syncActions();
@@ -3065,7 +3087,7 @@ function renderProtocolWorkspace(container) {
         runBtn.addEventListener('click', async () => {
             if (!session?.session_id) return;
             runBtn.disabled = true;
-            status.textContent = 'Publishing and starting the run…';
+            _setAutoProtocolStatus(status, 'Publishing and starting the run…');
             try {
                 session = await API.runProtocolAutoSession(session.session_id, { origin_channel: 'registry' });
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
@@ -3079,8 +3101,7 @@ function renderProtocolWorkspace(container) {
                 }
                 UI.notify('Protocol run started, but no run id was returned.', 'success');
             } catch (err) {
-                UI.reportError('Failed to run generated protocol', err, { context: 'Auto Protocol run failed' });
-                status.textContent = 'Run failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to run generated protocol', err, () => runBtn.click());
             }
             runBtn.disabled = false;
             syncActions();
@@ -8909,6 +8930,7 @@ function renderProtocolRuns(container) {
             actions: [cancelBtn, generateBtn, applyBtn, publishBtn, runBtn],
             maxWidth: '760px',
             initialFocus: request,
+            closeOnOverlay: false,
         });
         view.dialog.classList.add('protocol-auto-modal');
 
@@ -8944,7 +8966,7 @@ function renderProtocolRuns(container) {
             generateBtn.disabled = true;
             intro.hidden = true;
             requestLabel.hidden = true;
-            status.textContent = 'Designing improved protocol…';
+            _setAutoProtocolStatus(status, 'Designing improved protocol…');
             UI.reconcileChildren(preview, [UI.renderEmptyState('Planning stages, artifacts, reviewers, and runtime expectations…', true)]);
             try {
                 session = await API.createProtocolAutoSession({
@@ -8957,51 +8979,42 @@ function renderProtocolRuns(container) {
                     workspace_ref: sourceRun.run.workspace_ref || '',
                 });
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                status.textContent = 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.';
+                _setAutoProtocolStatus(status, 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.');
                 syncActions();
             } catch (err) {
-                UI.reportError('Failed to generate the run improvement', err, {
-                    context: 'Auto Protocol run improvement failed',
-                });
                 intro.hidden = false;
                 requestLabel.hidden = false;
-                status.textContent = 'Generation failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to generate the run improvement', err, () => generateBtn.click());
             }
             generateBtn.disabled = false;
         });
         applyBtn.addEventListener('click', async () => {
             if (!session?.session_id) return;
             applyBtn.disabled = true;
-            status.textContent = 'Applying improved draft…';
+            _setAutoProtocolStatus(status, 'Applying improved draft…');
             try {
                 session = await API.applyProtocolAutoSession(session.session_id);
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                status.textContent = 'Draft applied. Open the protocol editor to review or continue publishing from here.';
+                _setAutoProtocolStatus(status, 'Draft applied. Open the protocol editor to review or continue publishing from here.');
                 UI.notify('Improved protocol draft applied.', 'success');
                 syncActions();
             } catch (err) {
-                UI.reportError('Failed to apply improved protocol draft', err, {
-                    context: 'Auto Protocol apply failed',
-                });
-                status.textContent = 'Apply failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to apply improved protocol draft', err, () => applyBtn.click());
             }
             applyBtn.disabled = false;
         });
         publishBtn.addEventListener('click', async () => {
             if (!session?.session_id) return;
             publishBtn.disabled = true;
-            status.textContent = 'Publishing improved protocol…';
+            _setAutoProtocolStatus(status, 'Publishing improved protocol…');
             try {
                 session = await API.publishProtocolAutoSession(session.session_id);
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                status.textContent = 'Published. You can start a fresh run now.';
+                _setAutoProtocolStatus(status, 'Published. You can start a fresh run now.');
                 UI.notify('Improved protocol published.', 'success');
                 syncActions();
             } catch (err) {
-                UI.reportError('Failed to publish improved protocol', err, {
-                    context: 'Auto Protocol publish failed',
-                });
-                status.textContent = 'Publish failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to publish improved protocol', err, () => publishBtn.click());
             }
             publishBtn.disabled = false;
             syncActions();
@@ -9009,7 +9022,7 @@ function renderProtocolRuns(container) {
         runBtn.addEventListener('click', async () => {
             if (!session?.session_id) return;
             runBtn.disabled = true;
-            status.textContent = 'Publishing and starting improved run…';
+            _setAutoProtocolStatus(status, 'Publishing and starting improved run…');
             try {
                 session = await API.runProtocolAutoSession(session.session_id, { origin_channel: 'registry' });
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
@@ -9022,10 +9035,7 @@ function renderProtocolRuns(container) {
                 }
                 UI.notify('Improved run started, but no run id was returned.', 'success');
             } catch (err) {
-                UI.reportError('Failed to run improved protocol', err, {
-                    context: 'Auto Protocol run failed',
-                });
-                status.textContent = 'Run failed.';
+                _setAutoProtocolDialogError(preview, status, 'Failed to run improved protocol', err, () => runBtn.click());
             }
             runBtn.disabled = false;
             syncActions();

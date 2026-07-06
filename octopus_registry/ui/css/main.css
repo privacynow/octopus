@@ -7362,6 +7362,17 @@ button.kit-run-stage-progress-node {
 .protocol-auto-dialog {
     min-width: 0;
 }
+.protocol-auto-error-note {
+    color: var(--danger);
+    overflow-wrap: anywhere;
+}
+.protocol-auto-error.error-card {
+    border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+    background: color-mix(in srgb, var(--danger) 7%, var(--bg-secondary));
+}
+.protocol-auto-error.error-card p {
+    overflow-wrap: anywhere;
+}
 .protocol-auto-field-label {
     display: grid;
     gap: var(--space-1-5);

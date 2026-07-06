@@ -19,10 +19,15 @@ build_log="$REPO_DIR/.deploy/logs/docker-build-$provider.log"
 
 build_args=(
   --build-arg "BOT_PROVIDER=$provider"
-  --build-arg "CLAUDE_INSTALL_METHOD=${CLAUDE_INSTALL_METHOD:-npm}"
-  --build-arg "CLAUDE_CLI_NPM_PACKAGE=${CLAUDE_CLI_NPM_PACKAGE:-@anthropic-ai/claude-code}"
-  --build-arg "CLAUDE_INSTALL_URL=${CLAUDE_INSTALL_URL:-https://claude.ai/install.sh}"
 )
+# Only forward explicit overrides; otherwise the Dockerfile ARG defaults
+# (including the pinned CLI version) govern what the image installs.
+for env_key in CLAUDE_INSTALL_METHOD CLAUDE_CLI_NPM_PACKAGE CLAUDE_INSTALL_URL CODEX_CLI_NPM_PACKAGE; do
+  value="${!env_key:-}"
+  if [ -n "$value" ]; then
+    build_args+=(--build-arg "$env_key=$value")
+  fi
+done
 
 print_build_failure_summary() {
   local provider="$1" log_path="$2"

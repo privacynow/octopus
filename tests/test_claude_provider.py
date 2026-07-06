@@ -36,6 +36,7 @@ def test_command_building_new_session():
     assert "--output-format" in cmd
     assert "stream-json" in cmd
     assert "--verbose" in cmd
+    assert "--include-partial-messages" in cmd
     assert "--session-id" in cmd
     assert "abc-123" in cmd
     assert cmd[-1] == "hello world"
@@ -57,6 +58,25 @@ def test_command_building_with_model():
     cmd3 = p2._build_run_cmd(state_new, "test")
     assert "--model" in cmd3
     assert "claude-sonnet-4-6" in cmd3
+
+
+def test_command_building_effort():
+    p = ClaudeProvider(make_config(claude_effort="xhigh"))
+    cmd = p._build_run_cmd({"session_id": "abc-123", "started": False}, "hello")
+    assert cmd[cmd.index("--effort") + 1] == "xhigh"
+
+
+def test_command_building_ultracode_settings():
+    p = ClaudeProvider(make_config(claude_ultracode=True))
+    cmd = p._build_run_cmd({"session_id": "abc-123", "started": False}, "hello")
+    assert json.loads(cmd[cmd.index("--settings") + 1]) == {"ultracode": True}
+
+
+def test_command_building_no_effort_or_settings_by_default():
+    p = ClaudeProvider(make_config())
+    cmd = p._build_run_cmd({"session_id": "abc-123", "started": False}, "hello")
+    assert "--effort" not in cmd
+    assert "--settings" not in cmd
 
 
 def test_command_building_extra_dirs():
@@ -574,3 +594,90 @@ def test_claude_error_state():
 
     error_result = RunResult(text="error", returncode=1)
     assert error_result.provider_state_updates == {}
+
+
+class _FakeStreamProcess:
+    """Minimal fake of asyncio.subprocess.Process with canned stdout lines."""
+
+    def __init__(self, lines):
+        self._lines = list(lines)
+        self.returncode = 0
+
+    @property
+    def stdout(self):
+        return self
+
+    async def readline(self):
+        if self._lines:
+            return (self._lines.pop(0) + "\n").encode()
+        return b""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._lines:
+            return (self._lines.pop(0) + "\n").encode()
+        raise StopAsyncIteration
+
+    def kill(self):
+        self._lines = []
+
+    async def wait(self):
+        return self.returncode
+
+
+async def test_consume_stream_denial_corrects_tool_record():
+    """A permission denial in the tool_result must flip the already-recorded
+    tool execution from completed to denied (records are finalized when the
+    tool_use input finishes streaming, before execution)."""
+    p = ClaudeProvider(make_config())
+    events = [
+        {"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Bash", "id": "toolu_1"}}},
+        {"type": "stream_event", "event": {"type": "content_block_stop"}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1", "is_error": True, "content": "permission denied by policy"}]}},
+        {"type": "result", "result": "done"},
+    ]
+    proc = _FakeStreamProcess([json.dumps(e) for e in events])
+    _, result_data, tool_activity = await p._consume_stream(proc, FakeProgress())
+    records = result_data["_tool_executions"]
+    assert len(records) == 1
+    assert records[0].status == "denied"
+    assert records[0].call_id == "toolu_1"
+    assert "permission" in records[0].output_summary
+    assert "\u26d4 denied" in tool_activity
+
+
+async def test_consume_stream_assistant_fallback_joins_blocks_across_turns():
+    """Without stream deltas, assistant messages are the text source: all text
+    blocks of a message count, and turns accumulate instead of clobbering."""
+    p = ClaudeProvider(make_config())
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Part one."}, {"type": "text", "text": " Part two."}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Turn two."}]}},
+        {"type": "result"},
+    ]
+    proc = _FakeStreamProcess([json.dumps(e) for e in events])
+    text, result_data, _ = await p._consume_stream(proc, FakeProgress())
+    final = result_data.get("result", text) or text
+    assert "Part one." in final and "Part two." in final and "Turn two." in final
+
+
+async def test_consume_stream_throttles_deltas_and_flushes_tail():
+    """Per-token deltas must not each render progress; the suppressed tail is
+    flushed on message_stop so the final state is never lost."""
+    p = ClaudeProvider(make_config(stream_update_interval_seconds=60.0))
+    def delta(t):
+        return {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": t}}}
+    events = [
+        delta("A"), delta("B"), delta("C"),
+        {"type": "stream_event", "event": {"type": "message_stop"}},
+        {"type": "result", "result": "ABC"},
+    ]
+    proc = _FakeStreamProcess([json.dumps(e) for e in events])
+    progress = FakeProgress()
+    text, _, _ = await p._consume_stream(proc, progress)
+    assert text == "ABC"
+    # First delta emits, B/C are suppressed, message_stop flushes the tail.
+    assert len(progress.updates) == 2
+    assert "ABC" in progress.updates[-1]

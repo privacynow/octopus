@@ -263,9 +263,12 @@ provider's login flow.
 
 What to expect:
 
-- Codex-backed agents usually show a device-login URL and code. Open the URL in
-  your browser, enter the code, sign in, approve access, then return to the
-  terminal.
+- Codex-backed agents use the host `codex` CLI for interactive login, with
+  `CODEX_HOME` pointed at `.deploy/provider-auth/codex/.codex`. This keeps the
+  browser callback on the same host as the login server. Follow the CLI
+  instructions, sign in, approve access, and wait for the command to return
+  successfully. Octopus then verifies the saved auth from inside the bot image
+  using the configured Codex bot environment.
 - Claude-backed agents usually open an interactive Claude session. If it is not
   already logged in, run `/login`, finish the browser or token flow, then run
   `/exit`.
@@ -275,6 +278,18 @@ What to expect:
 Healthy provider auth means the agent can actually execute model-backed work.
 After login, run `./octopus status` again and confirm the provider no longer
 shows as unconfigured.
+
+For Codex bots, set the model with `BOT_MODEL` in the bot `.env` file. Set
+`CODEX_REASONING_EFFORT` to `minimal`, `low`, `medium`, `high`, or `xhigh` when
+you need to control Codex reasoning effort for that bot. Unsupported values
+fail startup instead of reaching the provider CLI.
+
+For Claude bots, set the model with `BOT_MODEL` (for example `claude-fable-5`).
+Set `CLAUDE_EFFORT` to `low`, `medium`, `high`, `xhigh`, or `max` to control
+Claude Code effort for that bot, and `CLAUDE_ULTRACODE=1` to enable ultracode
+mode (multi-agent workflow orchestration; implies `xhigh` effort unless
+`CLAUDE_EFFORT` overrides it). Unsupported effort values fail startup instead
+of reaching the provider CLI.
 
 ## Check Status
 

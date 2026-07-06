@@ -58,6 +58,10 @@ class _ComposeDockerRunner:
 
         return CompletedProcess(["docker"], 0, "", "")
 
+    def provider_env_files(self, provider: str) -> list[Path]:
+        del provider
+        return [Path("/dev/null")]
+
     def image_labels(self, image: str) -> dict[str, str]:
         del image
         return {}
@@ -226,6 +230,32 @@ def test_bot_compose_command_exports_provider_for_compose_interpolation(tmp_path
     assert env["BOT_PROVIDER"] == "codex"
     assert env["OCTOPUS_RUNTIME_IMAGE"] == "octopus-agent:codex"
     assert env["PROVIDER_AUTH_DIR"] == str(tmp_path / ".deploy" / "provider-auth" / "codex")
+
+
+def test_provider_compose_command_uses_configured_bot_env_for_provider_health(tmp_path: Path) -> None:
+    _write_bot_env(
+        tmp_path,
+        "m2",
+        "M2",
+        [
+            "BOT_MODEL=gpt-5.5",
+            "CODEX_REASONING_EFFORT=high",
+        ],
+    )
+    runner = DockerRunner(tmp_path)
+
+    _, env = runner.provider_compose_command("codex", "run", "--rm", "bot-provider")
+
+    assert env["BOT_PROVIDER"] == "codex"
+    assert env["BOT_ENV_FILE"] == ".deploy/bots/m2/.env"
+
+
+def test_provider_compose_command_falls_back_without_configured_bot_env(tmp_path: Path) -> None:
+    runner = DockerRunner(tmp_path)
+
+    _, env = runner.provider_compose_command("codex", "run", "--rm", "bot-provider")
+
+    assert env["BOT_ENV_FILE"] == "/dev/null"
 
 
 def test_start_registry_regenerates_workspace_override_from_configured_workspaces(tmp_path: Path) -> None:
@@ -674,6 +704,62 @@ def test_ensure_provider_auth_ready_retries_login_when_existing_auth_is_invalid(
             "/app/scripts/provider/container_provider_login.sh",
         )
     ]
+
+
+def test_ensure_provider_auth_ready_uses_host_codex_login_script(tmp_path: Path) -> None:
+    class _HostLoginDockerRunner(_ComposeDockerRunner):
+        def run(self, args, **kwargs):  # noqa: ANN001
+            del kwargs
+            self.commands.append(("run", *args))
+            from subprocess import CompletedProcess
+
+            return CompletedProcess(args, 0, "", "")
+
+    docker = _HostLoginDockerRunner()
+    manager = OctopusManager(tmp_path, docker=docker)
+    manager.ensure_provider_image_ready = lambda provider, force=False: None  # type: ignore[method-assign]
+
+    manager.ensure_provider_auth_ready("codex")
+
+    assert docker.commands == [("run", "./scripts/provider/provider_login.sh", "codex")]
+
+
+def test_provider_live_health_checks_each_configured_provider_env(tmp_path: Path) -> None:
+    class _HealthDockerRunner(_ComposeDockerRunner):
+        def __init__(self, env_files: list[Path]) -> None:
+            super().__init__()
+            self._env_files = env_files
+
+        def provider_env_files(self, provider: str) -> list[Path]:
+            assert provider == "codex"
+            return self._env_files
+
+        def provider_compose(self, provider, *args, **kwargs):  # noqa: ANN001
+            env_file = kwargs.pop("env_file")
+            kwargs.pop("check")
+            assert kwargs == {}
+            self.commands.append((f"provider:{provider}", str(env_file), *args))
+            from subprocess import CompletedProcess
+
+            return CompletedProcess(["docker"], 0, "Provider auth and runtime OK.\n", "")
+
+    env_files = [
+        tmp_path / ".deploy" / "bots" / "m1" / ".env",
+        tmp_path / ".deploy" / "bots" / "m2" / ".env",
+    ]
+    for env_file in env_files:
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.write_text("BOT_PROVIDER=codex\nBOT_MODEL=gpt-5.5\n", encoding="utf-8")
+    docker = _HealthDockerRunner(env_files)
+    manager = OctopusManager(tmp_path, docker=docker)
+    manager.ensure_provider_image_ready = lambda provider, force=False: None  # type: ignore[method-assign]
+
+    healthy, output = manager.provider_live_health_output("codex")
+
+    assert healthy is True
+    assert ".deploy/bots/m1/.env: Provider auth and runtime OK." in output
+    assert ".deploy/bots/m2/.env: Provider auth and runtime OK." in output
+    assert [command[1] for command in docker.commands] == [str(env_files[0]), str(env_files[1])]
 
 
 def test_provider_auth_state_reports_live_failure_for_configured_auth(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 from app.octopus_cli.admin_service import OctopusAdminService
@@ -184,6 +185,23 @@ def test_cli_disconnect_registry_id_without_targets_uses_matching_bots(tmp_path:
 
     assert result == 0
     assert disconnected == [("m1", "qa")]
+
+
+def test_interactive_diagnose_logs_passes_follow_flag(tmp_path: Path) -> None:
+    cli = OctopusCLI(tmp_path, io=PromptIO(stdin=io.StringIO("1\n1\n"), stdout=io.StringIO()))
+    cli.manager.inspect_state = lambda: _state(_bot("m1"))  # type: ignore[method-assign]
+    calls: list[tuple[list[str], bool]] = []
+
+    def _logs(targets: list[str], *, follow: bool) -> int:
+        calls.append((targets, follow))
+        return 0
+
+    cli.cmd_logs = _logs  # type: ignore[method-assign]
+
+    result = cli.menu_diagnose()
+
+    assert result == 0
+    assert calls == [(["registry"], True)]
 
 
 def test_render_provider_auth_status_shows_live_failure_detail(tmp_path: Path) -> None:

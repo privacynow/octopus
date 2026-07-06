@@ -122,6 +122,25 @@ Diagnose -> Provider auth
 
 Authenticate only the provider you intend to use for the ready path.
 
+Codex interactive login runs on the host `codex` CLI with `CODEX_HOME` pointed
+at `.deploy/provider-auth/codex/.codex`. That is intentional: current Codex CLI
+login starts a localhost browser callback server, and that callback must be
+reachable from the host browser. After login, Octopus runs a containerized live
+provider check against the same shared auth directory and the configured bot
+environment for that provider.
+
+Codex model selection is controlled per bot. Set `BOT_MODEL` in
+`.deploy/bots/<bot>/.env` for the model id. Set `CODEX_REASONING_EFFORT` to one
+of `minimal`, `low`, `medium`, `high`, or `xhigh` to pass Codex CLI
+`model_reasoning_effort` for every request from that bot.
+
+Claude model selection works the same way: set `BOT_MODEL` in
+`.deploy/bots/<bot>/.env` (for example `claude-fable-5`). Set `CLAUDE_EFFORT`
+to one of `low`, `medium`, `high`, `xhigh`, or `max` to pass the Claude CLI
+`--effort` flag, and `CLAUDE_ULTRACODE=1` to enable ultracode mode
+(multi-agent workflow orchestration; implies `xhigh` effort unless
+`CLAUDE_EFFORT` overrides it).
+
 If the host URL or public URL is wrong, redeploy the Registry with the intended
 address and restart bots so generated links and local bot connection metadata
 are refreshed:

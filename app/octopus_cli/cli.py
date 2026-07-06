@@ -550,7 +550,7 @@ class OctopusCLI:
 
     def menu_diagnose(self) -> int | None:
         items = [
-            ("Logs", lambda: self._diagnose_choose_target(self.cmd_logs)),
+            ("Logs", lambda: self._diagnose_choose_target(lambda targets: self.cmd_logs(targets, follow=True))),
             ("Shell", lambda: self._diagnose_choose_target(self.cmd_shell)),
             ("Doctor", lambda: self._diagnose_choose_target(self.cmd_doctor, bot_only=True)),
             ("Provider auth", self.menu_provider_auth),

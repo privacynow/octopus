@@ -290,3 +290,37 @@ Claude CLI npm install failed for package @anthropic-ai/claude-code.
     assert result.returncode == 1
     assert "Claude image build failed while installing the Claude CLI from npm." in combined
     assert "--build-arg CLAUDE_CLI_NPM_PACKAGE=@anthropic-ai/claude-code@1.2.3" in logged
+
+
+def test_build_bot_image_passes_no_provider_cli_overrides_by_default(tmp_path: Path) -> None:
+    """Without explicit env overrides, the Dockerfile ARG defaults (including
+    the pinned CLI version) must govern: no CLAUDE_*/CODEX_* build args."""
+    repo_root = _make_temp_build_repo(tmp_path)
+    bin_dir, command_log = _make_fake_build_bin(tmp_path, "ok", docker_exit=0)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"CLAUDE_INSTALL_METHOD", "CLAUDE_CLI_NPM_PACKAGE", "CLAUDE_INSTALL_URL", "CODEX_CLI_NPM_PACKAGE"}
+    }
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "TEST_COMMAND_LOG": str(command_log),
+            "TEST_DOCKER_OUTPUT": str(tmp_path / "docker-output.log"),
+            "TEST_DOCKER_EXIT": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(repo_root / "scripts/provider/build_bot_image.sh"), "claude"],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        env=env,
+    )
+
+    logged = command_log.read_text(encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--build-arg BOT_PROVIDER=claude" in logged
+    for key in ("CLAUDE_INSTALL_METHOD", "CLAUDE_CLI_NPM_PACKAGE", "CLAUDE_INSTALL_URL", "CODEX_CLI_NPM_PACKAGE"):
+        assert key not in logged, f"{key} must not be forwarded when unset: {logged}"

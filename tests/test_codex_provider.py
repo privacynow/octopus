@@ -108,6 +108,14 @@ def test_command_building_profile():
     assert "myprofile" in cmd7
 
 
+def test_command_building_reasoning_effort():
+    provider = CodexProvider(make_config(codex_reasoning_effort="xhigh"))
+    cmd = provider._build_new_cmd("test", [])
+
+    assert "-c" in cmd
+    assert 'model_reasoning_effort="xhigh"' in cmd
+
+
 def test_effective_model_overrides_config_model():
     """effective_model should override config.model in codex commands."""
     p = CodexProvider(make_config(model="o3"))
@@ -134,10 +142,10 @@ def test_effective_model_in_resume_cmd():
     assert "o3" not in cmd
 
 
-def test_command_building_ephemeral():
+def test_command_building_ignores_legacy_ephemeral_flag():
     p = CodexProvider(make_config())
     cmd8 = p._build_new_cmd("test", [], sandbox="read-only", ephemeral=True)
-    assert "--ephemeral" in cmd8
+    assert "--ephemeral" not in cmd8
     assert "--sandbox" in cmd8
     assert "read-only" in cmd8
 
@@ -850,6 +858,12 @@ async def _run_with_fake_codex_process(
 
 _THREAD_STARTED_LINE = b'{"type":"thread.started","thread_id":"t-123"}\n'
 _DONE_LINE = b'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n'
+_STREAM_ERROR_LINE = (
+    b'{"id":"0","msg":{"type":"stream_error","message":"stream error: temporary outage; retrying 1/5"}}\n'
+)
+_TERMINAL_AUTH_ERROR_LINE = (
+    b'{"id":"0","msg":{"type":"error","message":"Failed to refresh token: 401 Unauthorized"}}\n'
+)
 
 
 # -- _run_cmd timeout behaviour --
@@ -962,6 +976,40 @@ async def test_run_cmd_failed_file_change_becomes_failure():
     assert result.tool_executions[0].status == "failed"
 
 
+async def test_run_cmd_terminal_codex_json_error_fails_even_with_zero_exit(monkeypatch):
+    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    provider = CodexProvider(cfg)
+
+    result = await _run_with_fake_codex_process(
+        monkeypatch,
+        provider,
+        FakeProgress(),
+        [(0, _TERMINAL_AUTH_ERROR_LINE)],
+        is_resume=False,
+    )
+
+    assert result.returncode == 1
+    assert "Codex authentication failed" in result.text
+    assert "Provider auth" in result.text
+    assert "[empty response]" not in result.text
+
+
+async def test_run_cmd_stream_error_can_recover_with_valid_output(monkeypatch):
+    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    provider = CodexProvider(cfg)
+
+    result = await _run_with_fake_codex_process(
+        monkeypatch,
+        provider,
+        FakeProgress(),
+        [(0, _STREAM_ERROR_LINE), (0, _DONE_LINE)],
+        is_resume=False,
+    )
+
+    assert result.returncode == 0
+    assert result.text == "done"
+
+
 # -- _run_cmd modern schema --
 
 async def test_modern_schema_new():
@@ -1019,7 +1067,7 @@ def test_codex_preflight_no_full_auto():
     preflight_cmd = p._build_new_cmd("test", [], sandbox="read-only", ephemeral=True, safe_mode=True)
     assert "--full-auto" not in preflight_cmd
     assert "read-only" in preflight_cmd
-    assert "--ephemeral" in preflight_cmd
+    assert "--ephemeral" not in preflight_cmd
     assert "--model" in preflight_cmd
     assert "test-model" in preflight_cmd
 
@@ -1164,6 +1212,27 @@ async def test_check_runtime_health_reports_sandbox_support_error(monkeypatch):
     assert await provider.check_runtime_health() == [
         "Approval mode 'on' requires Codex sandboxing, but this host cannot provide it: nope",
     ]
+
+
+async def test_check_runtime_health_reports_codex_json_auth_error_with_zero_exit(monkeypatch):
+    provider = CodexProvider(make_config(provider_name="codex"))
+
+    async def fake_auth():
+        return []
+
+    async def fake_run(*cmd: str, timeout: int, env):
+        del cmd, timeout, env
+        return 0, _TERMINAL_AUTH_ERROR_LINE.decode("utf-8"), ""
+
+    provider.check_auth_health = fake_auth  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.codex.codex_sandbox_support_error", lambda config, approval_mode: None)
+    monkeypatch.setattr("app.providers.codex.run_health_command", fake_run)
+
+    errors = await provider.check_runtime_health()
+
+    assert len(errors) == 1
+    assert "Codex authentication failed" in errors[0]
+    assert "Provider auth" in errors[0]
 
 
 def test_codex_new_with_runtime_extra_dirs():

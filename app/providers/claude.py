@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,10 @@ from app.subprocess_env import build_subprocess_env
 log = logging.getLogger(__name__)
 
 _CLAUDE_ENV_KEYS = ("ANTHROPIC_API_KEY",)
+
+# Claude CLI maps settings.ultracode=true to xhigh effort and enables
+# multi-agent workflow orchestration; an explicit --effort flag still wins.
+_ULTRACODE_SETTINGS = '{"ultracode": true}'
 
 
 class ClaudeProvider:
@@ -137,10 +142,17 @@ class ClaudeProvider:
             "claude", "-p",
             "--output-format", "stream-json",
             "--verbose",
+            # Required on Claude CLI 2.x for stream_event lines; without it
+            # no text deltas or tool_use boundaries reach _consume_stream.
+            "--include-partial-messages",
         ]
         model = effective_model or self.config.model
         if model:
             cmd.extend(["--model", model])
+        if self.config.claude_effort:
+            cmd.extend(["--effort", self.config.claude_effort])
+        if self.config.claude_ultracode:
+            cmd.extend(["--settings", _ULTRACODE_SETTINGS])
         return cmd
 
     def _extra_dir_args(self, extra_dirs: list[str] | None = None) -> list[str]:
@@ -191,33 +203,47 @@ class ClaudeProvider:
         accumulated_text = ""
         tool_activity: list[str] = []
         current_tool: str = ""
+        current_tool_id: str = ""
         current_tool_started_at: float | None = None
         tool_counter = 0
         tool_records: list[ToolExecutionRecord] = []
+        tool_record_index: dict[str, int] = {}
         result_data: dict = {}
+        saw_stream_text = False
+        last_delta_emit = 0.0
+        delta_pending = False
 
         async def _emit(evt, *, force: bool = False) -> None:
             rendered = render_progress(evt)
             if rendered:
                 await progress.update(rendered, force=force)
 
+        async def _emit_accumulated() -> None:
+            active = (f"⚙ {current_tool}",) if current_tool else ()
+            await _emit(ContentDelta(
+                text=accumulated_text,
+                tool_activity=active,
+            ))
+
+        cancel_fut: asyncio.Future | None = None
         while True:
-            read_coro = proc.stdout.readline()
             if cancel is not None:
-                cancel_fut = asyncio.ensure_future(cancel.wait())
-                done, pending = await asyncio.wait(
-                    [asyncio.ensure_future(read_coro), cancel_fut],
+                if cancel_fut is None:
+                    cancel_fut = asyncio.ensure_future(cancel.wait())
+                read_fut = asyncio.ensure_future(proc.stdout.readline())
+                await asyncio.wait(
+                    [read_fut, cancel_fut],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                for fut in pending:
-                    fut.cancel()
                 if cancel.is_set():
+                    read_fut.cancel()
+                    cancel_fut.cancel()
                     proc.kill()
                     await proc.wait()
                     return accumulated_text, {"_tool_executions": tool_records}, tool_activity
-                line = done.pop().result()
+                line = read_fut.result()
             else:
-                line = await read_coro
+                line = await proc.stdout.readline()
             if not line:
                 break
             line = line.decode("utf-8", errors="replace").strip()
@@ -235,27 +261,39 @@ class ClaudeProvider:
             if etype == "stream_event":
                 inner = event.get("event", {})
                 itype = inner.get("type", "")
-                if itype == "content_block_delta":
+                if itype == "message_start":
+                    # Keep multi-turn progress/cancel text readable.
+                    if accumulated_text and not accumulated_text.endswith("\n"):
+                        accumulated_text += "\n\n"
+                elif itype == "message_stop":
+                    if delta_pending:
+                        delta_pending = False
+                        await _emit_accumulated()
+                elif itype == "content_block_delta":
                     delta = inner.get("delta", {})
                     if delta.get("type") == "text_delta":
                         accumulated_text += delta.get("text", "")
+                        saw_stream_text = True
                         # Signal that real content is streaming — stops heartbeat
                         cs = getattr(progress, "content_started", None)
                         if cs and not cs.is_set():
                             cs.set()
-                        # Only show the currently-active tool in ContentDelta,
-                        # not the full history. ToolStart/ToolFinish own the
-                        # boundary display now.
-                        active = (f"\u2699 {current_tool}",) if current_tool else ()
-                        await _emit(ContentDelta(
-                            text=accumulated_text,
-                            tool_activity=active,
-                        ))
+                        # Deltas arrive per token; rendering each one would do
+                        # a full markdown pass the sink throttle then discards,
+                        # so gate here and flush the tail on message_stop.
+                        now = time.monotonic()
+                        if now - last_delta_emit >= self.config.stream_update_interval_seconds:
+                            last_delta_emit = now
+                            delta_pending = False
+                            await _emit_accumulated()
+                        else:
+                            delta_pending = True
                 elif itype == "content_block_start":
                     cb = inner.get("content_block", {})
                     if cb.get("type") == "tool_use":
                         tool_name = cb.get("name", "?")
                         current_tool = tool_name
+                        current_tool_id = str(cb.get("id", "") or "")
                         current_tool_started_at = time.monotonic()
                         tool_activity.append(f"\u2699 {tool_name}")
                         await _emit(ToolStart(name=tool_name), force=True)
@@ -264,10 +302,15 @@ class ClaudeProvider:
                         duration_ms: int | None = None
                         if current_tool_started_at is not None:
                             duration_ms = max(0, int((time.monotonic() - current_tool_started_at) * 1000))
+                        # The tool_use block finishing means its INPUT streamed
+                        # fully; execution happens after. A later tool_result
+                        # (e.g. permission denial) corrects this record by id.
+                        call_id = current_tool_id or f"claude-tool-{tool_counter}"
+                        tool_record_index[call_id] = len(tool_records)
                         tool_records.append(
                             ToolExecutionRecord(
                                 tool_name=current_tool,
-                                call_id=f"claude-tool-{tool_counter}",
+                                call_id=call_id,
                                 status="completed",
                                 input_summary=current_tool,
                                 output_summary="completed",
@@ -277,20 +320,45 @@ class ClaudeProvider:
                         tool_counter += 1
                         await _emit(ToolFinish(name=current_tool))
                         current_tool = ""
+                        current_tool_id = ""
                         current_tool_started_at = None
 
             elif etype == "assistant":
-                msg = event.get("message", {})
-                for block in msg.get("content", []):
-                    if block.get("type") == "text":
-                        accumulated_text = block.get("text", "")
+                # With --include-partial-messages the deltas above are
+                # authoritative; only fall back to full assistant messages
+                # when no stream text arrived (older CLIs, degraded streams).
+                if not saw_stream_text:
+                    msg = event.get("message", {})
+                    message_text = "".join(
+                        block.get("text", "")
+                        for block in msg.get("content", [])
+                        if block.get("type") == "text"
+                    )
+                    if message_text:
+                        accumulated_text = (
+                            f"{accumulated_text}\n\n{message_text}"
+                            if accumulated_text
+                            else message_text
+                        )
 
             elif etype == "user":
                 for block in event.get("message", {}).get("content", []):
                     if block.get("is_error") and "permission" in str(
                         block.get("content", "")
                     ).lower():
-                        if current_tool:
+                        denied_detail = trim_text(str(block.get("content", "") or "Permission denied"), 300)
+                        denied_name = current_tool
+                        # Records are finalized when the tool_use block stops
+                        # streaming, before execution; a denial arriving in the
+                        # matching tool_result retroactively corrects that record.
+                        record_idx = tool_record_index.get(str(block.get("tool_use_id", "") or ""))
+                        if record_idx is not None:
+                            record = tool_records[record_idx]
+                            denied_name = denied_name or record.tool_name
+                            tool_records[record_idx] = replace(
+                                record, status="denied", output_summary=denied_detail,
+                            )
+                        elif current_tool:
                             duration_ms: int | None = None
                             if current_tool_started_at is not None:
                                 duration_ms = max(0, int((time.monotonic() - current_tool_started_at) * 1000))
@@ -300,20 +368,27 @@ class ClaudeProvider:
                                     call_id=f"claude-tool-{tool_counter}",
                                     status="denied",
                                     input_summary=current_tool,
-                                    output_summary=trim_text(str(block.get("content", "") or "Permission denied"), 300),
+                                    output_summary=denied_detail,
                                     duration_ms=duration_ms,
                                 )
                             )
                             tool_counter += 1
                         tool_activity.append("\u26d4 denied")
-                        await _emit(Denial(detail=current_tool or ""), force=True)
+                        await _emit(Denial(detail=denied_name or ""), force=True)
                         current_tool = ""
+                        current_tool_id = ""
                         current_tool_started_at = None
 
             elif etype == "result":
+                if delta_pending:
+                    delta_pending = False
+                    await _emit_accumulated()
                 result_data = event
                 result_data["_tool_executions"] = tool_records
                 break
+
+        if cancel_fut is not None:
+            cancel_fut.cancel()
 
         # Drain remaining stdout so the process can exit cleanly
         async for _ in proc.stdout:

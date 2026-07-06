@@ -21,6 +21,7 @@ from octopus_sdk.config import (
 )
 from octopus_sdk.identity import parse_actor_key, telegram_numeric_id
 from octopus_sdk.sessions import ProjectBinding
+from app.providers.claude_security import validate_claude_effort
 from app.providers.codex_security import (
     validate_codex_reasoning_effort,
     validate_codex_sandbox,
@@ -381,10 +382,10 @@ def load_config(instance: str | None = None) -> BotConfig:
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
 
-    def get_codex_reasoning_effort(key: str) -> str:
+    def get_validated_effort(key: str, validator) -> str:
         raw = get(key)
         try:
-            return validate_codex_reasoning_effort(raw)
+            return validator(raw)
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
     default_data = Path.home() / ".octopus-agent" / instance
@@ -475,7 +476,9 @@ def load_config(instance: str | None = None) -> BotConfig:
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
         codex_profile=get("CODEX_PROFILE"),
-        codex_reasoning_effort=get_codex_reasoning_effort("CODEX_REASONING_EFFORT"),
+        codex_reasoning_effort=get_validated_effort("CODEX_REASONING_EFFORT", validate_codex_reasoning_effort),
+        claude_effort=get_validated_effort("CLAUDE_EFFORT", validate_claude_effort),
+        claude_ultracode=get_bool("CLAUDE_ULTRACODE"),
         admin_actor_keys=frozenset(admin_actor_keys),
         admin_usernames=frozenset(admin_names),
         admin_users_explicit=admin_explicit,
@@ -555,10 +558,10 @@ def load_config_provider_health() -> BotConfig:
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
 
-    def get_codex_reasoning_effort(key: str) -> str:
+    def get_validated_effort(key: str, validator) -> str:
         raw = get(key)
         try:
-            return validate_codex_reasoning_effort(raw)
+            return validator(raw)
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
     instance = get("BOT_INSTANCE", "default")
@@ -591,7 +594,9 @@ def load_config_provider_health() -> BotConfig:
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
         codex_profile=get("CODEX_PROFILE"),
-        codex_reasoning_effort=get_codex_reasoning_effort("CODEX_REASONING_EFFORT"),
+        codex_reasoning_effort=get_validated_effort("CODEX_REASONING_EFFORT", validate_codex_reasoning_effort),
+        claude_effort=get_validated_effort("CLAUDE_EFFORT", validate_claude_effort),
+        claude_ultracode=get_bool("CLAUDE_ULTRACODE"),
         admin_actor_keys=frozenset(),
         admin_usernames=frozenset(),
         admin_users_explicit=False,
@@ -701,6 +706,10 @@ def validate_config(config: BotConfig) -> list[str]:
         errors.append(str(exc))
     try:
         validate_codex_reasoning_effort(config.codex_reasoning_effort)
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        validate_claude_effort(config.claude_effort)
     except ValueError as exc:
         errors.append(str(exc))
 

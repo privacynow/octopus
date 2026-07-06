@@ -221,6 +221,49 @@ def test_validate_config_accepts_xhigh_codex_reasoning_effort(tmp_path: Path):
     assert validate_config(make_config(codex_reasoning_effort="xhigh", working_dir=tmp_path)) == []
 
 
+def test_validate_config_rejects_invalid_claude_effort():
+    errors = validate_config(make_config(claude_effort="maximum"))
+    assert any("CLAUDE_EFFORT" in e for e in errors)
+
+
+def test_validate_config_accepts_max_claude_effort(tmp_path: Path):
+    assert validate_config(make_config(claude_effort="max", working_dir=tmp_path)) == []
+
+
+def test_load_config_rejects_invalid_claude_effort(tmp_path: Path):
+    env_path = tmp_path / "invalid-claude.env"
+    env_path.write_text(
+        "TELEGRAM_BOT_TOKEN=test-token\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_ALLOW_OPEN=1\n"
+        "CLAUDE_EFFORT=maximum\n",
+        encoding="utf-8",
+    )
+
+    with patch("app.config.env_path_for_instance", return_value=env_path):
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(SystemExit, match="CLAUDE_EFFORT"):
+                load_config("test-invalid-claude")
+
+
+def test_load_config_parses_claude_ultracode(tmp_path: Path):
+    env_path = tmp_path / "claude-ultracode.env"
+    env_path.write_text(
+        "TELEGRAM_BOT_TOKEN=test-token\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_ALLOW_OPEN=1\n"
+        "CLAUDE_EFFORT=xhigh\n"
+        "CLAUDE_ULTRACODE=1\n",
+        encoding="utf-8",
+    )
+
+    with patch("app.config.env_path_for_instance", return_value=env_path):
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_config("test-claude-ultracode")
+    assert config.claude_effort == "xhigh"
+    assert config.claude_ultracode is True
+
+
 def test_load_config_rejects_invalid_codex_sandbox(tmp_path: Path):
     env_path = tmp_path / "invalid-codex.env"
     env_path.write_text(

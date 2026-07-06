@@ -284,6 +284,13 @@ For Codex bots, set the model with `BOT_MODEL` in the bot `.env` file. Set
 you need to control Codex reasoning effort for that bot. Unsupported values
 fail startup instead of reaching the provider CLI.
 
+For Claude bots, set the model with `BOT_MODEL` (for example `claude-fable-5`).
+Set `CLAUDE_EFFORT` to `low`, `medium`, `high`, `xhigh`, or `max` to control
+Claude Code effort for that bot, and `CLAUDE_ULTRACODE=1` to enable ultracode
+mode (multi-agent workflow orchestration; implies `xhigh` effort unless
+`CLAUDE_EFFORT` overrides it). Unsupported effort values fail startup instead
+of reaching the provider CLI.
+
 ## Check Status
 
 After setup, run:

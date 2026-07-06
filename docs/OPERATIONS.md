@@ -134,6 +134,13 @@ Codex model selection is controlled per bot. Set `BOT_MODEL` in
 of `minimal`, `low`, `medium`, `high`, or `xhigh` to pass Codex CLI
 `model_reasoning_effort` for every request from that bot.
 
+Claude model selection works the same way: set `BOT_MODEL` in
+`.deploy/bots/<bot>/.env` (for example `claude-fable-5`). Set `CLAUDE_EFFORT`
+to one of `low`, `medium`, `high`, `xhigh`, or `max` to pass the Claude CLI
+`--effort` flag, and `CLAUDE_ULTRACODE=1` to enable ultracode mode
+(multi-agent workflow orchestration; implies `xhigh` effort unless
+`CLAUDE_EFFORT` overrides it).
+
 If the host URL or public URL is wrong, redeploy the Registry with the intended
 address and restart bots so generated links and local bot connection metadata
 are refreshed:

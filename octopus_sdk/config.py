@@ -42,6 +42,8 @@ class BotConfigBase:
     codex_dangerous: bool
     codex_profile: str
     codex_reasoning_effort: str
+    claude_effort: str
+    claude_ultracode: bool
     admin_actor_keys: frozenset[str]
     admin_usernames: frozenset[str]
     admin_users_explicit: bool

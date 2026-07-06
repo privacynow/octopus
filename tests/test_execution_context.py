@@ -620,6 +620,9 @@ _EXEC_CONFIG_FIELDS = [
     pytest.param("codex_full_auto", True, False, id="codex-full-auto"),
     pytest.param("codex_dangerous", True, False, id="codex-dangerous"),
     pytest.param("codex_profile", "fast", "", id="codex-profile"),
+    pytest.param("codex_reasoning_effort", "xhigh", "", id="codex-reasoning-effort"),
+    pytest.param("claude_effort", "xhigh", "", id="claude-effort"),
+    pytest.param("claude_ultracode", True, False, id="claude-ultracode"),
 ]
 
 

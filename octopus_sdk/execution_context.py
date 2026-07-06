@@ -111,18 +111,25 @@ def resolve_effective_model(
 def _compute_execution_config_digest(config: "BotConfigBase", effective_model: str = "") -> str:
     """Hash the BotConfig fields that affect CLI command construction.
 
-    Covers model selection and all codex execution flags.  If any of
-    these change, pending approvals must be invalidated.
+    Covers model selection and all codex/claude execution flags.  If any
+    of these change, pending approvals must be invalidated.
     Uses effective_model (resolved from profile) instead of raw config.model.
     """
-    payload = json.dumps({
+    payload_fields: dict[str, object] = {
         "model": effective_model or config.model,
         "codex_sandbox": config.codex_sandbox,
         "codex_full_auto": config.codex_full_auto,
         "codex_dangerous": config.codex_dangerous,
         "codex_profile": config.codex_profile,
         "codex_reasoning_effort": config.codex_reasoning_effort,
-    }, sort_keys=True)
+    }
+    # Claude knobs join the digest only when set, so introducing them does
+    # not invalidate pending approvals for bots that never used them.
+    if config.claude_effort:
+        payload_fields["claude_effort"] = config.claude_effort
+    if config.claude_ultracode:
+        payload_fields["claude_ultracode"] = True
+    payload = json.dumps(payload_fields, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()
 
 

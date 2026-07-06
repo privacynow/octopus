@@ -134,10 +134,10 @@ def test_effective_model_in_resume_cmd():
     assert "o3" not in cmd
 
 
-def test_command_building_ephemeral():
+def test_command_building_ignores_legacy_ephemeral_flag():
     p = CodexProvider(make_config())
     cmd8 = p._build_new_cmd("test", [], sandbox="read-only", ephemeral=True)
-    assert "--ephemeral" in cmd8
+    assert "--ephemeral" not in cmd8
     assert "--sandbox" in cmd8
     assert "read-only" in cmd8
 
@@ -1019,7 +1019,7 @@ def test_codex_preflight_no_full_auto():
     preflight_cmd = p._build_new_cmd("test", [], sandbox="read-only", ephemeral=True, safe_mode=True)
     assert "--full-auto" not in preflight_cmd
     assert "read-only" in preflight_cmd
-    assert "--ephemeral" in preflight_cmd
+    assert "--ephemeral" not in preflight_cmd
     assert "--model" in preflight_cmd
     assert "test-model" in preflight_cmd
 

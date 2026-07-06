@@ -233,8 +233,6 @@ class CodexProvider:
             cmd.extend(["--sandbox", resolved_sandbox])
         if self.config.codex_skip_git_repo_check:
             cmd.append("--skip-git-repo-check")
-        if ephemeral:
-            cmd.append("--ephemeral")
         cmd.extend(self._extra_dir_args(extra_dirs))
         for p in image_paths:
             cmd.extend(["-i", p])
@@ -260,8 +258,6 @@ class CodexProvider:
         cmd.extend(self._common_args(effective_model, skip_permissions=skip_permissions))
         if self.config.codex_skip_git_repo_check:
             cmd.append("--skip-git-repo-check")
-        if ephemeral:
-            cmd.append("--ephemeral")
         for p in image_paths:
             cmd.extend(["-i", p])
         cmd.extend([thread_id, prompt])

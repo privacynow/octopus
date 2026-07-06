@@ -121,6 +121,7 @@ def _compute_execution_config_digest(config: "BotConfigBase", effective_model: s
         "codex_full_auto": config.codex_full_auto,
         "codex_dangerous": config.codex_dangerous,
         "codex_profile": config.codex_profile,
+        "codex_reasoning_effort": config.codex_reasoning_effort,
     }, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()
 

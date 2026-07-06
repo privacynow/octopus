@@ -20,6 +20,15 @@ ALLOWED_CODEX_SANDBOXES = frozenset(
     }
 )
 
+ALLOWED_CODEX_REASONING_EFFORTS = frozenset(
+    {
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    }
+)
+
 # This allowlist is derived current repo usage plus the security
 # requirement that skills must not be able to weaken execution policy.
 ALLOWED_CODEX_CONFIG_OVERRIDE_KEYS = frozenset(
@@ -44,6 +53,22 @@ def validate_codex_sandbox(value: str) -> str:
             f"CODEX_SANDBOX must be one of {_allowed_sandbox_text()}, got '{value}'"
         )
     return sandbox
+
+
+def _allowed_reasoning_effort_text() -> str:
+    return ", ".join(sorted(ALLOWED_CODEX_REASONING_EFFORTS))
+
+
+def validate_codex_reasoning_effort(value: str) -> str:
+    effort = value.strip()
+    if not effort:
+        return ""
+    if effort not in ALLOWED_CODEX_REASONING_EFFORTS:
+        raise ValueError(
+            "CODEX_REASONING_EFFORT must be one of "
+            f"{_allowed_reasoning_effort_text()}, got '{value}'"
+        )
+    return effort
 
 
 def _reject_override(

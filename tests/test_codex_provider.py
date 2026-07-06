@@ -108,6 +108,14 @@ def test_command_building_profile():
     assert "myprofile" in cmd7
 
 
+def test_command_building_reasoning_effort():
+    provider = CodexProvider(make_config(codex_reasoning_effort="high"))
+    cmd = provider._build_new_cmd("test", [])
+
+    assert "-c" in cmd
+    assert 'model_reasoning_effort="high"' in cmd
+
+
 def test_effective_model_overrides_config_model():
     """effective_model should override config.model in codex commands."""
     p = CodexProvider(make_config(model="o3"))

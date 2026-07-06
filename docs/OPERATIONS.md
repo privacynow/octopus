@@ -122,6 +122,11 @@ Diagnose -> Provider auth
 
 Authenticate only the provider you intend to use for the ready path.
 
+Codex model selection is controlled per bot. Set `BOT_MODEL` in
+`.deploy/bots/<bot>/.env` for the model id. Set `CODEX_REASONING_EFFORT` to one
+of `minimal`, `low`, `medium`, or `high` to pass Codex CLI
+`model_reasoning_effort` for every request from that bot.
+
 If the host URL or public URL is wrong, redeploy the Registry with the intended
 address and restart bots so generated links and local bot connection metadata
 are refreshed:

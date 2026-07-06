@@ -218,6 +218,8 @@ class CodexProvider:
             args.extend(["--model", model])
         if self.config.codex_profile:
             args.extend(["--profile", self.config.codex_profile])
+        if self.config.codex_reasoning_effort:
+            args.extend(["-c", f'model_reasoning_effort="{self.config.codex_reasoning_effort}"'])
         return args
 
     def _common_args(

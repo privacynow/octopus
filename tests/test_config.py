@@ -212,6 +212,11 @@ def test_validate_config_rejects_invalid_codex_sandbox():
     assert any("CODEX_SANDBOX" in e for e in errors)
 
 
+def test_validate_config_rejects_invalid_codex_reasoning_effort():
+    errors = validate_config(make_config(codex_reasoning_effort="xhigh"))
+    assert any("CODEX_REASONING_EFFORT" in e for e in errors)
+
+
 def test_load_config_rejects_invalid_codex_sandbox(tmp_path: Path):
     env_path = tmp_path / "invalid-codex.env"
     env_path.write_text(

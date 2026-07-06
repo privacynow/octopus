@@ -39,3 +39,6 @@ docker compose \
   -f infra/compose/docker-compose.yml \
   --profile bot \
   run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh
+
+echo "Running live provider health check..."
+"$REPO_DIR/scripts/provider/provider_status.sh" "$provider"

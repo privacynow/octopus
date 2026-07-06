@@ -8,28 +8,38 @@ provider="${BOT_PROVIDER:-claude}"
 
 case "$provider" in
   codex)
+    codex_login_args="login"
+    if codex login --help 2>&1 | grep -q -- "--device-auth"; then
+      codex_login_args="login --device-auth"
+    fi
     cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
 ║  ACTION REQUIRED — CODex LOGIN                              ║
 ║                                                              ║
-║  The script runs:  codex login --device-auth                 ║
-║  Follow the printed URL and enter the device code            ║
-║  in any browser to complete sign-in.                         ║
-║  The command should return to setup when login completes.    ║
-║  If it does not, press Ctrl-C after sign-in finishes.        ║
+║  The script runs the login command supported by this image.  ║
+║  Follow the CLI instructions to complete sign-in.            ║
+║  The command must return successfully before setup continues.║
 ║                                                              ║
 ║  Do not run the removed flag:  codex --login                 ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
+    echo "Running: codex $codex_login_args"
     set +e
-    codex login --device-auth
+    # shellcheck disable=SC2086
+    codex $codex_login_args
     exit_code=$?
     set -e
+    if [ "$exit_code" -ne 0 ]; then
+      echo "✗ Codex login command failed." >&2
+      echo "  codex login exit code: $exit_code" >&2
+      echo "  Run ./scripts/provider/provider_login.sh codex again after fixing the login error." >&2
+      exit "$exit_code"
+    fi
     if python -m app.provider_auth has-runtime-artifacts codex "${HOME:-/home/bot}"; then
       echo "✓ Codex authentication complete. Returning to setup..."
     else
       echo "✗ Codex authentication is still incomplete." >&2
-      echo "  Complete device auth, wait for the CLI to finish, then run ./octopus again." >&2
+      echo "  Complete Codex login, wait for the CLI to finish, then run ./octopus again." >&2
       echo "  codex login exit code: $exit_code" >&2
       exit 1
     fi

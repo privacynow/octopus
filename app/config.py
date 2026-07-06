@@ -21,7 +21,10 @@ from octopus_sdk.config import (
 )
 from octopus_sdk.identity import parse_actor_key, telegram_numeric_id
 from octopus_sdk.sessions import ProjectBinding
-from app.providers.codex_security import validate_codex_sandbox
+from app.providers.codex_security import (
+    validate_codex_reasoning_effort,
+    validate_codex_sandbox,
+)
 from app.startup_diagnostics import sanitize_url_for_logging
 
 log = logging.getLogger(__name__)
@@ -377,6 +380,13 @@ def load_config(instance: str | None = None) -> BotConfig:
             return validate_codex_sandbox(raw)
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
+
+    def get_codex_reasoning_effort(key: str) -> str:
+        raw = get(key)
+        try:
+            return validate_codex_reasoning_effort(raw)
+        except ValueError as exc:
+            raise SystemExit(f"CONFIG ERROR: {exc}") from exc
     default_data = Path.home() / ".octopus-agent" / instance
 
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
@@ -465,6 +475,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
         codex_profile=get("CODEX_PROFILE"),
+        codex_reasoning_effort=get_codex_reasoning_effort("CODEX_REASONING_EFFORT"),
         admin_actor_keys=frozenset(admin_actor_keys),
         admin_usernames=frozenset(admin_names),
         admin_users_explicit=admin_explicit,
@@ -543,6 +554,13 @@ def load_config_provider_health() -> BotConfig:
             return validate_codex_sandbox(raw)
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
+
+    def get_codex_reasoning_effort(key: str) -> str:
+        raw = get(key)
+        try:
+            return validate_codex_reasoning_effort(raw)
+        except ValueError as exc:
+            raise SystemExit(f"CONFIG ERROR: {exc}") from exc
     instance = get("BOT_INSTANCE", "default")
     default_data = Path.home() / ".octopus-agent" / instance
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
@@ -573,6 +591,7 @@ def load_config_provider_health() -> BotConfig:
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
         codex_profile=get("CODEX_PROFILE"),
+        codex_reasoning_effort=get_codex_reasoning_effort("CODEX_REASONING_EFFORT"),
         admin_actor_keys=frozenset(),
         admin_usernames=frozenset(),
         admin_users_explicit=False,
@@ -678,6 +697,10 @@ def validate_config(config: BotConfig) -> list[str]:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")
     try:
         validate_codex_sandbox(config.codex_sandbox)
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        validate_codex_reasoning_effort(config.codex_reasoning_effort)
     except ValueError as exc:
         errors.append(str(exc))
 

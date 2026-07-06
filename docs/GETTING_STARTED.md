@@ -263,9 +263,9 @@ provider's login flow.
 
 What to expect:
 
-- Codex-backed agents usually show a device-login URL and code. Open the URL in
-  your browser, enter the code, sign in, approve access, then return to the
-  terminal.
+- Codex-backed agents run the login command supported by the Codex CLI installed
+  in the bot image. Follow the CLI instructions, sign in, approve access, and
+  wait for the command to return successfully.
 - Claude-backed agents usually open an interactive Claude session. If it is not
   already logged in, run `/login`, finish the browser or token flow, then run
   `/exit`.
@@ -275,6 +275,11 @@ What to expect:
 Healthy provider auth means the agent can actually execute model-backed work.
 After login, run `./octopus status` again and confirm the provider no longer
 shows as unconfigured.
+
+For Codex bots, set the model with `BOT_MODEL` in the bot `.env` file. Set
+`CODEX_REASONING_EFFORT` to `minimal`, `low`, `medium`, or `high` when you need
+to control Codex reasoning effort for that bot. Unsupported values fail startup
+instead of reaching the provider CLI.
 
 ## Check Status
 

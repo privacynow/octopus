@@ -918,6 +918,7 @@ def make_test_config(
         codex_full_auto=False,
         codex_dangerous=False,
         codex_profile="",
+        codex_reasoning_effort="",
         admin_actor_keys=frozenset(),
         admin_usernames=frozenset(),
         admin_users_explicit=False,

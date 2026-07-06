@@ -5574,6 +5574,133 @@ def test_protocol_artifact_runtime_rejects_full_agent_token_and_accepts_scoped_b
     assert accepted.json()["runtime"]["status"] == "stopped"
 
 
+def test_protocol_artifact_runtime_journey_spec_and_result_use_scoped_bearer(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    document = {
+        "schema_version": 1,
+        "metadata": {
+            "slug": "journey-spec",
+            "auto_protocol": {
+                "primary_artifact_key": "package",
+                "acceptance_contract": {
+                    "schema_version": 1,
+                    "primary_artifact_key": "package",
+                    "required_journeys": [
+                        {
+                            "journey_key": "primary_happy_path",
+                            "required_hooks": ["primary_action", "primary_result"],
+                            "steps": [{"action": "click", "hook": "primary_action"}],
+                            "assertions": [{"action": "assert_visible", "hook": "primary_result"}],
+                        }
+                    ],
+                },
+            },
+        },
+        "participants": [{"participant_key": "worker", "display_name": "Worker"}],
+        "artifacts": [{"artifact_key": "package", "kind": "workspace_file", "path": "package"}],
+        "stages": [
+            {
+                "stage_key": "final",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "transitions": {"accept": "__complete__", "revise": "__failed__", "fail": "__failed__"},
+                "instructions": "Review.",
+            }
+        ],
+    }
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="static",
+        ui_path="/",
+        health_path="/health",
+        test_hooks=[
+            {"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"},
+            {"hook": "primary_result", "selector": "[data-testid='primary-result']", "kind": "region"},
+        ],
+    )
+    runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-journey",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=manifest,
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+    )
+    events: list[ProtocolArtifactRuntimeEventRecord] = []
+
+    class _Store:
+        def validate_runtime_capability_token(self, *, bearer_token: str, protocol_run_id: str, artifact_key: str, action: str):
+            if bearer_token != "scoped-token":
+                return None
+            assert protocol_run_id == "run-1"
+            assert artifact_key == "package"
+            assert action in {"journey:read", "journey:result"}
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                protocol_run_id="run-1",
+                protocol_stage_execution_id="stage-1",
+                artifact_key="package",
+                participant_key="reviewer",
+                allowed_actions=["journey:read", "journey:result"],
+            )
+
+        def get_protocol_run(self, run_id: str, *, access):
+            assert run_id == "run-1"
+            assert access.has_role("runtime_capability")
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="ver-1",
+                    protocol_id="protocol-1",
+                    definition_json=RegistryJsonRecord.model_validate(document),
+                ),
+                artifacts=[ProtocolArtifactRecord(protocol_artifact_id="artifact-1", protocol_run_id="run-1", artifact_key="package", artifact_kind="workspace_file", location=str(tmp_path), exists=True)],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            assert access.has_role("runtime_capability")
+            return runtime
+
+        def append_protocol_artifact_runtime_event(self, event: ProtocolArtifactRuntimeEventRecord, *, access):
+            assert access.has_role("runtime_capability")
+            events.append(event)
+            return event
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        spec_response = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path",
+            headers={"Authorization": "Bearer scoped-token"},
+        )
+        result_response = client.post(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path/results",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={
+                "journey_run_id": "journey-1",
+                "ok": True,
+                "status": "passed",
+                "summary": "Visible result updated.",
+                "assertions": [{"action": "assert_visible", "hook": "primary_result", "ok": True}],
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert spec_response.status_code == 200
+    spec = spec_response.json()["spec"]
+    assert spec["journey_key"] == "primary_happy_path"
+    assert sorted(spec["hooks"]) == ["primary_action", "primary_result"]
+    assert result_response.status_code == 200
+    assert result_response.json()["event"]["event_kind"] == "journey_completed"
+    assert events[0].metadata_json.as_dict()["source"] == "agent_runtime_capability"
+    assert events[0].metadata_json.as_dict()["actor_stage_execution_id"] == "stage-1"
+
+
 def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_field(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

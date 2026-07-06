@@ -268,13 +268,19 @@ class ProtocolPostgresAdapter:
             stage = POSTGRES_STORE_DIALECT.fetchone(
                 conn,
                 f"""
-                SELECT status
+                SELECT status, failure_code
                 FROM {SCHEMA}.protocol_stage_executions
                 WHERE protocol_stage_execution_id = %s
                 """,
                 (token.protocol_stage_execution_id,),
             )
-            if stage is None or str(stage.get("status", "") or "") in {"completed", "failed", "blocked", "cancelled"}:
+            if stage is None:
+                return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="inactive", message="Runtime capability stage is no longer active.")
+            stage_status = str(stage.get("status", "") or "").strip().lower()
+            stage_failure_code = str(stage.get("failure_code", "") or "").strip().lower()
+            if stage_status in {"completed", "failed", "cancelled"} or (
+                stage_status == "blocked" and stage_failure_code != "runtime_evidence_required"
+            ):
                 return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="inactive", message="Runtime capability stage is no longer active.")
             updated = POSTGRES_STORE_DIALECT.fetchone(
                 conn,
@@ -1531,6 +1537,250 @@ class ProtocolPostgresAdapter:
         return any(re.search(pattern, normalized) for pattern in branding_patterns)
 
     @staticmethod
+    def _auto_protocol_acceptance_contract(document: ProtocolDefinitionDocumentRecord) -> dict[str, object]:
+        metadata = document.metadata.as_dict()
+        auto_protocol = metadata.get("auto_protocol") if isinstance(metadata, Mapping) else {}
+        if not isinstance(auto_protocol, Mapping):
+            return {}
+        contract = auto_protocol.get("acceptance_contract")
+        return dict(contract) if isinstance(contract, Mapping) else {}
+
+    @staticmethod
+    def _contract_required_journeys(contract: Mapping[str, object]) -> list[dict[str, object]]:
+        raw = contract.get("required_journeys")
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            return []
+        journeys: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            journey = dict(item)
+            key = str(journey.get("journey_key", "") or "").strip()
+            if not key or key in seen:
+                continue
+            journey["journey_key"] = key
+            journeys.append(journey)
+            seen.add(key)
+        return journeys
+
+    @staticmethod
+    def _contract_required_hooks(journeys: Sequence[Mapping[str, object]]) -> set[str]:
+        hooks: set[str] = set()
+        for journey in journeys:
+            raw_hooks = journey.get("required_hooks")
+            if isinstance(raw_hooks, Sequence) and not isinstance(raw_hooks, (str, bytes)):
+                for item in raw_hooks:
+                    if isinstance(item, Mapping):
+                        hook = str(item.get("hook", "") or item.get("hook_id", "") or "").strip()
+                    else:
+                        hook = str(item or "").strip()
+                    if hook:
+                        hooks.add(hook)
+            for collection_key in ("steps", "assertions"):
+                raw_steps = journey.get(collection_key)
+                if isinstance(raw_steps, Sequence) and not isinstance(raw_steps, (str, bytes)):
+                    for step in raw_steps:
+                        if isinstance(step, Mapping):
+                            hook = str(step.get("hook", "") or "").strip()
+                            if hook:
+                                hooks.add(hook)
+        return hooks
+
+    @staticmethod
+    def _runtime_manifest_test_hook_ids(manifest: ProtocolArtifactRuntimeManifestRecord | None) -> set[str]:
+        if manifest is None:
+            return set()
+        return {
+            str(item.hook or "").strip()
+            for item in manifest.test_hooks
+            if str(item.hook or "").strip()
+        }
+
+    @staticmethod
+    def _artifact_key_has_snapshot_or_observation(
+        conn,
+        detail: ProtocolRunDetailRecord,
+        *,
+        artifact_key: str,
+        engine,
+        stage_execution_row: Mapping[str, object] | None = None,
+    ) -> bool:
+        key = str(artifact_key or "").strip()
+        if not key:
+            return False
+        if any(str(item.artifact_key or "") == key for item in detail.artifact_snapshots):
+            return True
+        if any(str(item.artifact_key or "") == key and bool(item.exists) for item in detail.artifacts):
+            return True
+        for observation in getattr(engine, "artifact_observations", []) or []:
+            if str(getattr(observation, "artifact_key", "") or "") != key:
+                continue
+            if bool(getattr(observation, "exists", False)):
+                return True
+            location = str(getattr(observation, "path", "") or "").strip()
+            if location and Path(location).expanduser().exists():
+                return True
+        routed_task_id = str((stage_execution_row or {}).get("routed_task_id", "") or "").strip()
+        if conn is not None and routed_task_id:
+            task_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT result_json FROM {SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            result_json = task_row.get("result_json") if isinstance(task_row, Mapping) else {}
+            artifacts = result_json.get("artifacts") if isinstance(result_json, Mapping) else []
+            if isinstance(artifacts, Sequence) and not isinstance(artifacts, (str, bytes)):
+                for item in artifacts:
+                    if not isinstance(item, Mapping):
+                        continue
+                    if str(item.get("artifact_key", "") or "") == key and bool(item.get("exists", False)):
+                        return True
+        return False
+
+    def _runtime_structured_contract_gate(
+        self,
+        conn,
+        *,
+        document: ProtocolDefinitionDocumentRecord,
+        stage,
+        stage_execution_row: Mapping[str, object],
+        engine,
+        detail: ProtocolRunDetailRecord,
+        primary_key: str,
+        effective_manifest: ProtocolArtifactRuntimeManifestRecord | None,
+        contract: Mapping[str, object],
+    ):
+        journeys = self._contract_required_journeys(contract)
+        metadata_base = engine.transition_metadata.as_dict()
+        metadata_base.update({
+            "structured_runtime_contract_required": True,
+            "primary_artifact_key": primary_key,
+        })
+        if not journeys:
+            detail_text = (
+                "Final acceptance for this runnable primary artifact has an acceptance_contract, "
+                "but the contract does not define required_journeys. Revise the protocol or generated contract before accepting."
+            )
+            metadata = dict(metadata_base)
+            metadata.update({
+                "acceptance_contract_invalid": True,
+                "missing_runtime_evidence": ["acceptance_contract.required_journeys"],
+            })
+            return self._runtime_acceptance_revise_or_block_decision(
+                conn,
+                document=document,
+                stage=stage,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                detail_text=detail_text,
+                failure_code="acceptance_contract_invalid",
+                transition_error_code="ACCEPTANCE_CONTRACT_INVALID",
+                metadata=metadata,
+            )
+
+        required_hooks = self._contract_required_hooks(journeys)
+        manifest_hooks = self._runtime_manifest_test_hook_ids(effective_manifest)
+        missing_hooks = sorted(required_hooks - manifest_hooks)
+        if missing_hooks:
+            detail_text = (
+                "Final acceptance for this runnable primary artifact requires deterministic runtime test hooks "
+                "declared in octopus-runtime.json.test_hooks before structured journeys can be trusted. "
+                f"Artifact '{primary_key}' is missing required hook(s): {', '.join(missing_hooks)}."
+            )
+            metadata = dict(metadata_base)
+            metadata.update({
+                "runtime_manifest_hooks_missing": True,
+                "required_hooks": sorted(required_hooks),
+                "manifest_hooks": sorted(manifest_hooks),
+                "missing_runtime_evidence": [f"octopus-runtime.json.test_hooks.{hook}" for hook in missing_hooks],
+            })
+            return self._runtime_acceptance_revise_or_block_decision(
+                conn,
+                document=document,
+                stage=stage,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                detail_text=detail_text,
+                failure_code="runtime_manifest_hooks_missing",
+                transition_error_code="RUNTIME_MANIFEST_HOOKS_MISSING",
+                metadata=metadata,
+            )
+
+        events = [item for item in detail.runtime_events if item.artifact_key == primary_key]
+        has_started = any(str(item.event_kind or "") == "started" for item in events)
+        has_healthy = any(
+            str(item.event_kind or "") == "health_checked"
+            and bool(item.metadata_json.as_dict().get("ok"))
+            for item in events
+        )
+        required_journey_keys = {str(item.get("journey_key", "") or "").strip() for item in journeys}
+        completed_journey_keys = {
+            str(item.metadata_json.as_dict().get("journey_key", "") or "").strip()
+            for item in events
+            if str(item.event_kind or "") == "journey_completed"
+            and bool(item.metadata_json.as_dict().get("ok", True))
+        }
+        completed_journey_keys.discard("")
+        failed_journey_keys = {
+            str(item.metadata_json.as_dict().get("journey_key", "") or "").strip()
+            for item in events
+            if str(item.event_kind or "") == "journey_failed"
+        }
+        failed_journey_keys.discard("")
+        reviewer_manifest_key = str(contract.get("reviewer_manifest_artifact_key", "") or "").strip() or "reviewer_evidence_manifest"
+        has_reviewer_manifest = self._artifact_key_has_snapshot_or_observation(
+            conn,
+            detail,
+            artifact_key=reviewer_manifest_key,
+            engine=engine,
+            stage_execution_row=stage_execution_row,
+        )
+        missing: list[str] = []
+        if not has_started:
+            missing.append("runtime start")
+        if not has_healthy:
+            missing.append("healthy runtime check")
+        for key in sorted(required_journey_keys - completed_journey_keys):
+            missing.append(f"structured journey result: {key}")
+        if not has_reviewer_manifest:
+            missing.append(f"latest {reviewer_manifest_key} artifact snapshot")
+        if not missing:
+            return engine
+
+        detail_text = (
+            "Final acceptance for this runnable primary artifact requires structured runtime contract evidence before completion: "
+            + ", ".join(missing)
+            + ". Run the required Registry-routed journeys, post structured journey results, and provide reviewer_evidence_manifest before accepting."
+        )
+        metadata = dict(metadata_base)
+        metadata.update({
+            "runtime_evidence_required": True,
+            "missing_runtime_evidence": missing,
+            "required_journeys": sorted(required_journey_keys),
+            "completed_journeys": sorted(completed_journey_keys),
+            "failed_journeys": sorted(failed_journey_keys),
+            "required_hooks": sorted(required_hooks),
+            "manifest_hooks": sorted(manifest_hooks),
+            "reviewer_manifest_artifact_key": reviewer_manifest_key,
+        })
+        return engine.model_copy(update={
+            "run_status": "blocked",
+            "stage_status": "blocked",
+            "failure_code": "runtime_evidence_required",
+            "failure_detail": detail_text,
+            "transition_kind": "blocked",
+            "transition_reason": detail_text,
+            "transition_error_code": "RUNTIME_EVIDENCE_REQUIRED",
+            "run_blocked_code": "runtime_evidence_required",
+            "run_blocked_detail": detail_text,
+            "terminal_status": None,
+            "create_next_execution": False,
+            "next_stage_key": "",
+            "transition_metadata": RegistryJsonRecord.model_validate(metadata),
+        })
+
+    @staticmethod
     def _runtime_document_explicitly_allows_octopus_branding(document: ProtocolDefinitionDocumentRecord) -> bool:
         metadata = document.metadata.as_dict()
         auto_protocol = metadata.get("auto_protocol") if isinstance(metadata, Mapping) else {}
@@ -1766,6 +2016,20 @@ class ProtocolPostgresAdapter:
                 failure_code="runtime_manifest_not_run_ready",
                 transition_error_code="RUNTIME_MANIFEST_NOT_RUN_READY",
                 metadata=metadata,
+            )
+
+        contract = self._auto_protocol_acceptance_contract(document)
+        if contract:
+            return self._runtime_structured_contract_gate(
+                conn,
+                document=document,
+                stage=stage,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                detail=detail,
+                primary_key=primary_key,
+                effective_manifest=effective_manifest,
+                contract=contract,
             )
 
         events = [item for item in detail.runtime_events if item.artifact_key == primary_key]

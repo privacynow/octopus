@@ -2440,6 +2440,334 @@ def test_registry_store_blocks_final_accept_until_runtime_evidence_exists(postgr
     }
 
 
+def test_registry_store_contract_runtime_gate_requires_hooks_and_structured_journeys(postgres_registry_truncated: str, tmp_path: Path) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    artifact_root = tmp_path / "output"
+    artifact_root.mkdir()
+    (artifact_root / "index.html").write_text(
+        '<button data-testid="primary-action">Run</button><section data-testid="primary-result">Ready</section>',
+        encoding="utf-8",
+    )
+    (artifact_root / "octopus-runtime.json").write_text(
+        json.dumps({
+            "runtime_kind": "static",
+            "ui_path": "/",
+            "health_path": "/health",
+            "test_hooks": [
+                {"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    release_evidence = tmp_path / "release.md"
+    release_evidence.write_text("Release evidence.\n", encoding="utf-8")
+    reviewer_manifest = tmp_path / "reviewer.json"
+    reviewer_manifest.write_text(json.dumps({"checks": [{"id": "primary_happy_path", "status": "passed"}]}), encoding="utf-8")
+    document = {
+        "metadata": {
+            "slug": "structured-runtime-proof",
+            "display_name": "Structured Runtime Proof",
+            "auto_protocol": {
+                "primary_artifact_key": "produced_outcome",
+                "primary_artifact": {
+                    "artifact_key": "produced_outcome",
+                    "open_behavior": "runtime",
+                },
+                "acceptance_contract": {
+                    "schema_version": 1,
+                    "primary_artifact_key": "produced_outcome",
+                    "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
+                    "required_journeys": [
+                        {
+                            "journey_key": "primary_happy_path",
+                            "required_hooks": ["primary_action", "primary_result"],
+                            "steps": [{"action": "click", "hook": "primary_action"}],
+                            "assertions": [{"action": "assert_visible", "hook": "primary_result"}],
+                        }
+                    ],
+                },
+            },
+        },
+        "participants": [
+            {"participant_key": "worker", "display_name": "Worker"},
+            {"participant_key": "acceptor", "display_name": "Acceptor"},
+        ],
+        "artifacts": [
+            {"artifact_key": "produced_outcome", "kind": "workspace_file", "path": "output"},
+            {"artifact_key": "release_evidence", "kind": "workspace_file", "path": "release.md"},
+            {"artifact_key": "reviewer_evidence_manifest", "kind": "workspace_file", "path": "reviewer.json"},
+        ],
+        "stages": [
+            {
+                "stage_key": "produce",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "implementation"},
+                "stage_kind": "work",
+                "write_capable": True,
+                "outputs": ["produced_outcome"],
+                "transitions": {"completed": "final"},
+                "instructions": "Produce the runtime artifact.",
+            },
+            {
+                "stage_key": "final",
+                "participant_key": "acceptor",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "inputs": ["produced_outcome"],
+                "outputs": ["release_evidence", "reviewer_evidence_manifest"],
+                "strict_completion": False,
+                "require_output_verification": False,
+                "transitions": {"accept": "__complete__", "revise": "produce", "fail": "__failed__"},
+                "instructions": "Accept only after structured runtime evidence exists.",
+            },
+        ],
+        "policies": {"single_active_writer": True, "max_review_rounds": 2},
+    }
+    enroll, _published, created, detail = running_protocol_run(store, document=document)
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_registry.protocol_runs SET workspace_ref = %s WHERE protocol_run_id = %s",
+                (str(tmp_path), created.run.protocol_run_id),
+            )
+        conn.commit()
+
+    produce = detail.stage_executions[0]
+    store.update_routed_task_result(
+        enroll.agent_token,
+        produce.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "structured-runtime-produce",
+            "summary": "Produced runtime package.",
+            "full_text": "Produced output.\nPROTOCOL_SUMMARY: Produced runtime package.",
+            "artifacts": [
+                {
+                    "artifact_key": "produced_outcome",
+                    "artifact_kind": "workspace_file",
+                    "path": "output",
+                    "exists": True,
+                    "size_bytes": 100,
+                    "content_hash": "structured-runtime",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    final_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    final_stage = next(item for item in final_detail.stage_executions if item.stage_key == "final")
+    store.update_routed_task_result(
+        enroll.agent_token,
+        final_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "structured-runtime-final-missing-hook",
+            "summary": "Accepted.",
+            "full_text": "Looks good.\nPROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Accepted.",
+            "artifacts": [
+                {
+                    "artifact_key": "release_evidence",
+                    "artifact_kind": "workspace_file",
+                    "path": str(release_evidence),
+                    "exists": True,
+                    "size_bytes": release_evidence.stat().st_size,
+                    "content_hash": "release-structured-1",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                },
+                {
+                    "artifact_key": "reviewer_evidence_manifest",
+                    "artifact_kind": "workspace_file",
+                    "path": str(reviewer_manifest),
+                    "exists": True,
+                    "size_bytes": reviewer_manifest.stat().st_size,
+                    "content_hash": "reviewer-structured-1",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                },
+            ],
+        },
+    )
+    revised = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert revised.run.status == "running"
+    assert revised.run.current_stage_key == "produce"
+    assert any(
+        item.error_code == "RUNTIME_MANIFEST_HOOKS_MISSING"
+        for item in revised.transitions
+    )
+
+    (artifact_root / "octopus-runtime.json").write_text(
+        json.dumps({
+            "runtime_kind": "static",
+            "ui_path": "/",
+            "health_path": "/health",
+            "test_hooks": [
+                {"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"},
+                {"hook": "primary_result", "selector": "[data-testid='primary-result']", "kind": "region"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    clean_document = json.loads(json.dumps(document))
+    clean_document["metadata"]["slug"] = "structured-runtime-proof-clean"
+    enroll_2 = store.enroll(agent_card(bot_key="m2"))
+    published_2 = published_protocol(store, slug="mini-protocol-clean", document=clean_document)
+    created_2 = store.create_protocol_run(
+        {
+            "protocol_id": published_2.protocol.protocol_id,
+            "entry_agent_id": enroll_2.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    assert created_2.ok is True
+    assert created_2.run is not None
+    detail_2 = store.get_protocol_run(created_2.run.protocol_run_id, access=operator_access())
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_registry.protocol_runs SET workspace_ref = %s WHERE protocol_run_id = %s",
+                (str(tmp_path), created_2.run.protocol_run_id),
+            )
+        conn.commit()
+
+    second_produce = detail_2.stage_executions[0]
+    store.update_routed_task_result(
+        enroll_2.agent_token,
+        second_produce.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "structured-runtime-produce-fixed",
+            "summary": "Produced runtime package with hooks.",
+            "full_text": "Produced output.\nPROTOCOL_SUMMARY: Produced runtime package.",
+            "artifacts": [
+                {
+                    "artifact_key": "produced_outcome",
+                    "artifact_kind": "workspace_file",
+                    "path": "output",
+                    "exists": True,
+                    "size_bytes": 110,
+                    "content_hash": "structured-runtime-fixed",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    second_final_detail = store.get_protocol_run(created_2.run.protocol_run_id, access=operator_access())
+    second_final = next(item for item in second_final_detail.stage_executions if item.stage_key == "final" and item.status == "running")
+    runtime = store.save_protocol_artifact_runtime(
+        ProtocolArtifactRuntimeInstanceRecord(
+            runtime_instance_id="structured-runtime-instance",
+            protocol_run_id=created_2.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            agent_id=created_2.run.entry_agent_id,
+            status="running",
+            manifest=ProtocolArtifactRuntimeManifestRecord.model_validate(json.loads((artifact_root / "octopus-runtime.json").read_text(encoding="utf-8"))),
+            artifact_path=str(artifact_root),
+            runtime_url=f"/runtime/protocol-runs/{created_2.run.protocol_run_id}/artifacts/produced_outcome/app/",
+        ),
+        access=operator_access(),
+    )
+    for event_kind, metadata in (
+        ("started", {}),
+        ("health_checked", {"ok": True, "status_code": 200}),
+    ):
+        store.append_protocol_artifact_runtime_event(
+            ProtocolArtifactRuntimeEventRecord(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=created_2.run.protocol_run_id,
+                artifact_key="produced_outcome",
+                event_kind=event_kind,
+                actor_ref="operator-session",
+                summary=event_kind,
+                metadata_json=RegistryJsonRecord.model_validate(metadata),
+            ),
+            access=operator_access(),
+    )
+    store.update_routed_task_result(
+        enroll_2.agent_token,
+        second_final.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "structured-runtime-final-no-journey",
+            "summary": "Accepted.",
+            "full_text": "Looks good.\nPROTOCOL_DECISION: accept\nPROTOCOL_SUMMARY: Accepted.",
+            "artifacts": [
+                {
+                    "artifact_key": "release_evidence",
+                    "artifact_kind": "workspace_file",
+                    "path": str(release_evidence),
+                    "exists": True,
+                    "size_bytes": release_evidence.stat().st_size,
+                    "content_hash": "release-structured-2",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                },
+                {
+                    "artifact_key": "reviewer_evidence_manifest",
+                    "artifact_kind": "workspace_file",
+                    "path": str(reviewer_manifest),
+                    "exists": True,
+                    "size_bytes": reviewer_manifest.stat().st_size,
+                    "content_hash": "reviewer-structured-2",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                },
+            ],
+        },
+    )
+    blocked = store.get_protocol_run(created_2.run.protocol_run_id, access=operator_access())
+    assert blocked.run.status == "blocked"
+    assert blocked.run.blocked_code == "runtime_evidence_required"
+    assert "structured journey result: primary_happy_path" in blocked.run.blocked_detail
+    reviewer_artifact = next(item for item in blocked.artifacts if item.artifact_key == "reviewer_evidence_manifest")
+    store.save_protocol_artifact_snapshot(
+        ProtocolArtifactSnapshotRecord(
+            artifact_snapshot_id="reviewer-structured-snapshot",
+            protocol_artifact_id=reviewer_artifact.protocol_artifact_id,
+            protocol_run_id=created_2.run.protocol_run_id,
+            artifact_key="reviewer_evidence_manifest",
+            snapshot_kind="file",
+            storage_uri=str(reviewer_manifest),
+            content_hash="reviewer-structured-2",
+            size_bytes=reviewer_manifest.stat().st_size,
+        ),
+        access=operator_access(),
+    )
+
+    store.append_protocol_artifact_runtime_event(
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id=created_2.run.protocol_run_id,
+            artifact_key="produced_outcome",
+            event_kind="journey_completed",
+            actor_ref="runtime-capability:cap-1:stage-1:acceptor",
+            summary="Journey completed.",
+            metadata_json=RegistryJsonRecord.model_validate({
+                "journey_key": "primary_happy_path",
+                "journey_run_id": "journey-1",
+                "ok": True,
+                "status": "passed",
+            }),
+        ),
+        access=operator_access(),
+    )
+    accepted = store.act_on_protocol_run(
+        created_2.run.protocol_run_id,
+        access=operator_access(),
+        action="accept",
+        reason="Structured journey evidence is present.",
+    )
+    assert accepted.ok is True
+    assert accepted.run is not None
+    assert accepted.run.status == "completed", accepted.run.blocked_detail
+
+
 def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_satisfy_gate(postgres_registry_truncated: str, tmp_path: Path) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     artifact_root = tmp_path / "output"

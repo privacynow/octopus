@@ -56,6 +56,8 @@ from octopus_sdk.registry.management import (
     DesignAutoProtocolResult,
     ManagementRequest,
     ManagementResult,
+    RunArtifactJourneyRequest,
+    RunArtifactJourneyResult,
     StartArtifactRuntimeRequest,
     StopArtifactRuntimeRequest,
     WorkspaceCleanupRequest,
@@ -779,6 +781,7 @@ async def handle_registry_delivery(
                 ArtifactRuntimeHealthRequest,
                 ArtifactRuntimeLogsRequest,
                 ArtifactRuntimeFetchRequest,
+                RunArtifactJourneyRequest,
                 WorkspaceUsageRequest,
                 WorkspaceCleanupRequest,
             ),
@@ -805,6 +808,21 @@ async def handle_registry_delivery(
                     from app.runtime import workspace_hygiene
 
                     payload = await workspace_hygiene.workspace_cleanup(request.payload, config=config)
+                elif isinstance(request.payload, RunArtifactJourneyRequest):
+                    from app.runtime.browser_journey import run_browser_journey
+
+                    registry_client = RegistryClient(registry.url, agent_token=state.agent_token)
+                    exchange = await registry_client.exchange_runtime_capability(request.payload.capability_ref)
+                    bearer = str(exchange.get("bearer_token", "") or "").strip()
+                    if not bearer:
+                        raise RuntimeError(str(exchange.get("message", "") or "Runtime capability exchange failed."))
+                    journey_result = await run_browser_journey(
+                        request.payload.spec,
+                        registry_url=request.payload.registry_url or registry.url,
+                        bearer_token=bearer,
+                        journey_run_id=request.payload.journey_run_id,
+                    )
+                    payload = RunArtifactJourneyResult(result=journey_result)
                 else:
                     payload = await artifact_runtime.artifact_runtime_fetch(request.payload)
                 result = ManagementResult(

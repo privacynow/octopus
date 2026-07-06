@@ -88,6 +88,9 @@ AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE = (
     "and it must validate as ProtocolArtifactRuntimeManifestRecord. Use runtime_kind exactly one of static, node, python, "
     "java, binary, or process. For a Java service use runtime_kind 'java', not a descriptive phrase. For process-backed "
     "runtimes include start_command, ui_path, health_path, api_base_path, smoke_test steps, and endpoints as an array of objects. "
+    "Runnable primary artifacts must also include test_hooks in octopus-runtime.json. test_hooks maps stable hook ids to deterministic "
+    "locators, preferably data-testid selectors, with hook, selector, kind, and optional description. At minimum expose primary_action "
+    "for a representative user action and primary_result for the visible result area. "
     "The package must be built and smoke-tested before final acceptance; start_command is only for launching the already prepared "
     "runtime and must not run dependency installation, build, test, package, or developer server commands at launch. "
     "Each endpoint object uses label, path, endpoint_kind, method, and description; endpoint_kind must be one of ui, api, health, "
@@ -2154,6 +2157,19 @@ def _build_plan(
         "Final summary of artifacts, accepted reviews, revision loops, remaining risks, and exact inspection steps.",
         _auto_artifact_path("release-evidence"),
     )
+    if runtime_expected:
+        ensure_artifact(
+            "producer_evidence_manifest",
+            "Producer Evidence Manifest",
+            "Structured producer evidence listing implemented runtime hooks and smoke checks for the primary artifact.",
+            _auto_artifact_path("producer-evidence-manifest", extension=".json"),
+        )
+        ensure_artifact(
+            "reviewer_evidence_manifest",
+            "Reviewer Evidence Manifest",
+            "Structured reviewer evidence listing executed journeys, hook coverage, and pass/fail assertions for final runtime acceptance.",
+            _auto_artifact_path("reviewer-evidence-manifest", extension=".json"),
+        )
     artifacts = list(artifact_by_key.values())
 
     stage_key_by_package = {
@@ -2256,10 +2272,22 @@ def _build_plan(
             package.role_key,
             work_purpose,
             inputs=work_inputs,
-            outputs=[package.artifact_key],
+            outputs=(
+                [package.artifact_key, "producer_evidence_manifest"]
+                if package.package_key == "implementation" and runtime_expected
+                else [package.artifact_key]
+            ),
         ))
         if package.package_key == "implementation":
-            available_artifacts = list(dict.fromkeys([*available_artifacts, package.artifact_key]))
+            available_artifacts = list(dict.fromkeys([
+                *available_artifacts,
+                package.artifact_key,
+                *(
+                    ["producer_evidence_manifest"]
+                    if runtime_expected
+                    else []
+                ),
+            ]))
             continue
         review_inputs = list(dict.fromkeys([*work_inputs, package.artifact_key]))
         review_purpose = "\n".join([
@@ -2300,6 +2328,7 @@ def _build_plan(
                 "and record runtime evidence before accepting. Do not accept based on direct localhost or container-only smoke checks when the Registry-managed runtime cannot parse, start, route, or fetch the app. "
                 "Do not accept if the runtime start command performs build, dependency installation, packaging, tests, or developer-mode bootstrapping; the implementation stage must prepare the package first and the start command must only launch it. "
                 "For UI/API systems, run enough representative core journeys to prove breadth of the outcome, not just one happy path, and verify each result is visible and understandable in the app itself. "
+                "Write reviewer_evidence_manifest as JSON with checks for required hooks, executed journeys, assertions, console errors, and pass/fail outcome status. "
                 "Choose revise if the manifest is missing or invalid, the runtime cannot start, health fails, the UI/API cannot be exercised, "
                 "the primary artifact is hard to find, low-detail, not usable, missing required behavior, hides the result of core actions, exposes Octopus branding in customer-facing copy, lacks an outcome-readiness matrix, is unsupported by evidence, or below the stated quality bar. "
             )
@@ -2317,8 +2346,12 @@ def _build_plan(
             "Record final release evidence: what was inspected, what worked, what remains risky, exact user-facing inspection steps, a pass/fail outcome-readiness matrix, a customer-facing branding check, and the visible outcome/result from each exercised core journey when applicable. "
             "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
         ),
-        inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
-        outputs=["release_evidence"],
+        inputs=[
+            artifact.artifact_key
+            for artifact in artifacts
+            if artifact.artifact_key not in {"release_evidence", "reviewer_evidence_manifest"}
+        ],
+        outputs=["release_evidence", *(["reviewer_evidence_manifest"] if runtime_expected else [])],
         review_of="produce_outcome",
     ))
 
@@ -2463,6 +2496,30 @@ def compile_auto_protocol_plan(
         },
         "run_inputs": plan.run_profile.run_inputs,
     }
+    primary_behavior = str(plan.primary_artifact.open_behavior or "").strip().lower()
+    if primary_behavior in _AUTO_RUNTIME_OPEN_BEHAVIORS:
+        auto_protocol = metadata["auto_protocol"]
+        if isinstance(auto_protocol, dict):
+            auto_protocol["acceptance_contract"] = {
+                "schema_version": 1,
+                "primary_artifact_key": plan.primary_artifact.artifact_key,
+                "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
+                "required_journeys": [
+                    {
+                        "journey_key": "primary_happy_path",
+                        "description": "Exercise the primary user action and verify that the user-visible result is updated through the Registry-routed runtime.",
+                        "required_hooks": ["primary_action", "primary_result"],
+                        "steps": [
+                            {"action": "click", "hook": "primary_action"},
+                            {"action": "assert_visible", "hook": "primary_result"},
+                        ],
+                        "assertions": [
+                            {"action": "assert_visible", "hook": "primary_result"},
+                            {"action": "no_console_errors"},
+                        ],
+                    }
+                ],
+            }
     return draft_protocol_document_data({
         "schema_version": PROTOCOL_SCHEMA_VERSION,
         "metadata": metadata,

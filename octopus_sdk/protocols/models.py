@@ -44,6 +44,9 @@ ProtocolArtifactRuntimeEventKind = Literal[
     "archived",
     "deleted",
     "failed",
+    "journey_requested",
+    "journey_completed",
+    "journey_failed",
 ]
 ProtocolRuntimeCapabilityAction = Literal[
     "runtime:start",
@@ -646,6 +649,21 @@ class ProtocolArtifactRuntimeEndpointRecord(RegistryRecordModel):
         return text or "GET"
 
 
+class ProtocolRuntimeTestHookRecord(RegistryRecordModel):
+    hook: str = ""
+    selector: str = ""
+    kind: Literal["button", "input", "text", "region", "link", "other"] = "other"
+    description: str = ""
+
+    @field_validator("hook", "selector", mode="before")
+    @classmethod
+    def _nonblank(cls, value: object, info) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return text
+
+
 class ProtocolArtifactRuntimeManifestRecord(RegistryRecordModel):
     runtime_kind: ProtocolArtifactRuntimeKind = "static"
     display_name: str = ""
@@ -660,6 +678,7 @@ class ProtocolArtifactRuntimeManifestRecord(RegistryRecordModel):
     max_runtime_seconds: int = Field(default=3600, ge=60, le=86400)
     endpoints: list[ProtocolArtifactRuntimeEndpointRecord] = Field(default_factory=list)
     smoke_test: list[str] = Field(default_factory=list)
+    test_hooks: list[ProtocolRuntimeTestHookRecord] = Field(default_factory=list)
     metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
     @field_validator("working_directory", mode="before")
@@ -767,6 +786,33 @@ class ProtocolArtifactRuntimeEventRecord(RegistryRecordModel):
     summary: str = ""
     metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     created_at: str = ""
+
+
+class ProtocolRuntimeJourneySpecRecord(RegistryRecordModel):
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    journey_key: str = ""
+    target_url: str = ""
+    timeout_ms: int = Field(default=120000, ge=1000, le=600000)
+    steps: list[RegistryJsonRecord] = Field(default_factory=list)
+    assertions: list[RegistryJsonRecord] = Field(default_factory=list)
+    hooks: dict[str, ProtocolRuntimeTestHookRecord] = Field(default_factory=dict)
+    allowed_external_origins: list[str] = Field(default_factory=list)
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+
+class ProtocolRuntimeJourneyResultRecord(RegistryRecordModel):
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    journey_key: str = ""
+    journey_run_id: str = ""
+    ok: bool = False
+    status: str = ""
+    summary: str = ""
+    assertions: list[RegistryJsonRecord] = Field(default_factory=list)
+    console_errors: list[str] = Field(default_factory=list)
+    duration_ms: int = Field(default=0, ge=0)
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
 
 class ProtocolRuntimeCapabilityTokenRecord(RegistryRecordModel):

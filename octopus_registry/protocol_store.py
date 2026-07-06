@@ -3633,6 +3633,7 @@ class ProtocolPostgresAdapter:
         failure_detail = str(row.get("failure_detail", "") or "")
         lease_expires_at = str(row.get("lease_expires_at", "") or "")
         timeout_at = str(row.get("timeout_at", "") or "")
+        task_updated_at = str(row.get("task_updated_at", "") or "")
         run_id = str(row.get("protocol_run_id", "") or "")
         protocol_id = str(row.get("protocol_id", "") or "")
         display_name = str(row.get("protocol_display_name", "") or row.get("display_name", "") or "")
@@ -3656,6 +3657,7 @@ class ProtocolPostgresAdapter:
                     issue_detail=blocked_detail or failure_detail or "Protocol run is blocked.",
                     lease_expires_at=lease_expires_at,
                     timeout_at=timeout_at,
+                    task_updated_at=task_updated_at,
                     updated_at=updated_at,
                 )
             )
@@ -3675,6 +3677,7 @@ class ProtocolPostgresAdapter:
                     issue_detail=blocked_detail or failure_detail or "Protocol result contract is invalid.",
                     lease_expires_at=lease_expires_at,
                     timeout_at=timeout_at,
+                    task_updated_at=task_updated_at,
                     updated_at=updated_at,
                 )
             )
@@ -3696,6 +3699,7 @@ class ProtocolPostgresAdapter:
                             issue_detail=f"Write lease expired at {lease_expires_at}.",
                             lease_expires_at=lease_expires_at,
                             timeout_at=timeout_at,
+                            task_updated_at=task_updated_at,
                             updated_at=updated_at,
                         )
                     )
@@ -3719,6 +3723,7 @@ class ProtocolPostgresAdapter:
                             issue_detail=f"Stage timeout elapsed at {timeout_at}.",
                             lease_expires_at=lease_expires_at,
                             timeout_at=timeout_at,
+                            task_updated_at=task_updated_at,
                             updated_at=updated_at,
                         )
                     )
@@ -3799,10 +3804,13 @@ class ProtocolPostgresAdapter:
                     pse.failure_code,
                     pse.failure_detail,
                     pse.lease_expires_at,
-                    pse.timeout_at
+                    pse.timeout_at,
+                    rt.updated_at AS task_updated_at
                 FROM {SCHEMA}.protocol_runs pr
                 LEFT JOIN {SCHEMA}.protocol_stage_executions pse
                   ON pse.protocol_stage_execution_id = pr.current_stage_execution_id
+                LEFT JOIN {SCHEMA}.routed_tasks rt
+                  ON rt.routed_task_id = pse.routed_task_id
                 LEFT JOIN {SCHEMA}.protocol_definitions pd
                   ON pd.protocol_id = pr.protocol_id
                 {where}

@@ -319,7 +319,7 @@ function renderDashboard(container) {
             {
                 key: 'protocol-runs',
                 value: String(activeRuns.length),
-                label: 'Active or stuck runs',
+                label: 'Active or lease-expired runs',
                 detail: [
                     `${blockedRuns.length} blocked`,
                     `${activeRuns.filter((run) => issueRuns.has(String(run.protocol_run_id || '').trim())).length} with issues`,

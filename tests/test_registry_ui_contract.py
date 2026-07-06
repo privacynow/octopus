@@ -243,6 +243,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
+    assert "const mutation = await API.actOnProtocolRun(" in workspace
+    assert "_renderRunActionBlockedResult(mutation, currentRun)" in workspace
+    assert "Number(err?.status || 0) === 409" in workspace
     assert "btn.dataset.runAction = spec.action;" in workspace
     assert "event.currentTarget?.dataset?.runAction" in workspace
     assert "spec.action === 'cancel' ? 'btn btn-danger' : 'btn btn-primary'" in workspace
@@ -256,6 +259,13 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "UI.subscribeWithRefresh(cleanups, 'tasks'" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
+    assert "const runDisclosureState = new Map();" in workspace
+    assert "function _bindRunDisclosure(" in workspace
+    assert "issue.task_updated_at" in workspace
+    assert "task updated ${UI.relativeTime(issue.task_updated_at)" in workspace
+    assert "dataset.disclosureKey" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
 
     # Runs-side copy stays; empty/hint strings for the catalog now flow
     # through Kit.dict.
@@ -884,7 +894,7 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "label: 'Agents needing attention'" in dashboard
     assert "function visibleDashboardAgents()" in dashboard
     assert "function dashboardAgentHealth(summary)" in dashboard
-    assert "label: 'Active or stuck runs'" in dashboard
+    assert "label: 'Active or lease-expired runs'" in dashboard
     assert "with issues" in dashboard
     assert "label: 'Usage review'" in dashboard
     assert "label: 'Tokens · 24h'" not in dashboard

@@ -886,6 +886,7 @@ class ProtocolIssueRecord(RegistryRecordModel):
     issue_detail: str = ""
     lease_expires_at: str = ""
     timeout_at: str = ""
+    task_updated_at: str = ""
     updated_at: str = ""
 
 

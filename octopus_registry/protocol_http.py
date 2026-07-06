@@ -802,16 +802,67 @@ def build_protocol_router(
             "manifest",
             "manifest_path",
             "artifact_path",
-            "runtime_url",
-            "ui_url",
-            "api_url",
-            "health_url",
             "internal_url",
         ):
             if not update_payload.get(key):
                 update_payload.pop(key, None)
+        for key in ("runtime_url", "ui_url", "api_url", "health_url"):
+            update_payload.pop(key, None)
         payload.update(update_payload)
+        payload.update(_runtime_public_urls(
+            str(payload.get("protocol_run_id") or existing.protocol_run_id),
+            str(payload.get("artifact_key") or existing.artifact_key),
+        ))
         return ProtocolArtifactRuntimeInstanceRecord.model_validate(payload)
+
+    def _runtime_health_fingerprint(health: object) -> dict[str, object]:
+        return {
+            "ok": bool(getattr(health, "ok", False)),
+            "status": str(getattr(health, "status", "") or ""),
+            "status_code": int(getattr(health, "status_code", 0) or 0),
+        }
+
+    def _append_runtime_health_event_if_changed(
+        store: AbstractRegistryStore,
+        *,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        health: object,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeEventRecord | None:
+        fingerprint = _runtime_health_fingerprint(health)
+        try:
+            events = store.list_protocol_artifact_runtime_events(
+                runtime.protocol_run_id,
+                runtime.artifact_key,
+                access=access,
+                limit=10,
+            )
+        except (AttributeError, NotImplementedError):
+            events = []
+        for event in events:
+            if str(event.runtime_instance_id or "") != str(runtime.runtime_instance_id or ""):
+                continue
+            if str(event.event_kind or "") != "health_checked":
+                continue
+            metadata = event.metadata_json.as_dict()
+            previous = {
+                "ok": bool(metadata.get("ok")),
+                "status": str(metadata.get("status", "") or ""),
+                "status_code": int(metadata.get("status_code", 0) or 0),
+            }
+            if previous == fingerprint:
+                return None
+            break
+        return store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="health_checked",
+                actor_ref=access.actor_ref,
+                summary=str(getattr(health, "message", "") or "Runtime health checked."),
+                metadata=fingerprint,
+            ),
+            access=access,
+        )
 
     def _metadata_from_auto_session(session: ProtocolAutoDesignSessionRecord) -> dict[str, str]:
         doc = session.draft_definition_json.as_dict()
@@ -2661,10 +2712,15 @@ def build_protocol_router(
             )
             if result.success and isinstance(result.payload, ArtifactRuntimeHealthResult) and result.payload.health.runtime is not None:
                 health = result.payload.health
+                merged_runtime = _merge_runtime_record(runtime, result.payload.health.runtime)
+                if health.ok and str(merged_runtime.status or "").strip().lower() == "starting":
+                    merged_runtime = merged_runtime.model_copy(update={"status": "running"})
                 runtime = store.save_protocol_artifact_runtime(
-                    _merge_runtime_record(runtime, result.payload.health.runtime),
+                    merged_runtime,
                     access=access,
                 )
+                if health.ok:
+                    _append_runtime_health_event_if_changed(store, runtime=runtime, health=health, access=access)
         return {
             "runtime": _runtime_record_json(runtime),
             "health": _json_payload(health) if health is not None else None,
@@ -2750,10 +2806,16 @@ def build_protocol_router(
                 and isinstance(existing_result.payload, ArtifactRuntimeHealthResult)
                 and existing_result.payload.health.runtime is not None
             ):
+                existing_health = existing_result.payload.health
+                merged_runtime = _merge_runtime_record(existing_runtime, existing_health.runtime)
+                if existing_health.ok and str(merged_runtime.status or "").strip().lower() == "starting":
+                    merged_runtime = merged_runtime.model_copy(update={"status": "running"})
                 refreshed = store.save_protocol_artifact_runtime(
-                    _merge_runtime_record(existing_runtime, existing_result.payload.health.runtime),
+                    merged_runtime,
                     access=access,
                 )
+                if existing_health.ok:
+                    _append_runtime_health_event_if_changed(store, runtime=refreshed, health=existing_health, access=access)
                 refreshed_status = str(refreshed.status or "").strip().lower()
                 if refreshed_status in {"running", "starting"}:
                     store.append_protocol_artifact_runtime_event(
@@ -3093,20 +3155,11 @@ def build_protocol_router(
         if not result.success or not isinstance(result.payload, ArtifactRuntimeHealthResult):
             raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_HEALTH_FAILED", message=result.error_detail or "Bot failed to check artifact runtime health.")
         if result.payload.health.runtime is not None:
-            runtime = store.save_protocol_artifact_runtime(
-                _merge_runtime_record(runtime, result.payload.health.runtime),
-                access=access,
-            )
-        store.append_protocol_artifact_runtime_event(
-            _runtime_event(
-                runtime=runtime,
-                event_kind="health_checked",
-                actor_ref=access.actor_ref,
-                summary=result.payload.health.message,
-                metadata={"ok": result.payload.health.ok, "status_code": result.payload.health.status_code},
-            ),
-            access=access,
-        )
+            merged_runtime = _merge_runtime_record(runtime, result.payload.health.runtime)
+            if result.payload.health.ok and str(merged_runtime.status or "").strip().lower() == "starting":
+                merged_runtime = merged_runtime.model_copy(update={"status": "running"})
+            runtime = store.save_protocol_artifact_runtime(merged_runtime, access=access)
+        _append_runtime_health_event_if_changed(store, runtime=runtime, health=result.payload.health, access=access)
         return _json_payload(result.payload.health)
 
     @router.api_route(

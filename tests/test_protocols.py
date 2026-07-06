@@ -1398,6 +1398,8 @@ def test_registry_store_protocol_issues_report_timeout_stuck_blocked_and_contrac
         issue_kind="stuck_lease",
     )
     assert any(item.protocol_run_id == stuck_created.run.protocol_run_id for item in stuck_issues)
+    stuck_issue = next(item for item in stuck_issues if item.protocol_run_id == stuck_created.run.protocol_run_id)
+    assert stuck_issue.task_updated_at
 
     blocked_enroll = store.enroll(agent_card(bot_key="m2"))
     blocked_published = published_protocol(

@@ -3,7 +3,7 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'all', label: 'All issues' },
     { value: 'blocked_run', label: 'Blocked runs' },
     { value: 'invalid_contract', label: 'Contract errors' },
-    { value: 'stuck_lease', label: 'Stuck leases' },
+    { value: 'stuck_lease', label: 'Expired write leases' },
     { value: 'expired_timeout', label: 'Expired timeouts' },
 ];
 
@@ -8009,6 +8009,7 @@ function renderProtocolRuns(container) {
     let activeRunStageExecutionId = '';
     let activeRunStageFollowsCurrent = true;
     let activeRunArtifactStageExecutionId = '';
+    const runDisclosureState = new Map();
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
     let runPaginator = null;
@@ -8196,8 +8197,35 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _protocolIssueLabel(kind) {
+        const value = String(kind || '').trim();
+        if (value === 'stuck_lease') return 'Expired write lease';
+        return value.replace(/_/g, ' ');
+    }
+
+    function _issueFactParts(issue = {}) {
+        const parts = [];
+        const runState = String(issue.run_status || '').trim();
+        const stageState = String(issue.stage_status || '').trim();
+        if (runState || stageState) {
+            parts.push(`state ${[runState, stageState].filter(Boolean).join(' / ')}`);
+        }
+        if (issue.lease_expires_at) {
+            parts.push(`lease expires ${UI.relativeTime(issue.lease_expires_at) || issue.lease_expires_at}`);
+        }
+        if (issue.timeout_at) {
+            parts.push(`timeout ${UI.relativeTime(issue.timeout_at) || issue.timeout_at}`);
+        }
+        if (issue.task_updated_at) {
+            parts.push(`task updated ${UI.relativeTime(issue.task_updated_at) || issue.task_updated_at}`);
+        } else if (issue.updated_at) {
+            parts.push(`updated ${UI.relativeTime(issue.updated_at) || issue.updated_at}`);
+        }
+        return parts;
+    }
+
     function _issueAttentionLabel(issue) {
-        const kind = String(issue?.issue_kind || '').trim().replace(/_/g, ' ');
+        const kind = _protocolIssueLabel(issue?.issue_kind || '');
         const code = String(issue?.issue_code || '').trim().replace(/_/g, ' ');
         return (kind || code || 'Issue').replace(/\b\w/g, (char) => char.toUpperCase());
     }
@@ -8212,10 +8240,11 @@ function renderProtocolRuns(container) {
             }
             shell.dataset.runId = String(item.protocol_run_id || '');
             const row = UI.renderListRow({
-                label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.protocol_display_name || item.protocol_id || 'Protocol issue'}`,
+                label: `${_protocolIssueLabel(item.issue_kind)} · ${item.protocol_display_name || item.protocol_id || 'Protocol issue'}`,
                 sublabel: [
                     item.stage_key ? `stage ${item.stage_key}` : '',
                     item.issue_detail || item.issue_code || '',
+                    ..._issueFactParts(item),
                 ].filter(Boolean).join(' · '),
                 badgeText: item.issue_code || item.stage_key || '',
                 className: selected ? 'is-selected' : '',
@@ -8225,6 +8254,88 @@ function renderProtocolRuns(container) {
             shell.appendChild(row);
             return shell;
         });
+    }
+
+    function _runDisclosureKey(name) {
+        return `${String(currentRunId || 'run')}:${String(name || 'section')}`;
+    }
+
+    function _bindRunDisclosure(details, name, { open = false } = {}) {
+        if (!(details instanceof HTMLDetailsElement)) return details;
+        const key = _runDisclosureKey(name);
+        details.dataset.disclosureKey = key;
+        details.open = runDisclosureState.has(key) ? Boolean(runDisclosureState.get(key)) : Boolean(open);
+        details.addEventListener('toggle', () => {
+            runDisclosureState.set(key, Boolean(details.open));
+        });
+        return details;
+    }
+
+    function _latestBlockedTransition(detail = currentRun) {
+        const transitions = Array.isArray(detail?.transitions) ? detail.transitions : [];
+        const stageId = String(detail?.run?.current_stage_execution_id || '').trim();
+        return transitions.find((item) => {
+            const kind = String(item?.transition_kind || '').trim().toLowerCase();
+            const code = String(item?.error_code || '').trim().toLowerCase();
+            const fromStage = String(item?.from_stage_execution_id || '').trim();
+            const toStage = String(item?.to_stage_execution_id || '').trim();
+            const stageMatches = !stageId || !fromStage || fromStage === stageId || toStage === stageId;
+            return stageMatches && (kind === 'blocked' || code.includes('runtime') || code.includes('evidence'));
+        }) || transitions.find((item) => String(item?.transition_kind || '').trim().toLowerCase() === 'blocked') || null;
+    }
+
+    function _missingEvidenceList(detail = currentRun) {
+        const metadata = _latestBlockedTransition(detail)?.metadata_json || {};
+        const missing = Array.isArray(metadata?.missing_runtime_evidence) ? metadata.missing_runtime_evidence : [];
+        return missing.map((item) => String(item || '').trim()).filter(Boolean);
+    }
+
+    function _renderRunActionBlockedResult(mutation, detail = currentRun) {
+        const run = detail?.run || mutation?.run || currentRun?.run || {};
+        const stage = mutation?.stage_execution || detail?.stage_executions?.[0] || null;
+        const transition = _latestBlockedTransition(detail);
+        const panel = document.createElement('div');
+        panel.className = 'error-card protocol-run-action-result';
+        panel.setAttribute('role', 'alert');
+
+        const title = document.createElement('strong');
+        title.textContent = 'Run is still blocked';
+        panel.appendChild(title);
+
+        const detailText = String(
+            run.blocked_detail
+            || stage?.failure_detail
+            || transition?.reason
+            || mutation?.message
+            || 'The Registry kept this run blocked after applying the operator action.',
+        ).trim();
+        const copy = document.createElement('p');
+        copy.textContent = detailText;
+        panel.appendChild(copy);
+
+        const code = String(run.blocked_code || stage?.failure_code || transition?.error_code || '').trim();
+        const missing = _missingEvidenceList(detail);
+        if (code || missing.length) {
+            const facts = document.createElement('div');
+            facts.className = 'validation-list';
+            if (code) {
+                const row = document.createElement('div');
+                row.textContent = `Code: ${code}`;
+                facts.appendChild(row);
+            }
+            missing.forEach((value) => {
+                const row = document.createElement('div');
+                row.textContent = `Missing: ${value}`;
+                facts.appendChild(row);
+            });
+            panel.appendChild(facts);
+        }
+
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'This result remains open so you can read and copy it. Close the dialog when you are done.';
+        panel.appendChild(note);
+        return panel;
     }
 
     function _runStatusValue(run) {
@@ -8803,6 +8914,10 @@ function renderProtocolRuns(container) {
         reasonInput.placeholder = 'Short reason recorded in the protocol audit trail';
         form.appendChild(reasonInput);
 
+        const resultPanel = document.createElement('div');
+        resultPanel.hidden = true;
+        form.appendChild(resultPanel);
+
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
         cancelBtn.className = 'btn';
@@ -8826,7 +8941,7 @@ function renderProtocolRuns(container) {
             }
             confirmBtn.disabled = true;
             try {
-                await API.actOnProtocolRun(
+                const mutation = await API.actOnProtocolRun(
                     currentRun.run.protocol_run_id,
                     spec.action,
                     { reason },
@@ -8837,13 +8952,22 @@ function renderProtocolRuns(container) {
                             : `${Date.now()}${Math.random().toString(16).slice(2)}`,
                     },
                 );
-                view.close();
                 await loadRuns();
                 await loadIssues({ rerender: false });
                 await loadRunDetail();
+                const resultRun = currentRun?.run || mutation?.run || {};
+                if (String(resultRun.status || '').trim().toLowerCase() === 'blocked') {
+                    UI.reconcileChildren(resultPanel, [_renderRunActionBlockedResult(mutation, currentRun)]);
+                    resultPanel.hidden = false;
+                    reasonInput.disabled = true;
+                    confirmBtn.hidden = true;
+                    cancelBtn.textContent = 'Close';
+                    return;
+                }
+                view.close();
                 UI.notify(spec.successMessage, 'success');
             } catch (err) {
-                if (String(err && err.message || '').includes('409:')) {
+                if (Number(err?.status || 0) === 409 || String(err?.errorCode || '').includes('CONCURRENT')) {
                     await loadRunDetail();
                     UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning');
                 } else {
@@ -10064,7 +10188,7 @@ function renderProtocolRuns(container) {
                 const issueList = document.createElement('div');
                 issueList.className = 'run-evidence-issue-list';
                 UI.reconcileChildren(issueList, stageIssues.map((issue) => UI.renderListRow({
-                    label: `${String(issue.issue_kind || '').replace(/_/g, ' ')} · ${issue.issue_code || 'issue'}`,
+                    label: `${_protocolIssueLabel(issue.issue_kind)} · ${issue.issue_code || 'issue'}`,
                     sublabel: issue.issue_detail || issue.updated_at || '',
                     badgeText: issue.stage_key || '',
                     badgeClass: 'badge-blocked',
@@ -10173,7 +10297,7 @@ function renderProtocolRuns(container) {
                 const issueSummary = document.createElement('div');
                 issueSummary.className = 'run-evidence-issue-list';
                 UI.reconcileChildren(issueSummary, currentIssues.slice(0, 3).map((issue) => UI.renderListRow({
-                    label: `${String(issue.issue_kind || '').replace(/_/g, ' ')} · ${issue.issue_code || issue.stage_key || 'issue'}`,
+                    label: `${_protocolIssueLabel(issue.issue_kind)} · ${issue.issue_code || issue.stage_key || 'issue'}`,
                     sublabel: issue.issue_detail || issue.updated_at || '',
                     badgeText: issue.stage_key || '',
                     badgeClass: 'badge-blocked',
@@ -10451,6 +10575,7 @@ function renderProtocolRuns(container) {
             packageSummary.appendChild(packageCopy);
             const moreDetails = document.createElement('details');
             moreDetails.className = 'run-primary-package-details';
+            _bindRunDisclosure(moreDetails, 'evidence-paths');
             const moreDetailsSummary = document.createElement('summary');
             moreDetailsSummary.textContent = 'Evidence and paths';
             moreDetails.appendChild(moreDetailsSummary);
@@ -10497,6 +10622,7 @@ function renderProtocolRuns(container) {
                 if (lifecycleSpecs.length) {
                     const moreOptions = document.createElement('details');
                     moreOptions.className = 'run-primary-more-options';
+                    _bindRunDisclosure(moreOptions, 'more-run-options');
                     const moreOptionsSummary = document.createElement('summary');
                     moreOptionsSummary.textContent = 'More run options';
                     moreOptions.appendChild(moreOptionsSummary);
@@ -10625,6 +10751,7 @@ function renderProtocolRuns(container) {
         if (primaryArtifactPanel && primaryOwnsRunStory) {
             const stageHistory = document.createElement('details');
             stageHistory.className = 'run-stage-history-disclosure';
+            _bindRunDisclosure(stageHistory, 'stage-history');
             const summary = document.createElement('summary');
             summary.textContent = `Stage history (${stageRows.length || stageAttemptsByKey.size})`;
             stageHistory.appendChild(summary);
@@ -10636,6 +10763,7 @@ function renderProtocolRuns(container) {
 
         const auditDetails = document.createElement('details');
         auditDetails.className = 'run-audit-disclosure';
+        _bindRunDisclosure(auditDetails, 'audit');
         const auditSummary = document.createElement('summary');
         auditSummary.textContent = 'Audit and troubleshooting';
         auditDetails.appendChild(auditSummary);
@@ -10680,16 +10808,31 @@ function renderProtocolRuns(container) {
 
             const issueDetailList = document.createElement('div');
             const issueDetailRows = (currentIssues || []).map((item) => UI.renderListRow({
-                label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
+                label: `${_protocolIssueLabel(item.issue_kind)} · ${item.issue_code || item.stage_key || 'issue'}`,
                 sublabel: item.issue_detail || item.updated_at || '',
                 badgeText: item.stage_key || '',
             }));
             appendSectionTitle(sectionPanel, 'Support issues');
-            UI.reconcileChildren(
-                issueDetailList,
-                issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)],
-            );
+            UI.reconcileChildren(issueDetailList, issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)]);
             sectionPanel.appendChild(issueDetailList);
+            if ((currentIssues || []).length) {
+                const issueFacts = document.createElement('div');
+                issueFacts.className = 'run-evidence-issue-list';
+                UI.reconcileChildren(issueFacts, (currentIssues || []).map((item) => {
+                    const card = document.createElement('article');
+                    card.className = 'protocol-lineage-card';
+                    card.appendChild(UI.renderMetadataGrid([
+                        { label: 'Issue', value: `${_protocolIssueLabel(item.issue_kind)} · ${item.issue_code || item.stage_key || 'issue'}` },
+                        { label: 'Run state', value: item.run_status || '—' },
+                        { label: 'Stage state', value: item.stage_status || '—' },
+                        { label: 'Lease expiry', value: item.lease_expires_at || '—' },
+                        { label: 'Timeout', value: item.timeout_at || '—' },
+                        { label: 'Last issue update', value: item.updated_at ? `${item.updated_at} (${UI.relativeTime(item.updated_at)})` : '—' },
+                    ], { compact: true }));
+                    return card;
+                }));
+                sectionPanel.appendChild(issueFacts);
+            }
         }
         auditDetails.appendChild(sectionPanel);
         detailPanel.appendChild(auditDetails);

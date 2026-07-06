@@ -1540,6 +1540,17 @@ window.UI = (() => {
             },
             onBeforeElUpdated(fromEl, toEl) {
                 if (
+                    typeof HTMLDetailsElement !== 'undefined'
+                    && fromEl instanceof HTMLDetailsElement
+                    && toEl instanceof HTMLDetailsElement
+                    && fromEl.dataset
+                    && toEl.dataset
+                    && fromEl.dataset.disclosureKey
+                    && fromEl.dataset.disclosureKey === toEl.dataset.disclosureKey
+                ) {
+                    toEl.open = fromEl.open;
+                }
+                if (
                     fromEl instanceof Element
                     && toEl instanceof Element
                     && fromEl.dataset

@@ -3583,6 +3583,9 @@ class ProtocolPostgresAdapter:
                 "constraints_text": row.get("constraints_text", ""),
                 "resource_refs": row.get("resource_refs_json") or [],
                 "run_lessons": row.get("run_lessons_json") or [],
+                "planner_request_id": row.get("planner_request_id", ""),
+                "planner_agent_id": row.get("planner_agent_id", ""),
+                "source_document_json": row.get("source_document_json") or {},
                 "model_response": row.get("planner_response_json") or None,
                 "analysis": row.get("analysis_json") or {},
                 "plan": row.get("plan_json") or {},
@@ -3624,6 +3627,9 @@ class ProtocolPostgresAdapter:
             "constraints_text": session.constraints_text,
             "resource_refs_json": list(session.resource_refs or []),
             "run_lessons_json": [item.model_dump(mode="json") for item in session.run_lessons or []],
+            "planner_request_id": str(session.planner_request_id or ""),
+            "planner_agent_id": str(session.planner_agent_id or ""),
+            "source_document_json": session.source_document_json.as_dict(),
             "planner_response_json": session.model_response.model_dump(mode="json") if session.model_response is not None else {},
             "analysis_json": session.analysis.model_dump(mode="json"),
             "plan_json": session.plan.model_dump(mode="json"),
@@ -3699,11 +3705,12 @@ class ProtocolPostgresAdapter:
                         session_id, status, mode, surface, actor_ref, chat_ref,
                         source_protocol_id, source_version_id, source_draft_revision,
                         target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
+                        planner_request_id, planner_agent_id, source_document_json,
                         planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                         warnings_json, unresolved_decisions_json, change_summary_json,
                         applied_protocol_json, run_result_json, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (session_id) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -3720,6 +3727,9 @@ class ProtocolPostgresAdapter:
                         constraints_text = EXCLUDED.constraints_text,
                         resource_refs_json = EXCLUDED.resource_refs_json,
                         run_lessons_json = EXCLUDED.run_lessons_json,
+                        planner_request_id = EXCLUDED.planner_request_id,
+                        planner_agent_id = EXCLUDED.planner_agent_id,
+                        source_document_json = EXCLUDED.source_document_json,
                         planner_response_json = EXCLUDED.planner_response_json,
                         analysis_json = EXCLUDED.analysis_json,
                         plan_json = EXCLUDED.plan_json,
@@ -3750,6 +3760,9 @@ class ProtocolPostgresAdapter:
                         payload["constraints_text"],
                         jsonb(payload["resource_refs_json"]),
                         jsonb(payload["run_lessons_json"]),
+                        payload["planner_request_id"],
+                        payload["planner_agent_id"],
+                        jsonb(payload["source_document_json"]),
                         jsonb(payload["planner_response_json"]),
                         jsonb(payload["analysis_json"]),
                         jsonb(payload["plan_json"]),

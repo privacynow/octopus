@@ -905,6 +905,9 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     constraints_text TEXT NOT NULL DEFAULT '',
     resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    planner_request_id TEXT NOT NULL DEFAULT '',
+    planner_agent_id TEXT NOT NULL DEFAULT '',
+    source_document_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     plan_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -922,7 +925,10 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
 ALTER TABLE agent_registry.protocol_auto_sessions
     ADD COLUMN IF NOT EXISTS planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-    ADD COLUMN IF NOT EXISTS run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ADD COLUMN IF NOT EXISTS run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS planner_request_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS planner_agent_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS source_document_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_actor
     ON agent_registry.protocol_auto_sessions (actor_ref, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_target

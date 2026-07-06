@@ -1823,23 +1823,14 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
         def list_routing_skills(self):
             return []
 
-        def create_protocol_auto_design_session(self, payload, *, access):
-            self.session = generate_auto_protocol_session(
-                payload,
-                session_id="auto-1",
-                created_at="2026-04-16T00:00:00+00:00",
-                updated_at="2026-04-16T00:00:00+00:00",
-            )
-            return self.session
-
         def get_protocol_auto_design_session(self, session_id: str, *, access):
-            assert session_id == "auto-1"
             if self.session is None:
                 raise KeyError(session_id)
+            assert session_id == self.session.session_id
             return self.session
 
         def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
-            assert event_kind in {"applied", "published", "run_started"}
+            assert event_kind in {"planning_started", "generated", "applied", "published", "run_started"}
             self.session = session
             return session
 
@@ -1942,16 +1933,23 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
                 "requirement_text": "Build a 2D browser fighting game with historical figures, playtesting, and release evidence.",
             },
         )
-        apply_response = client.post("/v1/protocol-auto/sessions/auto-1/apply")
-        publish_response = client.post("/v1/protocol-auto/sessions/auto-1/publish")
-        run_response = client.post("/v1/protocol-auto/sessions/auto-1/run", json={"origin_channel": "registry"})
+        session_id = create_response.json()["session_id"]
+        loaded_response = client.get(f"/v1/protocol-auto/sessions/{session_id}")
+        apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
+        publish_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/publish")
+        run_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/run", json={"origin_channel": "registry"})
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
 
     assert create_response.status_code == 200
-    assert create_response.json()["analysis"]["domain"] == "requirement-specific"
+    assert create_response.json()["status"] == "planning"
+    assert create_response.json()["planner_request_id"]
+    assert loaded_response.status_code == 200
+    assert loaded_response.json()["status"] in {"ready", "blocked"}
+    assert loaded_response.json()["analysis"]["domain"] == "requirement-specific"
     assert apply_response.status_code == 200
+    assert apply_response.json()["analysis"]["domain"] == "requirement-specific"
     assert apply_response.json()["target_protocol_id"] == "protocol-auto"
     assert publish_response.status_code == 200
     assert publish_response.json()["status"] == "published"
@@ -2164,23 +2162,14 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                 )
             ]
 
-        def create_protocol_auto_design_session(self, payload, *, access):
-            self.session = generate_auto_protocol_session(
-                payload,
-                session_id="auto-duplicate",
-                created_at="2026-04-16T00:00:00+00:00",
-                updated_at="2026-04-16T00:00:00+00:00",
-            )
-            return self.session
-
         def get_protocol_auto_design_session(self, session_id: str, *, access):
-            assert session_id == "auto-duplicate"
             if self.session is None:
                 raise KeyError(session_id)
+            assert session_id == self.session.session_id
             return self.session
 
         def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
-            assert event_kind == "applied"
+            assert event_kind in {"planning_started", "generated", "applied"}
             self.session = session
             return session
 
@@ -2227,12 +2216,13 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                 "requirement_text": "Build a compact browser-runnable 2D historical platform fighter prototype.",
             },
         )
-        apply_response = client.post("/v1/protocol-auto/sessions/auto-duplicate/apply")
+        apply_response = client.post(f"/v1/protocol-auto/sessions/{create_response.json()['session_id']}/apply")
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
 
     assert create_response.status_code == 200
+    assert create_response.json()["status"] == "planning"
     assert apply_response.status_code == 200
     assert store.saved_slugs == [
         "build-a-compact-browser-runnable-2d-historical-platform-fighter",

@@ -28,7 +28,7 @@ from .models import (
 
 ProtocolAutoDesignMode = Literal["create", "revise"]
 ProtocolAutoDesignSurface = Literal["registry", "telegram", "api"]
-ProtocolAutoDesignStatus = Literal["draft", "ready", "blocked", "applied", "published", "running", "failed"]
+ProtocolAutoDesignStatus = Literal["draft", "planning", "ready", "blocked", "applied", "published", "running", "failed"]
 ProtocolAutoDesignSeverity = Literal["info", "warning", "error"]
 
 _AUTO_STAGE_BUDGET_SMALL_MAX = 7
@@ -710,6 +710,9 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     constraints_text: str = ""
     resource_refs: list[str] = Field(default_factory=list)
     run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
+    planner_request_id: str = ""
+    planner_agent_id: str = ""
+    source_document_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord, exclude=True)
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
     analysis: ProtocolAutoDesignAnalysisRecord = Field(default_factory=ProtocolAutoDesignAnalysisRecord)
     plan: ProtocolAutoDesignPlanRecord = Field(default_factory=ProtocolAutoDesignPlanRecord)

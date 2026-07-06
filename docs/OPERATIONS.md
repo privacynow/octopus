@@ -141,6 +141,14 @@ to one of `low`, `medium`, `high`, `xhigh`, or `max` to pass the Claude CLI
 (multi-agent workflow orchestration; implies `xhigh` effort unless
 `CLAUDE_EFFORT` overrides it).
 
+Auto Protocol design is expected to be heavyweight. The Registry stores a
+`planning` session and queues a `design_auto_protocol` management request to a
+provider-capable bot; the browser polls the session rather than holding one
+long request open. If a design appears stuck, check the Auto Protocol session
+status, the linked management request, and the target bot/provider logs. A
+provider timeout should surface as a failed session with planner details, not as
+a transient dialog that vanishes before the operator can read it.
+
 If the host URL or public URL is wrong, redeploy the Registry with the intended
 address and restart bots so generated links and local bot connection metadata
 are refreshed:

@@ -194,6 +194,11 @@ A usable Auto Protocol Telegram card should show:
 - the shortest visible follow-up command for modification when a button cannot
   collect text
 
+Heavy Auto Protocol designs may first return a `planning` session. Telegram
+must present that as in-progress planning and withhold Apply/Publish actions
+until a later session refresh finalizes the draft. The user should be able to
+ask for the latest session status instead of waiting on one long chat request.
+
 If a generated session is blocked, Telegram should say what to fix next instead
 of only reporting a code. If the session is ready, the user should be able to
 publish and run from Telegram or intentionally open Registry for richer editing.

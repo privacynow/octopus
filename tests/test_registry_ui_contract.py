@@ -1198,6 +1198,12 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
 
     assert "function _autoProtocolErrorMessage(label, err)" in workspace
     assert "function _setAutoProtocolDialogError(preview, status, label, err, retryFn)" in workspace
+    assert "function _autoProtocolPlanning(session)" in workspace
+    assert "function _autoProtocolHasDraft(session)" in workspace
+    assert "async function _waitForAutoProtocolPlanning(session" in workspace
+    assert "current = await API.getProtocolAutoSession(current.session_id);" in workspace
+    assert "planning = _autoProtocolPlanning(session)" in workspace
+    assert "actionable = hasSession && !planning && hasDraft" in workspace
     assert "UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);" in workspace
     assert "card.setAttribute('role', 'alert');" in workspace
     assert "closeOnOverlay: false" in workspace
@@ -1207,6 +1213,10 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "status.textContent = 'Generation failed.'" not in workspace
     assert ".protocol-auto-error-note" in css
     assert ".protocol-auto-error.error-card" in css
+
+    api = (repo_root / "octopus_registry" / "ui" / "js" / "api.js").read_text(encoding="utf-8")
+    assert "createProtocolAutoSession: (body = {}) =>\n            request('POST', '/v1/protocol-auto/sessions', { body })," in api
+    assert "reviseProtocolAutoSession: (sessionId, body = {}) =>\n            request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body })," in api
 
 
 def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:

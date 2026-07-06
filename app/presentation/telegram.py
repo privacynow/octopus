@@ -1511,6 +1511,7 @@ def protocol_auto_session_message(
     skills = analysis.get("skills") if isinstance(analysis.get("skills"), list) else []
     work_packages = analysis.get("work_packages") if isinstance(analysis.get("work_packages"), list) else []
     status = html.escape(str(data.get("status") or "draft"))
+    planning = str(data.get("status") or "") == "planning"
     stages = plan.get("stages") if isinstance(plan.get("stages"), list) else []
     artifacts = plan.get("artifacts") if isinstance(plan.get("artifacts"), list) else []
     primary = plan.get("primary_artifact") if isinstance(plan.get("primary_artifact"), dict) else {}
@@ -1532,6 +1533,8 @@ def protocol_auto_session_message(
         f"Stages: <code>{len(stages)}</code> · Artifacts: <code>{len(artifacts)}</code>",
         f"Validation: <code>{'ready' if validation.get('ok') else 'needs attention'}</code>",
     ]
+    if planning:
+        lines.append("Planner status: analyzing requirements, lessons, stages, artifacts, assignments, review gates, and runtime evidence.")
     primary_label = html.escape(str(primary.get("display_name") or primary.get("artifact_key") or "Produced Outcome"))
     primary_key = html.escape(str(primary.get("artifact_key") or "produced_outcome"))
     lines.append(f"Primary outcome: {primary_label} <code>{primary_key}</code>")
@@ -1603,9 +1606,10 @@ def protocol_auto_session_message(
             InlineKeyboardButton("Artifacts", callback_data=protocol_callback_data("auto_artifacts", session_id)),
             InlineKeyboardButton("Warnings", callback_data=protocol_callback_data("auto_warnings", session_id)),
         ])
-        keyboard.append([
-            InlineKeyboardButton("Apply draft", callback_data=protocol_callback_data("auto_apply", session_id)),
-        ])
+        if not planning:
+            keyboard.append([
+                InlineKeyboardButton("Apply draft", callback_data=protocol_callback_data("auto_apply", session_id)),
+            ])
         if ready:
             keyboard.append([
                 InlineKeyboardButton("Publish", callback_data=protocol_callback_data("auto_publish", session_id)),

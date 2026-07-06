@@ -234,6 +234,7 @@ class PreflightContext:
     working_dir: str = ""  # Per-chat project override; empty = use config default
     file_policy: str = ""  # "inspect" or "edit"; empty = use config default
     effective_model: str = ""  # resolved from model profiles; empty = use config.model
+    timeout_seconds: int = 0  # optional per-call preflight timeout; 0 = provider default
 
 
 @dataclass

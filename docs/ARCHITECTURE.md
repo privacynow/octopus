@@ -268,21 +268,27 @@ before bot handling continues.
 Auto Protocol uses the same protocol lifecycle as manual authoring. Registry
 owns sessions, persistence, HTTP actions, and UI state. It does not execute a
 model provider in-process. When a user creates or revises an Auto Protocol
-session, Registry synchronously sends a `design_auto_protocol` management
-request to a connected provider-capable bot and waits for the typed planner
-response. The bot runtime performs the provider-backed semantic planning step
-and returns typed SDK records. The SDK compiler then turns those records into
-one canonical protocol document and applies validation, semantic policy, stage
-budgets, review policy, and primary-artifact metadata.
+session, Registry creates a durable session in `planning` status and queues a
+`design_auto_protocol` management request to a connected provider-capable bot.
+The create/revise HTTP request returns the planning session immediately; UI and
+client surfaces poll the session. When the bot posts the typed planner result,
+the next session read finalizes it through the SDK compiler. The compiler turns
+those records into one canonical protocol document and applies validation,
+semantic policy, stage budgets, review policy, and primary-artifact metadata.
+Planner failures are persisted on the same session as failed/blocking details
+instead of being represented only as transport timeouts.
 
 The request path is:
 
 ```text
 Registry UI or Telegram
   -> /v1/protocol-auto/sessions
-  -> Registry management client
+  -> protocol_auto_sessions status=planning
+  -> queued management request
   -> bot registry-delivery transport
   -> app/runtime/auto_protocol_design.py provider call
+  -> management result
+  -> GET /v1/protocol-auto/sessions/{id} finalization
   -> SDK Auto Protocol compiler
   -> normal protocol draft / publish / run lifecycle
 ```

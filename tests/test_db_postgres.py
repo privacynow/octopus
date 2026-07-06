@@ -238,6 +238,9 @@ def test_run_init_restores_missing_additive_protocol_columns(postgres_truncated)
             cur.execute("ALTER TABLE agent_registry.protocol_artifact_snapshots DROP COLUMN produced_by_stage_execution_id")
             cur.execute("ALTER TABLE agent_registry.protocol_transitions DROP COLUMN error_code")
             cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN run_lessons_json")
+            cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN planner_request_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN planner_agent_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN source_document_json")
             cur.execute("DROP TABLE agent_registry.protocol_runtime_capability_tokens")
         conn.commit()
 
@@ -631,6 +634,9 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "constraints_text",
             "resource_refs_json",
             "run_lessons_json",
+            "planner_request_id",
+            "planner_agent_id",
+            "source_document_json",
             "planner_response_json",
             "analysis_json",
             "plan_json",

@@ -18,6 +18,30 @@ class _FailingPlannerProvider:
         )
 
 
+class _CapturingPlannerProvider:
+    def __init__(self):
+        self.context = None
+
+    async def run_preflight(self, prompt, image_paths, progress, context=None, cancel=None):
+        del image_paths, progress, cancel
+        self.context = context
+        return RunResult(
+            text=(
+                '{"requirement_summary":"Build a small browser app.",'
+                '"domain":"browser app","risk_assessment":"medium",'
+                '"assumptions":[],"open_questions":[],'
+                '"work_packages":[{"package_key":"implementation","display_name":"Implementation",'
+                '"rationale":"The app must be built before review.",'
+                '"role_key":"builder","role_display_name":"Builder",'
+                '"role_responsibility":"Build the requested app.",'
+                '"required_skills":["implementation"],'
+                '"purpose":"Build the requested app.","quality_bar":"App works.",'
+                '"artifact_key":"app","artifact_display_name":"Runnable app",'
+                '"artifact_description":"Browser app package.","artifact_path":"artifacts/app"}]}'
+            )
+        )
+
+
 async def test_design_auto_protocol_reports_provider_failure_before_json_parse():
     with pytest.raises(RuntimeError) as exc:
         await design_auto_protocol_with_provider(
@@ -33,3 +57,19 @@ async def test_design_auto_protocol_reports_provider_failure_before_json_parse()
     assert "Auto Protocol planner failed" in message
     assert "Codex authentication failed" in message
     assert "Planner output did not contain a JSON object" not in message
+
+
+async def test_design_auto_protocol_uses_configured_heavyweight_timeout():
+    provider = _CapturingPlannerProvider()
+
+    await design_auto_protocol_with_provider(
+        ProtocolAutoDesignModelRequestRecord(
+            requirement_text="Build a small browser app.",
+        ),
+        config=make_config(timeout_seconds=1800),
+        provider=provider,
+        provider_state_factory=lambda conversation_key: {},
+    )
+
+    assert provider.context is not None
+    assert provider.context.timeout_seconds == 1800

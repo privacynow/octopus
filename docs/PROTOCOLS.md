@@ -76,8 +76,10 @@ does not want to manually design every stage.
 From `Build -> Protocols`, choose `Auto protocol`, describe the desired outcome,
 attach any source files that should inform the work, and add optional
 constraints. Registry sends the design job to a connected provider-capable bot,
-which returns structured planning records. The SDK then compiles those records
-into a normal editable protocol draft with inferred roles, stages, artifacts,
+and immediately saves a durable `planning` session. The dialog stays open and
+polls the session while the bot performs heavyweight semantic planning. When the
+management result arrives, Registry compiles the typed planner response into a
+normal editable protocol draft with inferred roles, stages, artifacts,
 adversarial review loops, run inputs, resource references, and final evidence.
 Review the generated structure, ask for changes if needed, then apply it as a
 normal draft. When validation and assignments are already ready, the Auto
@@ -150,6 +152,9 @@ Minimum human verification:
 
 1. Generate a protocol from Registry and inspect the summary, packages, stages,
    warnings, primary artifact, attached-resource count, and available actions.
+   For large requirements, confirm the modal remains responsive while the
+   session status is `planning` and then updates to ready, blocked, or failed
+   without a browser request timeout.
 2. Generate a protocol from Telegram with `/protocol auto <requirement>` and
    confirm the returned card is readable, explains the proposed workflow, shows
    the primary outcome, and offers obvious next actions.

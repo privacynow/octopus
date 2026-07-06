@@ -229,6 +229,14 @@ the same controls as any other protocol. For revision from chat or deeper
 authoring notes, stay with [PROTOCOLS.md](PROTOCOLS.md) and
 [TELEGRAM.md](TELEGRAM.md).
 
+Auto Protocol design can be intentionally heavyweight. Large run-improvement
+requests may take several minutes because the planner is reading prior run
+context, lessons, artifact expectations, assignments, review loops, and runtime
+evidence needs. The Registry dialog should remain open and show planning
+progress until the session becomes ready, blocked, or failed. A failed planner
+session remains visible with an actionable error instead of disappearing behind
+a browser timeout.
+
 Telegram can also start an Auto Protocol session when you want a chat-first
 flow. The message should summarize the proposed workflow, show the primary
 outcome, and provide obvious actions such as Apply Draft, Publish, Publish &

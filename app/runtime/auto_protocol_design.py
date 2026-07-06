@@ -135,6 +135,7 @@ async def design_auto_protocol_with_provider(
             working_dir=str(getattr(config, "working_dir", "") or ""),
             file_policy="inspect",
             effective_model=str(getattr(config, "model", "") or ""),
+            timeout_seconds=max(300, int(getattr(config, "timeout_seconds", 0) or 0)),
         ),
     )
     if result.returncode != 0 or result.timed_out or result.cancelled:

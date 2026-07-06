@@ -369,13 +369,13 @@ const API = (() => {
         createProtocolDraft: (body = {}) =>
             request('POST', '/v1/protocol-drafts', { body }),
         createProtocolAutoSession: (body = {}) =>
-            request('POST', '/v1/protocol-auto/sessions', { body, timeoutMs: 120000 }),
+            request('POST', '/v1/protocol-auto/sessions', { body }),
         getProtocolAutoSession: (sessionId) =>
             request('GET', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}`),
         listProtocolAutoSessionEvents: (sessionId) =>
             request('GET', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/events`),
         reviseProtocolAutoSession: (sessionId, body = {}) =>
-            request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body, timeoutMs: 120000 }),
+            request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body }),
         applyProtocolAutoSession: (sessionId) =>
             request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/apply`, { body: {} }),
         publishProtocolAutoSession: (sessionId) =>

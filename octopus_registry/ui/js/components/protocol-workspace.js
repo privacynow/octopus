@@ -74,6 +74,52 @@ function _setAutoProtocolDialogError(preview, status, label, err, retryFn) {
     console.error(label, err);
 }
 
+function _autoProtocolSleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function _autoProtocolPlanning(session) {
+    return String(session?.status || '') === 'planning';
+}
+
+function _autoProtocolHasDraft(session) {
+    const draft = session?.draft_definition_json || {};
+    return Boolean(draft.metadata && Array.isArray(draft.stages));
+}
+
+function _autoProtocolFinishedMessage(session, readyMessage) {
+    const status = String(session?.status || '');
+    if (status === 'failed') return 'Planning failed. Review the details below, adjust the request, and retry.';
+    if (status === 'blocked') return 'Planning finished with blockers. Review the required decisions before publishing or running.';
+    return readyMessage;
+}
+
+async function _waitForAutoProtocolPlanning(session, {
+    preview,
+    status,
+    view,
+    progressMessage,
+    readyMessage,
+    summaryEl,
+}) {
+    let current = session;
+    let polls = 0;
+    while (_autoProtocolPlanning(current) && view?.dialog?.isConnected) {
+        const suffix = polls > 0 ? ` Still working after ${Math.max(3, polls * 3)} seconds.` : '';
+        _setAutoProtocolStatus(status, `${progressMessage}${suffix}`);
+        UI.reconcileChildren(preview, [_autoProtocolProgressEl()]);
+        await _autoProtocolSleep(Math.min(10000, polls < 10 ? 3000 : 5000));
+        if (!view?.dialog?.isConnected) return current;
+        current = await API.getProtocolAutoSession(current.session_id);
+        polls += 1;
+    }
+    if (!_autoProtocolPlanning(current)) {
+        UI.reconcileChildren(preview, [summaryEl(current)]);
+        _setAutoProtocolStatus(status, _autoProtocolFinishedMessage(current, readyMessage));
+    }
+    return current;
+}
+
 function _protocolArtifactLabel(item) {
     const parts = [];
     if (item.content_hash) {
@@ -2983,19 +3029,22 @@ function renderProtocolWorkspace(container) {
         view.dialog.classList.add('protocol-auto-modal');
         const syncActions = () => {
             const hasSession = Boolean(session?.session_id);
+            const planning = _autoProtocolPlanning(session);
+            const hasDraft = _autoProtocolHasDraft(session);
+            const actionable = hasSession && !planning && hasDraft;
             const ready = _autoProtocolReady(session);
             cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
-            generateBtn.hidden = hasSession;
-            reviseBtn.hidden = !hasSession;
-            applyBtn.hidden = !hasSession;
-            publishBtn.hidden = !hasSession;
-            runBtn.hidden = !hasSession;
-            reviseWrap.hidden = !hasSession;
-            revise.hidden = !hasSession;
-            reviseBtn.disabled = !hasSession || !revise.value.trim();
-            publishBtn.disabled = !ready;
-            runBtn.disabled = !ready;
-            applyBtn.className = ready ? 'btn' : 'btn btn-primary';
+            generateBtn.hidden = hasSession && (planning || hasDraft);
+            reviseBtn.hidden = !actionable;
+            applyBtn.hidden = !actionable;
+            publishBtn.hidden = !actionable;
+            runBtn.hidden = !actionable;
+            reviseWrap.hidden = !actionable;
+            revise.hidden = !actionable;
+            reviseBtn.disabled = !actionable || !revise.value.trim();
+            publishBtn.disabled = planning || !ready;
+            runBtn.disabled = planning || !ready;
+            applyBtn.className = ready || planning ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
             runBtn.style.order = hasSession && ready ? '0' : '3';
             applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
@@ -3027,8 +3076,19 @@ function renderProtocolWorkspace(container) {
                     resource_refs: resourcePicker.resourceRefs(),
                     workspace_ref: '',
                 });
-                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
-                _setAutoProtocolStatus(status, 'Review the generated structure. Apply it to continue in the normal editor.');
+                if (_autoProtocolPlanning(session)) {
+                    session = await _waitForAutoProtocolPlanning(session, {
+                        preview,
+                        status,
+                        view,
+                        progressMessage: 'Designing protocol…',
+                        readyMessage: 'Review the generated structure. Apply it to continue in the normal editor.',
+                        summaryEl: _autoProtocolSummaryEl,
+                    });
+                } else {
+                    UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                    _setAutoProtocolStatus(status, 'Review the generated structure. Apply it to continue in the normal editor.');
+                }
                 syncActions();
             } catch (err) {
                 _setAutoProtocolDialogError(preview, status, 'Failed to generate protocol', err, () => generateBtn.click());
@@ -3048,9 +3108,20 @@ function renderProtocolWorkspace(container) {
                     constraints_text: constraints.value.trim(),
                     resource_refs: resourcePicker.resourceRefs(),
                 });
-                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                if (_autoProtocolPlanning(session)) {
+                    session = await _waitForAutoProtocolPlanning(session, {
+                        preview,
+                        status,
+                        view,
+                        progressMessage: 'Updating generated protocol…',
+                        readyMessage: 'Updated. Review the changes, then apply the draft.',
+                        summaryEl: _autoProtocolSummaryEl,
+                    });
+                } else {
+                    UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                    _setAutoProtocolStatus(status, 'Updated. Review the changes, then apply the draft.');
+                }
                 revise.value = '';
-                _setAutoProtocolStatus(status, 'Updated. Review the changes, then apply the draft.');
                 syncActions();
             } catch (err) {
                 _setAutoProtocolDialogError(preview, status, 'Failed to modify generated protocol', err, () => reviseBtn.click());
@@ -9150,15 +9221,18 @@ function renderProtocolRuns(container) {
 
         const syncActions = () => {
             const hasSession = Boolean(session?.session_id);
+            const planning = _autoProtocolPlanning(session);
+            const hasDraft = _autoProtocolHasDraft(session);
+            const actionable = hasSession && !planning && hasDraft;
             const ready = _runAutoSessionReady(session);
             cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
-            generateBtn.hidden = hasSession;
-            applyBtn.hidden = !hasSession;
-            publishBtn.hidden = !hasSession;
-            runBtn.hidden = !hasSession;
-            publishBtn.disabled = !ready;
-            runBtn.disabled = !ready;
-            applyBtn.className = ready ? 'btn' : 'btn btn-primary';
+            generateBtn.hidden = hasSession && (planning || hasDraft);
+            applyBtn.hidden = !actionable;
+            publishBtn.hidden = !actionable;
+            runBtn.hidden = !actionable;
+            publishBtn.disabled = planning || !ready;
+            runBtn.disabled = planning || !ready;
+            applyBtn.className = ready || planning ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
             runBtn.style.order = hasSession && ready ? '0' : '3';
             applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
@@ -9193,8 +9267,19 @@ function renderProtocolRuns(container) {
                     resource_refs: resourcePicker.resourceRefs(),
                     workspace_ref: sourceRun.run.workspace_ref || '',
                 });
-                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                _setAutoProtocolStatus(status, 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.');
+                if (_autoProtocolPlanning(session)) {
+                    session = await _waitForAutoProtocolPlanning(session, {
+                        preview,
+                        status,
+                        view,
+                        progressMessage: 'Designing improved protocol…',
+                        readyMessage: 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.',
+                        summaryEl: _runImproveSummaryEl,
+                    });
+                } else {
+                    UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                    _setAutoProtocolStatus(status, 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.');
+                }
                 syncActions();
             } catch (err) {
                 intro.hidden = false;

@@ -70,7 +70,7 @@ COPY scripts ./scripts
 
 ARG BOT_PROVIDER=claude
 ARG CLAUDE_INSTALL_METHOD=npm
-ARG CLAUDE_CLI_NPM_PACKAGE=@anthropic-ai/claude-code@2.1.7
+ARG CLAUDE_CLI_NPM_PACKAGE=@anthropic-ai/claude-code@2.1.201
 ARG CLAUDE_INSTALL_URL=https://claude.ai/install.sh
 ARG CODEX_CLI_NPM_PACKAGE=@openai/codex@0.142.5
 RUN if [ "$BOT_PROVIDER" = "claude" ]; then \

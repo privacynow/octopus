@@ -149,8 +149,8 @@ def test_public_dependency_defaults_are_pinned() -> None:
 
     assert "fastapi==0.135.1" in constraints
     assert "pytest==9.0.2" in constraints
-    assert "@openai/codex@0.36.0" in dockerfile
-    assert "@openai/codex@0.36.0" in codex_installer
+    assert "@openai/codex@0.142.5" in dockerfile
+    assert "@openai/codex@0.142.5" in codex_installer
     assert "@anthropic-ai/claude-code@2.1.7" in dockerfile
     assert "@anthropic-ai/claude-code@2.1.7" in claude_installer
 

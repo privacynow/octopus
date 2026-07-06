@@ -72,7 +72,7 @@ ARG BOT_PROVIDER=claude
 ARG CLAUDE_INSTALL_METHOD=npm
 ARG CLAUDE_CLI_NPM_PACKAGE=@anthropic-ai/claude-code@2.1.7
 ARG CLAUDE_INSTALL_URL=https://claude.ai/install.sh
-ARG CODEX_CLI_NPM_PACKAGE=@openai/codex@0.36.0
+ARG CODEX_CLI_NPM_PACKAGE=@openai/codex@0.142.5
 RUN if [ "$BOT_PROVIDER" = "claude" ]; then \
       bash /app/scripts/provider/install_provider_claude.sh; \
     elif [ "$BOT_PROVIDER" = "codex" ]; then \

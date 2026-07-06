@@ -2,7 +2,7 @@
 # Install Codex CLI into the container. Used by infra/docker/Dockerfile.bot when BOT_PROVIDER=codex.
 # Uses npm @openai/codex (Node 18+). May require network.
 set -euo pipefail
-CODEX_CLI_NPM_PACKAGE="${CODEX_CLI_NPM_PACKAGE:-@openai/codex@0.36.0}"
+CODEX_CLI_NPM_PACKAGE="${CODEX_CLI_NPM_PACKAGE:-@openai/codex@0.142.5}"
 apt-get update
 apt-get install -y --no-install-recommends ca-certificates nodejs npm
 npm install -g "$CODEX_CLI_NPM_PACKAGE"

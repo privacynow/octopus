@@ -40,6 +40,8 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolRuntimeCapabilityExchangeResultRecord,
+    ProtocolRuntimeCapabilityTokenRecord,
     ProtocolScenarioRecord,
     ProtocolArtifactRecord,
     ProtocolArtifactSnapshotRecord,
@@ -1048,6 +1050,41 @@ class AbstractRegistryStore(Protocol):
         limit: int = 50,
     ) -> list[ProtocolArtifactRuntimeEventRecord]:
         """Return runtime lifecycle/audit events for one artifact."""
+
+    def mint_runtime_capability_token(
+        self,
+        *,
+        protocol_run_id: str,
+        protocol_stage_execution_id: str,
+        artifact_key: str,
+        participant_key: str,
+        target_agent_id: str,
+        allowed_actions: list[str] | tuple[str, ...],
+        expires_at: str,
+        actor_ref: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord:
+        """Create a non-secret runtime capability reference for a protocol stage."""
+
+    def exchange_runtime_capability_token(
+        self,
+        *,
+        capability_ref: str,
+        target_agent_id: str,
+    ) -> ProtocolRuntimeCapabilityExchangeResultRecord:
+        """Exchange a non-secret capability reference for a short-lived bearer."""
+
+    def validate_runtime_capability_token(
+        self,
+        *,
+        bearer_token: str,
+        protocol_run_id: str,
+        artifact_key: str,
+        action: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord | None:
+        """Validate a scoped runtime bearer token."""
+
+    def revoke_runtime_capability_tokens_for_stage(self, protocol_stage_execution_id: str, *, reason: str = "") -> int:
+        """Revoke active scoped runtime bearers for a stage execution."""
 
     def export_protocol_run(
         self,

@@ -39,6 +39,8 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolRuntimeCapabilityExchangeResultRecord,
+    ProtocolRuntimeCapabilityTokenRecord,
     ProtocolScenarioRecord,
     ProtocolTemplateSummaryRecord,
     ProtocolTextDocumentRecord,
@@ -1551,6 +1553,61 @@ class RegistryPostgresStore(AbstractRegistryStore):
             artifact_key,
             access=access,
             limit=limit,
+        )
+
+    def mint_runtime_capability_token(
+        self,
+        *,
+        protocol_run_id: str,
+        protocol_stage_execution_id: str,
+        artifact_key: str,
+        participant_key: str,
+        target_agent_id: str,
+        allowed_actions: list[str] | tuple[str, ...],
+        expires_at: str,
+        actor_ref: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord:
+        return self._protocol_store.mint_runtime_capability_token(
+            protocol_run_id=protocol_run_id,
+            protocol_stage_execution_id=protocol_stage_execution_id,
+            artifact_key=artifact_key,
+            participant_key=participant_key,
+            target_agent_id=target_agent_id,
+            allowed_actions=allowed_actions,
+            expires_at=expires_at,
+            actor_ref=actor_ref,
+        )
+
+    def exchange_runtime_capability_token(
+        self,
+        *,
+        capability_ref: str,
+        target_agent_id: str,
+    ) -> ProtocolRuntimeCapabilityExchangeResultRecord:
+        return self._protocol_store.exchange_runtime_capability_token(
+            capability_ref=capability_ref,
+            target_agent_id=target_agent_id,
+        )
+
+    def validate_runtime_capability_token(
+        self,
+        *,
+        bearer_token: str,
+        protocol_run_id: str,
+        artifact_key: str,
+        action: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord | None:
+        return self._protocol_store.validate_runtime_capability_token(
+            bearer_token=bearer_token,
+            protocol_run_id=protocol_run_id,
+            artifact_key=artifact_key,
+            action=action,
+        )
+
+    def revoke_runtime_capability_tokens_for_stage(self, protocol_stage_execution_id: str, *, reason: str = "") -> int:
+        return self._protocol_store.revoke_runtime_capability_tokens_for_stage(
+            protocol_stage_execution_id,
+            reason=reason,
         )
 
     def export_protocol_run(

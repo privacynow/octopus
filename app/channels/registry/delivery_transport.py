@@ -168,6 +168,7 @@ def build_registry_message_delivery(
     constraints_text: str = "",
     requested_skills: tuple[str, ...] = (),
     protocol_stage_contract: dict[str, Any] | None = None,
+    runtime_capability_ref: str = "",
     working_dir_hint: str = "",
     attachments: tuple[InboundAttachment, ...] = (),
     source_transport: str = "registry",
@@ -189,6 +190,7 @@ def build_registry_message_delivery(
         constraints_text=constraints_text,
         requested_skills=requested_skills,
         protocol_stage_contract=protocol_stage_contract,
+        runtime_capability_ref=runtime_capability_ref,
         working_dir_hint=working_dir_hint,
         attachments=attachments,
         source_transport=source_transport,
@@ -215,6 +217,7 @@ def build_registry_message_envelope(
     constraints_text: str = "",
     requested_skills: tuple[str, ...] = (),
     protocol_stage_contract: dict[str, Any] | None = None,
+    runtime_capability_ref: str = "",
     working_dir_hint: str = "",
     attachments: tuple[InboundAttachment, ...] = (),
     source_transport: str = "registry",
@@ -247,6 +250,7 @@ def build_registry_message_envelope(
         constraints_text=constraints_text,
         requested_skills=requested_skills,
         protocol_stage_contract=dict(protocol_stage_contract or {}),
+        runtime_capability_ref=str(runtime_capability_ref or ""),
         working_dir_hint=str(working_dir_hint or ""),
         authorized_actor_key=authorized_actor_key,
         authority_ref=registry_implementation_ref(registry_id),
@@ -486,6 +490,12 @@ async def admit_registry_delivery(
             constraints_text=_coerce_registry_message_text(request.get("constraints", "")),
             requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
             protocol_stage_contract=_protocol_stage_contract_from_request(request),
+            runtime_capability_ref=str(
+                (request.get("context", {}) or {}).get("runtime_capability", {}).get("capability_ref", "")
+                if isinstance(request.get("context", {}), dict)
+                and isinstance((request.get("context", {}) or {}).get("runtime_capability", {}), dict)
+                else ""
+            ),
             registry_id=registry_id,
             attachments=attachments,
         )

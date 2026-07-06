@@ -35,6 +35,7 @@ from octopus_sdk.protocols import (
     ProtocolPackageSkillPlanRecord,
     ProtocolPackageStageMappingPlanRecord,
     ProtocolRunCreateRecord,
+    ProtocolRuntimeCapabilityExchangeRecord,
     ProtocolTemplateCreateRecord,
     TargetSelector,
     canonical_protocol_document,
@@ -442,6 +443,74 @@ def build_protocol_router(
             roles.update({"agent", "author", "publisher"})
         return access.model_copy(update={"roles": sorted(roles)})
 
+    @router.post("/v1/agents/runtime-capabilities/exchange")
+    def resource_exchange_runtime_capability(
+        payload: ProtocolRuntimeCapabilityExchangeRecord = Body(default_factory=ProtocolRuntimeCapabilityExchangeRecord),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        if not auth.is_agent or not auth.agent_id:
+            raise _protocol_http_error(
+                403,
+                error_code="RUNTIME_CAPABILITY_AGENT_REQUIRED",
+                message="Runtime capability exchange requires an enrolled agent bearer token.",
+            )
+        result = store.exchange_runtime_capability_token(
+            capability_ref=payload.capability_ref,
+            target_agent_id=auth.agent_id,
+        )
+        if not result.ok:
+            raise _protocol_http_error(
+                403 if result.status in {"forbidden", "revoked", "expired", "inactive", "exhausted"} else 404,
+                error_code=f"RUNTIME_CAPABILITY_{str(result.status or 'invalid').upper()}",
+                message=result.message or "Runtime capability exchange failed.",
+            )
+        return _json_payload(result)
+
+    def _runtime_access(action: str):
+        def _dependency(
+            request: Request,
+            run_id: str,
+            artifact_key: str,
+            authorization: str | None = Header(default=None),
+            x_csrf_token: str | None = Header(default=None),
+            store: AbstractRegistryStore = Depends(get_store),
+        ) -> ProtocolAccessContextRecord:
+            bearer = ""
+            if authorization and authorization.startswith("Bearer "):
+                bearer = authorization.removeprefix("Bearer ").strip()
+            if bearer:
+                token = store.validate_runtime_capability_token(
+                    bearer_token=bearer,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact_key,
+                    action=action,
+                )
+                if token is None:
+                    raise _protocol_http_error(
+                        403,
+                        error_code="RUNTIME_CAPABILITY_FORBIDDEN",
+                        message="Runtime capability token is invalid for this run, artifact, or action.",
+                    )
+                return ProtocolAccessContextRecord(
+                    actor_ref=(
+                        "runtime-capability:"
+                        f"{token.capability_token_id}:"
+                        f"{token.protocol_stage_execution_id}:"
+                        f"{token.participant_key}"
+                    ),
+                    org_id="local",
+                    roles=["agent", "runtime_capability"],
+                )
+            operator_auth = require_operator_session(
+                request,
+                authorization=None,
+                x_csrf_token=x_csrf_token,
+            )
+            return protocol_access(operator_auth)
+
+        return _dependency
+
     def _package_format(value: object) -> str:
         token = str(value or "").strip().lower()
         if token in {"yaml", "yml"}:
@@ -768,6 +837,16 @@ def build_protocol_router(
         summary: str,
         metadata: dict[str, object] | None = None,
     ) -> ProtocolArtifactRuntimeEventRecord:
+        event_metadata = dict(metadata or {})
+        if str(actor_ref or "").startswith("runtime-capability:"):
+            actor_parts = str(actor_ref or "").split(":", 3)
+            event_metadata.setdefault("source", "agent_runtime_capability")
+            if len(actor_parts) > 1:
+                event_metadata.setdefault("capability_token_id", actor_parts[1])
+            if len(actor_parts) > 2:
+                event_metadata.setdefault("actor_stage_execution_id", actor_parts[2])
+            if len(actor_parts) > 3:
+                event_metadata.setdefault("participant_key", actor_parts[3])
         return ProtocolArtifactRuntimeEventRecord(
             runtime_event_id=uuid.uuid4().hex,
             runtime_instance_id=runtime.runtime_instance_id,
@@ -776,7 +855,7 @@ def build_protocol_router(
             event_kind=event_kind,
             actor_ref=actor_ref,
             summary=summary,
-            metadata_json=RegistryJsonRecord(metadata or {}),
+            metadata_json=RegistryJsonRecord(event_metadata),
         )
 
     def _runtime_public_urls(run_id: str, artifact_key: str) -> dict[str, str]:
@@ -2665,10 +2744,9 @@ def build_protocol_router(
     async def resource_get_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         try:
             detail = store.get_protocol_run(run_id, access=access)
             artifact = _artifact_for_detail(detail, artifact_key)
@@ -2733,10 +2811,9 @@ def build_protocol_router(
     async def resource_start_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:start")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         try:
             detail = store.get_protocol_run(run_id, access=access)
             artifact = _artifact_for_detail(detail, artifact_key)
@@ -2946,10 +3023,9 @@ def build_protocol_router(
     async def resource_stop_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:stop")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -2991,7 +3067,7 @@ def build_protocol_router(
     def resource_archive_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         access = protocol_access(auth)
@@ -3016,7 +3092,7 @@ def build_protocol_router(
     def resource_delete_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         access = protocol_access(auth)
@@ -3042,13 +3118,13 @@ def build_protocol_router(
         run_id: str,
         artifact_key: str,
         limit: int = Query(default=50, ge=1, le=200),
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         events = store.list_protocol_artifact_runtime_events(
             run_id,
             artifact_key,
-            access=protocol_access(auth),
+            access=access,
             limit=limit,
         )
         return _json_payload({"items": events})
@@ -3058,10 +3134,9 @@ def build_protocol_router(
         request: Request,
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:event")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -3108,10 +3183,9 @@ def build_protocol_router(
     async def resource_get_protocol_artifact_runtime_logs(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -3136,10 +3210,9 @@ def build_protocol_router(
     async def resource_get_protocol_artifact_runtime_health(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -3187,10 +3260,9 @@ def build_protocol_router(
         run_id: str,
         artifact_key: str,
         proxy_path: str = "",
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:fetch")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> Response:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")

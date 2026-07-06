@@ -1131,6 +1131,16 @@ class RegistryClient(
         )
         return TaskRecord.model_validate(response)
 
+    async def exchange_runtime_capability(
+        self,
+        capability_ref: str,
+    ) -> dict:
+        return await self._request(
+            "POST",
+            "/v1/agents/runtime-capabilities/exchange",
+            json={"capability_ref": str(capability_ref or "")},
+        )
+
     async def management_result(
         self,
         request_id: str,

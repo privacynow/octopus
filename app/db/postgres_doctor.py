@@ -31,6 +31,7 @@ _REQUIRED_TABLES: dict[str, tuple[str, ...]] = {
         "protocol_stage_executions",
         "protocol_artifacts",
         "protocol_transitions",
+        "protocol_runtime_capability_tokens",
         "protocol_idempotency",
         "protocol_compliance_events",
         "skills_override",
@@ -105,6 +106,15 @@ _REQUIRED_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
         "verification_state",
     ),
     ("agent_registry", "protocol_transitions"): ("error_code", "metadata_json"),
+    ("agent_registry", "protocol_runtime_capability_tokens"): (
+        "capability_ref_hash",
+        "bearer_token_hash",
+        "protocol_run_id",
+        "protocol_stage_execution_id",
+        "allowed_actions_json",
+        "expires_at",
+        "revoked_at",
+    ),
     ("bot_content", "skill_revisions"): ("skill_kind",),
 }
 _REQUIRED_INDEX = "idx_one_claimed_per_conv"

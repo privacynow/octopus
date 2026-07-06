@@ -3261,6 +3261,84 @@ def test_protocol_stage_dispatch_writes_events_to_recipient_conversation(
     assert str(metadata.get("status") or "") == "queued"
 
 
+def test_protocol_stage_runtime_capability_exchange_is_scoped_and_revoked(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, _created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT request_json
+                FROM agent_registry.routed_tasks
+                WHERE routed_task_id = %s
+                """,
+                (first_stage.routed_task_id,),
+            )
+            row = cur.fetchone()
+    request_json = dict(row[0])
+    context = request_json["context"]
+    capability = context["runtime_capability"]
+    capability_ref = capability["capability_ref"]
+
+    assert capability_ref.startswith("oct-cap-")
+    assert "OCTOPUS_CAPABILITY_TOKEN" in request_json["instructions"]
+    assert "oct-rt-" not in json.dumps(request_json)
+
+    exchanged = store.exchange_runtime_capability_token(
+        capability_ref=capability_ref,
+        target_agent_id=enroll.agent_id,
+    )
+    assert exchanged.ok
+    assert exchanged.bearer_token.startswith("oct-rt-")
+    assert store.validate_runtime_capability_token(
+        bearer_token=exchanged.bearer_token,
+        protocol_run_id=detail.run.protocol_run_id,
+        artifact_key="plan",
+        action="runtime:read",
+    )
+    assert store.validate_runtime_capability_token(
+        bearer_token=exchanged.bearer_token,
+        protocol_run_id="wrong-run",
+        artifact_key="plan",
+        action="runtime:read",
+    ) is None
+    assert store.validate_runtime_capability_token(
+        bearer_token=exchanged.bearer_token,
+        protocol_run_id=detail.run.protocol_run_id,
+        artifact_key="plan",
+        action="runtime:delete",
+    ) is None
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "done-capability-1",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": False,
+                }
+            ],
+        },
+    )
+    assert store.validate_runtime_capability_token(
+        bearer_token=exchanged.bearer_token,
+        protocol_run_id=detail.run.protocol_run_id,
+        artifact_key="plan",
+        action="runtime:read",
+    ) is None
+
+
 def test_protocol_stage_completion_via_routed_task_result_updates_both_sides(
     postgres_registry_truncated: str,
 ) -> None:

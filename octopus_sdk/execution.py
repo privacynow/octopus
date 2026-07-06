@@ -128,6 +128,7 @@ class TransportIdentity:
     conversation_ref: str
     routed_task_id: str
     authority_ref: str
+    runtime_capability_ref: str = ""
     requested_skills: tuple[str, ...] = ()
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
@@ -143,6 +144,7 @@ class ExecutionChannelMetadata:
     authority_ref: str
     external_conversation_ref: str
     target_agent_id: str
+    runtime_capability_ref: str = ""
     requested_skills: tuple[str, ...] = ()
 
 
@@ -193,6 +195,7 @@ def build_transport_identity_from_metadata(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
+            runtime_capability_ref=metadata.runtime_capability_ref,
             requested_skills=metadata.requested_skills,
             timeline_callback=routed_task_callback_factory(
                 metadata.routed_task_id,
@@ -215,6 +218,7 @@ def build_transport_identity_from_metadata(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
+            runtime_capability_ref=metadata.runtime_capability_ref,
             requested_skills=metadata.requested_skills,
             timeline_callback=conversation_callback_factory(
                 conversation_ref,
@@ -230,6 +234,7 @@ def build_transport_identity_from_metadata(
         conversation_ref=conversation_ref,
         routed_task_id=metadata.routed_task_id,
         authority_ref=metadata.authority_ref,
+        runtime_capability_ref=metadata.runtime_capability_ref,
         requested_skills=metadata.requested_skills,
         timeline_callback=None,
     )
@@ -447,6 +452,25 @@ async def check_credential_satisfaction(
     return None
 
 
+async def _runtime_capability_env(
+    transport: TransportIdentity,
+    *,
+    runtime: ExecutionRuntime,
+) -> CredentialEnvRecord:
+    if runtime.services.runtime_capabilities is None:
+        return CredentialEnvRecord()
+    capability_ref = str(getattr(transport, "runtime_capability_ref", "") or "").strip()
+    if not capability_ref:
+        return CredentialEnvRecord()
+    bearer = await runtime.services.runtime_capabilities.exchange_runtime_capability(
+        authority_ref=transport.authority_ref,
+        capability_ref=capability_ref,
+    )
+    if not str(bearer or "").strip():
+        raise RuntimeError("Runtime capability exchange failed for this routed protocol stage.")
+    return CredentialEnvRecord({"OCTOPUS_CAPABILITY_TOKEN": str(bearer)})
+
+
 async def _execute_request_locked(
     transport: TransportIdentity,
     prompt: str,
@@ -479,6 +503,11 @@ async def _execute_request_locked(
     )
     if credential_env is None:
         return None
+    runtime_capability_env = await _runtime_capability_env(transport, runtime=runtime)
+    if runtime_capability_env:
+        merged_env = credential_env.to_dict()
+        merged_env.update(runtime_capability_env.to_dict())
+        credential_env = CredentialEnvRecord(merged_env)
 
     if _should_publish_user_message(transport):
         await event_sink.on_user_message(prompt, actor=transport.actor)

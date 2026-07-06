@@ -54,6 +54,7 @@ from octopus_sdk.protocols import (
     ProtocolRunDetailRecord,
     ProtocolRunMutationRecord,
     ProtocolRunRecord,
+    ProtocolRuntimeCapabilityTokenRecord,
     generate_auto_protocol_session,
 )
 from octopus_sdk.registry.management import (
@@ -5453,6 +5454,7 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
 def test_protocol_artifact_runtime_status_detects_static_package(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     package_dir = tmp_path / "offline-package"
     package_dir.mkdir()
     (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
@@ -5505,9 +5507,77 @@ def test_protocol_artifact_runtime_status_detects_static_package(monkeypatch, tm
     assert payload["package_url"].endswith("/v1/protocol-runs/run-1/artifacts/package/content?download=1")
 
 
+def test_protocol_artifact_runtime_rejects_full_agent_token_and_accepts_scoped_bearer(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    package_dir = tmp_path / "scoped-package"
+    package_dir.mkdir()
+    (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
+
+    class _Store:
+        def validate_runtime_capability_token(self, *, bearer_token: str, protocol_run_id: str, artifact_key: str, action: str):
+            if bearer_token != "scoped-token":
+                return None
+            assert protocol_run_id == "run-1"
+            assert artifact_key == "package"
+            assert action == "runtime:read"
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                protocol_run_id="run-1",
+                protocol_stage_execution_id="stage-1",
+                artifact_key="package",
+                participant_key="builder",
+                allowed_actions=["runtime:read"],
+            )
+
+        def get_protocol_run(self, run_id: str, *, access):
+            assert run_id == "run-1"
+            assert access.has_role("runtime_capability")
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(package_dir),
+                        workspace_path="scoped-package",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        rejected = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime",
+            headers={"Authorization": "Bearer full-agent-token"},
+        )
+        accepted = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime",
+            headers={"Authorization": "Bearer scoped-token"},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert rejected.status_code == 403
+    assert rejected.json()["detail"]["error_code"] == "RUNTIME_CAPABILITY_FORBIDDEN"
+    assert accepted.status_code == 200
+    assert accepted.json()["runtime"]["status"] == "stopped"
+
+
 def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_field(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     package_dir = tmp_path / "package"
     package_dir.mkdir()
     (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
@@ -5605,6 +5675,7 @@ def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_fi
 def test_protocol_artifact_runtime_get_reconcile_preserves_registry_urls_and_dedupes_health(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     package_dir = tmp_path / "package"
     package_dir.mkdir()
     manifest = ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/health")
@@ -5726,6 +5797,7 @@ def test_protocol_artifact_runtime_get_reconcile_preserves_registry_urls_and_ded
 def test_protocol_artifact_runtime_start_blocks_non_run_ready_manifest(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     package_dir = tmp_path / "package"
     package_dir.mkdir()
     (package_dir / "octopus-runtime.json").write_text(
@@ -5790,8 +5862,9 @@ def test_protocol_artifact_runtime_start_blocks_non_run_ready_manifest(monkeypat
         org_id="local",
         roles=("operator",),
     )
+    csrf = _ui_csrf_token(client)
     try:
-        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/start")
+        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/start", headers={"X-CSRF-Token": csrf})
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
@@ -5806,6 +5879,7 @@ def test_protocol_artifact_runtime_start_blocks_non_run_ready_manifest(monkeypat
 def test_protocol_artifact_runtime_stop_preserves_typed_manifest(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     manifest = ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/")
     existing_runtime = ProtocolArtifactRuntimeInstanceRecord(
         runtime_instance_id="runtime-1",
@@ -5875,8 +5949,9 @@ def test_protocol_artifact_runtime_stop_preserves_typed_manifest(monkeypatch, tm
         org_id="local",
         roles=("operator",),
     )
+    csrf = _ui_csrf_token(client)
     try:
-        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/stop")
+        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/stop", headers={"X-CSRF-Token": csrf})
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)

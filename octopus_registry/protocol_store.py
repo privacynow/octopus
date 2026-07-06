@@ -7,6 +7,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import secrets
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
@@ -48,6 +49,8 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolRuntimeCapabilityExchangeResultRecord,
+    ProtocolRuntimeCapabilityTokenRecord,
     ProtocolScenarioRecord,
     ProtocolStageExecutionRecord,
     ProtocolStageTaskResultRecord,
@@ -151,6 +154,219 @@ class ProtocolPostgresAdapter:
             if access is not None and access.has_role(role):
                 return role
         return "service"
+
+    @staticmethod
+    def _hash_capability_secret(value: str) -> str:
+        return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _capability_token_from_row(row: Mapping[str, object], *, capability_ref: str = "") -> ProtocolRuntimeCapabilityTokenRecord:
+        allowed_raw = row.get("allowed_actions_json", [])
+        allowed_actions = allowed_raw if isinstance(allowed_raw, list) else []
+        return ProtocolRuntimeCapabilityTokenRecord(
+            capability_token_id=str(row.get("capability_token_id", "") or ""),
+            capability_ref=capability_ref,
+            protocol_run_id=str(row.get("protocol_run_id", "") or ""),
+            protocol_stage_execution_id=str(row.get("protocol_stage_execution_id", "") or ""),
+            artifact_key=str(row.get("artifact_key", "") or ""),
+            participant_key=str(row.get("participant_key", "") or ""),
+            target_agent_id=str(row.get("target_agent_id", "") or ""),
+            allowed_actions=[str(item or "") for item in allowed_actions if str(item or "").strip()],
+            expires_at=str(row.get("expires_at", "") or ""),
+            revoked_at=str(row.get("revoked_at", "") or ""),
+            exchange_count=int(row.get("exchange_count", 0) or 0),
+            max_exchange_count=int(row.get("max_exchange_count", 2) or 2),
+            created_at=str(row.get("created_at", "") or ""),
+            updated_at=str(row.get("updated_at", "") or ""),
+            actor_ref=str(row.get("actor_ref", "") or ""),
+        )
+
+    def mint_runtime_capability_token(
+        self,
+        *,
+        protocol_run_id: str,
+        protocol_stage_execution_id: str,
+        artifact_key: str,
+        participant_key: str,
+        target_agent_id: str,
+        allowed_actions: Sequence[str],
+        expires_at: str,
+        actor_ref: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord:
+        capability_ref = f"oct-cap-{secrets.token_urlsafe(24)}"
+        now = utcnow_iso()
+        token_id = uuid.uuid4().hex
+        actions = [str(item or "").strip() for item in allowed_actions if str(item or "").strip()]
+        with self._connect() as conn, write_tx(conn):
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                INSERT INTO {SCHEMA}.protocol_runtime_capability_tokens (
+                    capability_token_id, capability_ref_hash, bearer_token_hash,
+                    protocol_run_id, protocol_stage_execution_id, artifact_key, participant_key,
+                    target_agent_id, allowed_actions_json, expires_at, revoked_at,
+                    exchange_count, max_exchange_count, created_at, updated_at, actor_ref
+                ) VALUES (%s, %s, '', %s, %s, %s, %s, %s, %s, %s, '', 0, 2, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    token_id,
+                    self._hash_capability_secret(capability_ref),
+                    protocol_run_id,
+                    protocol_stage_execution_id,
+                    str(artifact_key or "").strip() or "*",
+                    participant_key,
+                    target_agent_id,
+                    jsonb(actions),
+                    expires_at,
+                    now,
+                    now,
+                    actor_ref,
+                ),
+            )
+        if row is None:
+            raise RuntimeError("Failed to mint runtime capability token")
+        return self._capability_token_from_row(row, capability_ref=capability_ref)
+
+    def exchange_runtime_capability_token(
+        self,
+        *,
+        capability_ref: str,
+        target_agent_id: str,
+    ) -> ProtocolRuntimeCapabilityExchangeResultRecord:
+        ref = str(capability_ref or "").strip()
+        agent_id = str(target_agent_id or "").strip()
+        if not ref or not agent_id:
+            return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="invalid", message="capability_ref and target_agent_id are required.")
+        now = utcnow_iso()
+        bearer = f"oct-rt-{secrets.token_urlsafe(32)}"
+        with self._connect() as conn, write_tx(conn):
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_runtime_capability_tokens
+                WHERE capability_ref_hash = %s
+                FOR UPDATE
+                """,
+                (self._hash_capability_secret(ref),),
+            )
+            if row is None:
+                return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="not_found", message="Unknown runtime capability reference.")
+            token = self._capability_token_from_row(row, capability_ref=ref)
+            if token.target_agent_id and token.target_agent_id != agent_id:
+                return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="forbidden", message="Capability reference is not assigned to this agent.")
+            if token.revoked_at:
+                return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="revoked", message="Runtime capability has been revoked.")
+            try:
+                if datetime.fromisoformat(token.expires_at) <= datetime.fromisoformat(now):
+                    return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="expired", message="Runtime capability has expired.")
+            except ValueError:
+                return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="invalid", message="Runtime capability expiry is invalid.")
+            if token.exchange_count >= token.max_exchange_count:
+                return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="exhausted", message="Runtime capability exchange limit reached.")
+            stage = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT status
+                FROM {SCHEMA}.protocol_stage_executions
+                WHERE protocol_stage_execution_id = %s
+                """,
+                (token.protocol_stage_execution_id,),
+            )
+            if stage is None or str(stage.get("status", "") or "") in {"completed", "failed", "blocked", "cancelled"}:
+                return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="inactive", message="Runtime capability stage is no longer active.")
+            updated = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                UPDATE {SCHEMA}.protocol_runtime_capability_tokens
+                SET bearer_token_hash = %s,
+                    exchange_count = exchange_count + 1,
+                    updated_at = %s
+                WHERE capability_token_id = %s
+                RETURNING *
+                """,
+                (
+                    self._hash_capability_secret(bearer),
+                    now,
+                    token.capability_token_id,
+                ),
+            )
+        if updated is None:
+            return ProtocolRuntimeCapabilityExchangeResultRecord(ok=False, status="error", message="Runtime capability exchange failed.")
+        return ProtocolRuntimeCapabilityExchangeResultRecord(
+            ok=True,
+            status="exchanged",
+            message="Runtime capability exchanged.",
+            bearer_token=bearer,
+            token=self._capability_token_from_row(updated, capability_ref=ref),
+        )
+
+    def validate_runtime_capability_token(
+        self,
+        *,
+        bearer_token: str,
+        protocol_run_id: str,
+        artifact_key: str,
+        action: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord | None:
+        bearer = str(bearer_token or "").strip()
+        if not bearer:
+            return None
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"""
+                SELECT *
+                FROM {SCHEMA}.protocol_runtime_capability_tokens
+                WHERE bearer_token_hash = %s
+                """,
+                (self._hash_capability_secret(bearer),),
+            )
+        if row is None:
+            return None
+        token = self._capability_token_from_row(row)
+        if token.revoked_at or token.protocol_run_id != str(protocol_run_id or "").strip():
+            return None
+        scoped_artifact = str(token.artifact_key or "").strip()
+        requested_artifact = str(artifact_key or "").strip()
+        if scoped_artifact not in {"", "*", requested_artifact}:
+            return None
+        if str(action or "").strip() not in set(token.allowed_actions):
+            return None
+        try:
+            if datetime.fromisoformat(token.expires_at) <= datetime.fromisoformat(now):
+                return None
+        except ValueError:
+            return None
+        return token
+
+    def revoke_runtime_capability_tokens_for_stage(self, protocol_stage_execution_id: str, *, reason: str = "") -> int:
+        stage_execution_id = str(protocol_stage_execution_id or "").strip()
+        if not stage_execution_id:
+            return 0
+        now = utcnow_iso()
+        rows = 0
+        with self._connect() as conn, write_tx(conn):
+            rows = int(POSTGRES_STORE_DIALECT.execute(
+                conn,
+                f"""
+                UPDATE {SCHEMA}.protocol_runtime_capability_tokens
+                SET revoked_at = %s,
+                    updated_at = %s,
+                    actor_ref = CASE WHEN actor_ref = '' THEN %s ELSE actor_ref END
+                WHERE protocol_stage_execution_id = %s
+                  AND revoked_at = ''
+                """,
+                (
+                    now,
+                    now,
+                    str(reason or "stage_terminal"),
+                    stage_execution_id,
+                ),
+            ) or 0)
+        return rows
 
     @classmethod
     def _access_can_edit_protocol_internals(cls, access: ProtocolAccessContextRecord | None) -> bool:
@@ -1883,6 +2099,19 @@ class ProtocolPostgresAdapter:
             now=now,
             resolve_selector=lambda selector: self._resolve_selector_in_tx(conn, selector),
         )
+        if engine.routed_task_request is not None:
+            engine = engine.model_copy(
+                update={
+                    "routed_task_request": self._attach_runtime_capability_to_request(
+                        conn,
+                        run_row=run_row,
+                        stage_execution_row=stage_execution_row,
+                        request=engine.routed_task_request,
+                        timeout_at=engine.timeout_at,
+                        now=now,
+                    )
+                }
+            )
         try:
             return self._apply_protocol_engine_decision_in_tx(
                 conn,
@@ -1909,6 +2138,127 @@ class ProtocolPostgresAdapter:
                 now=now,
             )
             return {}
+
+    def _attach_runtime_capability_to_request(
+        self,
+        conn,
+        *,
+        run_row: Mapping[str, object],
+        stage_execution_row: Mapping[str, object],
+        request,
+        timeout_at: str,
+        now: str,
+    ):
+        stage_execution_id = str(stage_execution_row.get("protocol_stage_execution_id", "") or "")
+        stage_key = str(stage_execution_row.get("stage_key", "") or "")
+        participant_key = str(stage_execution_row.get("participant_key", "") or "")
+        target_agent_id = str(getattr(request, "target_agent_id", "") or "")
+        artifact_key = "*"
+        try:
+            context = dict(getattr(request, "context", {}) or {})
+            manifest = context.get("artifact_manifest", [])
+            if isinstance(manifest, list):
+                output_keys = [
+                    str(item.get("artifact_key", "") or "").strip()
+                    for item in manifest
+                    if isinstance(item, Mapping) and str(item.get("artifact_key", "") or "").strip()
+                ]
+                if len(output_keys) == 1:
+                    artifact_key = output_keys[0]
+        except Exception:
+            context = dict(getattr(request, "context", {}) or {})
+        expires_at = str(timeout_at or "").strip()
+        if not expires_at:
+            expires_at = (datetime.fromisoformat(now) + timedelta(hours=4)).isoformat()
+        token_id = uuid.uuid4().hex
+        capability_ref = f"oct-cap-{secrets.token_urlsafe(24)}"
+        allowed_actions = [
+            "runtime:start",
+            "runtime:stop",
+            "runtime:read",
+            "runtime:fetch",
+            "runtime:event",
+            "journey:read",
+            "journey:result",
+            "journey:run",
+        ]
+        POSTGRES_STORE_DIALECT.execute(
+            conn,
+            f"""
+            INSERT INTO {SCHEMA}.protocol_runtime_capability_tokens (
+                capability_token_id, capability_ref_hash, bearer_token_hash,
+                protocol_run_id, protocol_stage_execution_id, artifact_key, participant_key,
+                target_agent_id, allowed_actions_json, expires_at, revoked_at,
+                exchange_count, max_exchange_count, created_at, updated_at, actor_ref
+            ) VALUES (%s, %s, '', %s, %s, %s, %s, %s, %s, %s, '', 0, 2, %s, %s, %s)
+            """,
+            (
+                token_id,
+                self._hash_capability_secret(capability_ref),
+                str(run_row.get("protocol_run_id", "") or ""),
+                stage_execution_id,
+                artifact_key,
+                participant_key,
+                target_agent_id,
+                jsonb(allowed_actions),
+                expires_at,
+                now,
+                now,
+                stage_execution_id,
+            ),
+        )
+        context["runtime_capability"] = {
+            "capability_ref": capability_ref,
+            "artifact_key": artifact_key,
+            "expires_at": expires_at,
+            "allowed_actions": allowed_actions,
+        }
+        internal_context = dict(getattr(request, "internal_context", {}) or {})
+        internal_context["runtime_capability"] = {
+            "capability_ref": capability_ref,
+            "artifact_key": artifact_key,
+            "expires_at": expires_at,
+            "stage_key": stage_key,
+        }
+        instructions = str(getattr(request, "instructions", "") or "").rstrip()
+        instructions = (
+            instructions
+            + "\n\nRuntime Registry capability:\n"
+            "- Use the OCTOPUS_CAPABILITY_TOKEN environment variable when calling Registry runtime or journey endpoints.\n"
+            "- Do not print, persist, or include the token in artifacts, logs, or final responses.\n"
+            "- The token is scoped to this protocol run and expires when the stage completes or is retried."
+        )
+        context_model = type(getattr(request, "context", RegistryJsonRecord()))
+        internal_context_model = type(getattr(request, "internal_context", RegistryJsonRecord()))
+        return request.model_copy(
+            update={
+                "context": context_model.model_validate(context),
+                "internal_context": internal_context_model.model_validate(internal_context),
+                "instructions": instructions,
+            }
+        )
+
+    def _revoke_runtime_capabilities_for_stage_in_tx(
+        self,
+        conn,
+        *,
+        protocol_stage_execution_id: str,
+        now: str,
+    ) -> None:
+        stage_execution_id = str(protocol_stage_execution_id or "").strip()
+        if not stage_execution_id:
+            return
+        POSTGRES_STORE_DIALECT.execute(
+            conn,
+            f"""
+            UPDATE {SCHEMA}.protocol_runtime_capability_tokens
+            SET revoked_at = %s,
+                updated_at = %s
+            WHERE protocol_stage_execution_id = %s
+              AND revoked_at = ''
+            """,
+            (now, now, stage_execution_id),
+        )
 
     def _upsert_protocol_stage_artifacts_in_tx(
         self,
@@ -2199,6 +2549,12 @@ class ProtocolPostgresAdapter:
                     now,
                     run_row["protocol_run_id"],
                 ),
+            )
+        if engine.stage_status in {"completed", "failed", "blocked", "cancelled"}:
+            self._revoke_runtime_capabilities_for_stage_in_tx(
+                conn,
+                protocol_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+                now=now,
             )
         if engine.artifact_observations:
             self._upsert_protocol_stage_artifacts_in_tx(

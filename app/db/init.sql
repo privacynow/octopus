@@ -780,6 +780,34 @@ CREATE INDEX IF NOT EXISTS idx_protocol_artifact_runtime_events_instance
 CREATE INDEX IF NOT EXISTS idx_protocol_artifact_runtime_events_run
     ON agent_registry.protocol_artifact_runtime_events (protocol_run_id, artifact_key, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_runtime_capability_tokens (
+    capability_token_id TEXT PRIMARY KEY,
+    capability_ref_hash TEXT NOT NULL UNIQUE,
+    bearer_token_hash TEXT NOT NULL DEFAULT '',
+    protocol_run_id TEXT NOT NULL,
+    protocol_stage_execution_id TEXT NOT NULL,
+    artifact_key TEXT NOT NULL DEFAULT '',
+    participant_key TEXT NOT NULL DEFAULT '',
+    target_agent_id TEXT NOT NULL DEFAULT '',
+    allowed_actions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT NOT NULL DEFAULT '',
+    exchange_count INTEGER NOT NULL DEFAULT 0,
+    max_exchange_count INTEGER NOT NULL DEFAULT 2,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    actor_ref TEXT NOT NULL DEFAULT ''
+);
+ALTER TABLE agent_registry.protocol_runtime_capability_tokens
+    DROP CONSTRAINT IF EXISTS protocol_runtime_capability_tokens_bearer_token_hash_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_runtime_capability_tokens_bearer_hash
+    ON agent_registry.protocol_runtime_capability_tokens (bearer_token_hash)
+    WHERE bearer_token_hash <> '';
+CREATE INDEX IF NOT EXISTS idx_protocol_runtime_capability_tokens_stage
+    ON agent_registry.protocol_runtime_capability_tokens (protocol_stage_execution_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_protocol_runtime_capability_tokens_run_artifact
+    ON agent_registry.protocol_runtime_capability_tokens (protocol_run_id, artifact_key, revoked_at, expires_at);
+
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_transitions (
     protocol_transition_id TEXT PRIMARY KEY,
     protocol_run_id TEXT NOT NULL,

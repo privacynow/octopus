@@ -45,6 +45,16 @@ ProtocolArtifactRuntimeEventKind = Literal[
     "deleted",
     "failed",
 ]
+ProtocolRuntimeCapabilityAction = Literal[
+    "runtime:start",
+    "runtime:stop",
+    "runtime:read",
+    "runtime:fetch",
+    "runtime:event",
+    "journey:read",
+    "journey:result",
+    "journey:run",
+]
 ProtocolResolutionOutcome = Literal["queued", "ok", "error"]
 ProtocolArtifactVerificationState = Literal["declared", "available", "verified", "missing", "waived"]
 ProtocolArtifactRetentionState = Literal["active", "archived", "expired", "deleted", "unavailable"]
@@ -757,6 +767,36 @@ class ProtocolArtifactRuntimeEventRecord(RegistryRecordModel):
     summary: str = ""
     metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     created_at: str = ""
+
+
+class ProtocolRuntimeCapabilityTokenRecord(RegistryRecordModel):
+    capability_token_id: str = ""
+    capability_ref: str = ""
+    protocol_run_id: str = ""
+    protocol_stage_execution_id: str = ""
+    artifact_key: str = ""
+    participant_key: str = ""
+    target_agent_id: str = ""
+    allowed_actions: list[ProtocolRuntimeCapabilityAction | str] = Field(default_factory=list)
+    expires_at: str = ""
+    revoked_at: str = ""
+    exchange_count: int = 0
+    max_exchange_count: int = 2
+    created_at: str = ""
+    updated_at: str = ""
+    actor_ref: str = ""
+
+
+class ProtocolRuntimeCapabilityExchangeRecord(RegistryRecordModel):
+    capability_ref: str = ""
+
+
+class ProtocolRuntimeCapabilityExchangeResultRecord(RegistryRecordModel):
+    ok: bool = False
+    status: str = ""
+    message: str = ""
+    bearer_token: str = ""
+    token: ProtocolRuntimeCapabilityTokenRecord | None = None
 
 
 class ProtocolArtifactRuntimeHealthRecord(RegistryRecordModel):

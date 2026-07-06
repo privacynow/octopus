@@ -406,6 +406,7 @@ def execution_channel_metadata(
         authority_ref=getattr(message, "authority_ref", ""),
         external_conversation_ref=external_conversation_ref,
         target_agent_id=target_agent_id,
+        runtime_capability_ref=getattr(message, "runtime_capability_ref", ""),
     )
 
 

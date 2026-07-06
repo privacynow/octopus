@@ -270,6 +270,16 @@ class ExecutionFaultStatePort(Protocol):
 
 
 @runtime_checkable
+class RuntimeCapabilityExchangePort(Protocol):
+    async def exchange_runtime_capability(
+        self,
+        *,
+        authority_ref: str,
+        capability_ref: str,
+    ) -> str: ...
+
+
+@runtime_checkable
 class ControlPlanePort(Protocol):
     conversation_projection: ConversationProjectionPort
     task_routing: TaskRoutingPort
@@ -290,6 +300,7 @@ class ExecutionServices:
     agent_directory: AgentDirectoryPort | None = None
     conversation_projection: ConversationProjectionPort | None = None
     agent_awareness: AgentAwarenessPort | None = None
+    runtime_capabilities: RuntimeCapabilityExchangePort | None = None
 
 
 @dataclass(frozen=True)
@@ -890,6 +901,7 @@ class BotRuntime:
                 authority_ref=authority_ref,
                 external_conversation_ref=str(getattr(event, "external_conversation_ref", "") or ""),
                 target_agent_id=self._target_agent_id_for_authority(authority_ref),
+                runtime_capability_ref=str(getattr(event, "runtime_capability_ref", "") or ""),
                 requested_skills=tuple(
                     str(skill).strip().lower()
                     for skill in getattr(event, "requested_skills", ())
@@ -2074,7 +2086,9 @@ class ProviderDispatchRuntime:
             r"api[_-]?key|token|secret|password|passwd|authorization|credential"
             r")(\s*[:=]\s*)([^\s,;]+)"
         )
+        runtime_token_re = re.compile(r"oct-rt-[A-Za-z0-9_-]+")
         text = secret_re.sub(r"\1\2<redacted>", text)
+        text = runtime_token_re.sub("<runtime-token>", text)
         text = path_re.sub("<path>", text)
         limit = 1500
         if len(text) > limit:

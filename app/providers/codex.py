@@ -13,6 +13,7 @@ from typing import Any
 from app.config import BotConfig
 from app.formatting import trim_text
 from app.provider_auth import auth_artifact_errors, runtime_auth_root
+from app.provider_failures import classify_provider_failure
 from app.provider_health import command_failure, combined_output, run_health_command
 from app.progress import (
     CommandFinish, CommandStart, DraftReply, Liveness, Thinking,
@@ -53,6 +54,59 @@ class CodexProvider:
     @staticmethod
     def _safe_failure_text(returncode: int) -> str:
         return f"Codex exited with code {returncode} before completing the request."
+
+    @classmethod
+    def _terminal_event_error(cls, event: dict[str, Any]) -> str:
+        msg = event.get("msg")
+        if isinstance(msg, dict) and cls._normalize_type(msg.get("type")) == "error":
+            return (
+                cls._trimmed_text(msg.get("message"))
+                or cls._trimmed_text(msg.get("error"))
+                or "Codex reported an error."
+            )
+
+        if cls._normalize_type(event.get("type")) == "error":
+            return (
+                cls._trimmed_text(event.get("message"))
+                or cls._trimmed_text(event.get("error"))
+                or "Codex reported an error."
+            )
+
+        payload = event.get("payload")
+        if isinstance(payload, dict) and cls._normalize_type(payload.get("type")) == "error":
+            return (
+                cls._trimmed_text(payload.get("message"))
+                or cls._trimmed_text(payload.get("error"))
+                or "Codex reported an error."
+            )
+
+        return ""
+
+    @classmethod
+    def _event_stream_error(cls, output: str) -> str:
+        for line in str(output or "").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            detail = cls._terminal_event_error(event)
+            if detail:
+                return detail
+        return ""
+
+    @staticmethod
+    def _provider_failure_text(detail: str) -> str:
+        text = trim_text(str(detail or "").strip(), 500) or "Codex reported an error."
+        classification = classify_provider_failure("codex", text)
+        if classification.fault_kind == "provider_auth":
+            return (
+                "Codex authentication failed while refreshing the stored token. "
+                "Run './octopus' and choose Diagnose -> Provider auth for codex, then retry. "
+                f"Detail: {text}"
+            )
+        return f"Codex reported a provider error before completing the request: {text}"
 
     def check_health(self) -> list[str]:
         errors: list[str] = []
@@ -134,7 +188,10 @@ class CodexProvider:
                 timeout=30,
                 env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
             )
-            if returncode != 0:
+            provider_error = self._event_stream_error(stdout)
+            if provider_error:
+                errors.append(self._provider_failure_text(provider_error))
+            elif returncode != 0:
                 errors.append(
                     command_failure(
                         "Codex runtime probe",
@@ -616,6 +673,7 @@ class CodexProvider:
         usage_output = 0
         cached_usage_input: int | None = None
         cached_usage_output: int | None = None
+        provider_error = ""
 
         def append_unique(values: list[str], value: str) -> None:
             if value and value not in values:
@@ -626,6 +684,7 @@ class CodexProvider:
             nonlocal usage_input, usage_output
             nonlocal cached_usage_input, cached_usage_output
             nonlocal failed_file_change, successful_file_change
+            nonlocal provider_error
             while True:
                 read_coro = proc.stdout.readline()
                 if cancel is not None:
@@ -652,6 +711,10 @@ class CodexProvider:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+
+                event_error = self._terminal_event_error(event)
+                if event_error and not provider_error:
+                    provider_error = event_error
 
                 etype = self._normalize_type(event.get("type"))
                 payload = event.get("payload")
@@ -793,6 +856,16 @@ class CodexProvider:
         state_updates: dict[str, Any] = {}
         if thread_id:
             state_updates["thread_id"] = thread_id
+
+        if provider_error:
+            log.warning("codex reported provider error: %s", trim_text(provider_error, 300))
+            return RunResult(
+                text=self._provider_failure_text(provider_error),
+                working_dir=cwd,
+                returncode=proc.returncode if proc.returncode else 1,
+                provider_state_updates=state_updates,
+                tool_executions=tool_records,
+            )
 
         reply = final_text or "\n\n".join(messages).strip() or draft_text or "[empty response]"
 

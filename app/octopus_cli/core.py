@@ -54,6 +54,14 @@ MANAGED_IMAGE_KIND_LABEL = "org.octopus.image-kind"
 MANAGED_IMAGE_FINGERPRINT_LABEL = "org.octopus.source-fingerprint"
 MANAGED_IMAGE_PROVIDER_LABEL = "org.octopus.provider"
 
+# Env vars that may override Dockerfile ARG defaults for provider bot images.
+IMAGE_BUILD_OVERRIDE_ENV_KEYS = (
+    "CLAUDE_INSTALL_METHOD",
+    "CLAUDE_CLI_NPM_PACKAGE",
+    "CLAUDE_INSTALL_URL",
+    "CODEX_CLI_NPM_PACKAGE",
+)
+
 
 class OctopusError(RuntimeError):
     """User-facing operator error."""
@@ -674,7 +682,14 @@ class OctopusManager:
                 Path("skills"),
                 Path("scripts"),
             ]
-            seed = f"{kind}:{provider}".encode("utf-8")
+            # Env build-arg overrides change what the image installs, so
+            # setting or unsetting one must mark existing images stale.
+            seed_text = f"{kind}:{provider}"
+            for env_key in IMAGE_BUILD_OVERRIDE_ENV_KEYS:
+                override = os.environ.get(env_key, "").strip()
+                if override:
+                    seed_text += f":{env_key}={override}"
+            seed = seed_text.encode("utf-8")
         else:
             paths = [
                 Path("requirements.txt"),
@@ -1057,12 +1072,15 @@ class OctopusManager:
             "infra/docker/Dockerfile.bot",
             "--build-arg",
             f"BOT_PROVIDER={provider}",
-            "--build-arg",
-            f"CLAUDE_INSTALL_METHOD={os.environ.get('CLAUDE_INSTALL_METHOD', 'npm')}",
-            "--build-arg",
-            f"CLAUDE_CLI_NPM_PACKAGE={os.environ.get('CLAUDE_CLI_NPM_PACKAGE', '@anthropic-ai/claude-code')}",
-            "--build-arg",
-            f"CLAUDE_INSTALL_URL={os.environ.get('CLAUDE_INSTALL_URL', 'https://claude.ai/install.sh')}",
+        ]
+        # Only forward explicit overrides; otherwise the Dockerfile ARG
+        # defaults (including the pinned CLI version) are the single source
+        # of truth for what the image installs.
+        for env_key in IMAGE_BUILD_OVERRIDE_ENV_KEYS:
+            override = os.environ.get(env_key, "").strip()
+            if override:
+                build_args.extend(["--build-arg", f"{env_key}={override}"])
+        build_args += [
             "--label",
             f"{MANAGED_IMAGE_KIND_LABEL}=provider-bot",
             "--label",

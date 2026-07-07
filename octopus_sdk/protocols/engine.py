@@ -24,6 +24,7 @@ from .core import (
     protocol_review_edge_key,
     protocol_participant_session_key,
     protocol_retention_until,
+    protocol_stage_effective_timeout_seconds,
     protocol_stage_internal_context,
     render_protocol_stage_prompt,
     stage_target_for_decision,
@@ -161,9 +162,10 @@ class ProtocolRunEngine:
         lease_owner: str,
         lease_ttl_seconds: int,
     ) -> ProtocolDispatchDecisionRecord:
+        timeout_seconds = protocol_stage_effective_timeout_seconds(document, stage)
         timeout_at = ""
-        if stage.timeout_seconds > 0:
-            timeout_at = _iso_plus_seconds(now, stage.timeout_seconds)
+        if timeout_seconds > 0:
+            timeout_at = _iso_plus_seconds(now, timeout_seconds)
         if not stage.write_capable or not document.policies.single_active_writer:
             return ProtocolDispatchDecisionRecord(
                 ok=True,

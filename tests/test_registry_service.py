@@ -79,6 +79,7 @@ from octopus_sdk.registry.management_executor import (
     execute_management_request,
 )
 from octopus_sdk.providers import ProviderStateRecord
+from octopus_sdk.resources import ResourceRecord
 from octopus_sdk.skill_packages import SkillPackageRecord, skill_document_to_text, skill_package_document
 
 _FULL_MANAGEMENT_OPERATIONS = list(ALL_MANAGEMENT_OPERATIONS)
@@ -1972,6 +1973,17 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
             "planner_agent_id": "agent-1",
         })
         loaded_response = client.get(f"/v1/protocol-auto/sessions/{session_id}")
+        app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+            is_operator=True,
+            org_id="local",
+            roles=("operator", "author"),
+        )
+        author_apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
+        app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+            is_operator=True,
+            org_id="local",
+            roles=("operator", "author", "publisher"),
+        )
         apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
         publish_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/publish")
         run_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/run", json={"origin_channel": "registry"})
@@ -1989,6 +2001,8 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
     assert loaded_response.status_code == 200
     assert loaded_response.json()["status"] in {"ready", "blocked"}
     assert loaded_response.json()["analysis"]["domain"] == "requirement-specific"
+    assert author_apply_response.status_code == 403
+    assert author_apply_response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_APPLY_ROLE_REQUIRED"
     assert apply_response.status_code == 200
     assert apply_response.json()["analysis"]["domain"] == "requirement-specific"
     assert apply_response.json()["target_protocol_id"] == "protocol-auto"
@@ -1996,6 +2010,183 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
     assert publish_response.json()["status"] == "published"
     assert run_response.status_code == 200
     assert run_response.json()["run_result"]["run"]["protocol_run_id"] == "run-auto"
+
+
+def test_protocol_auto_create_resource_attach_failure_returns_session_details(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __init__(self):
+            self.session = None
+            self.routed_task_id = ""
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    display_name="Builder",
+                    routing_skills=["testing"],
+                    supported_admin_operations=["design_auto_protocol"],
+                    connectivity_state="connected",
+                )
+            ]
+
+        def get_agent_status(self, agent_id: str):
+            return AgentRecord(
+                agent_id=agent_id,
+                display_name="Builder",
+                connectivity_state="connected",
+                supported_admin_operations=["design_auto_protocol"],
+            )
+
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            return []
+
+        def list_routing_skills(self):
+            return []
+
+        def get_resource(self, resource_id: str):
+            assert resource_id == "resource-1"
+            return ResourceRecord(
+                resource_id="resource-1",
+                original_name="context.txt",
+                mime_type="text/plain",
+                size_bytes=42,
+                content_hash="abc123",
+                source_surface="registry",
+                metadata_json=RegistryJsonRecord.model_validate({"summary": "context"}),
+            )
+
+        def attach_resource(self, **kwargs):
+            raise KeyError(kwargs.get("resource_id"))
+
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id="auto-conversation",
+                target_agent_id=str(kwargs.get("target_agent_id") or "agent-1"),
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                title="Auto Protocol planner",
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.routed_task_id = request.routed_task_id
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id="agent-1",
+                request=request.context,
+            )
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind == "planning_started"
+            self.session = session
+            return session
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build a routed test protocol.",
+                "resource_refs": ["resource-1"],
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 404, response.text
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "RESOURCE_NOT_FOUND"
+    assert detail["details"]["session_id"] == store.session.session_id
+    assert detail["details"]["planner_task_id"] == store.routed_task_id
+    assert detail["details"]["status"] == "planning"
+
+
+def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    def _session(index: int):
+        return generate_auto_protocol_session(
+            ProtocolAutoDesignRequestRecord(
+                surface="registry",
+                requirement_text=f"Build design {index}.",
+                available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+                model_response=ProtocolAutoDesignModelResponseRecord(
+                    requirement_summary=f"Build design {index}.",
+                    domain="test",
+                    work_packages=[
+                        ProtocolAutoDesignWorkPackageRecord(
+                            package_key="implementation",
+                            display_name="Implementation",
+                            rationale="Needed.",
+                            purpose="Build it.",
+                            quality_bar="Verified.",
+                            required_skills=["implementation"],
+                        )
+                    ],
+                ),
+            ),
+            session_id=f"auto-session-{index}",
+            created_at=f"2026-04-16T00:0{index}:00+00:00",
+            updated_at=f"2026-04-16T00:0{index}:00+00:00",
+        ).model_copy(update={
+            "status": "planning",
+            "planner_task_id": f"auto-design-{index}",
+            "planner_agent_id": "agent-1",
+            "planner_policy": "auto_select",
+            "planner_state": RegistryJsonRecord.model_validate({
+                "planner_status": "queued",
+                "queued_at": f"2026-04-16T00:0{index}:00+00:00",
+                "progress_summary": "Queued.",
+            }),
+        })
+
+    sessions = [_session(1), _session(2), _session(3)]
+
+    class _Store:
+        def list_protocol_auto_design_sessions(self, *, access, cursor=0, limit=25, status=""):
+            del access
+            filtered = [
+                item for item in sessions
+                if not str(status or "").strip() or item.status == str(status or "").strip()
+            ]
+            return filtered[int(cursor or 0): int(cursor or 0) + int(limit or 25)]
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2")
+        final_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=2")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["next_cursor"] == 2
+    assert [item["session_id"] for item in payload["items"]] == ["auto-session-1", "auto-session-2"]
+    assert [item["planner_state"]["queue_position"] for item in payload["items"]] == [0, 1]
+    assert final_response.status_code == 200, final_response.text
+    final_payload = final_response.json()
+    assert final_payload["next_cursor"] is None
+    assert [item["session_id"] for item in final_payload["items"]] == ["auto-session-3"]
 
 
 def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkeypatch, tmp_path: Path):
@@ -3550,6 +3741,42 @@ def test_protocol_stage_result_broadcasts_protocol_run_invalidation(monkeypatch,
     assert response.status_code == 200
     assert captured
     assert {"tasks", "conversations", "summary", "protocols", "protocol-run:run-1"} in captured
+
+
+def test_auto_design_progress_status_broadcasts_session_only(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    captured: list[set[str]] = []
+
+    class _Authority:
+        def update_routed_task_for_agent(self, agent_token: str, payload):
+            assert agent_token == "agent-token"
+            assert payload["routed_task_id"] == "auto-design:session-1:task"
+            return TaskRecord(
+                routed_task_id="auto-design:session-1:task",
+                target_agent_id="agent-1",
+                status="running",
+                summary="planner running",
+            )
+
+    async def _capture_invalidations(*, topics, reason, conversation_id="", agent_id="", routed_task_id=""):
+        assert reason == "routed_task.updated"
+        captured.append(set(topics))
+
+    monkeypatch.setattr(registry_server, "_broadcast_invalidations", _capture_invalidations)
+    app.dependency_overrides[registry_server.get_authority] = lambda: _Authority()
+    try:
+        response = client.post(
+            "/v1/agents/routed-tasks/auto-design:session-1:task/status",
+            headers={"Authorization": "Bearer agent-token"},
+            json={"status": "running", "summary": "planner running", "progress": 8},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_authority, None)
+
+    assert response.status_code == 200
+    assert captured == [{"tasks", "protocol-auto-session:session-1"}]
+    assert "protocols" not in captured[0]
 
 
 def test_protocol_issues_route_returns_issue_rows(monkeypatch, tmp_path: Path):

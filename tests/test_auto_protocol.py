@@ -104,7 +104,7 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "playable" in plan_text
     document = session.draft_definition_json.as_dict()
     produce_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_outcome")
-    assert int(produce_stage["timeout_seconds"]) >= 14_400
+    assert int(produce_stage["timeout_seconds"]) == 0
     assert "only valid protocol decision is completed" in produce_stage["instructions"]
     assert "Do not leave foreground servers" in produce_stage["instructions"]
     assert "runtime_kind 'java'" in produce_stage["instructions"]
@@ -114,7 +114,24 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "developer server commands at launch" in produce_stage["instructions"]
     assert "must not run dependency installation" in produce_stage["instructions"]
     acceptance_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "final_evidence")
-    assert int(acceptance_stage["timeout_seconds"]) >= 10_800
+    assert int(acceptance_stage["timeout_seconds"]) == 0
+    definition = ProtocolDefinitionDocumentRecord.model_validate(document)
+    run = ProtocolRunRecord(
+        protocol_run_id="run-timeouts",
+        protocol_definition_version_id="version-timeouts",
+    )
+    assert protocol_stage_runtime_contract(
+        document=definition,
+        run=run,
+        stage_execution_id="produce-timeout",
+        stage=definition.stage("produce_outcome"),
+    ).timeout_seconds >= 14_400
+    assert protocol_stage_runtime_contract(
+        document=definition,
+        run=run,
+        stage_execution_id="accept-timeout",
+        stage=definition.stage("final_evidence"),
+    ).timeout_seconds >= 10_800
     assert acceptance_stage["transitions"]["revise"] == "produce_outcome"
     assert "Adversarially" in acceptance_stage["instructions"]
     assert "exercise" in acceptance_stage["instructions"]

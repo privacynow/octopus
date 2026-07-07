@@ -232,13 +232,14 @@ authoring notes, stay with [PROTOCOLS.md](PROTOCOLS.md) and
 Auto Protocol design can be intentionally heavyweight. Large run-improvement
 requests may take several minutes because the planner is reading prior run
 context, lessons, artifact expectations, assignments, review loops, and runtime
-evidence needs. The Registry dialog shows the planner agent, planner job,
-elapsed/quiet progress, timeout expectations, and large-input hints while the
-session is `planning`. `Apply draft`, `Publish`, and `Publish & Run` are not
-valid actions until planning finishes; if the browser reloads or the dialog is
-closed, reopening Auto Protocol re-attaches to the active session instead of
-starting another planner job. A failed planner session remains visible with an
-actionable error instead of disappearing behind a browser timeout.
+evidence needs. The Registry dialog and `Build -> Designs` queue show the
+planner agent, planner job, elapsed/quiet progress, timeout expectations, and
+large-input hints while the session is `planning`. `Apply draft`, `Publish`, and
+`Publish & Run` are not valid actions until planning finishes; if the browser
+reloads or the dialog is closed, open `Build -> Designs` to reattach to the same
+session instead of starting another planner job. A failed planner session
+remains visible with an actionable error instead of disappearing behind a
+browser timeout.
 
 When the request is a serious product, Auto Protocol shows the inferred product
 class and whether a full product/system contract is required. Full contract mode
@@ -246,8 +247,11 @@ adds early contract-production and contract-review stages before implementation.
 Those stages produce the run-specific `auto_protocol_contract`, which becomes
 the acceptance bar for product behavior, domain caveats, backend/API behavior,
 persistence, provider callouts, security boundaries, and verification evidence.
-Serious-product stages carry explicit multi-hour execution budgets so slow
-domain, backend, and evidence work does not inherit a short global bot timeout.
+Serious-product stages use derived multi-hour execution budgets at dispatch time
+so slow domain, backend, and evidence work does not inherit a short global bot
+timeout. Generated drafts persist `timeout_seconds: 0` unless an operator
+explicitly authored a timeout; the run detail and routed task still receive the
+derived serious-product budget.
 If a stage still times out, the run detail shows the timed-out stage and routed
 task so you can retry, send back, interrupt, or inspect provider health.
 Use lightweight mode only for non-runtime, non-high-risk work.

@@ -2040,6 +2040,90 @@ def test_registry_store_standard_surface_preserves_existing_operator_only_fields
     assert saved.draft_definition_json["stages"][0]["timeout_seconds"] == 300
 
 
+def test_registry_store_generated_auto_protocol_dispatch_uses_derived_timeout(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="registry",
+            requirement_text=(
+                "Build a browser-runnable trading education app with a backend API, "
+                "persistent paper-trading state, provider adapters, and acceptance evidence."
+            ),
+            available_agents=[
+                {
+                    "agent_id": "agent-1",
+                    "display_name": "Builder",
+                    "routing_skills": [
+                        "architecture",
+                        "backend",
+                        "domain",
+                        "implementation",
+                        "product",
+                        "review",
+                        "testing",
+                    ],
+                }
+            ],
+            model_response=ProtocolAutoDesignModelResponseRecord(
+                requirement_summary="Build the requested serious product.",
+                domain="software product",
+                work_packages=[
+                    ProtocolAutoDesignWorkPackageRecord(
+                        package_key="backend_api",
+                        display_name="Backend API",
+                        rationale="The product requires a backend and provider adapters.",
+                        purpose="Implement API, persistence, and provider abstractions.",
+                        quality_bar="The backend behavior is testable and verified.",
+                        required_skills=["backend", "testing"],
+                    )
+                ],
+            ),
+        ),
+        session_id="auto-timeout-session",
+        created_at="2026-04-16T00:00:00+00:00",
+        updated_at="2026-04-16T00:00:00+00:00",
+    )
+    document = session.draft_definition_json.as_dict()
+    assert {int(stage.get("timeout_seconds") or 0) for stage in document["stages"]} == {0}
+    runtime_document = protocol_document()
+    runtime_document["metadata"]["auto_protocol"] = {
+        "generated": True,
+        "contract_required": True,
+        "primary_artifact": {"open_behavior": "runtime"},
+        "acceptance_contract": {"schema_version": 1},
+    }
+    for stage in runtime_document["stages"]:
+        stage["timeout_seconds"] = 0
+
+    _enrolled, _published, _created, detail = running_protocol_run(store, document=runtime_document)
+    stage_execution = next(
+        item for item in detail.stage_executions
+        if item.protocol_stage_execution_id == detail.run.current_stage_execution_id
+    )
+    assert stage_execution.timeout_at
+    created_at = datetime.fromisoformat(stage_execution.started_at)
+    timeout_at = datetime.fromisoformat(stage_execution.timeout_at)
+    assert (timeout_at - created_at).total_seconds() >= 14_400
+
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT request_json
+                FROM agent_registry.routed_tasks
+                WHERE routed_task_id = %s
+                """,
+                (stage_execution.routed_task_id,),
+            )
+            task_row = cur.fetchone()
+    assert task_row is not None
+    request_json = task_row[0]
+    contract = request_json["internal_context"]["protocol_stage_contract"]
+    assert contract["timeout_seconds"] >= 14_400
+
+
 def test_registry_store_persists_protocol_artifact_runtime(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     _enroll, _published, _created, detail = running_protocol_run(store)

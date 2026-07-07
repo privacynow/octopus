@@ -138,6 +138,7 @@ Router.register('/ui/conversations', renderConversationList);
 Router.register('/ui/conversations/:id', renderConversationDetail);
 Router.register('/ui/tasks', renderTaskList);
 Router.register('/ui/protocols', renderProtocolWorkspace);
+Router.register('/ui/design-sessions', renderProtocolWorkspace);
 Router.register('/ui/runs', renderProtocolRuns);
 Router.register('/ui/routing', renderRoutingPolicyList);
 Router.register('/ui/skills', renderSkillCatalog);

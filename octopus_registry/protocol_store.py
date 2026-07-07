@@ -4866,6 +4866,8 @@ class ProtocolPostgresAdapter:
             "completed_at": str(result_json.get("completed_at") or now),
             "progress_summary": str(result_json.get("summary") or ""),
         })
+        if status == "completed":
+            state["progress"] = 100
         if status != "completed":
             failed = self._auto_design_failed_session(
                 session,
@@ -4980,14 +4982,23 @@ class ProtocolPostgresAdapter:
             params.append(str(status or "").strip())
             clauses.append("status = %s")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        params.extend([max(1, min(int(limit or 25), 100)), max(0, int(cursor or 0))])
+        params.extend([max(1, min(int(limit or 25), 101)), max(0, int(cursor or 0))])
         with self._connect() as conn:
             rows = POSTGRES_STORE_DIALECT.fetchall(
                 conn,
                 f"""
                 SELECT * FROM {SCHEMA}.protocol_auto_sessions
                 {where}
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY
+                    CASE status
+                        WHEN 'planning' THEN 0
+                        WHEN 'ready' THEN 1
+                        WHEN 'blocked' THEN 2
+                        WHEN 'failed' THEN 3
+                        ELSE 4
+                    END,
+                    updated_at DESC,
+                    created_at DESC
                 LIMIT %s OFFSET %s
                 """,
                 tuple(params),

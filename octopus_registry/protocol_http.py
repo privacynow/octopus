@@ -7,7 +7,7 @@ import base64
 import copy
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -456,6 +456,70 @@ def build_protocol_router(
         if auth.is_agent:
             roles.update({"agent", "author", "publisher"})
         return access.model_copy(update={"roles": sorted(roles)})
+
+    def _auto_protocol_can_apply_operator_surface(access: ProtocolAccessContextRecord) -> bool:
+        return access.has_role("publisher") or access.has_role("admin")
+
+    def _auto_protocol_planner_status(session: ProtocolAutoDesignSessionRecord) -> str:
+        return str(session.planner_state.as_dict().get("planner_status") or "").strip().lower()
+
+    def _auto_protocol_queue_position_key(session: ProtocolAutoDesignSessionRecord) -> str:
+        agent_id = str(session.planner_agent_id or "").strip()
+        if agent_id:
+            return f"agent:{agent_id}"
+        return str(session.planner_policy or "auto_select").strip() or "auto_select"
+
+    def _auto_protocol_session_with_queue_position(
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        planning_sessions: Sequence[ProtocolAutoDesignSessionRecord],
+    ) -> ProtocolAutoDesignSessionRecord:
+        state = dict(session.planner_state.as_dict())
+        if str(session.status or "") != "planning" or _auto_protocol_planner_status(session) != "queued":
+            state.pop("queue_position", None)
+            return session.model_copy(update={"planner_state": RegistryJsonRecord.model_validate(state)})
+        key = _auto_protocol_queue_position_key(session)
+        queued = [
+            item
+            for item in planning_sessions
+            if str(item.status or "") == "planning"
+            and _auto_protocol_planner_status(item) == "queued"
+            and _auto_protocol_queue_position_key(item) == key
+        ]
+        queued.sort(key=lambda item: (
+            str(item.planner_state.as_dict().get("queued_at") or item.created_at or ""),
+            str(item.created_at or ""),
+            str(item.session_id or ""),
+        ))
+        position = 0
+        for index, item in enumerate(queued):
+            if str(item.session_id or "") == str(session.session_id or ""):
+                position = index
+                break
+        state["queue_position"] = position
+        return session.model_copy(update={"planner_state": RegistryJsonRecord.model_validate(state)})
+
+    def _auto_protocol_sessions_with_queue_positions(
+        sessions: Sequence[ProtocolAutoDesignSessionRecord],
+        *,
+        store: AbstractRegistryStore,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolAutoDesignSessionRecord]:
+        if not any(str(item.status or "") == "planning" for item in sessions):
+            return list(sessions)
+        try:
+            planning_sessions = store.list_protocol_auto_design_sessions(
+                access=access,
+                status="planning",
+                limit=100,
+                cursor=0,
+            )
+        except Exception:
+            planning_sessions = list(sessions)
+        return [
+            _auto_protocol_session_with_queue_position(item, planning_sessions=planning_sessions)
+            for item in sessions
+        ]
 
     @router.post("/v1/agents/runtime-capabilities/exchange")
     def resource_exchange_runtime_capability(
@@ -1111,6 +1175,14 @@ def build_protocol_router(
                     message=f"Attached resource was not found: {token}",
                 ) from exc
 
+    def _auto_protocol_session_error_details(session: ProtocolAutoDesignSessionRecord) -> dict[str, object]:
+        return {
+            "session_id": str(session.session_id or ""),
+            "planner_task_id": str(session.planner_task_id or ""),
+            "planner_request_id": str(session.planner_request_id or ""),
+            "status": str(session.status or ""),
+        }
+
     def _artifact_for_detail(detail, artifact_key: str) -> ProtocolArtifactRecord:
         artifact = next(
             (item for item in detail.artifacts if str(item.artifact_key or "").strip() == str(artifact_key or "").strip()),
@@ -1515,6 +1587,12 @@ def build_protocol_router(
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolAutoDesignSessionRecord:
+        if not _auto_protocol_can_apply_operator_surface(access):
+            raise _protocol_http_error(
+                403,
+                error_code="PROTOCOL_AUTO_APPLY_ROLE_REQUIRED",
+                message="Applying a generated Auto Protocol draft requires publisher or admin authoring access.",
+            )
         metadata = _metadata_from_auto_session(session)
         definition_json = session.draft_definition_json
         result = store.save_protocol_draft(
@@ -1783,7 +1861,24 @@ def build_protocol_router(
                 access=access,
                 event_kind="planning_started",
             )
-            _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            try:
+                _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            except PermissionError as exc:
+                raise _protocol_http_error(
+                    403,
+                    error_code="PROTOCOL_FORBIDDEN",
+                    message=str(exc),
+                    details=_auto_protocol_session_error_details(session),
+                ) from exc
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                error_code = str(detail.get("error_code") or "PROTOCOL_AUTO_SESSION_ATTACHMENT_FAILED")
+                message = str(detail.get("message") or "Auto Protocol session was queued, but attached resources could not be linked.")
+                details = dict(_auto_protocol_session_error_details(session))
+                extra = detail.get("details")
+                if isinstance(extra, dict):
+                    details.update(extra)
+                raise _protocol_http_error(exc.status_code, error_code=error_code, message=message, details=details) from exc
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except ManagementClientError as exc:
@@ -1804,6 +1899,7 @@ def build_protocol_router(
             session = store.get_protocol_auto_design_session(session_id, access=access)
             before = str(session.status or "")
             session = _maybe_complete_auto_protocol_planning_session(store, session, access=access)
+            session = _auto_protocol_sessions_with_queue_positions([session], store=store, access=access)[0]
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except KeyError as exc:
@@ -1822,15 +1918,23 @@ def build_protocol_router(
     ) -> dict[str, Any]:
         access = _auto_protocol_access(auth)
         try:
+            fetch_limit = min(limit + 1, 101)
             sessions = store.list_protocol_auto_design_sessions(
                 access=access,
                 cursor=cursor,
-                limit=limit,
+                limit=fetch_limit,
                 status=status,
             )
+            has_next = len(sessions) > limit
+            sessions = sessions[:limit]
+            sessions = _auto_protocol_sessions_with_queue_positions(sessions, store=store, access=access)
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
-        return {"items": [item.model_dump(mode="json") for item in sessions]}
+        next_cursor = cursor + limit if has_next else None
+        return {
+            "items": [item.model_dump(mode="json") for item in sessions],
+            "next_cursor": next_cursor,
+        }
 
     @router.get("/v1/protocol-auto/sessions/{session_id}/events")
     def resource_list_protocol_auto_session_events(
@@ -1901,7 +2005,24 @@ def build_protocol_router(
                 access=access,
                 event_kind="planning_started",
             )
-            _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            try:
+                _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            except PermissionError as exc:
+                raise _protocol_http_error(
+                    403,
+                    error_code="PROTOCOL_FORBIDDEN",
+                    message=str(exc),
+                    details=_auto_protocol_session_error_details(session),
+                ) from exc
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                error_code = str(detail.get("error_code") or "PROTOCOL_AUTO_SESSION_ATTACHMENT_FAILED")
+                message = str(detail.get("message") or "Auto Protocol session was queued, but attached resources could not be linked.")
+                details = dict(_auto_protocol_session_error_details(session))
+                extra = detail.get("details")
+                if isinstance(extra, dict):
+                    details.update(extra)
+                raise _protocol_http_error(exc.status_code, error_code=error_code, message=message, details=details) from exc
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except ManagementClientError as exc:

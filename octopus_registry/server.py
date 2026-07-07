@@ -664,17 +664,16 @@ async def routed_task_status(
     agent_id = result.target_agent_id or result.origin_agent_id
     if (parent_conversation_id or result.recipient_conversation_id) and (result.inserted_events or result.recipient_inserted_events):
         await _broadcast_task_record_events(result)
+    topics: tuple[str, ...]
+    routed_task_ref = str(result.routed_task_id or "")
+    if routed_task_ref.startswith("auto-design:"):
+        parts = routed_task_ref.split(":")
+        session_topic = f"protocol-auto-session:{parts[1]}" if len(parts) >= 2 and parts[1] else ""
+        topics = tuple(item for item in ("tasks", session_topic) if item)
+    else:
+        topics = ("tasks", "conversations", "summary")
     await _broadcast_invalidations(
-        topics=(
-            "tasks",
-            "conversations",
-            "summary",
-            *(
-                (f"protocol-auto-session:{str(result.routed_task_id).split(':')[1]}", "protocols")
-                if str(result.routed_task_id or "").startswith("auto-design:")
-                else ()
-            ),
-        ),
+        topics=topics,
         reason="routed_task.updated",
         conversation_id=parent_conversation_id,
         agent_id=agent_id,

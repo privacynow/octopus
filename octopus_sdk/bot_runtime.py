@@ -940,14 +940,19 @@ class BotRuntime:
         class _TaskProgress:
             def __init__(self) -> None:
                 self._last_update = 0.0
+                self._progress = 1
 
             async def update(self, html_text: str, *, force: bool = False) -> None:
                 now = asyncio.get_running_loop().time()
                 if not force and self._last_update and now - self._last_update < 10.0:
                     return
                 self._last_update = now
+                self._progress = min(95, self._progress + 3)
                 text = html.unescape(_HTML_TAG_RE.sub(" ", html_text or ""))
-                await update_status(text or "Auto Protocol planner is running.")
+                await update_status(
+                    text or "Auto Protocol planner is running.",
+                    progress=self._progress,
+                )
 
         await update_status("Auto Protocol planner started.", progress=1)
         try:

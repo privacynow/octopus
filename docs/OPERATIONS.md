@@ -144,17 +144,24 @@ to one of `low`, `medium`, `high`, `xhigh`, or `max` to pass the Claude CLI
 Auto Protocol design is expected to be heavyweight. The Registry stores a
 `planning` session and queues a hidden `auto_design` routed task to a
 provider-capable bot; the browser watches the session topic rather than holding
-one long request open. If a design appears stuck, check the Auto Protocol
-session status, the linked routed task, the assigned planner agent, the last
-progress timestamp, and the target bot/provider logs. A provider timeout or
-planner-task timeout should surface as a failed session with planner details,
-not as a transient dialog that vanishes before the operator can read it.
+one long request open. If a design appears stuck, open `Build -> Designs` and
+check the Auto Protocol session status, the linked routed task, queue position,
+the assigned planner agent, the last progress timestamp, and the target
+bot/provider logs. A provider timeout or planner-task timeout should surface as
+a failed session with planner details, not as a transient dialog that vanishes
+before the operator can read it.
+New `design_auto_protocol` work is not accepted on the management channel; bots
+return `auto_design_requires_routed_task` so planner execution stays on the
+queued routed-task path.
 Legacy planning sessions that still point at old management requests are
 reconciled by the same maintenance sweep so completed, failed, or timed-out
 planner work does not remain in `planning` indefinitely.
 
-After publish/run, serious Auto Protocol stages use the stage timeout embedded
-in their runtime contract, not just `BOT_TIMEOUT_SECONDS`. A generated
+After publish/run, serious Auto Protocol stages use a timeout derived from the
+generated Auto Protocol metadata and carried in their runtime contract, not just
+`BOT_TIMEOUT_SECONDS`. Generated drafts persist `timeout_seconds: 0` unless an
+operator explicitly authored a timeout; the stage row `timeout_at`, maintenance
+sweep, and bot runtime contract all use the same derived value. A generated
 contract/outcome stage timing out means the provider exceeded that stage budget
 or stopped making progress; inspect the linked routed task, task age, stage
 artifacts, and provider logs before retrying or sending back.

@@ -279,7 +279,10 @@ policy, stage budgets, review policy, and primary-artifact metadata.
 Planner failures are persisted on the same session as failed/blocking details
 instead of being represented only as transport timeouts.
 When a generated serious-product protocol runs, each stage's timeout budget is
-embedded in the `protocol_stage_contract` carried by the routed task. Bot
+derived from Auto Protocol metadata unless an operator explicitly authored a
+stage timeout. Generated documents therefore persist `timeout_seconds: 0`, while
+dispatch preflight writes the derived `timeout_at` to the stage execution and
+the routed task carries the same value in `protocol_stage_contract`. Bot
 execution reads that contract into `RunContext.timeout_seconds`, and providers
 honor the per-stage budget before falling back to the bot's global timeout.
 
@@ -299,8 +302,10 @@ Registry UI or Telegram
 
 New planner work must use routed tasks because they already provide queueing,
 task status, cancellation, delivery leases, hidden task records, and task
-result ingestion. Management requests remain for short synchronous operations
-and only legacy Auto Protocol sessions continue to reconcile through
+result ingestion. Management requests remain for short synchronous operations;
+bots reject new management-channel `design_auto_protocol` requests with
+`auto_design_requires_routed_task`. Only historical Auto Protocol sessions that
+already reference old management requests continue to reconcile through
 management-request status during maintenance.
 
 Generated protocols declare a primary artifact in `metadata.auto_protocol`.

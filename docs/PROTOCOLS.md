@@ -77,14 +77,15 @@ From `Build -> Protocols`, choose `Auto protocol`, describe the desired outcome,
 attach any source files that should inform the work, and add optional
 constraints. Registry sends the design job to a connected provider-capable bot,
 and immediately saves a durable `planning` session backed by a hidden
-`auto_design` routed task. The dialog stays open, subscribes to the
-`protocol-auto-session:{id}` update topic, and polls as a fallback while the bot
-performs heavyweight semantic planning. The operator can leave and re-open the
-dialog; the session re-attaches to the same planner job instead of starting a
-duplicate one. When the routed task posts the typed planner result, Registry
-compiles it into a normal editable protocol draft with inferred roles, stages,
-artifacts, adversarial review loops, run inputs, resource references, and final
-evidence.
+`auto_design` routed task. `Build -> Designs` is the first-class queue for those
+sessions: it remains visible after a dialog closes, supports deep links by
+`session_id`, and shows the planner agent, progress, events, warnings, draft
+summary, and available Apply/Publish/Run actions. The dialog and queue subscribe
+to the `protocol-auto-session:{id}` update topic and poll as a fallback while
+the bot performs heavyweight semantic planning. When the routed task posts the
+typed planner result, Registry compiles it into a normal editable protocol draft
+with inferred roles, stages, artifacts, adversarial review loops, run inputs,
+resource references, and final evidence.
 Review the generated structure, ask for changes if needed, then apply it as a
 normal draft. When validation and assignments are already ready, the Auto
 Protocol panel can also publish or publish and run directly; otherwise use the
@@ -153,9 +154,18 @@ defects such as a missing, invalid, or non-run-ready manifest are converted into
 an in-product revise transition when the protocol has a revise path; missing
 operator exercise evidence remains blocked until the runtime is exercised.
 For serious contract-backed products, generated stages also receive explicit
-execution budgets in the stage runtime contract. Provider runtimes honor that
-budget per stage, so heavyweight contract, implementation, and evidence stages
-do not silently fall back to a short global bot timeout.
+execution budgets in the stage runtime contract. Generated documents persist
+`timeout_seconds: 0` unless an operator explicitly authored a value; runtime
+dispatch derives serious work/review/acceptance budgets from Auto Protocol
+metadata so the DB stage row, timeout sweep, and bot runtime contract agree.
+Provider runtimes honor that budget per stage, so heavyweight contract,
+implementation, and evidence stages do not silently fall back to a short global
+bot timeout.
+
+Applying an Auto Protocol draft uses the operator authoring surface. Callers
+without publisher or admin authoring rights receive
+`PROTOCOL_AUTO_APPLY_ROLE_REQUIRED`; the UI treats that as a permission problem,
+not a retryable planner failure.
 
 Every Auto Protocol declares primary artifact metadata. Runs UI and Telegram
 promote that artifact first, then show supporting plans, reviews, and release

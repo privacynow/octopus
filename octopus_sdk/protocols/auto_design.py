@@ -19,9 +19,6 @@ from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel
 from .documents import draft_protocol_document_data, validate_protocol_document
 from .models import (
     PROTOCOL_SCHEMA_VERSION,
-    PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS,
-    PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS,
-    PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS,
     ProtocolDefinitionDocumentRecord,
     ProtocolMutationRecord,
     ProtocolRunCreateRecord,
@@ -2763,15 +2760,6 @@ def compile_auto_protocol_plan(
     constraints_text: str = "",
     run_lessons: list[ProtocolRunLessonRecord] | None = None,
 ) -> dict[str, object]:
-    def stage_timeout_seconds(stage: ProtocolAutoDesignStagePlanRecord) -> int:
-        if not plan.contract_required:
-            return 0
-        if stage.stage_kind == "acceptance":
-            return PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS
-        if stage.stage_kind == "review":
-            return PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS
-        return PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS
-
     role_by_key = {role.role_key: role for role in plan.roles}
     stages: list[dict[str, object]] = []
     for index, stage in enumerate(plan.stages):
@@ -2824,7 +2812,7 @@ def compile_auto_protocol_plan(
             "max_rounds": 0,
             "strict_completion": stage.stage_kind in {"review", "acceptance"},
             "require_output_verification": True if stage.outputs else None,
-            "timeout_seconds": stage_timeout_seconds(stage),
+            "timeout_seconds": 0,
         })
     metadata: dict[str, object] = {
         "slug": plan.protocol_slug,

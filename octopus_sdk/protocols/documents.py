@@ -1122,7 +1122,7 @@ def default_protocol_document_slug(document: ProtocolDefinitionDocumentRecord) -
     return display or "protocol"
 
 
-def _generated_auto_protocol_stage_timeout(
+def protocol_stage_effective_timeout_seconds(
     document: ProtocolDefinitionDocumentRecord,
     stage: ProtocolStageDefinitionRecord,
 ) -> int:
@@ -1181,7 +1181,7 @@ def protocol_stage_runtime_contract(
         participant_key=stage.participant_key,
         stage_key=stage.stage_key,
         stage_kind=stage.stage_kind,
-        timeout_seconds=_generated_auto_protocol_stage_timeout(document, stage),
+        timeout_seconds=protocol_stage_effective_timeout_seconds(document, stage),
         strict_completion=stage.strict_completion,
         require_output_verification=require_verification,
         output_artifacts=outputs,

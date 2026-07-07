@@ -57,7 +57,6 @@ from octopus_sdk.registry.management import (
     CancelRoutedTaskRequest,
     CancelRoutedTaskResult,
     DesignAutoProtocolRequest,
-    DesignAutoProtocolResult,
     ManagementRequest,
     ManagementResult,
     RunArtifactJourneyRequest,
@@ -752,31 +751,13 @@ async def handle_registry_delivery(
         if not state.agent_token:
             return "retry_later"
         if isinstance(request.payload, DesignAutoProtocolRequest):
-            from app.runtime.auto_protocol_design import design_auto_protocol_with_provider
-
-            try:
-                if runtime.provider is None:
-                    raise RuntimeError("Auto Protocol planner requires a provider-capable runtime.")
-                response = await design_auto_protocol_with_provider(
-                    request.payload.request,
-                    config=config,
-                    provider=runtime.provider,
-                    provider_state_factory=runtime.provider_state_factory,
-                )
-                result = ManagementResult(
-                    request_id=request.request_id,
-                    agent_id=request.agent_id,
-                    success=True,
-                    payload=DesignAutoProtocolResult(response=response),
-                )
-            except Exception as exc:
-                result = ManagementResult(
-                    request_id=request.request_id,
-                    agent_id=request.agent_id,
-                    success=False,
-                    error_code="request_failed",
-                    error_detail=str(exc),
-                )
+            result = ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=False,
+                error_code="auto_design_requires_routed_task",
+                error_detail="Auto Protocol design uses routed tasks; management-channel design requests are no longer executed.",
+            )
         elif isinstance(
             request.payload,
             (

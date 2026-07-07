@@ -19,6 +19,9 @@ from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel
 from .documents import draft_protocol_document_data, validate_protocol_document
 from .models import (
     PROTOCOL_SCHEMA_VERSION,
+    PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS,
+    PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS,
+    PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS,
     ProtocolDefinitionDocumentRecord,
     ProtocolMutationRecord,
     ProtocolRunCreateRecord,
@@ -35,9 +38,6 @@ _AUTO_STAGE_BUDGET_SMALL_MAX = 7
 _AUTO_STAGE_BUDGET_STANDARD_MAX = 12
 _AUTO_STAGE_BUDGET_COMPLEX_MAX = 16
 _AUTO_STAGE_HARD_CAP = 18
-_AUTO_SERIOUS_WORK_TIMEOUT_SECONDS = 14_400
-_AUTO_SERIOUS_REVIEW_TIMEOUT_SECONDS = 10_800
-_AUTO_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS = 10_800
 _AUTO_STANDARD_WORK_PACKAGE_BUDGET = 6
 _AUTO_REVIEW_ROUND_MAX = 6
 _AUTO_REQUIREMENT_CONTEXT_MAX_CHARS = 1800
@@ -2761,10 +2761,10 @@ def compile_auto_protocol_plan(
         if not plan.contract_required:
             return 0
         if stage.stage_kind == "acceptance":
-            return _AUTO_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS
+            return PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS
         if stage.stage_kind == "review":
-            return _AUTO_SERIOUS_REVIEW_TIMEOUT_SECONDS
-        return _AUTO_SERIOUS_WORK_TIMEOUT_SECONDS
+            return PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS
+        return PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS
 
     role_by_key = {role.role_key: role for role in plan.roles}
     stages: list[dict[str, object]] = []

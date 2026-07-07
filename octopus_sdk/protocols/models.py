@@ -65,6 +65,9 @@ ProtocolArtifactVerificationState = Literal["declared", "available", "verified",
 ProtocolArtifactRetentionState = Literal["active", "archived", "expired", "deleted", "unavailable"]
 ProtocolArtifactSnapshotKind = Literal["file", "directory", "text", "external"]
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back", "interrupt"]
+PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS = 14_400
+PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS = 10_800
+PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS = 10_800
 ProtocolIssueKind = Literal[
     "blocked_run",
     "invalid_contract",
@@ -1345,6 +1348,9 @@ __all__ = [
         "PROTOCOL_DEFAULT_RUN_ORG_ID",
         "PROTOCOL_DEFAULT_OPERATOR_REF",
         "PROTOCOL_DEFAULT_VISIBILITY",
+        "PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS",
+        "PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS",
+        "PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS",
         "REHEARSAL_AUTHORITY_REF",
         "PROTOCOL_SUPPORTED_RUN_STATUSES",
         "PROTOCOL_SUPPORTED_STAGE_STATUSES",

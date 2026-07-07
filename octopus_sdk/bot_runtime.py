@@ -1803,6 +1803,27 @@ class BotRuntime:
         message = self.workflows.messages.recovery_orphaned_command(detail)
         await egress.send_text(message)
 
+    async def _notify_direct_message_dispatch_failure(
+        self,
+        event: InboundMessage | InboundCommand | InboundCallback | InboundAction,
+        item: WorkItemRecord,
+    ) -> None:
+        if not isinstance(event, InboundMessage):
+            return
+        if str(getattr(event, "routed_task_id", "") or "").strip():
+            return
+        if str(getattr(event, "admission_class", "external") or "external") == "internal":
+            return
+        try:
+            egress, _conversation_ref = self._build_worker_egress(event, item)
+            await egress.send_text(self.workflows.messages.recovery_error_try_again())
+        except Exception:
+            log.debug(
+                "Could not notify user about dispatch failure for work item %s",
+                item.id,
+                exc_info=True,
+            )
+
     async def _dispatch_claimed_item(
         self,
         kind: str,
@@ -1982,6 +2003,7 @@ class BotRuntime:
                                 current_conversation_key,
                                 item.event_id,
                             )
+                            await self._notify_direct_message_dispatch_failure(event, item)
                             self.work_queue.fail_work_item(
                                 self.config.data_dir,
                                 item_id,

@@ -124,6 +124,56 @@ async def test_happy_path():
         assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
 
 
+async def test_plain_message_dispatch_exception_notifies_after_resuming():
+    class RaisingProvider(FakeProvider):
+        async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
+            self.run_calls.append({
+                "provider_state": dict(provider_state),
+                "prompt": prompt,
+                "image_paths": image_paths,
+                "context": context,
+            })
+            raise RuntimeError("provider dispatch exploded")
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, runtime_mode="shared")
+        prov = RaisingProvider("claude")
+        setup_globals(cfg, prov)
+        session = default_session(
+            "claude",
+            ProviderStateRecord({"session_id": "resume-session", "started": True}),
+            "off",
+        )
+        save_session(data_dir, _conv(12345), session)
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        await send_text(chat, user, "continue")
+
+        runtime = current_runtime()
+        worker = runtime.submitter
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(worker._run_worker_loop(stop_event))
+        try:
+            for _ in range(60):
+                texts = [str(item.get("text") or item.get("edit_text") or "") for item in current_bot_instance().sent_messages]
+                if any("Something went wrong" in text for text in texts):
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("plain-message dispatch failure did not notify the user")
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        texts = [str(item.get("text") or item.get("edit_text") or "") for item in current_bot_instance().sent_messages]
+        assert any("Resuming" in text for text in texts)
+        assert any("Something went wrong" in text for text in texts)
+        items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
+        assert items[-1].state == "failed"
+        assert items[-1].error == "dispatch_exception"
+
+
 async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome(monkeypatch):
     with fresh_env(
         config_overrides={"completion_webhook_url": "https://hooks.example.com/completed"}

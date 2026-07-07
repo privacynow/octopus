@@ -8416,14 +8416,17 @@ function renderProtocolWorkspace(container) {
     }
 
     function _autoProtocolSessionCard(session, { onOpen = null, selected = false } = {}) {
+        const sessionId = String(session?.session_id || '');
         const item = document.createElement('li');
         item.className = 'kit-catalog-item';
+        item.dataset.key = `auto-protocol-session:${sessionId || 'unknown'}`;
 
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'kit-catalog-card protocol-auto-session-card';
+        card.dataset.key = `auto-protocol-session-card:${sessionId || 'unknown'}`;
         if (selected) card.classList.add('selected');
-        card.dataset.autoProtocolSessionId = String(session?.session_id || '');
+        card.dataset.autoProtocolSessionId = sessionId;
         card.addEventListener('click', () => {
             if (typeof onOpen === 'function') {
                 onOpen(session);

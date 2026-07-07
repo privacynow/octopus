@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -350,6 +351,33 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
     assert "path.startsWith('/ui/protocol-runs')" not in router_js
+
+
+def test_improve_run_apply_adopts_the_applied_protocol_draft() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    dialog_match = re.search(
+        r"function _openImproveRunDialog\(\) \{(?P<body>.*?)\n    function _buildRunActionBar",
+        workspace,
+        flags=re.S,
+    )
+    assert dialog_match is not None
+    dialog_body = dialog_match.group("body")
+    apply_match = re.search(
+        r"applyBtn\.addEventListener\('click', async \(\) => \{(?P<body>.*?)\n        \}\);",
+        dialog_body,
+        flags=re.S,
+    )
+    assert apply_match is not None
+    apply_body = apply_match.group("body")
+
+    assert "const applied = await API.applyProtocolAutoSession(session.session_id);" in apply_body
+    assert "if (await _adoptAutoProtocolSession(applied)) {" in apply_body
+    assert "view.close();" in apply_body
+    assert "Draft applied. Open the protocol editor" not in apply_body
 
 
 def test_protocol_artifact_runtime_controls_recover_after_status_or_start_failures() -> None:

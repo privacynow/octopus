@@ -9342,15 +9342,21 @@ function renderProtocolRuns(container) {
             applyBtn.disabled = true;
             _setAutoProtocolStatus(status, 'Applying improved draft…');
             try {
-                session = await API.applyProtocolAutoSession(session.session_id);
+                const applied = await API.applyProtocolAutoSession(session.session_id);
+                session = applied;
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                _setAutoProtocolStatus(status, 'Draft applied. Open the protocol editor to review or continue publishing from here.');
-                UI.notify('Improved protocol draft applied.', 'success');
-                syncActions();
+                if (await _adoptAutoProtocolSession(applied)) {
+                    view.close();
+                    UI.notify('Improved protocol draft applied.', 'success');
+                    return;
+                }
+                _setAutoProtocolStatus(status, 'Draft applied, but the protocol id was not returned.');
+                UI.notify('Draft applied, but the protocol id was not returned. Refresh protocols before continuing.', 'warning', { timeout: 0 });
             } catch (err) {
                 _setAutoProtocolDialogError(preview, status, 'Failed to apply improved protocol draft', err, () => applyBtn.click());
             }
             applyBtn.disabled = false;
+            syncActions();
         });
         publishBtn.addEventListener('click', async () => {
             if (!session?.session_id) return;

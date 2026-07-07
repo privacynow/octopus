@@ -263,6 +263,31 @@ function _createAutoProtocolPlannerField(agents = []) {
     return { element: label, select };
 }
 
+function _setAutoProtocolButtonBusy(button, busy) {
+    if (!button) return;
+    if (busy) {
+        button.dataset.autoProtocolBusy = '1';
+        button.disabled = true;
+        return;
+    }
+    delete button.dataset.autoProtocolBusy;
+}
+
+function _setAutoProtocolButtonState(button, { visible = true, disabled = false } = {}) {
+    if (!button) return;
+    const shown = Boolean(visible);
+    button.hidden = !shown;
+    if (!shown) {
+        button.disabled = true;
+        button.tabIndex = -1;
+        button.setAttribute('aria-hidden', 'true');
+        return;
+    }
+    button.removeAttribute('aria-hidden');
+    button.removeAttribute('tabindex');
+    button.disabled = button.dataset.autoProtocolBusy === '1' || Boolean(disabled);
+}
+
 function _autoProtocolHasDraft(session) {
     const draft = session?.draft_definition_json || {};
     return Boolean(draft.metadata && Array.isArray(draft.stages));
@@ -3337,17 +3362,14 @@ function renderProtocolWorkspace(container) {
             const actionable = hasSession && !planning && hasDraft;
             const ready = _autoProtocolReady(session);
             cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
-            generateBtn.hidden = hasSession && (planning || hasDraft);
-            reviseBtn.hidden = !actionable;
-            applyBtn.hidden = !actionable;
-            publishBtn.hidden = !actionable;
-            runBtn.hidden = !actionable;
-            queueBtn.hidden = !hasSession;
+            _setAutoProtocolButtonState(generateBtn, { visible: !(hasSession && (planning || hasDraft)) });
+            _setAutoProtocolButtonState(reviseBtn, { visible: actionable, disabled: !actionable || !revise.value.trim() });
+            _setAutoProtocolButtonState(applyBtn, { visible: actionable });
+            _setAutoProtocolButtonState(publishBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(runBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(queueBtn, { visible: hasSession });
             reviseWrap.hidden = !actionable;
             revise.hidden = !actionable;
-            reviseBtn.disabled = !actionable || !revise.value.trim();
-            publishBtn.disabled = planning || !ready;
-            runBtn.disabled = planning || !ready;
             applyBtn.className = ready || planning ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
             runBtn.style.order = hasSession && ready ? '0' : '3';
@@ -3455,7 +3477,7 @@ function renderProtocolWorkspace(container) {
                 status.textContent = 'Describe what the protocol should accomplish.';
                 return;
             }
-            generateBtn.disabled = true;
+            _setAutoProtocolButtonBusy(generateBtn, true);
             _setAutoProtocolStatus(status, 'Designing protocol…');
             UI.reconcileChildren(preview, [_autoProtocolProgressEl()]);
             try {
@@ -3493,12 +3515,13 @@ function renderProtocolWorkspace(container) {
                     : () => runGenerate();
                 _setAutoProtocolDialogError(preview, status, 'Failed to generate protocol', err, retry);
             }
-            generateBtn.disabled = false;
+            _setAutoProtocolButtonBusy(generateBtn, false);
+            syncActions();
         };
         generateBtn.addEventListener('click', () => void runGenerate());
         const runRevise = async () => {
             if (!session?.session_id || !revise.value.trim()) return;
-            reviseBtn.disabled = true;
+            _setAutoProtocolButtonBusy(reviseBtn, true);
             _setAutoProtocolStatus(status, 'Updating generated protocol…');
             try {
                 session = await API.reviseProtocolAutoSession(session.session_id, {
@@ -3535,16 +3558,17 @@ function renderProtocolWorkspace(container) {
                     : () => runRevise();
                 _setAutoProtocolDialogError(preview, status, 'Failed to modify generated protocol', err, retry);
             }
-            reviseBtn.disabled = false;
+            _setAutoProtocolButtonBusy(reviseBtn, false);
+            syncActions();
         };
         reviseBtn.addEventListener('click', () => void runRevise());
         const runApply = async () => {
             if (!session?.session_id) return;
-            applyBtn.disabled = true;
+            _setAutoProtocolButtonBusy(applyBtn, true);
             _setAutoProtocolStatus(status, 'Applying generated draft…');
             try {
                 if (!await ensureSessionReadyForAction()) {
-                    applyBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(applyBtn, false);
                     syncActions();
                     return;
                 }
@@ -3559,23 +3583,23 @@ function renderProtocolWorkspace(container) {
                 _setAutoProtocolStatus(status, 'Draft applied, but the protocol id was not returned.');
             } catch (err) {
                 if (await handlePlanningError(err)) {
-                    applyBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(applyBtn, false);
                     syncActions();
                     return;
                 }
                 _setAutoProtocolDialogError(preview, status, 'Failed to apply generated protocol', err, () => runApply());
             }
-            applyBtn.disabled = false;
+            _setAutoProtocolButtonBusy(applyBtn, false);
             syncActions();
         };
         applyBtn.addEventListener('click', () => void runApply());
         const runPublish = async () => {
             if (!session?.session_id) return;
-            publishBtn.disabled = true;
+            _setAutoProtocolButtonBusy(publishBtn, true);
             _setAutoProtocolStatus(status, 'Publishing generated protocol…');
             try {
                 if (!await ensureSessionReadyForAction()) {
-                    publishBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(publishBtn, false);
                     syncActions();
                     return;
                 }
@@ -3587,23 +3611,23 @@ function renderProtocolWorkspace(container) {
                 syncActions();
             } catch (err) {
                 if (await handlePlanningError(err)) {
-                    publishBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(publishBtn, false);
                     syncActions();
                     return;
                 }
                 _setAutoProtocolDialogError(preview, status, 'Failed to publish generated protocol', err, () => runPublish());
             }
-            publishBtn.disabled = false;
+            _setAutoProtocolButtonBusy(publishBtn, false);
             syncActions();
         };
         publishBtn.addEventListener('click', () => void runPublish());
         const runStart = async () => {
             if (!session?.session_id) return;
-            runBtn.disabled = true;
+            _setAutoProtocolButtonBusy(runBtn, true);
             _setAutoProtocolStatus(status, 'Publishing and starting the run…');
             try {
                 if (!await ensureSessionReadyForAction()) {
-                    runBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(runBtn, false);
                     syncActions();
                     return;
                 }
@@ -3623,13 +3647,13 @@ function renderProtocolWorkspace(container) {
                 UI.notify('Protocol run started, but no run id was returned.', 'success');
             } catch (err) {
                 if (await handlePlanningError(err)) {
-                    runBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(runBtn, false);
                     syncActions();
                     return;
                 }
                 _setAutoProtocolDialogError(preview, status, 'Failed to run generated protocol', err, () => runStart());
             }
-            runBtn.disabled = false;
+            _setAutoProtocolButtonBusy(runBtn, false);
             syncActions();
         };
         runBtn.addEventListener('click', () => void runStart());
@@ -10334,13 +10358,11 @@ function renderProtocolRuns(container) {
             const actionable = hasSession && !planning && hasDraft;
             const ready = _runAutoSessionReady(session);
             cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
-            generateBtn.hidden = hasSession && (planning || hasDraft);
-            applyBtn.hidden = !actionable;
-            publishBtn.hidden = !actionable;
-            runBtn.hidden = !actionable;
-            queueBtn.hidden = !hasSession;
-            publishBtn.disabled = planning || !ready;
-            runBtn.disabled = planning || !ready;
+            _setAutoProtocolButtonState(generateBtn, { visible: !(hasSession && (planning || hasDraft)) });
+            _setAutoProtocolButtonState(applyBtn, { visible: actionable });
+            _setAutoProtocolButtonState(publishBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(runBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(queueBtn, { visible: hasSession });
             applyBtn.className = ready || planning ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
             runBtn.style.order = hasSession && ready ? '0' : '3';
@@ -10456,7 +10478,7 @@ function renderProtocolRuns(container) {
                 request.focus();
                 return;
             }
-            generateBtn.disabled = true;
+            _setAutoProtocolButtonBusy(generateBtn, true);
             intro.hidden = true;
             requestLabel.hidden = true;
             _setAutoProtocolStatus(status, 'Designing improved protocol…');
@@ -10501,16 +10523,17 @@ function renderProtocolRuns(container) {
                     : () => runGenerateImprovement();
                 _setAutoProtocolDialogError(preview, status, 'Failed to generate the run improvement', err, retry);
             }
-            generateBtn.disabled = false;
+            _setAutoProtocolButtonBusy(generateBtn, false);
+            syncActions();
         };
         generateBtn.addEventListener('click', () => void runGenerateImprovement());
         const runApplyImprovement = async () => {
             if (!session?.session_id) return;
-            applyBtn.disabled = true;
+            _setAutoProtocolButtonBusy(applyBtn, true);
             _setAutoProtocolStatus(status, 'Applying improved draft…');
             try {
                 if (!await ensureSessionReadyForAction()) {
-                    applyBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(applyBtn, false);
                     syncActions();
                     return;
                 }
@@ -10528,23 +10551,23 @@ function renderProtocolRuns(container) {
                 UI.notify('Draft applied, but the protocol id was not returned. Refresh protocols before continuing.', 'warning', { timeout: 0 });
             } catch (err) {
                 if (await handlePlanningError(err)) {
-                    applyBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(applyBtn, false);
                     syncActions();
                     return;
                 }
                 _setAutoProtocolDialogError(preview, status, 'Failed to apply improved protocol draft', err, () => runApplyImprovement());
             }
-            applyBtn.disabled = false;
+            _setAutoProtocolButtonBusy(applyBtn, false);
             syncActions();
         };
         applyBtn.addEventListener('click', () => void runApplyImprovement());
         const runPublishImprovement = async () => {
             if (!session?.session_id) return;
-            publishBtn.disabled = true;
+            _setAutoProtocolButtonBusy(publishBtn, true);
             _setAutoProtocolStatus(status, 'Publishing improved protocol…');
             try {
                 if (!await ensureSessionReadyForAction()) {
-                    publishBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(publishBtn, false);
                     syncActions();
                     return;
                 }
@@ -10555,23 +10578,23 @@ function renderProtocolRuns(container) {
                 syncActions();
             } catch (err) {
                 if (await handlePlanningError(err)) {
-                    publishBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(publishBtn, false);
                     syncActions();
                     return;
                 }
                 _setAutoProtocolDialogError(preview, status, 'Failed to publish improved protocol', err, () => runPublishImprovement());
             }
-            publishBtn.disabled = false;
+            _setAutoProtocolButtonBusy(publishBtn, false);
             syncActions();
         };
         publishBtn.addEventListener('click', () => void runPublishImprovement());
         const runStartImprovement = async () => {
             if (!session?.session_id) return;
-            runBtn.disabled = true;
+            _setAutoProtocolButtonBusy(runBtn, true);
             _setAutoProtocolStatus(status, 'Publishing and starting improved run…');
             try {
                 if (!await ensureSessionReadyForAction()) {
-                    runBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(runBtn, false);
                     syncActions();
                     return;
                 }
@@ -10590,13 +10613,13 @@ function renderProtocolRuns(container) {
                 UI.notify('Improved run started, but no run id was returned.', 'success');
             } catch (err) {
                 if (await handlePlanningError(err)) {
-                    runBtn.disabled = false;
+                    _setAutoProtocolButtonBusy(runBtn, false);
                     syncActions();
                     return;
                 }
                 _setAutoProtocolDialogError(preview, status, 'Failed to run improved protocol', err, () => runStartImprovement());
             }
-            runBtn.disabled = false;
+            _setAutoProtocolButtonBusy(runBtn, false);
             syncActions();
         };
         runBtn.addEventListener('click', () => void runStartImprovement());

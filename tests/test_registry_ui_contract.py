@@ -1269,6 +1269,18 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "function _autoProtocolPlanning(session)" in workspace
     assert "function _autoProtocolHasDraft(session)" in workspace
     assert "function _subscribeAutoProtocolSession(sessionId, onUpdate)" in workspace
+    assert "function _setAutoProtocolButtonBusy(button, busy)" in workspace
+    assert "function _setAutoProtocolButtonState(button, { visible = true, disabled = false } = {})" in workspace
+    assert "button.hidden = !shown;" in workspace
+    assert "button.disabled = true;" in workspace
+    assert "button.tabIndex = -1;" in workspace
+    assert "button.setAttribute('aria-hidden', 'true');" in workspace
+    assert "button.removeAttribute('aria-hidden');" in workspace
+    assert "button.removeAttribute('tabindex');" in workspace
+    assert "_setAutoProtocolButtonState(applyBtn, { visible: actionable });" in workspace
+    assert "_setAutoProtocolButtonState(queueBtn, { visible: hasSession });" in workspace
+    assert "applyBtn.hidden = !actionable;" not in workspace
+    assert "queueBtn.hidden = !hasSession;" not in workspace
     assert "let activeAutoProtocolSessionId = '';" in workspace
     assert "function _rememberActiveAutoProtocolSession(session)" in workspace
     assert "let activeAutoProtocolSessionId = '';" not in workspace[workspace.index("function renderProtocolWorkspace"):]

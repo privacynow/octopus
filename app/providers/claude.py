@@ -556,8 +556,13 @@ class ClaudeProvider:
                 "resume" if is_resume else "fresh",
                 str(provider_state.get("session_id", "") or ""),
             )
+            timeout_seconds = int(getattr(context, "timeout_seconds", 0) or 0) if context else 0
             accumulated, result_data, rc, stderr, tool_executions = await self._run_process(
-                cmd, progress, extra_env=extra_env, working_dir=working_dir,
+                cmd,
+                progress,
+                timeout=timeout_seconds if timeout_seconds > 0 else None,
+                extra_env=extra_env,
+                working_dir=working_dir,
                 cancel=cancel,
             )
         finally:

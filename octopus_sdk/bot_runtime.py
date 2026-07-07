@@ -892,6 +892,13 @@ class BotRuntime:
 
         authority_ref = str(getattr(event, "authority_ref", "") or "")
         routed_task_id = str(getattr(event, "routed_task_id", "") or "")
+        stage_contract = getattr(event, "protocol_stage_contract", {}) or {}
+        timeout_seconds = 0
+        if isinstance(stage_contract, dict):
+            try:
+                timeout_seconds = max(0, int(stage_contract.get("timeout_seconds") or 0))
+            except (TypeError, ValueError):
+                timeout_seconds = 0
         return build_transport_identity_from_metadata(
             ExecutionChannelMetadata(
                 conversation_key=str(getattr(event, "conversation_key", "") or ""),
@@ -909,6 +916,7 @@ class BotRuntime:
                     for skill in getattr(event, "requested_skills", ())
                     if str(skill).strip()
                 ),
+                execution_timeout_seconds=timeout_seconds,
             ),
             conversation_callback_factory=lambda _conversation_ref, _routed_task_id: self._noop_timeline_callback,
             routed_task_callback_factory=lambda task_id, auth_ref: (

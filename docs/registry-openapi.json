@@ -2264,6 +2264,9 @@
             "title": "Assumptions",
             "type": "array"
           },
+          "contract_skeleton": {
+            "$ref": "#/components/schemas/RegistryJsonRecord"
+          },
           "domain": {
             "default": "requirement-specific",
             "title": "Domain",
@@ -2283,6 +2286,11 @@
           },
           "primary_artifact": {
             "$ref": "#/components/schemas/ProtocolAutoDesignPrimaryArtifactRecord"
+          },
+          "product_class": {
+            "default": "",
+            "title": "Product Class",
+            "type": "string"
           },
           "requirement_summary": {
             "default": "",

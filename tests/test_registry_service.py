@@ -39,6 +39,7 @@ from app.storage import default_session, ensure_data_dirs, load_session, save_se
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
+    ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeActionResultRecord,
     ProtocolArtifactRuntimeEventRecord,
     ProtocolArtifactRuntimeHealthRecord,
@@ -5733,6 +5734,156 @@ def test_protocol_artifact_runtime_journey_spec_and_result_use_scoped_bearer(mon
     result_event = events[-1]
     assert result_event.metadata_json.as_dict()["source"] == "registry_journey_runner"
     assert result_event.metadata_json.as_dict()["actor_stage_execution_id"] == "stage-1"
+
+
+def test_protocol_artifact_runtime_journey_spec_reads_v2_contract_snapshot(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    contract_path = tmp_path / "auto_protocol_contract.json"
+    contract_path.write_text(
+        json.dumps({
+            "product_contract": {"workflows": ["run scenario"]},
+            "domain_contract": {"caveats": ["educational"]},
+            "system_contract": {"api_surface": []},
+            "verification_contract": {
+                "required_journeys": [
+                    {
+                        "journey_key": "contract_happy_path",
+                        "required_hooks": ["primary_action", "primary_result"],
+                        "steps": [{"action": "click", "hook": "primary_action"}],
+                        "assertions": [{"action": "assert_visible", "hook": "primary_result"}],
+                    }
+                ]
+            },
+        }),
+        encoding="utf-8",
+    )
+    document = {
+        "schema_version": 1,
+        "metadata": {
+            "slug": "journey-spec-v2",
+            "auto_protocol": {
+                "primary_artifact_key": "package",
+                "acceptance_contract": {
+                    "schema_version": 2,
+                    "contract_required": True,
+                    "primary_artifact_key": "package",
+                    "contract_artifact_key": "auto_protocol_contract",
+                },
+            },
+        },
+        "participants": [{"participant_key": "worker", "display_name": "Worker"}],
+        "artifacts": [
+            {"artifact_key": "package", "kind": "workspace_file", "path": "package"},
+            {"artifact_key": "auto_protocol_contract", "kind": "workspace_file", "path": "auto_protocol_contract.json"},
+        ],
+        "stages": [
+            {
+                "stage_key": "final",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "transitions": {"accept": "__complete__", "revise": "__failed__", "fail": "__failed__"},
+                "instructions": "Review.",
+            }
+        ],
+    }
+    runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-journey-v2",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="static",
+            ui_path="/",
+            health_path="/health",
+            test_hooks=[
+                {"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"},
+                {"hook": "primary_result", "selector": "[data-testid='primary-result']", "kind": "region"},
+            ],
+        ),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+    )
+
+    class _Store:
+        def validate_runtime_capability_token(self, *, bearer_token: str, protocol_run_id: str, artifact_key: str, action: str):
+            if bearer_token != "scoped-token":
+                return None
+            assert action == "journey:read"
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                protocol_run_id=protocol_run_id,
+                protocol_stage_execution_id="stage-1",
+                artifact_key=artifact_key,
+                participant_key="reviewer",
+                allowed_actions=["journey:read"],
+            )
+
+        def get_protocol_run(self, run_id: str, *, access):
+            assert run_id == "run-1"
+            assert access.has_role("runtime_capability")
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="ver-1",
+                    protocol_id="protocol-1",
+                    definition_json=RegistryJsonRecord.model_validate(document),
+                ),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(tmp_path),
+                        exists=True,
+                    ),
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-contract",
+                        protocol_run_id="run-1",
+                        artifact_key="auto_protocol_contract",
+                        artifact_kind="workspace_file",
+                        location=str(contract_path),
+                        exists=True,
+                    ),
+                ],
+                artifact_snapshots=[
+                    ProtocolArtifactSnapshotRecord(
+                        artifact_snapshot_id="snapshot-contract",
+                        protocol_artifact_id="artifact-contract",
+                        protocol_run_id="run-1",
+                        artifact_key="auto_protocol_contract",
+                        snapshot_kind="file",
+                        storage_uri=str(contract_path),
+                        content_hash="contract-hash",
+                        size_bytes=contract_path.stat().st_size,
+                        produced_by_stage_execution_id="stage-contract",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            assert access.has_role("runtime_capability")
+            return runtime
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        response = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/contract_happy_path",
+            headers={"Authorization": "Bearer scoped-token"},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert response.status_code == 200
+    spec = response.json()["spec"]
+    assert spec["journey_key"] == "contract_happy_path"
+    assert [item["hook"] for item in spec["steps"]] == ["primary_action"]
+    assert sorted(spec["hooks"]) == ["primary_action", "primary_result"]
 
 
 def test_protocol_artifact_runtime_journey_run_queues_management_request(monkeypatch, tmp_path: Path):

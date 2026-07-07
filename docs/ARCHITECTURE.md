@@ -277,6 +277,10 @@ those records into one canonical protocol document and applies validation,
 semantic policy, stage budgets, review policy, and primary-artifact metadata.
 Planner failures are persisted on the same session as failed/blocking details
 instead of being represented only as transport timeouts.
+When a generated serious-product protocol runs, each stage's timeout budget is
+embedded in the `protocol_stage_contract` carried by the routed task. Bot
+execution reads that contract into `RunContext.timeout_seconds`, and providers
+honor the per-stage budget before falling back to the bot's global timeout.
 
 The request path is:
 
@@ -298,6 +302,33 @@ Runs UI and Telegram use that metadata to promote the user-facing output before
 supporting plans, reviews, and release evidence. The normal generated topology
 keeps the primary outcome stage second-last and uses one final adversarial
 acceptance stage that can send the work back to the outcome stage.
+
+For serious products, the planner metadata is deliberately not the full
+contract. `metadata.auto_protocol.acceptance_contract` schema version 2 is a
+frozen skeleton: product class, `contract_required`, the
+`auto_protocol_contract` artifact key, expected contract producer/review stages,
+manifest keys, and required evidence kinds. The authoritative contract is a
+run-produced artifact snapshot created by the
+`produce_system_verification_contract` stage and reviewed by
+`review_system_verification_contract`. The acceptance gate resolves that
+snapshot by `produced_by_stage_execution_id` and rejects missing, wrong-stage,
+stale, or unreviewed contracts. This keeps the planner from self-authoring the
+entire acceptance bar and gives the run a concrete artifact trail.
+
+The compact serious-product topology is:
+
+1. `produce_product_domain_contract`
+2. `review_product_domain_contract`
+3. `produce_system_verification_contract`
+4. `review_system_verification_contract`
+5. optional implementation-support work/review pairs
+6. `produce_outcome`
+7. `final_evidence`
+
+The specialist review burden is expressed as rubric sections inside the two
+contract reviews and the final evidence manifest, not six independent reviewer
+participants. The compiler still keeps the primary artifact stage immediately
+before final acceptance and stays within the normal stage cap.
 
 Existing-run improvement is the same Auto Protocol path. Registry and Telegram
 build run-context requirement text from the selected run, then create a
@@ -777,6 +808,19 @@ results after terminal or blocked stage state are preserved in task/audit
 metadata and do not advance the engine or update protocol artifact rows.
 `interrupt` is enforced by the protocol engine and store; terminal runs and
 completed stages cannot be reopened by posting the action directly.
+
+Structured Auto Protocol acceptance is still one gate:
+`_runtime_acceptance_evidence_gate` in `protocol_store.py`. Schema v1 contracts
+use the structured journey path. Schema v2 contracts first resolve the reviewed
+`auto_protocol_contract` snapshot, the producer evidence manifest, and the
+reviewer evidence manifest. Tier 1 evidence is cross-checked against Registry
+facts such as runtime start/health events, correlated journey events, routed
+fetch events, and artifact snapshot hashes. Tier 2 evidence is accepted only
+from the expected independent reviewer or verification stage and only when it
+matches the current artifact hash. Tier 3 evidence is displayed as advisory
+domain/source/residual-risk context and cannot substitute for required Tier 1
+or Tier 2 evidence. Producer evidence can support review but does not satisfy
+reviewer-required evidence.
 
 Rehearsal runs use `REHEARSAL_AUTHORITY_REF = "rehearsal"` and resolve stages to
 rehearsal agents/sessions. Rehearsal is dry-run execution for protocol behavior,

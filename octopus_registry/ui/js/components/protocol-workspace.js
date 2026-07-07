@@ -2833,8 +2833,10 @@ function renderProtocolWorkspace(container) {
             `${reviewCount} reviews`,
             `${stagesForSummary.length} stages`,
             `${artifactsForSummary.length} artifacts`,
+            plan.contract_required ? 'Full product/system contract' : 'Lightweight contract',
+            String(plan.product_class || '').trim() ? `Product class: ${plan.product_class}` : '',
             validation.ok ? 'Validation ready' : 'Validation needs attention',
-        ].forEach((label) => {
+        ].filter(Boolean).forEach((label) => {
             const item = document.createElement('span');
             item.className = 'kit-catalog-card-meta-item';
             item.textContent = label;
@@ -9227,6 +9229,51 @@ function renderProtocolRuns(container) {
         qualityHint.textContent = 'Good improvements should produce a prepared runtime package, a routed UI/API users can actually exercise, a pass/fail outcome-readiness matrix, and customer-facing copy that uses the requested product/domain brand rather than Octopus.';
         form.appendChild(qualityHint);
 
+        const lessonPreview = document.createElement('details');
+        lessonPreview.className = 'protocol-auto-detail';
+        lessonPreview.open = true;
+        const lessonSummary = document.createElement('summary');
+        lessonSummary.textContent = 'Candidate lessons from this run';
+        lessonPreview.appendChild(lessonSummary);
+        const lessonBody = document.createElement('div');
+        lessonBody.className = 'protocol-auto-detail-body';
+        const lessonItems = [];
+        if (sourceRun.run?.blocked_code) {
+            lessonItems.push(`Blocked: ${sourceRun.run.blocked_code} ${sourceRun.run.blocked_detail || ''}`.trim());
+        }
+        (sourceRun.stage_executions || []).forEach((stage) => {
+            if (stage.failure_code) {
+                lessonItems.push(`Stage ${stage.stage_key} failed/blocked with ${stage.failure_code}: ${stage.failure_detail || ''}`.trim());
+            } else if (stage.decision_summary) {
+                lessonItems.push(`Stage ${stage.stage_key}: ${stage.decision_summary}`);
+            }
+        });
+        (sourceRun.runtime_events || []).forEach((event) => {
+            const kind = String(event.event_kind || '');
+            if (['journey_failed', 'client_error', 'health_checked', 'runtime_error'].includes(kind)) {
+                lessonItems.push(`Runtime ${kind}: ${event.summary || ''}`.trim());
+            }
+        });
+        (sourceRun.transitions || []).forEach((transition) => {
+            if (transition.error_code || ['late_result', 'runtime_evidence_auto_accept', 'task_cancel_requested'].includes(String(transition.transition_kind || ''))) {
+                lessonItems.push(`${transition.transition_kind}: ${transition.reason || transition.error_code || ''}`.trim());
+            }
+        });
+        (sourceRun.artifacts || []).forEach((artifact) => {
+            if (artifact.exists === false || ['missing', 'declared'].includes(String(artifact.verification_state || ''))) {
+                lessonItems.push(`Artifact ${artifact.artifact_key} was not proved available.`);
+            }
+        });
+        const lessonNodes = lessonItems.slice(0, 12).map((text) => {
+            const item = document.createElement('p');
+            item.className = 'quiet-note';
+            item.textContent = text;
+            return item;
+        });
+        UI.reconcileChildren(lessonBody, lessonNodes.length ? lessonNodes : [UI.renderEmptyState('No prior blockers or evidence lessons were found in the current run detail. The server will still harvest structured lessons when generation starts.', true)]);
+        lessonPreview.appendChild(lessonBody);
+        form.appendChild(lessonPreview);
+
         const status = document.createElement('p');
         status.className = 'quiet-note';
         status.textContent = 'The generated improvement becomes a normal protocol draft you can apply, publish, and run.';
@@ -10614,6 +10661,50 @@ function renderProtocolRuns(container) {
                         renderRunsRoute();
                     },
                 }));
+            }
+            const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+            const contract = autoMeta.acceptance_contract || {};
+            if (Number(contract.schema_version || 0) >= 2 || autoMeta.contract_required) {
+                const contractKey = String(contract.contract_artifact_key || 'auto_protocol_contract').trim();
+                const producerManifestKey = String(contract.producer_manifest_artifact_key || 'producer_evidence_manifest').trim();
+                const reviewerManifestKey = String(contract.reviewer_manifest_artifact_key || 'reviewer_evidence_manifest').trim();
+                const findArtifact = (key) => artifactRows.find((item) => String(item.artifact_key || '').trim() === key) || null;
+                const missingEvidence = _missingEvidenceList(currentRun);
+                const contractBox = document.createElement('div');
+                contractBox.className = 'run-evidence-issue-list';
+                contractBox.appendChild(UI.renderListRow({
+                    label: 'Auto Protocol product/system contract',
+                    sublabel: [
+                        String(autoMeta.product_class || contract.product_class || '').trim() ? `Product class: ${autoMeta.product_class || contract.product_class}` : '',
+                        contract.contract_required || autoMeta.contract_required ? 'Full contract mode' : 'Contract metadata present',
+                    ].filter(Boolean).join(' · '),
+                    badgeText: 'v2',
+                    badgeClass: 'badge-connected',
+                }));
+                [
+                    [contractKey, 'Authoritative contract'],
+                    [producerManifestKey, 'Producer evidence manifest'],
+                    [reviewerManifestKey, 'Reviewer evidence manifest'],
+                ].forEach(([key, label]) => {
+                    const artifact = findArtifact(key);
+                    contractBox.appendChild(UI.renderListRow({
+                        label,
+                        sublabel: artifact
+                            ? [_protocolArtifactLabel(artifact), _protocolArtifactDisplayPath(artifact)].filter(Boolean).join(' · ')
+                            : `Missing artifact ${key}`,
+                        badgeText: artifact ? 'available' : 'missing',
+                        badgeClass: artifact ? 'badge-connected' : 'badge-blocked',
+                    }));
+                });
+                if (missingEvidence.length) {
+                    contractBox.appendChild(UI.renderListRow({
+                        label: `${missingEvidence.length} evidence item${missingEvidence.length === 1 ? '' : 's'} still required`,
+                        sublabel: missingEvidence.slice(0, 4).join(' · '),
+                        badgeText: 'blocked',
+                        badgeClass: 'badge-blocked',
+                    }));
+                }
+                section.appendChild(contractBox);
             }
             return section;
         };

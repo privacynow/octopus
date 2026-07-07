@@ -77,7 +77,9 @@ def test_protocol_run_engine_dispatch_preflight_blocks_active_write_lease() -> N
 
 
 def test_protocol_run_engine_builds_dispatch_request_from_shared_contract() -> None:
-    document = _document()
+    raw_document = protocol_document()
+    raw_document["stages"][0]["timeout_seconds"] = 7200
+    document = canonical_protocol_document(raw_document)
     run = _run().model_copy(
         update={
             "entry_agent_id": "agent-1",
@@ -108,6 +110,7 @@ def test_protocol_run_engine_builds_dispatch_request_from_shared_contract() -> N
     assert request.project_id_override == "workspace-a"
     assert request.context["protocol_run_id"] == "run-1"
     assert request.internal_context["protocol_stage_contract"]["stage_key"] == "planning"
+    assert request.internal_context["protocol_stage_contract"]["timeout_seconds"] == 7200
     assert request.requested_skills == ["planning"]
 
 

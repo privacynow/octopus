@@ -237,6 +237,18 @@ progress until the session becomes ready, blocked, or failed. A failed planner
 session remains visible with an actionable error instead of disappearing behind
 a browser timeout.
 
+When the request is a serious product, Auto Protocol shows the inferred product
+class and whether a full product/system contract is required. Full contract mode
+adds early contract-production and contract-review stages before implementation.
+Those stages produce the run-specific `auto_protocol_contract`, which becomes
+the acceptance bar for product behavior, domain caveats, backend/API behavior,
+persistence, provider callouts, security boundaries, and verification evidence.
+Serious-product stages carry explicit multi-hour execution budgets so slow
+domain, backend, and evidence work does not inherit a short global bot timeout.
+If a stage still times out, the run detail shows the timed-out stage and routed
+task so you can retry, send back, interrupt, or inspect provider health.
+Use lightweight mode only for non-runtime, non-high-risk work.
+
 Telegram can also start an Auto Protocol session when you want a chat-first
 flow. The message should summarize the proposed workflow, show the primary
 outcome, and provide obvious actions such as Apply Draft, Publish, Publish &
@@ -327,12 +339,21 @@ unless that branding was requested.
 
 If acceptance is blocked, the dialog stays open with the missing evidence. For
 contract-bearing runs, Octopus checks structured journey results and reviewer
-evidence manifests instead of accepting prose-only claims. A missing hook,
+evidence manifests instead of accepting prose-only claims. A missing reviewed
+contract, wrong-stage snapshot, stale artifact hash, missing API probe, failed
+DB invariant, missing provider mock, absent domain-source note, missing hook,
 failed journey, unhealthy runtime, or absent reviewer manifest remains visible
 until fixed, re-run, accepted by the correct path, or sent back.
 Use `Re-run journeys` from the runtime panel to queue another browser journey
 without re-running the whole stage. The request returns immediately, and the run
 updates when the bot posts the correlated result.
+
+The evidence matrix groups missing items by product/domain, backend/API,
+provider/data, state/security, and browser/runtime. Tier 1 evidence is
+machine-corroborated by Registry events; Tier 2 is independent reviewer
+attestation bound to the current artifact hash; Tier 3 is advisory domain or
+residual-risk evidence. Advisory notes help you understand risk, but they do
+not replace required machine evidence.
 
 Use `Interrupt` when a running stage is clearly on the wrong path or the
 provider is stuck and you want to stop it without losing the run history.

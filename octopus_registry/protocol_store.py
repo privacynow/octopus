@@ -1726,6 +1726,14 @@ class ProtocolPostgresAdapter:
         detail: ProtocolRunDetailRecord,
         artifact_key: str,
     ) -> dict[str, object] | None:
+        loaded = self._artifact_snapshot_json_detail_for_key(detail, artifact_key)
+        return loaded[0] if loaded is not None else None
+
+    def _artifact_snapshot_json_detail_for_key(
+        self,
+        detail: ProtocolRunDetailRecord,
+        artifact_key: str,
+    ) -> tuple[dict[str, object], ProtocolArtifactSnapshotRecord] | None:
         key = str(artifact_key or "").strip()
         snapshots = [
             item
@@ -1747,7 +1755,154 @@ class ProtocolPostgresAdapter:
             loaded = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        return dict(loaded) if isinstance(loaded, Mapping) else None
+        return (dict(loaded), snapshot) if isinstance(loaded, Mapping) else None
+
+    @staticmethod
+    def _latest_stage_execution_for_key(detail: ProtocolRunDetailRecord, stage_key: str):
+        key = str(stage_key or "").strip()
+        if not key:
+            return None
+        matches = [
+            item
+            for item in detail.stage_executions
+            if str(item.stage_key or "").strip() == key
+        ]
+        if not matches:
+            return None
+        matches.sort(
+            key=lambda item: (
+                str(getattr(item, "completed_at", "") or ""),
+                str(getattr(item, "started_at", "") or ""),
+                str(getattr(item, "created_at", "") or ""),
+                str(getattr(item, "protocol_stage_execution_id", "") or ""),
+            ),
+            reverse=True,
+        )
+        return matches[0]
+
+    @staticmethod
+    def _contract_v2_required_journeys(contract_document: Mapping[str, object]) -> list[dict[str, object]]:
+        verification = contract_document.get("verification_contract")
+        if not isinstance(verification, Mapping):
+            return []
+        raw = verification.get("required_journeys") or verification.get("browser_journeys")
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            return []
+        journeys: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            journey = dict(item)
+            key = str(journey.get("journey_key", "") or journey.get("evidence_id", "") or "").strip()
+            if not key or key in seen:
+                continue
+            journey["journey_key"] = key
+            journeys.append(journey)
+            seen.add(key)
+        return journeys
+
+    @staticmethod
+    def _manifest_evidence_items(manifest: Mapping[str, object] | None) -> list[dict[str, object]]:
+        if not isinstance(manifest, Mapping):
+            return []
+        raw = manifest.get("evidence_items")
+        if raw is None:
+            raw = manifest.get("evidence")
+        if raw is None:
+            raw = manifest.get("items")
+        if raw is None:
+            raw = manifest.get("checks")
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            return []
+        items: list[dict[str, object]] = []
+        for entry in raw:
+            if isinstance(entry, Mapping):
+                item = dict(entry)
+                if "evidence_id" not in item and "id" in item:
+                    item["evidence_id"] = item.get("id")
+                items.append(item)
+        return items
+
+    @staticmethod
+    def _required_evidence_items(contract_document: Mapping[str, object]) -> list[dict[str, object]]:
+        verification = contract_document.get("verification_contract")
+        if not isinstance(verification, Mapping):
+            return []
+        raw = verification.get("required_evidence")
+        if raw is None:
+            raw = verification.get("required_evidence_items")
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            return []
+        required: list[dict[str, object]] = []
+        for index, entry in enumerate(raw):
+            if not isinstance(entry, Mapping):
+                continue
+            item = dict(entry)
+            if item.get("required") is False:
+                continue
+            evidence_id = str(item.get("evidence_id", "") or item.get("id", "") or "").strip()
+            kind = str(item.get("kind", "") or "").strip()
+            if not evidence_id and kind:
+                evidence_id = f"{kind}_{index + 1}"
+            if not evidence_id:
+                continue
+            item["evidence_id"] = evidence_id
+            item["kind"] = kind
+            tier = str(item.get("trust_tier", "") or "").strip().lower().replace(" ", "_").replace("-", "_")
+            if tier in {"1", "tier1"}:
+                tier = "tier_1"
+            elif tier in {"2", "tier2"}:
+                tier = "tier_2"
+            elif tier in {"3", "tier3"}:
+                tier = "tier_3"
+            item["trust_tier"] = tier or "tier_2"
+            required.append(item)
+        return required
+
+    @staticmethod
+    def _evidence_item_passed(item: Mapping[str, object]) -> bool:
+        status = str(item.get("status", "") or "").strip().lower()
+        return status in {"pass", "passed", "ok", "verified", "success", "succeeded"}
+
+    @staticmethod
+    def _evidence_item_key(item: Mapping[str, object]) -> tuple[str, str]:
+        evidence_id = str(item.get("evidence_id", "") or item.get("id", "") or "").strip()
+        kind = str(item.get("kind", "") or "").strip()
+        return evidence_id, kind
+
+    @staticmethod
+    def _fetch_event_matches_probe(event: ProtocolArtifactRuntimeEventRecord, evidence: Mapping[str, object]) -> bool:
+        if str(event.event_kind or "") != "fetch":
+            return False
+        metadata = event.metadata_json.as_dict()
+        expected_method = str(
+            evidence.get("method", "")
+            or (evidence.get("command_or_probe", {}) if isinstance(evidence.get("command_or_probe"), Mapping) else {}).get("method", "")
+            or ""
+        ).strip().upper()
+        expected_path = str(
+            evidence.get("path", "")
+            or (evidence.get("command_or_probe", {}) if isinstance(evidence.get("command_or_probe"), Mapping) else {}).get("path", "")
+            or ""
+        ).strip()
+        expected_status = str(
+            evidence.get("status_code", "")
+            or evidence.get("expected_status", "")
+            or (evidence.get("command_or_probe", {}) if isinstance(evidence.get("command_or_probe"), Mapping) else {}).get("status_code", "")
+            or (evidence.get("command_or_probe", {}) if isinstance(evidence.get("command_or_probe"), Mapping) else {}).get("expected_status", "")
+            or ""
+        ).strip()
+        method = str(metadata.get("method", "") or "").strip().upper()
+        path = str(metadata.get("path", "") or "").strip()
+        status = str(metadata.get("status_code", "") or "").strip()
+        if expected_method and method != expected_method:
+            return False
+        if expected_path and path != expected_path:
+            return False
+        if expected_status and status != expected_status:
+            return False
+        return bool(method or path or status)
 
     @staticmethod
     def _manifest_passed_journey_keys(manifest: Mapping[str, object] | None) -> set[str]:
@@ -1809,6 +1964,248 @@ class ProtocolPostgresAdapter:
                         return True
         return False
 
+    def _runtime_v2_contract_gate(
+        self,
+        conn,
+        *,
+        document: ProtocolDefinitionDocumentRecord,
+        stage,
+        stage_execution_row: Mapping[str, object],
+        engine,
+        detail: ProtocolRunDetailRecord,
+        primary_key: str,
+        effective_manifest: ProtocolArtifactRuntimeManifestRecord | None,
+        contract: Mapping[str, object],
+    ):
+        metadata_base = engine.transition_metadata.as_dict()
+        metadata_base.update({
+            "structured_runtime_contract_required": True,
+            "acceptance_contract_schema_version": 2,
+            "primary_artifact_key": primary_key,
+        })
+        contract_key = str(contract.get("contract_artifact_key", "") or "").strip() or "auto_protocol_contract"
+        contract_producer_stage_key = str(contract.get("contract_producer_stage_key", "") or "").strip() or "produce_system_verification_contract"
+        contract_review_stage_key = str(contract.get("contract_review_stage_key", "") or "").strip() or "review_system_verification_contract"
+        producer_manifest_key = str(contract.get("producer_manifest_artifact_key", "") or "").strip() or "producer_evidence_manifest"
+        reviewer_manifest_key = str(contract.get("reviewer_manifest_artifact_key", "") or "").strip() or "reviewer_evidence_manifest"
+        current_stage_execution_id = str(stage_execution_row.get("protocol_stage_execution_id", "") or "").strip()
+        current_runtime_instance_id = self._current_runtime_instance_id(detail, primary_key)
+        current_artifact_hash = self._current_artifact_content_hash(detail, primary_key)
+
+        contract_producer = self._latest_stage_execution_for_key(detail, contract_producer_stage_key)
+        contract_review = self._latest_stage_execution_for_key(detail, contract_review_stage_key)
+        contract_snapshot = self._artifact_snapshot_json_detail_for_key(detail, contract_key)
+        producer_manifest_snapshot = self._artifact_snapshot_json_detail_for_key(detail, producer_manifest_key)
+        reviewer_manifest_snapshot = self._artifact_snapshot_json_detail_for_key(detail, reviewer_manifest_key)
+        missing: list[str] = []
+
+        if contract_producer is None:
+            missing.append(f"contract producer stage: {contract_producer_stage_key}")
+        if contract_review is None or str(contract_review.status or "").strip().lower() != "completed":
+            missing.append(f"completed contract review stage: {contract_review_stage_key}")
+        contract_document: dict[str, object] | None = None
+        if contract_snapshot is None:
+            missing.append(f"latest {contract_key} artifact snapshot")
+        else:
+            contract_document, contract_snapshot_record = contract_snapshot
+            expected_contract_stage_id = str(getattr(contract_producer, "protocol_stage_execution_id", "") or "").strip()
+            snapshot_stage_id = str(contract_snapshot_record.produced_by_stage_execution_id or "").strip()
+            if expected_contract_stage_id and snapshot_stage_id != expected_contract_stage_id:
+                missing.append(f"{contract_key} snapshot from expected stage {contract_producer_stage_key}")
+            for section in ("product_contract", "domain_contract", "system_contract", "verification_contract"):
+                if not isinstance(contract_document.get(section), Mapping):
+                    missing.append(f"{contract_key}.{section}")
+
+        events = [item for item in detail.runtime_events if item.artifact_key == primary_key]
+        has_started = any(str(item.event_kind or "") == "started" for item in events)
+        has_healthy = any(
+            str(item.event_kind or "") == "health_checked"
+            and bool(item.metadata_json.as_dict().get("ok"))
+            for item in events
+        )
+        required_journeys = self._contract_v2_required_journeys(contract_document or {})
+        required_hooks = self._contract_required_hooks(required_journeys)
+        manifest_hooks = self._runtime_manifest_test_hook_ids(effective_manifest)
+        missing_hooks = sorted(required_hooks - manifest_hooks)
+        for hook in missing_hooks:
+            missing.append(f"octopus-runtime.json.test_hooks.{hook}")
+
+        required_items = self._required_evidence_items(contract_document or {})
+        if contract_document is not None and not required_items:
+            missing.append(f"{contract_key}.verification_contract.required_evidence")
+
+        producer_manifest: dict[str, object] | None = None
+        reviewer_manifest: dict[str, object] | None = None
+        if producer_manifest_snapshot is None:
+            missing.append(f"latest {producer_manifest_key} artifact snapshot")
+        else:
+            producer_manifest, producer_manifest_record = producer_manifest_snapshot
+            producer_stage_id = str(producer_manifest_record.produced_by_stage_execution_id or "").strip()
+            produced_outcome_stage = self._latest_stage_execution_for_key(detail, "produce_outcome")
+            expected_producer_stage_id = str(getattr(produced_outcome_stage, "protocol_stage_execution_id", "") or "").strip()
+            if expected_producer_stage_id and producer_stage_id != expected_producer_stage_id:
+                missing.append(f"{producer_manifest_key} snapshot from produce_outcome")
+        if reviewer_manifest_snapshot is None:
+            missing.append(f"latest {reviewer_manifest_key} artifact snapshot")
+        else:
+            reviewer_manifest, reviewer_manifest_record = reviewer_manifest_snapshot
+            reviewer_stage_id = str(reviewer_manifest_record.produced_by_stage_execution_id or "").strip()
+            if current_stage_execution_id and reviewer_stage_id != current_stage_execution_id:
+                missing.append(f"{reviewer_manifest_key} snapshot from final acceptance stage")
+
+        reviewer_items = self._manifest_evidence_items(reviewer_manifest)
+        reviewer_by_id: dict[str, list[dict[str, object]]] = {}
+        for item in reviewer_items:
+            evidence_id, _kind = self._evidence_item_key(item)
+            if evidence_id:
+                reviewer_by_id.setdefault(evidence_id, []).append(item)
+
+        requested_journeys: dict[str, dict[str, object]] = {}
+        required_journey_keys = {str(item.get("journey_key", "") or "").strip() for item in required_journeys}
+        required_journey_keys.discard("")
+        for item in events:
+            if str(item.event_kind or "") != "journey_requested":
+                continue
+            metadata = item.metadata_json.as_dict()
+            journey_run_id = str(metadata.get("journey_run_id", "") or "").strip()
+            journey_key = str(metadata.get("journey_key", "") or "").strip()
+            if not journey_run_id or journey_key not in required_journey_keys:
+                continue
+            if current_runtime_instance_id and str(item.runtime_instance_id or "").strip() != current_runtime_instance_id:
+                continue
+            event_hash = str(metadata.get("artifact_content_hash", "") or "").strip()
+            if current_artifact_hash and event_hash != current_artifact_hash:
+                continue
+            requested_journeys[journey_run_id] = {
+                "journey_key": journey_key,
+                "artifact_content_hash": event_hash,
+                "runtime_instance_id": str(item.runtime_instance_id or "").strip(),
+            }
+        completed_journey_keys: set[str] = set()
+        for item in events:
+            if str(item.event_kind or "") != "journey_completed":
+                continue
+            metadata = item.metadata_json.as_dict()
+            if not bool(metadata.get("ok", True)):
+                continue
+            source = str(metadata.get("source", "") or "").strip()
+            if source not in {"registry_journey_runner", "operator_journey_run"}:
+                continue
+            actor_stage_execution_id = str(metadata.get("actor_stage_execution_id", "") or "").strip()
+            if source == "registry_journey_runner" and actor_stage_execution_id != current_stage_execution_id:
+                continue
+            journey_run_id = str(metadata.get("journey_run_id", "") or "").strip()
+            requested = requested_journeys.get(journey_run_id)
+            if requested is None:
+                continue
+            journey_key = str(metadata.get("journey_key", "") or "").strip()
+            if journey_key != str(requested.get("journey_key", "") or ""):
+                continue
+            if current_runtime_instance_id and str(item.runtime_instance_id or "").strip() != current_runtime_instance_id:
+                continue
+            event_hash = str(metadata.get("artifact_content_hash", "") or "").strip()
+            if current_artifact_hash and event_hash != current_artifact_hash:
+                continue
+            completed_journey_keys.add(journey_key)
+
+        for journey_key in sorted(required_journey_keys - completed_journey_keys):
+            missing.append(f"structured journey result: {journey_key}")
+
+        def matching_reviewer_item(required: Mapping[str, object]) -> dict[str, object] | None:
+            evidence_id = str(required.get("evidence_id", "") or "").strip()
+            kind = str(required.get("kind", "") or "").strip()
+            for item in reviewer_by_id.get(evidence_id, []):
+                if kind and str(item.get("kind", "") or "").strip() != kind:
+                    continue
+                return item
+            return None
+
+        for required in required_items:
+            evidence_id = str(required.get("evidence_id", "") or "").strip()
+            kind = str(required.get("kind", "") or "").strip()
+            tier = str(required.get("trust_tier", "") or "").strip().lower()
+            item = matching_reviewer_item(required)
+            if item is None:
+                missing.append(f"reviewer evidence: {evidence_id}")
+                continue
+            if not self._evidence_item_passed(item):
+                missing.append(f"passed reviewer evidence: {evidence_id}")
+                continue
+            item_hash = str(item.get("artifact_content_hash", "") or "").strip()
+            if current_artifact_hash and item_hash != current_artifact_hash:
+                missing.append(f"current artifact hash on evidence: {evidence_id}")
+                continue
+            source_stage_id = str(item.get("source_stage_execution_id", "") or "").strip()
+            if source_stage_id != current_stage_execution_id:
+                missing.append(f"reviewer-stage provenance on evidence: {evidence_id}")
+                continue
+            if not str(item.get("observed_at", "") or "").strip():
+                missing.append(f"observed_at on evidence: {evidence_id}")
+                continue
+            item_tier = str(item.get("trust_tier", "") or "").strip().lower().replace(" ", "_").replace("-", "_")
+            if item_tier in {"1", "tier1"}:
+                item_tier = "tier_1"
+            elif item_tier in {"2", "tier2"}:
+                item_tier = "tier_2"
+            elif item_tier in {"3", "tier3"}:
+                item_tier = "tier_3"
+            if item_tier != tier:
+                missing.append(f"trust tier on evidence: {evidence_id}")
+                continue
+            if tier == "tier_1":
+                if kind == "runtime_start" and not has_started:
+                    missing.append("runtime start")
+                elif kind == "runtime_health" and not has_healthy:
+                    missing.append("healthy runtime check")
+                elif kind == "browser_journey":
+                    journey_key = str(item.get("journey_key", "") or required.get("journey_key", "") or "").strip()
+                    if journey_key and journey_key not in completed_journey_keys:
+                        missing.append(f"machine-corroborated browser journey: {journey_key}")
+                elif kind == "api_probe":
+                    if not any(
+                        (not current_runtime_instance_id or str(event.runtime_instance_id or "").strip() == current_runtime_instance_id)
+                        and self._fetch_event_matches_probe(event, item)
+                        for event in events
+                    ):
+                        missing.append(f"Registry fetch event for API probe: {evidence_id}")
+        missing = list(dict.fromkeys(item for item in missing if item))
+        if not missing:
+            return engine
+        detail_text = (
+            "Final acceptance for this serious product requires reviewed v2 contract evidence before completion: "
+            + ", ".join(missing)
+            + ". Provide the reviewed auto_protocol_contract, current-hash producer and reviewer evidence manifests, and required corroborated runtime/API/backend evidence."
+        )
+        metadata = dict(metadata_base)
+        metadata.update({
+            "runtime_evidence_required": True,
+            "missing_runtime_evidence": missing,
+            "contract_artifact_key": contract_key,
+            "contract_review_stage_key": contract_review_stage_key,
+            "producer_manifest_artifact_key": producer_manifest_key,
+            "reviewer_manifest_artifact_key": reviewer_manifest_key,
+            "current_runtime_instance_id": current_runtime_instance_id,
+            "artifact_content_hash": current_artifact_hash,
+            "required_evidence_count": len(required_items),
+            "required_journeys": sorted(required_journey_keys),
+            "completed_journeys": sorted(completed_journey_keys),
+        })
+        return engine.model_copy(update={
+            "run_status": "blocked",
+            "stage_status": "blocked",
+            "failure_code": "runtime_evidence_required",
+            "failure_detail": detail_text,
+            "transition_kind": "blocked",
+            "transition_reason": detail_text,
+            "transition_error_code": "RUNTIME_EVIDENCE_REQUIRED",
+            "run_blocked_code": "runtime_evidence_required",
+            "run_blocked_detail": detail_text,
+            "terminal_status": None,
+            "create_next_execution": False,
+            "next_stage_key": "",
+            "transition_metadata": RegistryJsonRecord.model_validate(metadata),
+        })
+
     def _runtime_structured_contract_gate(
         self,
         conn,
@@ -1822,6 +2219,22 @@ class ProtocolPostgresAdapter:
         effective_manifest: ProtocolArtifactRuntimeManifestRecord | None,
         contract: Mapping[str, object],
     ):
+        try:
+            schema_version = int(contract.get("schema_version", 1) or 1)
+        except (TypeError, ValueError):
+            schema_version = 1
+        if schema_version >= 2:
+            return self._runtime_v2_contract_gate(
+                conn,
+                document=document,
+                stage=stage,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                detail=detail,
+                primary_key=primary_key,
+                effective_manifest=effective_manifest,
+                contract=contract,
+            )
         journeys = self._contract_required_journeys(contract)
         metadata_base = engine.transition_metadata.as_dict()
         metadata_base.update({
@@ -5734,8 +6147,9 @@ class ProtocolPostgresAdapter:
                     INSERT INTO {SCHEMA}.protocol_artifact_snapshots (
                         artifact_snapshot_id, protocol_artifact_id, protocol_run_id, artifact_key,
                         snapshot_kind, storage_uri, content_hash, size_bytes, manifest_json,
-                        retention_state, retention_until, created_at, created_by, deleted_at, deleted_by
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        retention_state, retention_until, created_at, created_by, deleted_at, deleted_by,
+                        produced_by_stage_execution_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (artifact_snapshot_id) DO UPDATE SET
                         protocol_artifact_id = EXCLUDED.protocol_artifact_id,
                         storage_uri = EXCLUDED.storage_uri,
@@ -5745,7 +6159,8 @@ class ProtocolPostgresAdapter:
                         retention_state = EXCLUDED.retention_state,
                         retention_until = EXCLUDED.retention_until,
                         deleted_at = EXCLUDED.deleted_at,
-                        deleted_by = EXCLUDED.deleted_by
+                        deleted_by = EXCLUDED.deleted_by,
+                        produced_by_stage_execution_id = EXCLUDED.produced_by_stage_execution_id
                     RETURNING *
                     """,
                     (
@@ -5764,6 +6179,7 @@ class ProtocolPostgresAdapter:
                         created_by,
                         snapshot.deleted_at,
                         snapshot.deleted_by,
+                        snapshot.produced_by_stage_execution_id,
                     ),
                 )
                 row = db_cur.fetchone()
@@ -5783,6 +6199,7 @@ class ProtocolPostgresAdapter:
                             "artifact_snapshot_id": snapshot_id,
                             "content_hash": snapshot.content_hash,
                             "size_bytes": snapshot.size_bytes,
+                            "produced_by_stage_execution_id": snapshot.produced_by_stage_execution_id,
                         }),
                         created_by,
                         now,

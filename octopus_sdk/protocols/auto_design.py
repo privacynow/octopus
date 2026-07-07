@@ -35,6 +35,9 @@ _AUTO_STAGE_BUDGET_SMALL_MAX = 7
 _AUTO_STAGE_BUDGET_STANDARD_MAX = 12
 _AUTO_STAGE_BUDGET_COMPLEX_MAX = 16
 _AUTO_STAGE_HARD_CAP = 18
+_AUTO_SERIOUS_WORK_TIMEOUT_SECONDS = 14_400
+_AUTO_SERIOUS_REVIEW_TIMEOUT_SECONDS = 10_800
+_AUTO_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS = 10_800
 _AUTO_STANDARD_WORK_PACKAGE_BUDGET = 6
 _AUTO_REVIEW_ROUND_MAX = 6
 _AUTO_REQUIREMENT_CONTEXT_MAX_CHARS = 1800
@@ -81,6 +84,74 @@ _AUTO_RUNTIME_PHRASES = (
     "web app",
     "web application",
     "web browser",
+)
+_AUTO_CONTRACT_ARTIFACT_KEY = "auto_protocol_contract"
+_AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY = "product_domain_contract"
+_AUTO_CONTRACT_REVIEW_ARTIFACT_KEY = "auto_protocol_contract_review"
+_AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY = "product_domain_contract_review"
+_AUTO_SERIOUS_PRODUCT_TERMS = {
+    "account",
+    "accounts",
+    "api",
+    "app",
+    "application",
+    "audit",
+    "auth",
+    "backend",
+    "backtest",
+    "backtesting",
+    "broker",
+    "callout",
+    "dashboard",
+    "data integration",
+    "database",
+    "db",
+    "finance",
+    "healthcare",
+    "integration",
+    "irreversible",
+    "ledger",
+    "legal",
+    "live",
+    "order",
+    "orders",
+    "payment",
+    "payments",
+    "persistent",
+    "provider",
+    "recommendation",
+    "recommendations",
+    "secret",
+    "secrets",
+    "service",
+    "state",
+    "trading",
+    "workflow",
+}
+_AUTO_SERIOUS_PRODUCT_CLASSES = {
+    "api_service",
+    "backend_system",
+    "data_integration",
+    "dashboard",
+    "external_integration",
+    "finance_tool",
+    "healthcare_tool",
+    "legal_tool",
+    "persistent_state_system",
+    "serious_product",
+    "trading_tool",
+    "workflow_engine",
+}
+_AUTO_V2_REQUIRED_EVIDENCE_KINDS = (
+    "runtime_start",
+    "runtime_health",
+    "browser_journey",
+    "api_probe",
+    "db_invariant",
+    "provider_mock",
+    "state_machine",
+    "security_gate",
+    "domain_source",
 )
 
 AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE = (
@@ -575,6 +646,8 @@ class ProtocolAutoDesignPlanRecord(RegistryRecordModel):
     protocol_name: str = ""
     protocol_slug: str = ""
     description: str = ""
+    product_class: str = ""
+    contract_required: bool = False
     roles: list[ProtocolAutoDesignRolePlanRecord] = Field(default_factory=list)
     artifacts: list[ProtocolAutoDesignArtifactPlanRecord] = Field(default_factory=list)
     stages: list[ProtocolAutoDesignStagePlanRecord] = Field(default_factory=list)
@@ -605,6 +678,8 @@ class ProtocolAutoDesignModelRequestRecord(RegistryRecordModel):
 class ProtocolAutoDesignModelResponseRecord(RegistryRecordModel):
     requirement_summary: str = ""
     domain: str = "requirement-specific"
+    product_class: str = ""
+    contract_skeleton: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     risk_assessment: str = ""
     assumptions: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
@@ -1583,6 +1658,207 @@ def _consolidate_work_packages(
     return [requirements, *kept, consolidated, implementation]
 
 
+def _contract_required_for_auto_protocol(
+    *,
+    requirement_text: str,
+    constraints_text: str,
+    runtime_expected: bool,
+    analysis: ProtocolAutoDesignAnalysisRecord,
+    model_response: ProtocolAutoDesignModelResponseRecord | None,
+) -> tuple[bool, str]:
+    skeleton = (
+        model_response.contract_skeleton.as_dict()
+        if model_response is not None and isinstance(model_response.contract_skeleton, RegistryJsonRecord)
+        else {}
+    )
+    declared_required = skeleton.get("contract_required")
+    product_class = _snake(str((model_response.product_class if model_response is not None else "") or ""))
+    if not product_class:
+        product_class = _snake(str((skeleton.get("product_class") if isinstance(skeleton, Mapping) else "") or ""))
+    haystack = _normalized_words(
+        requirement_text,
+        constraints_text,
+        analysis.domain,
+        analysis.goal,
+        analysis.focus,
+        *(analysis.deliverables or []),
+        *((model_response.risk_assessment if model_response is not None else "") or "",),
+    )
+    term_hit = _has_any(haystack, tuple(_AUTO_SERIOUS_PRODUCT_TERMS))
+    class_hit = product_class in _AUTO_SERIOUS_PRODUCT_CLASSES
+    required = bool(runtime_expected or class_hit or term_hit or declared_required is True)
+    if not product_class:
+        if "trading" in haystack or "broker" in haystack or "order" in haystack:
+            product_class = "trading_tool"
+        elif "api" in haystack or "backend" in haystack or "service" in haystack:
+            product_class = "api_service"
+        elif "provider" in haystack or "integration" in haystack or "callout" in haystack:
+            product_class = "external_integration"
+        elif "database" in haystack or "ledger" in haystack or "persistent" in haystack or "state" in haystack:
+            product_class = "persistent_state_system"
+        elif runtime_expected:
+            product_class = "serious_product"
+        else:
+            product_class = "lightweight_artifact"
+    if product_class == "lightweight_artifact" and required:
+        product_class = "serious_product"
+    return required, product_class
+
+
+def _contract_stage_packages(
+    *,
+    requirement_text: str,
+    terms_text: str,
+    product_class: str,
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    requirement = _sentence(requirement_text) or "Create the requested outcome."
+    product_domain = _work_package(
+        "product_domain_contract",
+        "Product and Domain Contract",
+        "product_domain_contract_owner",
+        "Product and Domain Contract Owner",
+        (
+            "Produce the first half of the authoritative Auto Protocol contract: product goals, target users, core workflows, "
+            "domain expertise, safety caveats, operator decision points, and non-goals."
+        ),
+        (
+            f"Create product_domain_contract as structured JSON for: {requirement} "
+            "It must include product_contract and domain_contract sections. product_contract must cover users, workflows, success criteria, unsafe actions, visible outcomes, and non_goals. "
+            "domain_contract must cover domain terms, expert assumptions, required sources, caveats, operator_decisions_required, and do_not_claim boundaries. "
+            f"Preserve requirement terms: {terms_text}. Product class: {product_class}."
+        ),
+        (
+            "The JSON is concrete enough that implementation and verification stages do not have to invent product, domain, safety, or operator-decision standards."
+        ),
+        _AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY,
+        "Product and Domain Contract",
+        "Structured JSON containing product_contract and domain_contract sections for the run.",
+        artifact_path=_auto_artifact_path("product-domain-contract", extension=".json"),
+        review_role_key="product_domain_contract_reviewer",
+        review_display_name="Product and Domain Contract Reviewer",
+        review_artifact_key=_AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY,
+        review_artifact_display_name="Product and Domain Contract Review",
+        review_artifact_description="Adversarial review of product/domain contract depth, operator decisions, domain risk, and unsupported claims.",
+        review_artifact_path=_auto_artifact_path("product-domain-contract-review"),
+        review_rubric=(
+            "Review product, domain, safety, and operator-decision coverage. Choose revise if workflows, unsafe actions, domain expertise, sources, caveats, non-goals, or user decisions are shallow, unsupported, or missing."
+        ),
+        rationale="Serious product runs need explicit product and domain standards before system design or implementation.",
+        required_skills=("product analysis", "domain grounding", "risk review"),
+    )
+    system_verification = _work_package(
+        "system_verification_contract",
+        "System and Verification Contract",
+        "system_verification_contract_owner",
+        "System and Verification Contract Owner",
+        (
+            "Produce the authoritative Auto Protocol contract by combining accepted product/domain contract content with backend/API, state, provider, security, and verification requirements."
+        ),
+        (
+            "Create auto_protocol_contract as structured JSON. It must include product_contract and domain_contract from the accepted upstream artifact, plus system_contract and verification_contract. "
+            "system_contract must cover APIs, state transitions, persistence invariants, provider ports/adapters, external callouts, secrets/auth boundaries, failure behavior, and docs/readme expectations when relevant. "
+            "verification_contract must list required_evidence items with evidence_id, kind, trust_tier, requirement_id, required status, and expected corroboration. "
+            "Require backend/API/data correctness evidence for serious products even when the UI looks polished. "
+            f"Preserve requirement terms: {terms_text}."
+        ),
+        (
+            "The contract is decision-complete and testable: each required workflow, backend/API behavior, provider callout, state invariant, safety gate, and browser/API journey maps to explicit evidence."
+        ),
+        _AUTO_CONTRACT_ARTIFACT_KEY,
+        "Auto Protocol Contract",
+        "Authoritative structured product/domain/system/verification contract consumed by final acceptance.",
+        artifact_path=_auto_artifact_path("auto-protocol-contract", extension=".json"),
+        dependencies=[_AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY, _AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY],
+        review_role_key="system_verification_contract_reviewer",
+        review_display_name="System and Verification Contract Reviewer",
+        review_artifact_key=_AUTO_CONTRACT_REVIEW_ARTIFACT_KEY,
+        review_artifact_display_name="System and Verification Contract Review",
+        review_artifact_description="Adversarial review of backend/API, state, provider, security, and evidence requirements in the authoritative contract.",
+        review_artifact_path=_auto_artifact_path("auto-protocol-contract-review"),
+        review_rubric=(
+            "Review backend/API, persistence/state, provider/data, security/live-action, UX, and verification sections. Choose revise if the contract lacks negative cases, machine-corroborated evidence, independent attestation, or operator-visible outcomes."
+        ),
+        rationale="The gate needs a reviewed system/verification contract artifact, not planner prose, to judge implementation evidence.",
+        required_skills=("technical architecture", "testing", "security", "data modeling"),
+    )
+    return [product_domain, system_verification]
+
+
+def _apply_contract_package_shape(
+    packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
+    *,
+    requirement_text: str,
+    terms_text: str,
+    contract_required: bool,
+    product_class: str,
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    if not contract_required:
+        return list(packages)
+    contract_packages = _contract_stage_packages(
+        requirement_text=requirement_text,
+        terms_text=terms_text,
+        product_class=product_class,
+    )
+    planning_only = {
+        "requirements",
+        "technical_approach",
+        "input_model",
+        "domain_grounding",
+        "risk_assessment",
+        "product_domain_contract",
+        "system_verification_contract",
+    }
+    support = [
+        package
+        for package in packages
+        if package.package_key not in planning_only and package.package_key != "implementation"
+    ]
+    implementation = next((package for package in packages if package.package_key == "implementation"), None)
+    if implementation is None:
+        implementation = _work_package(
+            "implementation",
+            "Integrated Outcome",
+            "integrator",
+            "Outcome Integrator",
+            "Produce the primary requested outcome.",
+            "Produce the primary requested outcome.",
+            "The outcome is usable and inspectable.",
+            "produced_outcome",
+            "Produced Outcome",
+            "The primary deliverable requested by the user.",
+            artifact_path=_auto_artifact_path("output", extension=""),
+        )
+    dependency_seed = [
+        _AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY,
+        _AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY,
+        _AUTO_CONTRACT_ARTIFACT_KEY,
+        _AUTO_CONTRACT_REVIEW_ARTIFACT_KEY,
+    ]
+    shaped_support: list[ProtocolAutoDesignWorkPackageRecord] = []
+    for package in support:
+        filtered_dependencies = [
+            dependency
+            for dependency in package.dependencies
+            if dependency not in {"requirements_plan", "requirements_review", "input_model", "risk_review", "domain_grounding", "technical_approach"}
+        ]
+        shaped_support.append(package.model_copy(update={
+            "dependencies": list(dict.fromkeys([*dependency_seed, *filtered_dependencies])),
+        }))
+    implementation_dependencies = [
+        *dependency_seed,
+        *(
+            artifact
+            for package in shaped_support
+            for artifact in (package.artifact_key, package.review_artifact_key)
+            if artifact
+        ),
+    ]
+    implementation = implementation.model_copy(update={
+        "dependencies": list(dict.fromkeys([*implementation_dependencies, *implementation.dependencies])),
+    })
+    return [*contract_packages, *shaped_support, implementation]
+
+
 def _normalize_model_work_packages(
     packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
     *,
@@ -2123,6 +2399,21 @@ def _build_plan(
             model_response.domain if model_response is not None else "",
         )
     )
+    contract_required, product_class = _contract_required_for_auto_protocol(
+        requirement_text=requirement,
+        constraints_text=constraints,
+        runtime_expected=runtime_expected,
+        analysis=analysis,
+        model_response=model_response,
+    )
+    terms_text = ", ".join(list(analysis.requirement_terms)[:14]) or "the explicit user requirement"
+    work_packages = _apply_contract_package_shape(
+        work_packages,
+        requirement_text=requirement,
+        terms_text=terms_text,
+        contract_required=contract_required,
+        product_class=product_class,
+    )
 
     roles_by_key: dict[str, ProtocolAutoDesignRolePlanRecord] = {}
 
@@ -2169,22 +2460,24 @@ def _build_plan(
         "Final summary of artifacts, accepted reviews, revision loops, remaining risks, and exact inspection steps.",
         _auto_artifact_path("release-evidence"),
     )
-    if runtime_expected:
+    if runtime_expected or contract_required:
         ensure_artifact(
             "producer_evidence_manifest",
             "Producer Evidence Manifest",
-            "Structured producer evidence listing implemented runtime hooks and smoke checks for the primary artifact.",
+            "Structured producer evidence listing implemented runtime hooks, API probes, backend/state checks, provider checks, and smoke checks for the primary artifact.",
             _auto_artifact_path("producer-evidence-manifest", extension=".json"),
         )
         ensure_artifact(
             "reviewer_evidence_manifest",
             "Reviewer Evidence Manifest",
-            "Structured reviewer evidence listing executed journeys, hook coverage, and pass/fail assertions for final runtime acceptance.",
+            "Structured reviewer evidence listing verified journeys, API probes, DB/state invariants, provider checks, security gates, domain source checks, and pass/fail assertions for final acceptance.",
             _auto_artifact_path("reviewer-evidence-manifest", extension=".json"),
         )
     artifacts = list(artifact_by_key.values())
 
     stage_key_by_package = {
+        "product_domain_contract": "produce_product_domain_contract",
+        "system_verification_contract": "produce_system_verification_contract",
         "requirements": "plan_requirements",
         "technical_approach": "define_technical_approach",
         "input_model": "model_inputs",
@@ -2201,6 +2494,8 @@ def _build_plan(
         "implementation": "produce_outcome",
     }
     review_key_by_package = {
+        "product_domain_contract": "review_product_domain_contract",
+        "system_verification_contract": "review_system_verification_contract",
         "requirements": "review_requirements",
         "technical_approach": "review_technical_approach",
         "input_model": "review_inputs",
@@ -2217,6 +2512,8 @@ def _build_plan(
         "implementation": "review_outcome",
     }
     work_display_by_package = {
+        "product_domain_contract": "Produce product and domain contract",
+        "system_verification_contract": "Produce system and verification contract",
         "requirements": "Map requirement and acceptance criteria",
         "technical_approach": "Define technical approach",
         "input_model": "Model required inputs",
@@ -2233,6 +2530,8 @@ def _build_plan(
         "implementation": "Integrate requested outcome",
     }
     review_display_by_package = {
+        "product_domain_contract": "Review product and domain contract",
+        "system_verification_contract": "Review system and verification contract",
         "requirements": "Review requirement coverage",
         "technical_approach": "Review technical approach",
         "input_model": "Review input model",
@@ -2286,7 +2585,7 @@ def _build_plan(
             inputs=work_inputs,
             outputs=(
                 [package.artifact_key, "producer_evidence_manifest"]
-                if package.package_key == "implementation" and runtime_expected
+                if package.package_key == "implementation" and (runtime_expected or contract_required)
                 else [package.artifact_key]
             ),
         ))
@@ -2296,7 +2595,7 @@ def _build_plan(
                 package.artifact_key,
                 *(
                     ["producer_evidence_manifest"]
-                    if runtime_expected
+                    if runtime_expected or contract_required
                     else []
                 ),
             ]))
@@ -2355,6 +2654,16 @@ def _build_plan(
             )
         )
         + (
+            (
+                "This protocol uses the v2 Auto Protocol contract. Read auto_protocol_contract and reviewer evidence requirements before accepting. "
+                "Write reviewer_evidence_manifest as JSON evidence items with evidence_id, kind, trust_tier, requirement_id, status, observed_at, artifact_content_hash, source_stage_execution_id, source_artifact_key, command_or_probe, observed_result, corroboration_refs, and failure_detail. "
+                "For serious products, acceptance must cover backend/API behavior, persistence or state invariants, provider/data callouts, security/live-action gates, domain caveats, and adversarial negative cases in addition to any browser journeys. "
+                "Do not accept when required evidence is only narrative, producer-only, stale, missing hashes, missing reviewer provenance, failed, skipped, or uncorroborated. "
+            )
+            if contract_required
+            else ""
+        )
+        + (
             "Record final release evidence: what was inspected, what worked, what remains risky, exact user-facing inspection steps, a pass/fail outcome-readiness matrix, a customer-facing branding check, and the visible outcome/result from each exercised core journey when applicable. "
             "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
         ),
@@ -2363,7 +2672,7 @@ def _build_plan(
             for artifact in artifacts
             if artifact.artifact_key not in {"release_evidence", "reviewer_evidence_manifest"}
         ],
-        outputs=["release_evidence", *(["reviewer_evidence_manifest"] if runtime_expected else [])],
+        outputs=["release_evidence", *(["reviewer_evidence_manifest"] if (runtime_expected or contract_required) else [])],
         review_of="produce_outcome",
     ))
 
@@ -2387,6 +2696,15 @@ def _build_plan(
             "Primary artifact exists and is inspectable.",
             "Final acceptance records what was exercised or inspected.",
             "Release evidence links the artifact to the original requirement.",
+            *(
+                [
+                    "A reviewed auto_protocol_contract JSON artifact defines product, domain, system, and verification requirements for this run.",
+                    "Producer and reviewer evidence manifests bind required backend/API, data/provider, state, security, domain, and UI evidence to the current artifact hash.",
+                    "Reviewer-required evidence cannot be satisfied by producer-only claims or prose-only acceptance.",
+                ]
+                if contract_required
+                else []
+            ),
             *(
                 [
                     "A root octopus-runtime.json manifest exists for the primary artifact.",
@@ -2421,6 +2739,8 @@ def _build_plan(
         protocol_name=title,
         protocol_slug=slug,
         description=description,
+        product_class=product_class,
+        contract_required=contract_required,
         roles=roles,
         artifacts=artifacts,
         stages=stages,
@@ -2437,6 +2757,15 @@ def compile_auto_protocol_plan(
     constraints_text: str = "",
     run_lessons: list[ProtocolRunLessonRecord] | None = None,
 ) -> dict[str, object]:
+    def stage_timeout_seconds(stage: ProtocolAutoDesignStagePlanRecord) -> int:
+        if not plan.contract_required:
+            return 0
+        if stage.stage_kind == "acceptance":
+            return _AUTO_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS
+        if stage.stage_kind == "review":
+            return _AUTO_SERIOUS_REVIEW_TIMEOUT_SECONDS
+        return _AUTO_SERIOUS_WORK_TIMEOUT_SECONDS
+
     role_by_key = {role.role_key: role for role in plan.roles}
     stages: list[dict[str, object]] = []
     for index, stage in enumerate(plan.stages):
@@ -2489,7 +2818,7 @@ def compile_auto_protocol_plan(
             "max_rounds": 0,
             "strict_completion": stage.stage_kind in {"review", "acceptance"},
             "require_output_verification": True if stage.outputs else None,
-            "timeout_seconds": 0,
+            "timeout_seconds": stage_timeout_seconds(stage),
         })
     metadata: dict[str, object] = {
         "slug": plan.protocol_slug,
@@ -2499,6 +2828,8 @@ def compile_auto_protocol_plan(
             "generated": True,
             "requirement": str(requirement_text or "").strip(),
             "constraints": str(constraints_text or "").strip(),
+            "product_class": str(plan.product_class or "").strip() or "lightweight_artifact",
+            "contract_required": bool(plan.contract_required),
             "primary_artifact_key": plan.primary_artifact.artifact_key,
             "primary_artifact": plan.primary_artifact.model_dump(mode="json"),
             "stage_count": len(plan.stages),
@@ -2515,9 +2846,28 @@ def compile_auto_protocol_plan(
         if isinstance(auto_protocol, dict):
             auto_protocol["run_lessons"] = lessons_payload
     primary_behavior = str(plan.primary_artifact.open_behavior or "").strip().lower()
+    auto_protocol = metadata["auto_protocol"]
+    if isinstance(auto_protocol, dict) and plan.contract_required:
+        auto_protocol["acceptance_contract"] = {
+            "schema_version": 2,
+            "contract_required": True,
+            "product_class": str(plan.product_class or "").strip() or "serious_product",
+            "primary_artifact_key": plan.primary_artifact.artifact_key,
+            "contract_artifact_key": _AUTO_CONTRACT_ARTIFACT_KEY,
+            "contract_producer_stage_key": "produce_system_verification_contract",
+            "contract_review_stage_key": "review_system_verification_contract",
+            "product_domain_contract_artifact_key": _AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY,
+            "producer_manifest_artifact_key": "producer_evidence_manifest",
+            "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
+            "required_evidence_kinds": list(_AUTO_V2_REQUIRED_EVIDENCE_KINDS),
+            "trust_tiers": {
+                "tier_1": "machine-corroborated Registry/runtime/fetch/snapshot evidence",
+                "tier_2": "independent reviewer attestation bound to artifact hash and stage provenance",
+                "tier_3": "advisory domain/source/residual-risk evidence",
+            },
+        }
     if primary_behavior in _AUTO_RUNTIME_OPEN_BEHAVIORS:
-        auto_protocol = metadata["auto_protocol"]
-        if isinstance(auto_protocol, dict):
+        if isinstance(auto_protocol, dict) and not plan.contract_required:
             auto_protocol["acceptance_contract"] = {
                 "schema_version": 1,
                 "primary_artifact_key": plan.primary_artifact.artifact_key,
@@ -2910,7 +3260,15 @@ def _semantic_warnings_for_session(
         "safety and risk review": ("risk", "safety", "security"),
     }
     stage_text = _normalized_words(*(stage.stage_key for stage in plan.stages), *(stage.display_name for stage in plan.stages))
+    contract_stage_present = any(stage.stage_key == "produce_system_verification_contract" for stage in plan.stages)
     for skill, required_tokens in skill_stage_requirements.items():
+        if contract_stage_present and skill in {
+            "technical architecture",
+            "domain grounding",
+            "data and input modeling",
+            "safety and risk review",
+        }:
+            continue
         if skill in analysis.skills and not any(token in stage_text for token in required_tokens):
             unresolved.append(ProtocolAutoDesignWarningRecord(
                 code="semantic.skill_missing",

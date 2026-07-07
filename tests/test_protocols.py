@@ -3008,6 +3008,582 @@ def test_registry_store_contract_runtime_gate_requires_hooks_and_structured_jour
     assert accepted.run.status == "completed", accepted.run.blocked_detail
 
 
+def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corroborated_evidence(
+    postgres_registry_truncated: str,
+    tmp_path: Path,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    now = "2026-04-16T00:00:00+00:00"
+    artifact_root = tmp_path / "output"
+    artifact_root.mkdir()
+    (artifact_root / "index.html").write_text(
+        '<button data-testid="primary-action">Run</button><section data-testid="primary-result">Ready</section>',
+        encoding="utf-8",
+    )
+    (artifact_root / "octopus-runtime.json").write_text(
+        json.dumps({
+            "runtime_kind": "static",
+            "ui_path": "/",
+            "health_path": "/health",
+            "test_hooks": [
+                {"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"},
+                {"hook": "primary_result", "selector": "[data-testid='primary-result']", "kind": "region"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    contract_file = tmp_path / "auto_protocol_contract.json"
+    product_domain_file = tmp_path / "product_domain_contract.json"
+    product_domain_review_file = tmp_path / "product_domain_review.md"
+    contract_review_file = tmp_path / "auto_protocol_contract_review.md"
+    release_file = tmp_path / "release.md"
+    producer_manifest_file = tmp_path / "producer_manifest.json"
+    reviewer_manifest_file = tmp_path / "reviewer_manifest.json"
+    product_domain_file.write_text(json.dumps({"product_contract": {}, "domain_contract": {}}), encoding="utf-8")
+    product_domain_review_file.write_text("Product/domain contract accepted.\n", encoding="utf-8")
+    contract_review_file.write_text("System/verification contract accepted.\n", encoding="utf-8")
+    release_file.write_text("Release evidence.\n", encoding="utf-8")
+    contract_document = {
+        "product_contract": {
+            "users": ["operator"],
+            "workflows": ["research a symbol and see a visible result"],
+            "success_criteria": ["the UI and API both update for a new symbol"],
+            "unsafe_actions": ["placing live orders"],
+            "visible_outcomes": ["primary result is visible"],
+            "non_goals": ["profit promises"],
+        },
+        "domain_contract": {
+            "domain_terms": ["quote"],
+            "expert_assumptions": ["market data may be delayed"],
+            "required_sources": ["fixture provider"],
+            "caveats": ["educational only"],
+            "operator_decisions_required": [],
+            "do_not_claim": ["guaranteed profit"],
+        },
+        "system_contract": {
+            "api_surface": [{"method": "GET", "path": "/api/quote"}],
+            "persistence_invariants": ["failed validation does not mutate state"],
+            "provider_ports": ["MarketDataProvider"],
+            "external_callouts": ["fixture market data"],
+            "secrets_auth_boundaries": ["no frontend secrets"],
+            "failure_behavior": ["provider unavailable returns status payload, not 500"],
+        },
+        "verification_contract": {
+            "required_journeys": [
+                {
+                    "journey_key": "primary_happy_path",
+                    "required_hooks": ["primary_action", "primary_result"],
+                    "steps": [{"action": "click", "hook": "primary_action"}],
+                    "assertions": [{"action": "assert_visible", "hook": "primary_result"}],
+                }
+            ],
+            "required_evidence": [
+                {"evidence_id": "runtime_started", "kind": "runtime_start", "trust_tier": "tier_1"},
+                {"evidence_id": "runtime_healthy", "kind": "runtime_health", "trust_tier": "tier_1"},
+                {
+                    "evidence_id": "quote_api_probe",
+                    "kind": "api_probe",
+                    "trust_tier": "tier_1",
+                    "command_or_probe": {"method": "GET", "path": "/api/quote", "status_code": 200},
+                },
+                {
+                    "evidence_id": "primary_happy_path",
+                    "kind": "browser_journey",
+                    "trust_tier": "tier_1",
+                    "journey_key": "primary_happy_path",
+                },
+                {"evidence_id": "no_failed_mutation", "kind": "db_invariant", "trust_tier": "tier_2"},
+                {"evidence_id": "domain_sources", "kind": "domain_source", "trust_tier": "tier_3"},
+            ],
+        },
+    }
+    contract_file.write_text(json.dumps(contract_document), encoding="utf-8")
+
+    def document(slug: str) -> dict[str, object]:
+        return {
+            "metadata": {
+                "slug": slug,
+                "display_name": "V2 Contract Proof",
+                "auto_protocol": {
+                    "primary_artifact_key": "produced_outcome",
+                    "primary_artifact": {
+                        "artifact_key": "produced_outcome",
+                        "open_behavior": "runtime",
+                    },
+                    "acceptance_contract": {
+                        "schema_version": 2,
+                        "contract_required": True,
+                        "product_class": "app",
+                        "primary_artifact_key": "produced_outcome",
+                        "contract_artifact_key": "auto_protocol_contract",
+                        "contract_producer_stage_key": "produce_system_verification_contract",
+                        "contract_review_stage_key": "review_system_verification_contract",
+                        "producer_manifest_artifact_key": "producer_evidence_manifest",
+                        "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
+                    },
+                },
+            },
+            "participants": [
+                {"participant_key": "worker", "display_name": "Worker"},
+                {"participant_key": "reviewer", "display_name": "Reviewer"},
+                {"participant_key": "acceptor", "display_name": "Acceptor"},
+            ],
+            "artifacts": [
+                {"artifact_key": "product_domain_contract", "kind": "workspace_file", "path": "product-domain.json"},
+                {"artifact_key": "product_domain_contract_review", "kind": "workspace_file", "path": "product-domain-review.md"},
+                {"artifact_key": "auto_protocol_contract", "kind": "workspace_file", "path": "auto_protocol_contract.json"},
+                {"artifact_key": "auto_protocol_contract_review", "kind": "workspace_file", "path": "auto-contract-review.md"},
+                {"artifact_key": "produced_outcome", "kind": "workspace_file", "path": "output"},
+                {"artifact_key": "producer_evidence_manifest", "kind": "workspace_file", "path": "producer_manifest.json"},
+                {"artifact_key": "release_evidence", "kind": "workspace_file", "path": "release.md"},
+                {"artifact_key": "reviewer_evidence_manifest", "kind": "workspace_file", "path": "reviewer_manifest.json"},
+            ],
+            "stages": [
+                {
+                    "stage_key": "produce_product_domain_contract",
+                    "participant_key": "worker",
+                    "selector": {"kind": "skill", "value": "planning"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "outputs": ["product_domain_contract"],
+                    "transitions": {"completed": "review_product_domain_contract"},
+                    "instructions": "Produce the product/domain contract.",
+                },
+                {
+                    "stage_key": "review_product_domain_contract",
+                    "participant_key": "reviewer",
+                    "selector": {"kind": "skill", "value": "review"},
+                    "stage_kind": "review",
+                    "inputs": ["product_domain_contract"],
+                    "outputs": ["product_domain_contract_review"],
+                    "review_of_stage_key": "produce_product_domain_contract",
+                    "transitions": {"accept": "produce_system_verification_contract", "revise": "produce_product_domain_contract"},
+                    "instructions": "Review the product/domain contract.",
+                },
+                {
+                    "stage_key": "produce_system_verification_contract",
+                    "participant_key": "worker",
+                    "selector": {"kind": "skill", "value": "architecture"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "inputs": ["product_domain_contract", "product_domain_contract_review"],
+                    "outputs": ["auto_protocol_contract"],
+                    "transitions": {"completed": "review_system_verification_contract"},
+                    "instructions": "Produce the authoritative contract.",
+                },
+                {
+                    "stage_key": "review_system_verification_contract",
+                    "participant_key": "reviewer",
+                    "selector": {"kind": "skill", "value": "review"},
+                    "stage_kind": "review",
+                    "inputs": ["auto_protocol_contract"],
+                    "outputs": ["auto_protocol_contract_review"],
+                    "review_of_stage_key": "produce_system_verification_contract",
+                    "transitions": {"accept": "produce_outcome", "revise": "produce_system_verification_contract"},
+                    "instructions": "Review the authoritative contract.",
+                },
+                {
+                    "stage_key": "produce_outcome",
+                    "participant_key": "worker",
+                    "selector": {"kind": "skill", "value": "implementation"},
+                    "stage_kind": "work",
+                    "write_capable": True,
+                    "inputs": ["auto_protocol_contract"],
+                    "outputs": ["produced_outcome", "producer_evidence_manifest"],
+                    "transitions": {"completed": "final_evidence"},
+                    "instructions": "Produce the runtime artifact.",
+                },
+                {
+                    "stage_key": "final_evidence",
+                    "participant_key": "acceptor",
+                    "selector": {"kind": "skill", "value": "review"},
+                    "stage_kind": "acceptance",
+                    "inputs": ["produced_outcome", "auto_protocol_contract"],
+                    "outputs": ["release_evidence", "reviewer_evidence_manifest"],
+                    "review_of_stage_key": "produce_outcome",
+                    "strict_completion": False,
+                    "require_output_verification": False,
+                    "transitions": {"accept": "__complete__", "revise": "produce_outcome", "fail": "__failed__"},
+                    "instructions": "Accept only after v2 contract evidence exists.",
+                },
+            ],
+            "policies": {"single_active_writer": True, "max_review_rounds": 2},
+        }
+
+    def artifact_id(detail, key: str) -> str:
+        return next(item.protocol_artifact_id for item in detail.artifacts if item.artifact_key == key)
+
+    def save_snapshot(run_id: str, detail, key: str, path: Path, content_hash: str, stage_execution_id: str) -> None:
+        store.save_protocol_artifact_snapshot(
+            ProtocolArtifactSnapshotRecord(
+                artifact_snapshot_id=f"{run_id}-{key}-{stage_execution_id}",
+                protocol_artifact_id=artifact_id(detail, key),
+                protocol_run_id=run_id,
+                artifact_key=key,
+                snapshot_kind="file",
+                storage_uri=str(path),
+                content_hash=content_hash,
+                size_bytes=path.stat().st_size,
+                produced_by_stage_execution_id=stage_execution_id,
+            ),
+            access=operator_access(),
+        )
+
+    def update_stage(enroll, stage, transition_id: str, artifacts: list[dict[str, object]] | None = None, decision: str = "") -> None:
+        full_text = f"{stage.stage_key} complete.\nPROTOCOL_SUMMARY: done."
+        if decision:
+            full_text += f"\nPROTOCOL_DECISION: {decision}"
+        store.update_routed_task_result(
+            enroll.agent_token,
+            stage.routed_task_id,
+            {
+                "status": "completed",
+                "transition_id": transition_id,
+                "summary": "Done.",
+                "full_text": full_text,
+                "artifacts": artifacts or [],
+            },
+        )
+
+    def running_stage(detail, stage_key: str):
+        stage = next(
+            (item for item in detail.stage_executions if item.stage_key == stage_key and item.status == "running"),
+            None,
+        )
+        assert stage is not None, [
+            (item.stage_key, item.status, item.failure_code, item.failure_detail)
+            for item in detail.stage_executions
+        ]
+        return stage
+
+    def run_to_final(slug: str, *, contract_snapshot_stage: str = "correct", include_api_fetch: bool = True, reviewer_source: str = "final"):
+        enroll = store.enroll(agent_card(bot_key=f"m-{uuid.uuid4().hex[:8]}"))
+        published = published_protocol(store, slug=slug, document=document(slug))
+        created = store.create_protocol_run(
+            {
+                "protocol_id": published.protocol.protocol_id,
+                "entry_agent_id": enroll.agent_id,
+                "origin_channel": "registry",
+                "workspace_ref": "default",
+                "problem_statement": "Build the feature.",
+                "constraints_json": {},
+            },
+            access=operator_access(),
+        )
+        assert created.ok is True
+        assert created.run is not None
+        detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+        run_id = created.run.protocol_run_id
+        with get_connection(postgres_registry_truncated) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE agent_registry.protocol_runs SET workspace_ref = %s WHERE protocol_run_id = %s",
+                    (str(tmp_path), run_id),
+                )
+            conn.commit()
+
+        product_stage = next(item for item in detail.stage_executions if item.stage_key == "produce_product_domain_contract")
+        update_stage(
+            enroll,
+            product_stage,
+            f"{slug}-product",
+            artifacts=[
+                {
+                    "artifact_key": "product_domain_contract",
+                    "artifact_kind": "workspace_file",
+                    "path": product_domain_file.name,
+                    "exists": True,
+                    "size_bytes": product_domain_file.stat().st_size,
+                    "content_hash": "product-domain-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                }
+            ],
+        )
+        detail = store.get_protocol_run(run_id, access=operator_access())
+        product_review = running_stage(detail, "review_product_domain_contract")
+        update_stage(
+            enroll,
+            product_review,
+            f"{slug}-product-review",
+            artifacts=[
+                {
+                    "artifact_key": "product_domain_contract_review",
+                    "artifact_kind": "workspace_file",
+                    "path": product_domain_review_file.name,
+                    "exists": True,
+                    "size_bytes": product_domain_review_file.stat().st_size,
+                    "content_hash": "product-domain-review-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                }
+            ],
+            decision="accept",
+        )
+        detail = store.get_protocol_run(run_id, access=operator_access())
+        contract_stage = running_stage(detail, "produce_system_verification_contract")
+        update_stage(
+            enroll,
+            contract_stage,
+            f"{slug}-contract",
+            artifacts=[
+                {
+                    "artifact_key": "auto_protocol_contract",
+                    "artifact_kind": "workspace_file",
+                    "path": contract_file.name,
+                    "exists": True,
+                    "size_bytes": contract_file.stat().st_size,
+                    "content_hash": "contract-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                }
+            ],
+        )
+        detail = store.get_protocol_run(run_id, access=operator_access())
+        contract_snapshot_stage_id = contract_stage.protocol_stage_execution_id
+        if contract_snapshot_stage == "wrong":
+            contract_snapshot_stage_id = product_stage.protocol_stage_execution_id
+        if contract_snapshot_stage != "missing":
+            save_snapshot(run_id, detail, "auto_protocol_contract", contract_file, "contract-hash", contract_snapshot_stage_id)
+        contract_review = running_stage(detail, "review_system_verification_contract")
+        update_stage(
+            enroll,
+            contract_review,
+            f"{slug}-contract-review",
+            artifacts=[
+                {
+                    "artifact_key": "auto_protocol_contract_review",
+                    "artifact_kind": "workspace_file",
+                    "path": contract_review_file.name,
+                    "exists": True,
+                    "size_bytes": contract_review_file.stat().st_size,
+                    "content_hash": "contract-review-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                }
+            ],
+            decision="accept",
+        )
+        detail = store.get_protocol_run(run_id, access=operator_access())
+        outcome_stage = running_stage(detail, "produce_outcome")
+        producer_manifest_file.write_text(
+            json.dumps({
+                "evidence_items": [
+                    {
+                        "evidence_id": "producer_smoke",
+                        "kind": "unit_test",
+                        "trust_tier": "tier_2",
+                        "status": "passed",
+                        "observed_at": now,
+                        "artifact_content_hash": "outcome-hash",
+                        "source_stage_execution_id": outcome_stage.protocol_stage_execution_id,
+                        "source_artifact_key": "producer_evidence_manifest",
+                    }
+                ]
+            }),
+            encoding="utf-8",
+        )
+        update_stage(
+            enroll,
+            outcome_stage,
+            f"{slug}-outcome",
+            artifacts=[
+                {
+                    "artifact_key": "produced_outcome",
+                    "artifact_kind": "workspace_file",
+                    "path": "output",
+                    "exists": True,
+                    "size_bytes": 100,
+                    "content_hash": "outcome-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                },
+                {
+                    "artifact_key": "producer_evidence_manifest",
+                    "artifact_kind": "workspace_file",
+                    "path": producer_manifest_file.name,
+                    "exists": True,
+                    "size_bytes": producer_manifest_file.stat().st_size,
+                    "content_hash": "producer-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                },
+            ],
+        )
+        detail = store.get_protocol_run(run_id, access=operator_access())
+        save_snapshot(run_id, detail, "producer_evidence_manifest", producer_manifest_file, "producer-hash", outcome_stage.protocol_stage_execution_id)
+        final_stage = running_stage(detail, "final_evidence")
+        reviewer_stage_id = final_stage.protocol_stage_execution_id if reviewer_source == "final" else outcome_stage.protocol_stage_execution_id
+        runtime = store.save_protocol_artifact_runtime(
+            ProtocolArtifactRuntimeInstanceRecord(
+                runtime_instance_id=f"{run_id}-runtime",
+                protocol_run_id=run_id,
+                artifact_key="produced_outcome",
+                agent_id=created.run.entry_agent_id,
+                status="running",
+                manifest=ProtocolArtifactRuntimeManifestRecord.model_validate(
+                    json.loads((artifact_root / "octopus-runtime.json").read_text(encoding="utf-8"))
+                ),
+                artifact_path=str(artifact_root),
+                runtime_url=f"/runtime/protocol-runs/{run_id}/artifacts/produced_outcome/app/",
+            ),
+            access=operator_access(),
+        )
+        for event_kind, metadata in (
+            ("started", {}),
+            ("health_checked", {"ok": True, "status_code": 200}),
+        ):
+            store.append_protocol_artifact_runtime_event(
+                ProtocolArtifactRuntimeEventRecord(
+                    runtime_instance_id=runtime.runtime_instance_id,
+                    protocol_run_id=run_id,
+                    artifact_key="produced_outcome",
+                    event_kind=event_kind,
+                    actor_ref="operator-session",
+                    summary=event_kind,
+                    metadata_json=RegistryJsonRecord.model_validate(metadata),
+                ),
+                access=operator_access(),
+            )
+        if include_api_fetch:
+            store.append_protocol_artifact_runtime_event(
+                ProtocolArtifactRuntimeEventRecord(
+                    runtime_instance_id=runtime.runtime_instance_id,
+                    protocol_run_id=run_id,
+                    artifact_key="produced_outcome",
+                    event_kind="fetch",
+                    actor_ref="operator-session",
+                    summary="GET /api/quote -> 200",
+                    metadata_json=RegistryJsonRecord.model_validate({
+                        "method": "GET",
+                        "path": "/api/quote",
+                        "status_code": 200,
+                        "is_api": True,
+                    }),
+                ),
+                access=operator_access(),
+            )
+        requested_event = store.append_protocol_artifact_runtime_event(
+            ProtocolArtifactRuntimeEventRecord(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key="produced_outcome",
+                event_kind="journey_requested",
+                actor_ref="operator-session",
+                summary="Journey requested.",
+                metadata_json=RegistryJsonRecord.model_validate({
+                    "journey_key": "primary_happy_path",
+                    "journey_run_id": f"{run_id}-journey",
+                    "source": "operator_journey_run",
+                    "runtime_instance_id": runtime.runtime_instance_id,
+                    "artifact_content_hash": "outcome-hash",
+                }),
+            ),
+            access=operator_access(),
+        )
+        store.append_protocol_artifact_runtime_event(
+            ProtocolArtifactRuntimeEventRecord(
+                runtime_instance_id=runtime.runtime_instance_id,
+                protocol_run_id=run_id,
+                artifact_key="produced_outcome",
+                event_kind="journey_completed",
+                actor_ref=f"runtime-capability:cap-1:{final_stage.protocol_stage_execution_id}:acceptor",
+                summary="Journey completed.",
+                metadata_json=RegistryJsonRecord.model_validate({
+                    "journey_key": "primary_happy_path",
+                    "journey_run_id": f"{run_id}-journey",
+                    "ok": True,
+                    "status": "passed",
+                    "source": "registry_journey_runner",
+                    "requested_event_id": requested_event.runtime_event_id,
+                    "runtime_instance_id": runtime.runtime_instance_id,
+                    "artifact_content_hash": "outcome-hash",
+                    "actor_stage_execution_id": final_stage.protocol_stage_execution_id,
+                }),
+            ),
+            access=operator_access(),
+        )
+        reviewer_items = []
+        for evidence_id, kind, tier in (
+            ("runtime_started", "runtime_start", "tier_1"),
+            ("runtime_healthy", "runtime_health", "tier_1"),
+            ("quote_api_probe", "api_probe", "tier_1"),
+            ("primary_happy_path", "browser_journey", "tier_1"),
+            ("no_failed_mutation", "db_invariant", "tier_2"),
+            ("domain_sources", "domain_source", "tier_3"),
+        ):
+            item = {
+                "evidence_id": evidence_id,
+                "kind": kind,
+                "trust_tier": tier,
+                "status": "passed",
+                "observed_at": now,
+                "artifact_content_hash": "outcome-hash",
+                "runtime_instance_id": runtime.runtime_instance_id,
+                "source_stage_execution_id": reviewer_stage_id,
+                "source_artifact_key": "reviewer_evidence_manifest",
+                "observed_result": "passed",
+                "corroboration_refs": [runtime.runtime_instance_id],
+            }
+            if evidence_id == "quote_api_probe":
+                item["command_or_probe"] = {"method": "GET", "path": "/api/quote", "status_code": 200}
+            if evidence_id == "primary_happy_path":
+                item["journey_key"] = "primary_happy_path"
+            reviewer_items.append(item)
+        reviewer_manifest_file.write_text(json.dumps({"evidence_items": reviewer_items}), encoding="utf-8")
+        detail = store.get_protocol_run(run_id, access=operator_access())
+        save_snapshot(run_id, detail, "reviewer_evidence_manifest", reviewer_manifest_file, "reviewer-hash", final_stage.protocol_stage_execution_id)
+        update_stage(
+            enroll,
+            final_stage,
+            f"{slug}-final",
+            artifacts=[
+                {
+                    "artifact_key": "release_evidence",
+                    "artifact_kind": "workspace_file",
+                    "path": release_file.name,
+                    "exists": True,
+                    "size_bytes": release_file.stat().st_size,
+                    "content_hash": "release-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                },
+                {
+                    "artifact_key": "reviewer_evidence_manifest",
+                    "artifact_kind": "workspace_file",
+                    "path": reviewer_manifest_file.name,
+                    "exists": True,
+                    "size_bytes": reviewer_manifest_file.stat().st_size,
+                    "content_hash": "reviewer-hash",
+                    "modified_at": now,
+                    "verification_state": "verified",
+                },
+            ],
+            decision="accept",
+        )
+        return store.get_protocol_run(run_id, access=operator_access())
+
+    missing_contract = run_to_final("v2-contract-missing", contract_snapshot_stage="missing")
+    assert missing_contract.run.status == "blocked"
+    assert "latest auto_protocol_contract artifact snapshot" in missing_contract.run.blocked_detail
+
+    wrong_contract = run_to_final("v2-contract-wrong-stage", contract_snapshot_stage="wrong")
+    assert wrong_contract.run.status == "blocked"
+    assert "auto_protocol_contract snapshot from expected stage" in wrong_contract.run.blocked_detail
+
+    producer_only = run_to_final("v2-contract-producer-evidence", reviewer_source="producer")
+    assert producer_only.run.status == "blocked"
+    assert "reviewer-stage provenance on evidence: runtime_started" in producer_only.run.blocked_detail
+
+    missing_fetch = run_to_final("v2-contract-missing-fetch", include_api_fetch=False)
+    assert missing_fetch.run.status == "blocked"
+    assert "Registry fetch event for API probe: quote_api_probe" in missing_fetch.run.blocked_detail
+
+    accepted = run_to_final("v2-contract-accepted")
+    assert accepted.run.status == "completed", accepted.run.blocked_detail
+
+
 def test_registry_store_auto_completes_blocked_final_accept_when_runtime_events_satisfy_gate(postgres_registry_truncated: str, tmp_path: Path) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     artifact_root = tmp_path / "output"

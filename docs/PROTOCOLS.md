@@ -122,6 +122,18 @@ historical, art, sound, implementation, playtest, UX, and release reviewers. An
 analytics workflow may need data modeling, visualization, validation, and
 readiness evidence. A simple workflow may need fewer stages.
 
+For serious products, Auto Protocol now separates the planner's outline from
+the authoritative acceptance contract. The planner stores only a v2 skeleton in
+`metadata.auto_protocol.acceptance_contract`: product class, whether a full
+contract is required, the `auto_protocol_contract` artifact key, and the
+minimum evidence kinds. Early run stages then produce and review the real
+run-specific contract as artifacts: product/domain first, then system and
+verification. The gate reads the latest reviewed `auto_protocol_contract`
+snapshot, not the planner's prose, before final acceptance. This is required for
+runnable apps, APIs, dashboards, workflow engines, persistent-state systems,
+external-provider integrations, finance/trading, payments, secrets, live
+actions, recommendations, backtesting, or other high-risk product classes.
+
 Generated workflows are budgeted. The normal compiler keeps the primary outcome
 stage immediately before final acceptance and rejects plans above the hard stage
 cap instead of silently creating a token-heavy workflow. The final stage is an
@@ -130,6 +142,10 @@ artifact and can return defective work to the outcome stage. Runtime contract
 defects such as a missing, invalid, or non-run-ready manifest are converted into
 an in-product revise transition when the protocol has a revise path; missing
 operator exercise evidence remains blocked until the runtime is exercised.
+For serious contract-backed products, generated stages also receive explicit
+execution budgets in the stage runtime contract. Provider runtimes honor that
+budget per stage, so heavyweight contract, implementation, and evidence stages
+do not silently fall back to a short global bot timeout.
 
 Every Auto Protocol declares primary artifact metadata. Runs UI and Telegram
 promote that artifact first, then show supporting plans, reviews, and release
@@ -355,7 +371,27 @@ keep the legacy runtime/prose evidence gate.
 The evidence manifest artifact keys are `producer_evidence_manifest` and
 `reviewer_evidence_manifest`. They are normal protocol artifacts and are read
 from the latest retained snapshot when the acceptance gate evaluates a
-contract-bearing run.
+contract-bearing run. For v2 contracts, each evidence item also carries a trust
+tier, source stage, observed time, current artifact content hash, runtime
+instance when applicable, observed result, and corroboration references. Tier 1
+evidence is machine-corroborated by Registry state: runtime start/health,
+journey results tied to a Registry-issued `journey_run_id`, API probes matched
+against server-generated fetch events, and retained snapshot hashes. Tier 2 is
+independent reviewer attestation such as unit/integration tests, DB invariants,
+provider mocks, state-machine checks, and security checks; it must be produced
+by the expected reviewer or verification stage and match the current artifact
+hash. Tier 3 is advisory evidence such as domain sources, live-provider notes,
+and residual-risk explanations. Advisory evidence can be required for
+visibility, but it cannot satisfy machine-proof requirements.
+
+The v2 gate covers more than browser journeys. The reviewed
+`auto_protocol_contract` must describe product workflows, unsafe actions,
+domain assumptions and source boundaries, API surface, persistence/state
+invariants, provider ports and callouts, secrets/auth boundaries, failure
+behavior, positive and negative tests, backend/API probes, DB/state checks,
+provider mock or live-status checks, browser journeys, and documentation checks
+when the product needs them. A reviewer manifest that only says "looks good" or
+contains uncorroborated JSON is not enough.
 
 ## Starting A Run
 

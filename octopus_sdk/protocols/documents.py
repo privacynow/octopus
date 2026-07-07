@@ -1155,6 +1155,7 @@ def protocol_stage_runtime_contract(
         participant_key=stage.participant_key,
         stage_key=stage.stage_key,
         stage_kind=stage.stage_kind,
+        timeout_seconds=stage.timeout_seconds,
         strict_completion=stage.strict_completion,
         require_output_verification=require_verification,
         output_artifacts=outputs,

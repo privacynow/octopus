@@ -642,6 +642,7 @@ class CodexProvider:
         is_resume: bool = False,
         extra_env: dict[str, str] | None = None,
         working_dir: str = "",
+        timeout_seconds: float = 0,
         cancel: asyncio.Event | None = None,
     ) -> RunResult:
         log.info("codex: %s", " ".join(cmd[:-1] + ["<prompt>"]))
@@ -819,19 +820,20 @@ class CodexProvider:
         try:
             # shield() keeps the reader alive if the first timeout fires,
             # so we can extend the deadline when codex is compacting context.
+            effective_timeout = max(0.001, float(timeout_seconds or self.config.timeout_seconds))
             await asyncio.wait_for(
-                asyncio.shield(stdout_task), timeout=self.config.timeout_seconds,
+                asyncio.shield(stdout_task), timeout=effective_timeout,
             )
             stderr = (await stderr_task).decode("utf-8", errors="replace").strip()
         except (asyncio.TimeoutError, TimeoutError):
             if is_resume and proc.returncode is None:
                 # Codex is still running — likely compacting context.
                 # Warn the user and give it one more timeout period.
-                log.info("codex resume still running after %ds — extending for compaction",
-                         self.config.timeout_seconds)
+                log.info("codex resume still running after %.3gs — extending for compaction",
+                         effective_timeout)
                 await progress.update(render_progress(Liveness(detail="Still working — this may take a moment...")))
                 try:
-                    await asyncio.wait_for(stdout_task, timeout=self.config.timeout_seconds)
+                    await asyncio.wait_for(stdout_task, timeout=effective_timeout)
                     stderr = (await stderr_task).decode("utf-8", errors="replace").strip()
                 except (asyncio.TimeoutError, TimeoutError):
                     proc.kill()
@@ -972,7 +974,25 @@ class CodexProvider:
                 cmd.insert(-1, override)
 
         extra_env = context.credential_env if context else {}
-        return await self._run_cmd(cmd, progress, is_resume=is_resume, extra_env=extra_env, working_dir=working_dir, cancel=cancel)
+        timeout_seconds = float(getattr(context, "timeout_seconds", 0) or 0) if context else 0
+        if timeout_seconds > 0:
+            return await self._run_cmd(
+                cmd,
+                progress,
+                is_resume=is_resume,
+                extra_env=extra_env,
+                working_dir=working_dir,
+                timeout_seconds=timeout_seconds,
+                cancel=cancel,
+            )
+        return await self._run_cmd(
+            cmd,
+            progress,
+            is_resume=is_resume,
+            extra_env=extra_env,
+            working_dir=working_dir,
+            cancel=cancel,
+        )
 
     async def run_preflight(
         self,

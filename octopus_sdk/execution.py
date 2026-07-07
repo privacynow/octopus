@@ -58,6 +58,14 @@ def _progress_request_timed_out(seconds: int) -> str:
     return f"Request timed out after {seconds} seconds."
 
 
+def _coerce_execution_timeout_seconds(value: object) -> int:
+    try:
+        seconds = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, seconds)
+
+
 def _progress_session_not_resumed() -> str:
     return "\n\n<i>Session could not be resumed — your next message will start fresh.</i>"
 
@@ -130,6 +138,7 @@ class TransportIdentity:
     authority_ref: str
     runtime_capability_ref: str = ""
     requested_skills: tuple[str, ...] = ()
+    execution_timeout_seconds: int = 0
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
 
@@ -146,6 +155,7 @@ class ExecutionChannelMetadata:
     target_agent_id: str
     runtime_capability_ref: str = ""
     requested_skills: tuple[str, ...] = ()
+    execution_timeout_seconds: int = 0
 
 
 @dataclass(frozen=True)
@@ -197,6 +207,7 @@ def build_transport_identity_from_metadata(
             authority_ref=metadata.authority_ref,
             runtime_capability_ref=metadata.runtime_capability_ref,
             requested_skills=metadata.requested_skills,
+            execution_timeout_seconds=_coerce_execution_timeout_seconds(metadata.execution_timeout_seconds),
             timeline_callback=routed_task_callback_factory(
                 metadata.routed_task_id,
                 metadata.authority_ref,
@@ -220,6 +231,7 @@ def build_transport_identity_from_metadata(
             authority_ref=metadata.authority_ref,
             runtime_capability_ref=metadata.runtime_capability_ref,
             requested_skills=metadata.requested_skills,
+            execution_timeout_seconds=_coerce_execution_timeout_seconds(metadata.execution_timeout_seconds),
             timeline_callback=conversation_callback_factory(
                 conversation_ref,
                 metadata.routed_task_id,
@@ -236,6 +248,7 @@ def build_transport_identity_from_metadata(
         authority_ref=metadata.authority_ref,
         runtime_capability_ref=metadata.runtime_capability_ref,
         requested_skills=metadata.requested_skills,
+        execution_timeout_seconds=_coerce_execution_timeout_seconds(metadata.execution_timeout_seconds),
         timeline_callback=None,
     )
 
@@ -537,6 +550,9 @@ async def _execute_request_locked(
         effective_model=resolved.effective_model,
         available_agents=available_agents,
     )
+    execution_timeout_seconds = _coerce_execution_timeout_seconds(transport.execution_timeout_seconds)
+    if execution_timeout_seconds > 0:
+        context.timeout_seconds = execution_timeout_seconds
     awareness_block = await _agent_awareness_prompt_block(
         runtime,
         transport,
@@ -682,7 +698,10 @@ async def _execute_request_locked(
         await event_sink.on_tool_execution(record, index=index)
 
     if result.timed_out:
-        await progress.update(_progress_request_timed_out(cfg.timeout_seconds), force=True)
+        await progress.update(
+            _progress_request_timed_out(context.timeout_seconds or cfg.timeout_seconds),
+            force=True,
+        )
         return RequestExecutionOutcome(status="timed_out", working_dir=str(result.working_dir or resolved.working_dir or ""))
 
     if result.returncode != 0:

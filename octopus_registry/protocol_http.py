@@ -1068,10 +1068,46 @@ def build_protocol_router(
         if not isinstance(auto_protocol, Mapping):
             return {}
         contract = auto_protocol.get("acceptance_contract")
-        return dict(contract) if isinstance(contract, Mapping) else {}
+        if not isinstance(contract, Mapping):
+            return {}
+        result = dict(contract)
+        try:
+            schema_version = int(result.get("schema_version", 1) or 1)
+        except (TypeError, ValueError):
+            schema_version = 1
+        if schema_version < 2:
+            return result
+        contract_key = str(result.get("contract_artifact_key", "") or "").strip() or "auto_protocol_contract"
+        snapshots = [
+            item
+            for item in getattr(detail, "artifact_snapshots", []) or []
+            if str(item.artifact_key or "").strip() == contract_key
+        ]
+        snapshots.sort(key=lambda item: (str(item.created_at or ""), str(item.artifact_snapshot_id or "")), reverse=True)
+        for snapshot in snapshots:
+            path = artifact_snapshot_storage_path(load_registry_config().artifact_store_dir, snapshot)
+            if path is None:
+                raw_path = Path(str(snapshot.storage_uri or "")).expanduser()
+                if raw_path.exists():
+                    path = raw_path
+            if path is None or not path.is_file():
+                continue
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(loaded, Mapping):
+                result["resolved_contract_artifact"] = dict(loaded)
+                break
+        return result
 
     def _contract_journeys(contract: Mapping[str, object]) -> dict[str, dict[str, object]]:
         raw = contract.get("required_journeys")
+        if raw is None:
+            resolved = contract.get("resolved_contract_artifact")
+            verification = resolved.get("verification_contract") if isinstance(resolved, Mapping) else {}
+            if isinstance(verification, Mapping):
+                raw = verification.get("required_journeys") or verification.get("browser_journeys")
         if not isinstance(raw, list):
             return {}
         result: dict[str, dict[str, object]] = {}

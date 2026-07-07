@@ -149,6 +149,12 @@ status, the linked management request, and the target bot/provider logs. A
 provider timeout should surface as a failed session with planner details, not as
 a transient dialog that vanishes before the operator can read it.
 
+After publish/run, serious Auto Protocol stages use the stage timeout embedded
+in their runtime contract, not just `BOT_TIMEOUT_SECONDS`. A generated
+contract/outcome stage timing out means the provider exceeded that stage budget
+or stopped making progress; inspect the linked routed task, task age, stage
+artifacts, and provider logs before retrying or sending back.
+
 If the host URL or public URL is wrong, redeploy the Registry with the intended
 address and restart bots so generated links and local bot connection metadata
 are refreshed:
@@ -310,7 +316,7 @@ Common issue responses:
 | `lease_held` | Inspect active or stale work lease. |
 | `stage_timeout` | Inspect worker health and provider result. |
 | `max_review_rounds_exceeded` | Decide whether to accept, send back, or cancel. |
-| `runtime_evidence_required` | Start or open the runtime, run health, exercise required journeys, and inspect missing evidence. |
+| `runtime_evidence_required` | Start or open the runtime, run health, exercise required journeys, inspect backend/API/provider/state evidence, and read the missing evidence list. |
 | `operator_interrupted` | Retry, send back, cancel, or fork after confirming whether cancellation reached the bot. |
 
 Scoped runtime capability tokens are internal execution credentials. Stage
@@ -328,6 +334,17 @@ run before final acceptance. Contract-bearing protocols should not complete
 from reviewer prose alone or from uncorrelated `journey_completed` events. The
 operator `Re-run journey` control queues bot work and returns immediately; use
 the run updates/runtime event list to confirm the later pass or failure.
+
+For v2 Auto Protocol contracts, also verify that the latest
+`auto_protocol_contract` snapshot was produced by
+`produce_system_verification_contract` and reviewed by
+`review_system_verification_contract`. The final `reviewer_evidence_manifest`
+must be produced by `final_evidence`, match the current primary artifact hash,
+and include required Tier 1, Tier 2, and Tier 3 items. API probes should have
+matching Registry fetch events; DB invariants, provider mocks, state-machine
+checks, and security checks should come from the expected reviewer stage rather
+than the producer. Domain-source notes are advisory and should not be treated as
+proof that runtime/API behavior works.
 
 ## Cleanup
 

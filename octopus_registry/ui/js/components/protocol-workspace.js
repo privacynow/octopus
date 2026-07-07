@@ -296,10 +296,13 @@ function _autoProtocolRunAttemptKey(sessionId) {
     return `auto-protocol-session:${normalized}:run:${nonce}`;
 }
 
-function _autoProtocolPlanningActionError() {
+function _autoProtocolPlanningActionError(session = null) {
     const err = new Error('Auto Protocol is still designing this session. Wait for planning to finish before applying, publishing, or running.');
     err.status = 409;
     err.errorCode = 'PROTOCOL_AUTO_PLANNING';
+    if (session?.session_id) {
+        err.session = session;
+    }
     return err;
 }
 
@@ -309,7 +312,7 @@ async function _autoProtocolRunAction(sessionId, action, { originChannel = 'regi
     if (!normalizedSessionId) return null;
     const latest = await API.getProtocolAutoSession(normalizedSessionId);
     if (_autoProtocolPlanning(latest)) {
-        throw _autoProtocolPlanningActionError();
+        throw _autoProtocolPlanningActionError(latest);
     }
     if (normalizedAction === 'apply') {
         return API.applyProtocolAutoSession(normalizedSessionId);
@@ -429,9 +432,6 @@ function _autoProtocolProgressEl(session = null) {
     }
     if (plannerState.timeout_at) {
         facts.appendChild(_autoProtocolPlannerFact('Timeout', UI.relativeTime(plannerState.timeout_at)));
-    }
-    if (Number.isFinite(Number(plannerState.queue_position))) {
-        facts.appendChild(_autoProtocolPlannerFact('Queue position', String(Number(plannerState.queue_position) + 1)));
     }
     if (promptDiagnostics.large_input) {
         facts.appendChild(_autoProtocolPlannerFact('Input size', 'Large design input'));
@@ -3472,14 +3472,9 @@ function renderProtocolWorkspace(container) {
                 if (designSessionsRoute) {
                     selectedAutoProtocolSessionId = String(session.session_id || '');
                     selectedAutoProtocolSession = session;
+                    const listChanged = _mergeAutoProtocolSessionIntoList(session);
                     _writeState({ push: true });
-                    void loadAutoProtocolSessions({ quiet: true })
-                        .then(() => {
-                            if (designSessionsRoute) render();
-                        })
-                        .catch((err) => {
-                            console.warn('Failed to refresh Auto Protocol design sessions after dialog update', err);
-                        });
+                    if (listChanged) render();
                 }
             }
             if (_autoProtocolPlanning(session)) {
@@ -8925,6 +8920,32 @@ function renderProtocolWorkspace(container) {
         if (!quiet) render();
     }
 
+    function _mergeAutoProtocolSessionIntoList(session) {
+        const sessionId = String(session?.session_id || '').trim();
+        if (!sessionId) return false;
+        const statusFilter = String(autoProtocolStatusFilter || '').trim();
+        const matchesFilter = !designSessionsRoute || !statusFilter || String(session?.status || '') === statusFilter;
+        let changed = false;
+        const next = [];
+        let replaced = false;
+        (Array.isArray(autoProtocolSessions) ? autoProtocolSessions : []).forEach((item) => {
+            if (String(item?.session_id || '') !== sessionId) {
+                next.push(item);
+                return;
+            }
+            replaced = true;
+            changed = JSON.stringify(item || {}) !== JSON.stringify(session || {});
+            if (matchesFilter) next.push(session);
+        });
+        if (!replaced && matchesFilter) {
+            next.unshift(session);
+            changed = true;
+        }
+        if (replaced && !matchesFilter) changed = true;
+        if (changed) autoProtocolSessions = next;
+        return changed;
+    }
+
     async function loadAutoProtocolSessions({ quiet = false } = {}) {
         autoProtocolSessionsLoading = true;
         if (!quiet) render();
@@ -8965,7 +8986,7 @@ function renderProtocolWorkspace(container) {
             if (String(sessionId || '') !== String(selectedAutoProtocolSessionId || '')) return;
             if (String(updated?.session_id || '') !== String(selectedAutoProtocolSessionId || '')) return;
             selectedAutoProtocolSession = updated;
-            await loadAutoProtocolSessions({ quiet: true });
+            _mergeAutoProtocolSessionIntoList(updated);
             try {
                 const events = await API.listProtocolAutoSessionEvents(sessionId);
                 selectedAutoProtocolEvents = Array.isArray(events?.items) ? events.items : [];
@@ -9041,6 +9062,10 @@ function renderProtocolWorkspace(container) {
             }
             render();
         } catch (err) {
+            if (err?.session?.session_id) {
+                selectedAutoProtocolSession = err.session;
+                _mergeAutoProtocolSessionIntoList(err.session);
+            }
             autoProtocolQueueActionError = err;
             const status = Number(err?.status || 0);
             const code = String(err?.errorCode || '').trim().toUpperCase();

@@ -7,7 +7,7 @@ import base64
 import copy
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -458,75 +458,6 @@ def build_protocol_router(
 
     def _auto_protocol_can_apply_operator_surface(access: ProtocolAccessContextRecord) -> bool:
         return access.has_role("publisher") or access.has_role("admin")
-
-    def _auto_protocol_planner_status(session: ProtocolAutoDesignSessionRecord) -> str:
-        return str(session.planner_state.as_dict().get("planner_status") or "").strip().lower()
-
-    def _auto_protocol_queue_position_key(session: ProtocolAutoDesignSessionRecord) -> str:
-        agent_id = str(session.planner_agent_id or "").strip()
-        if agent_id:
-            return f"agent:{agent_id}"
-        return str(session.planner_policy or "auto_select").strip() or "auto_select"
-
-    def _auto_protocol_session_with_queue_position(
-        session: ProtocolAutoDesignSessionRecord,
-        *,
-        planning_sessions: Sequence[ProtocolAutoDesignSessionRecord],
-    ) -> ProtocolAutoDesignSessionRecord:
-        state = dict(session.planner_state.as_dict())
-        if str(session.status or "") != "planning" or _auto_protocol_planner_status(session) != "queued":
-            state.pop("queue_position", None)
-            return session.model_copy(update={"planner_state": RegistryJsonRecord.model_validate(state)})
-        key = _auto_protocol_queue_position_key(session)
-        queued = [
-            item
-            for item in planning_sessions
-            if str(item.status or "") == "planning"
-            and _auto_protocol_planner_status(item) == "queued"
-            and _auto_protocol_queue_position_key(item) == key
-        ]
-        queued.sort(key=lambda item: (
-            str(item.planner_state.as_dict().get("queued_at") or item.created_at or ""),
-            str(item.created_at or ""),
-            str(item.session_id or ""),
-        ))
-        position = 0
-        for index, item in enumerate(queued):
-            if str(item.session_id or "") == str(session.session_id or ""):
-                position = index
-                break
-        state["queue_position"] = position
-        return session.model_copy(update={"planner_state": RegistryJsonRecord.model_validate(state)})
-
-    def _auto_protocol_sessions_with_queue_positions(
-        sessions: Sequence[ProtocolAutoDesignSessionRecord],
-        *,
-        store: AbstractRegistryStore,
-        access: ProtocolAccessContextRecord,
-    ) -> list[ProtocolAutoDesignSessionRecord]:
-        if not any(str(item.status or "") == "planning" for item in sessions):
-            return list(sessions)
-        try:
-            planning_sessions: list[ProtocolAutoDesignSessionRecord] = []
-            cursor = 0
-            page_size = 101
-            while True:
-                page = store.list_protocol_auto_design_sessions(
-                    access=access,
-                    status="planning",
-                    limit=page_size,
-                    cursor=cursor,
-                )
-                planning_sessions.extend(page)
-                if len(page) < page_size:
-                    break
-                cursor += len(page)
-        except Exception:
-            planning_sessions = list(sessions)
-        return [
-            _auto_protocol_session_with_queue_position(item, planning_sessions=planning_sessions)
-            for item in sessions
-        ]
 
     @router.post("/v1/agents/runtime-capabilities/exchange")
     def resource_exchange_runtime_capability(
@@ -1826,7 +1757,6 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
-            session = _auto_protocol_sessions_with_queue_positions([session], store=store, access=access)[0]
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except KeyError as exc:
@@ -1852,7 +1782,6 @@ def build_protocol_router(
             )
             has_next = len(sessions) > limit
             sessions = sessions[:limit]
-            sessions = _auto_protocol_sessions_with_queue_positions(sessions, store=store, access=access)
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         next_cursor = cursor + limit if has_next else None

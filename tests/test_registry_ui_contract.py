@@ -63,6 +63,15 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         assert "__routeReady" in text, f"{name} must publish an initial route readiness promise"
 
 
+def test_ui_query_param_updates_do_not_push_duplicate_history_entries() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ui_js = (repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js").read_text(encoding="utf-8")
+
+    assert "const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;" in ui_js
+    assert "if (next === current) return;" in ui_js
+    assert ui_js.index("if (next === current) return;") < ui_js.index("history.pushState(null, '', next);")
+
+
 def test_management_views_request_agent_pages_with_supported_limit() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     api_js = (

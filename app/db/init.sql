@@ -942,6 +942,16 @@ ALTER TABLE agent_registry.protocol_auto_sessions
     ADD COLUMN IF NOT EXISTS planner_state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS prompt_diagnostics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS source_document_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+UPDATE agent_registry.protocol_auto_sessions
+SET status = 'failed',
+    planner_state_json = COALESCE(planner_state_json, '{}'::jsonb) || jsonb_build_object(
+        'planner_status', 'failed',
+        'progress_summary', 'Legacy Auto Protocol planner request cannot be completed after routed-task planner migration. Retry the design session.',
+        'completed_at', CURRENT_TIMESTAMP::TEXT
+    ),
+    updated_at = CURRENT_TIMESTAMP::TEXT
+WHERE status = 'planning'
+  AND COALESCE(planner_task_id, '') = '';
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_actor
     ON agent_registry.protocol_auto_sessions (actor_ref, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_target

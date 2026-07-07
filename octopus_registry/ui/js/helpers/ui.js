@@ -102,6 +102,8 @@ window.UI = (() => {
                 }
             });
             const next = `${url.pathname}${url.search}${url.hash}`;
+            const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+            if (next === current) return;
             if (replace) {
                 history.replaceState(null, '', next);
             } else {

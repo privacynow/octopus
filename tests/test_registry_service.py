@@ -2114,7 +2114,7 @@ def test_protocol_auto_create_resource_attach_failure_returns_session_details(mo
     assert detail["details"]["status"] == "planning"
 
 
-def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkeypatch, tmp_path: Path):
+def test_protocol_auto_session_list_returns_pagination_without_queue_position(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -2177,6 +2177,8 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
         second_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=2")
         deep_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=102")
         final_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=104")
+        hundred_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=100")
+        hundred_final_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=100&cursor=100")
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
@@ -2185,7 +2187,7 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
     payload = response.json()
     assert payload["next_cursor"] == 2
     assert [item["session_id"] for item in payload["items"]] == ["auto-session-1", "auto-session-2"]
-    assert [item["planner_state"]["queue_position"] for item in payload["items"]] == [0, 1]
+    assert all("queue_position" not in item["planner_state"] for item in payload["items"])
     assert second_response.status_code == 200, second_response.text
     second_payload = second_response.json()
     assert second_payload["next_cursor"] == 4
@@ -2194,11 +2196,25 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
     deep_payload = deep_response.json()
     assert deep_payload["next_cursor"] == 104
     assert [item["session_id"] for item in deep_payload["items"]] == ["auto-session-103", "auto-session-104"]
-    assert [item["planner_state"]["queue_position"] for item in deep_payload["items"]] == [102, 103]
+    assert all("queue_position" not in item["planner_state"] for item in deep_payload["items"])
     assert final_response.status_code == 200, final_response.text
     final_payload = final_response.json()
     assert final_payload["next_cursor"] is None
     assert [item["session_id"] for item in final_payload["items"]] == ["auto-session-105"]
+    assert hundred_response.status_code == 200, hundred_response.text
+    hundred_payload = hundred_response.json()
+    assert len(hundred_payload["items"]) == 100
+    assert hundred_payload["next_cursor"] == 100
+    assert hundred_final_response.status_code == 200, hundred_final_response.text
+    hundred_final_payload = hundred_final_response.json()
+    assert hundred_final_payload["next_cursor"] is None
+    assert [item["session_id"] for item in hundred_final_payload["items"]] == [
+        "auto-session-101",
+        "auto-session-102",
+        "auto-session-103",
+        "auto-session-104",
+        "auto-session-105",
+    ]
 
 
 def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkeypatch, tmp_path: Path):

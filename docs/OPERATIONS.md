@@ -145,9 +145,9 @@ Auto Protocol design is expected to be heavyweight. The Registry stores a
 `planning` session and queues a hidden `auto_design` routed task to a
 provider-capable bot; the browser watches the session topic rather than holding
 one long request open. If a design appears stuck, open `Build -> Designs` and
-check the Auto Protocol session status, the linked routed task, queue position,
-the assigned planner agent, the last progress timestamp, and the target
-bot/provider logs. A provider timeout or planner-task timeout should surface as
+check the Auto Protocol session status, the linked routed task, the assigned
+planner agent, the last progress timestamp, and the target bot/provider logs.
+A provider timeout or planner-task timeout should surface as
 a failed session with planner details, not as a transient dialog that vanishes
 before the operator can read it.
 New `design_auto_protocol` work is not accepted on the management channel; bots

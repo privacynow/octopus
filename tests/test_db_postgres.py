@@ -139,6 +139,63 @@ def test_run_init_backfills_nullable_default_visibility_columns(postgres_truncat
         assert constraints[table][1].lower() == "false"
 
 
+def test_run_init_fails_legacy_auto_protocol_planning_without_routed_task(postgres_truncated):
+    """Planner migration leaves no invisible legacy planning sessions without task ownership."""
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO agent_registry.protocol_auto_sessions (
+                    session_id, status, planner_request_id, planner_task_id,
+                    planner_state_json, created_at, updated_at
+                )
+                VALUES (
+                    'legacy-planning-session', 'planning', 'legacy-management-request', '',
+                    '{"planner_status":"running"}'::jsonb,
+                    '2026-07-07T12:00:00Z', '2026-07-07T12:00:00Z'
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.protocol_auto_sessions (
+                    session_id, status, planner_request_id, planner_task_id,
+                    planner_state_json, created_at, updated_at
+                )
+                VALUES (
+                    'routed-planning-session', 'planning', '', 'auto-design:routed',
+                    '{"planner_status":"queued"}'::jsonb,
+                    '2026-07-07T12:01:00Z', '2026-07-07T12:01:00Z'
+                )
+                """
+            )
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT session_id, status, planner_state_json
+                FROM agent_registry.protocol_auto_sessions
+                WHERE session_id IN ('legacy-planning-session', 'routed-planning-session')
+                ORDER BY session_id
+                """
+            )
+            rows = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+    legacy_status, legacy_state = rows["legacy-planning-session"]
+    routed_status, routed_state = rows["routed-planning-session"]
+    assert legacy_status == "failed"
+    assert legacy_state["planner_status"] == "failed"
+    assert "routed-task planner migration" in legacy_state["progress_summary"]
+    assert routed_status == "planning"
+    assert routed_state["planner_status"] == "queued"
+
+
 def test_protocol_responsiveness_indexes_exist(postgres_truncated):
     """Run and issue list filters have matching indexes for UI-scale history."""
     from app.db.postgres import get_connection

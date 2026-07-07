@@ -345,8 +345,7 @@ test('design-session queue shows active work and does not loop pagination', asyn
   await expect(page.locator('.protocol-auto-session-detail')).toContainText('Analyzing product goals and verification scope.');
   await expect(page.locator('.protocol-auto-session-detail')).toContainText('Planner agent');
   await expect(page.locator('.protocol-auto-session-detail')).toContainText('M2');
-  const queuePositionRow = page.locator('.protocol-auto-session-detail .kit-details-row').filter({ hasText: 'Queue position' });
-  await expect(queuePositionRow).toContainText('2');
+  await expect(page.locator('.protocol-auto-session-detail .kit-details-row').filter({ hasText: 'Queue position' })).toHaveCount(0);
 
   const next = page.getByRole('button', { name: 'Next', exact: true });
   await expect(next).toBeEnabled();
@@ -391,6 +390,55 @@ test('queue action deterministic errors render once without retry', async ({ pag
   await expect(errorCard.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
   await expect(detail.getByText('Operator authoring role is required.')).toHaveCount(1);
 
+  expect(capture.pageErrors).toEqual([]);
+  expect(capture.consoleErrors).toEqual([]);
+});
+
+test('queue action planning refresh updates stale detail without mutating', async ({ page }) => {
+  await login(page);
+  let actionRefresh = false;
+  let mutationAttempts = 0;
+  const ready = mockSession(1, {
+    session_id: 'session-01',
+    requirement_text: 'Ready design before stale refresh',
+    target_protocol_id: 'protocol-01',
+  });
+  const planning = {
+    ...ready,
+    status: 'planning',
+    draft_definition_json: {},
+    validation: { ok: false },
+    planner_state: {
+      planner_status: 'running',
+      selected_agent_display_name: 'M2',
+      queued_at: '2026-07-07T12:00:00Z',
+      started_at: '2026-07-07T12:01:00Z',
+      last_progress_at: '2026-07-07T12:03:00Z',
+      progress_summary: 'Still designing after refresh.',
+    },
+  };
+  await mockAutoProtocolSessions(page, {
+    sessions: [ready],
+    sessionGetHandler: async ({ json, session }) => {
+      await json(actionRefresh ? planning : session);
+    },
+    actionHandler: async ({ json }) => {
+      mutationAttempts += 1;
+      await json({ detail: { message: 'Mutation should not have run.', error_code: 'UNEXPECTED_MUTATION' } }, 500);
+    },
+  });
+  const capture = attachErrorCapture(page);
+
+  await page.goto('/ui/design-sessions?session_id=session-01', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.protocol-auto-session-detail')).toContainText('Ready design before stale refresh');
+  actionRefresh = true;
+  await page.getByRole('button', { name: 'Apply draft', exact: true }).click();
+
+  const detail = page.locator('.protocol-auto-session-detail');
+  await expect(detail.locator('.protocol-auto-error')).toContainText('PROTOCOL_AUTO_PLANNING');
+  await expect(detail).toContainText('Still designing after refresh.');
+  await expect(detail.getByRole('button', { name: 'Apply draft', exact: true })).toBeDisabled();
+  expect(mutationAttempts).toBe(0);
   expect(capture.pageErrors).toEqual([]);
   expect(capture.consoleErrors).toEqual([]);
 });

@@ -3,8 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PLAYWRIGHT_DIR="${REPO_DIR}/.tmp/playwright"
-PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.59.1}"
+PLAYWRIGHT_DIR="${REPO_DIR}/tests/e2e/playwright"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-${REPO_DIR}/.tmp/ms-playwright}"
 
 if [ "$#" -eq 0 ]; then
@@ -19,7 +18,7 @@ fi
 mkdir -p "${PLAYWRIGHT_DIR}"
 
 if [ ! -x "${PLAYWRIGHT_DIR}/node_modules/.bin/playwright" ]; then
-  npm install --prefix "${PLAYWRIGHT_DIR}" --no-save "@playwright/test@${PLAYWRIGHT_VERSION}"
+  npm ci --prefix "${PLAYWRIGHT_DIR}"
 fi
 
 PLAYWRIGHT_BIN="${PLAYWRIGHT_DIR}/node_modules/.bin/playwright"

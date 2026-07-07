@@ -43,6 +43,7 @@ jobs:
   registry-ui-e2e:
     name: Registry UI / Playwright
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4

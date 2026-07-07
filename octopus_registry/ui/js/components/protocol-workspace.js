@@ -8514,6 +8514,8 @@ function renderProtocolWorkspace(container) {
             availableCatalogSkills = Array.from(catalogByName.values());
             if (currentProtocol && !protocolDetailLoading) {
                 render();
+            } else if (!currentProtocolId && Array.isArray(autoProtocolSessions) && autoProtocolSessions.length) {
+                render();
             }
         } catch (err) {
             availableAgents = [];

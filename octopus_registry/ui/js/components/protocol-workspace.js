@@ -8720,6 +8720,14 @@ function renderProtocolWorkspace(container) {
         actions.appendChild(openDesigner);
         section.appendChild(actions);
 
+        const requirementText = String(session?.requirement_text || '').trim();
+        if (requirementText) {
+            const requirement = document.createElement('p');
+            requirement.className = 'quiet-note protocol-auto-session-requirement';
+            requirement.textContent = requirementText;
+            section.appendChild(requirement);
+        }
+
         if (autoProtocolQueueActionError) {
             section.appendChild(_autoProtocolErrorEl(
                 'Auto Protocol action failed',

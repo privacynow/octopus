@@ -296,6 +296,36 @@ function _autoProtocolRunAttemptKey(sessionId) {
     return `auto-protocol-session:${normalized}:run:${nonce}`;
 }
 
+function _autoProtocolPlanningActionError() {
+    const err = new Error('Auto Protocol is still designing this session. Wait for planning to finish before applying, publishing, or running.');
+    err.status = 409;
+    err.errorCode = 'PROTOCOL_AUTO_PLANNING';
+    return err;
+}
+
+async function _autoProtocolRunAction(sessionId, action, { originChannel = 'registry' } = {}) {
+    const normalizedSessionId = String(sessionId || '').trim();
+    const normalizedAction = String(action || '').trim();
+    if (!normalizedSessionId) return null;
+    const latest = await API.getProtocolAutoSession(normalizedSessionId);
+    if (_autoProtocolPlanning(latest)) {
+        throw _autoProtocolPlanningActionError();
+    }
+    if (normalizedAction === 'apply') {
+        return API.applyProtocolAutoSession(normalizedSessionId);
+    }
+    if (normalizedAction === 'publish') {
+        return API.publishProtocolAutoSession(normalizedSessionId);
+    }
+    if (normalizedAction === 'run') {
+        return API.runProtocolAutoSession(normalizedSessionId, {
+            origin_channel: originChannel,
+            idempotency_key: _autoProtocolRunAttemptKey(normalizedSessionId),
+        });
+    }
+    throw new Error(`Unsupported Auto Protocol action: ${normalizedAction || 'unknown'}`);
+}
+
 function _autoProtocolSessionSourceRunId(session) {
     return String(session?.source_run_id || '').trim();
 }
@@ -3520,15 +3550,6 @@ function renderProtocolWorkspace(container) {
             UI.notify('Auto Protocol is still designing. The dialog reattached to the active planner job.', 'warning', { timeout: 0 });
             return true;
         };
-        const ensureSessionReadyForAction = async (options = {}) => {
-            if (!session?.session_id) return false;
-            await refreshSessionState(options);
-            if (_autoProtocolPlanning(session)) {
-                UI.notify('Auto Protocol is still designing. Wait for planning to finish before applying, publishing, or running.', 'warning', { timeout: 0 });
-                return false;
-            }
-            return true;
-        };
         revise.addEventListener('input', syncActions);
         cancelBtn.addEventListener('click', () => view.close());
         queueBtn.addEventListener('click', () => {
@@ -3648,12 +3669,7 @@ function renderProtocolWorkspace(container) {
             _setAutoProtocolButtonBusy(applyBtn, true);
             _setAutoProtocolStatus(status, 'Applying generated draft…');
             try {
-                if (!await ensureSessionReadyForAction()) {
-                    _setAutoProtocolButtonBusy(applyBtn, false);
-                    syncActions();
-                    return;
-                }
-                const applied = await API.applyProtocolAutoSession(session.session_id);
+                const applied = await _autoProtocolRunAction(session.session_id, 'apply');
                 session = applied;
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 if (await _adoptAutoProtocolSession(applied)) {
@@ -3679,12 +3695,7 @@ function renderProtocolWorkspace(container) {
             _setAutoProtocolButtonBusy(publishBtn, true);
             _setAutoProtocolStatus(status, 'Publishing generated protocol…');
             try {
-                if (!await ensureSessionReadyForAction()) {
-                    _setAutoProtocolButtonBusy(publishBtn, false);
-                    syncActions();
-                    return;
-                }
-                session = await API.publishProtocolAutoSession(session.session_id);
+                session = await _autoProtocolRunAction(session.session_id, 'publish');
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 await _adoptAutoProtocolSession(session);
                 _setAutoProtocolStatus(status, 'Published. You can run it now or continue editing a draft revision later.');
@@ -3707,15 +3718,7 @@ function renderProtocolWorkspace(container) {
             _setAutoProtocolButtonBusy(runBtn, true);
             _setAutoProtocolStatus(status, 'Publishing and starting the run…');
             try {
-                if (!await ensureSessionReadyForAction()) {
-                    _setAutoProtocolButtonBusy(runBtn, false);
-                    syncActions();
-                    return;
-                }
-                session = await API.runProtocolAutoSession(session.session_id, {
-                    origin_channel: 'registry',
-                    idempotency_key: _autoProtocolRunAttemptKey(session.session_id),
-                });
+                session = await _autoProtocolRunAction(session.session_id, 'run');
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 await _adoptAutoProtocolSession(session);
                 const runId = _autoProtocolRunId(session);
@@ -9019,28 +9022,7 @@ function renderProtocolWorkspace(container) {
         autoProtocolQueueRetryAction = '';
         render();
         try {
-            const latest = await API.getProtocolAutoSession(sessionId);
-            selectedAutoProtocolSession = latest;
-            if (_autoProtocolPlanning(latest)) {
-                autoProtocolQueueActionError = {
-                    status: 409,
-                    errorCode: 'PROTOCOL_AUTO_PLANNING',
-                    message: 'Auto Protocol is still designing this session. Wait for planning to finish before applying, publishing, or running.',
-                };
-                autoProtocolQueueRetryAction = '';
-                render();
-                return;
-            }
-            if (action === 'apply') {
-                selectedAutoProtocolSession = await API.applyProtocolAutoSession(sessionId);
-            } else if (action === 'publish') {
-                selectedAutoProtocolSession = await API.publishProtocolAutoSession(sessionId);
-            } else if (action === 'run') {
-                selectedAutoProtocolSession = await API.runProtocolAutoSession(sessionId, {
-                    origin_channel: 'registry',
-                    idempotency_key: _autoProtocolRunAttemptKey(sessionId),
-                });
-            }
+            selectedAutoProtocolSession = await _autoProtocolRunAction(sessionId, action);
             await loadAutoProtocolSessions({ quiet: true });
             await loadSelectedAutoProtocolSession({ quiet: true });
             if (action === 'apply' || action === 'publish') {
@@ -10558,16 +10540,6 @@ function renderProtocolRuns(container) {
             UI.notify('Auto Protocol is still designing. The dialog reattached to the active planner job.', 'warning', { timeout: 0 });
             return true;
         };
-        const ensureSessionReadyForAction = async (options = {}) => {
-            if (!session?.session_id) return false;
-            await refreshSessionState(options);
-            if (_autoProtocolPlanning(session)) {
-                UI.notify('Auto Protocol is still designing. Wait for planning to finish before applying, publishing, or running.', 'warning', { timeout: 0 });
-                return false;
-            }
-            return true;
-        };
-
         cancelBtn.addEventListener('click', () => view.close());
         const rememberedSessionId = activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();
         if (rememberedSessionId) {
@@ -10639,12 +10611,7 @@ function renderProtocolRuns(container) {
             _setAutoProtocolButtonBusy(applyBtn, true);
             _setAutoProtocolStatus(status, 'Applying improved draft…');
             try {
-                if (!await ensureSessionReadyForAction()) {
-                    _setAutoProtocolButtonBusy(applyBtn, false);
-                    syncActions();
-                    return;
-                }
-                const applied = await API.applyProtocolAutoSession(session.session_id);
+                const applied = await _autoProtocolRunAction(session.session_id, 'apply');
                 session = applied;
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
                 const protocolId = _autoProtocolTargetProtocolId(applied);
@@ -10673,12 +10640,7 @@ function renderProtocolRuns(container) {
             _setAutoProtocolButtonBusy(publishBtn, true);
             _setAutoProtocolStatus(status, 'Publishing improved protocol…');
             try {
-                if (!await ensureSessionReadyForAction()) {
-                    _setAutoProtocolButtonBusy(publishBtn, false);
-                    syncActions();
-                    return;
-                }
-                session = await API.publishProtocolAutoSession(session.session_id);
+                session = await _autoProtocolRunAction(session.session_id, 'publish');
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
                 _setAutoProtocolStatus(status, 'Published. You can start a fresh run now.');
                 UI.notify('Improved protocol published.', 'success');
@@ -10700,15 +10662,7 @@ function renderProtocolRuns(container) {
             _setAutoProtocolButtonBusy(runBtn, true);
             _setAutoProtocolStatus(status, 'Publishing and starting improved run…');
             try {
-                if (!await ensureSessionReadyForAction()) {
-                    _setAutoProtocolButtonBusy(runBtn, false);
-                    syncActions();
-                    return;
-                }
-                session = await API.runProtocolAutoSession(session.session_id, {
-                    origin_channel: 'registry',
-                    idempotency_key: _autoProtocolRunAttemptKey(session.session_id),
-                });
+                session = await _autoProtocolRunAction(session.session_id, 'run');
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
                 const runId = _runAutoSessionRunId(session);
                 view.close();

@@ -62,7 +62,6 @@ from octopus_sdk.registry.management import (
     ArtifactRuntimeHealthResult,
     ArtifactRuntimeLogsRequest,
     ArtifactRuntimeLogsResult,
-    DesignAutoProtocolResult,
     ManagementRequest,
     RunArtifactJourneyRequest,
     StartArtifactRuntimeRequest,
@@ -1018,7 +1017,6 @@ def build_protocol_router(
     def _planning_auto_protocol_session(
         request_payload: ProtocolAutoDesignRequestRecord,
         *,
-        planner_request: ManagementRequest | None = None,
         planner_task_id: str = "",
         planner_agent_id: str = "",
         planner_policy: str = "auto_select",
@@ -1045,10 +1043,10 @@ def build_protocol_router(
             constraints_text=request_payload.constraints_text,
             resource_refs=list(request_payload.resource_refs or []),
             run_lessons=list(request_payload.run_lessons or []),
-            planner_request_id=planner_request.request_id if planner_request is not None else "",
+            planner_request_id="",
             planner_task_id=str(planner_task_id or ""),
             planner_policy=str(planner_policy or "auto_select"),
-            planner_agent_id=str(planner_agent_id or (planner_request.agent_id if planner_request is not None else "")),
+            planner_agent_id=str(planner_agent_id or ""),
             planner_state=RegistryJsonRecord.model_validate(dict(planner_state or {})),
             prompt_diagnostics=RegistryJsonRecord.model_validate(dict(prompt_diagnostics or {})),
             source_document_json=request_payload.source_document,
@@ -1080,86 +1078,6 @@ def build_protocol_router(
             "unresolved_decisions": [warning],
             "change_summary": [detail[:1000]],
         })
-
-    def _auto_protocol_request_from_session(
-        store: AbstractRegistryStore,
-        session: ProtocolAutoDesignSessionRecord,
-        *,
-        response: object,
-    ) -> ProtocolAutoDesignRequestRecord:
-        return ProtocolAutoDesignRequestRecord.model_validate({
-            "mode": session.mode,
-            "surface": session.surface,
-            "requirement_text": session.requirement_text,
-            "constraints_text": session.constraints_text,
-            "target_protocol_id": session.target_protocol_id,
-            "target_version_id": session.source_version_id,
-            "target_draft_revision": session.source_draft_revision,
-            "source_run_id": session.source_run_id,
-            "source_document": session.source_document_json.as_dict(),
-            "available_agents": _connected_agents(store),
-            "available_skills": [_routing_skill_json(item) for item in store.list_routing_skills()],
-            "workspace_ref": "",
-            "preferred_design_agent_id": session.planner_agent_id,
-            "actor_ref": session.actor_ref,
-            "chat_ref": session.chat_ref,
-            "resource_refs": list(session.resource_refs or []),
-            "run_lessons": [item.model_dump(mode="json") for item in session.run_lessons or []],
-            "model_response": response,
-        })
-
-    def _maybe_complete_auto_protocol_planning_session(
-        store: AbstractRegistryStore,
-        session: ProtocolAutoDesignSessionRecord,
-        *,
-        access: ProtocolAccessContextRecord,
-    ) -> ProtocolAutoDesignSessionRecord:
-        if str(session.status or "") != "planning" or str(session.planner_task_id or "").strip() or not str(session.planner_request_id or "").strip():
-            return session
-        result = store.get_management_result(session.planner_request_id)
-        if result is None:
-            return session
-        if not result.success or not isinstance(result.payload, DesignAutoProtocolResult):
-            detail = result.error_detail or result.error_code or "Auto Protocol planner failed."
-            failed = _auto_protocol_failed_session(
-                session,
-                code="planner.request_failed",
-                message=detail,
-            )
-            return store.update_protocol_auto_design_session(failed, access=access, event_kind="planner_failed")
-        try:
-            request_payload = _auto_protocol_request_from_session(store, session, response=result.payload.response)
-            if session.mode == "revise":
-                completed = revise_auto_protocol_session(
-                    request_payload,
-                    session_id=session.session_id,
-                    created_at=session.created_at,
-                    updated_at=session.updated_at,
-                )
-                event_kind = "revised"
-            else:
-                completed = generate_auto_protocol_session(
-                    request_payload,
-                    session_id=session.session_id,
-                    created_at=session.created_at,
-                    updated_at=session.updated_at,
-                )
-                event_kind = "generated"
-            completed = completed.model_copy(update={
-                "planner_request_id": session.planner_request_id,
-                "planner_agent_id": session.planner_agent_id,
-                "source_document_json": session.source_document_json,
-            })
-            saved = store.update_protocol_auto_design_session(completed, access=access, event_kind=event_kind)
-            _attach_auto_protocol_resources(store, saved, actor_ref=access.actor_ref)
-            return saved
-        except Exception as exc:
-            failed = _auto_protocol_failed_session(
-                session,
-                code="planner.compile_failed",
-                message=f"Auto Protocol planner result could not be compiled: {exc}",
-            )
-            return store.update_protocol_auto_design_session(failed, access=access, event_kind="planner_failed")
 
     def _attach_auto_protocol_resources(
         store: AbstractRegistryStore,
@@ -1908,15 +1826,11 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
-            before = str(session.status or "")
-            session = _maybe_complete_auto_protocol_planning_session(store, session, access=access)
             session = _auto_protocol_sessions_with_queue_positions([session], store=store, access=access)[0]
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except KeyError as exc:
             raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
-        if before == "planning" and str(session.status or "") != "planning":
-            await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.planner_completed")
         return _json_payload(session)
 
     @router.get("/v1/protocol-auto/sessions")
@@ -1972,7 +1886,6 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             existing = store.get_protocol_auto_design_session(session_id, access=access)
-            existing = _maybe_complete_auto_protocol_planning_session(store, existing, access=access)
             if str(existing.status or "") == "planning":
                 raise _protocol_http_error(
                     409,
@@ -2054,7 +1967,6 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
-            session = _maybe_complete_auto_protocol_planning_session(store, session, access=access)
             if str(session.status or "") == "planning":
                 raise _protocol_http_error(
                     409,
@@ -2078,7 +1990,6 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
-            session = _maybe_complete_auto_protocol_planning_session(store, session, access=access)
             _ensure_auto_protocol_ready(session, action="publish")
             session = _ensure_auto_protocol_session_published(store, session, access=access)
         except PermissionError as exc:
@@ -2099,7 +2010,6 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
-            session = _maybe_complete_auto_protocol_planning_session(store, session, access=access)
             _ensure_auto_protocol_ready(session, action="run")
             session = _ensure_auto_protocol_session_published(store, session, access=access)
             agents = _connected_agents(store)

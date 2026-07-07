@@ -153,9 +153,9 @@ before the operator can read it.
 New `design_auto_protocol` work is not accepted on the management channel; bots
 return `auto_design_requires_routed_task` so planner execution stays on the
 queued routed-task path.
-Legacy planning sessions that still point at old management requests are
-reconciled by the same maintenance sweep so completed, failed, or timed-out
-planner work does not remain in `planning` indefinitely.
+Historical sessions may still display an old planner request id, but active
+planning completion is routed-task only. Legacy management-request planner
+results are not compiled by reads or maintenance sweeps.
 
 After publish/run, serious Auto Protocol stages use a timeout derived from the
 generated Auto Protocol metadata and carried in their runtime contract, not just

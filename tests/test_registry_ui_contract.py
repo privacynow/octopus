@@ -374,7 +374,8 @@ def test_improve_run_apply_adopts_the_applied_protocol_draft() -> None:
     assert apply_match is not None
     apply_body = apply_match.group("body")
 
-    assert "const applied = await API.applyProtocolAutoSession(session.session_id);" in apply_body
+    assert "const applied = await _autoProtocolRunAction(session.session_id, 'apply');" in apply_body
+    assert "API.applyProtocolAutoSession(session.session_id)" not in apply_body
     assert "const protocolId = _autoProtocolTargetProtocolId(applied);" in apply_body
     assert "if (protocolId) {" in apply_body
     assert "view.close();" in apply_body
@@ -1295,7 +1296,7 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "requirePlanning: !explicitSessionId" in workspace
     assert "ignoreRememberedSession: true" in workspace
     assert "const updated = await API.getProtocolAutoSession(session.session_id);" in workspace
-    assert "Auto Protocol is still designing. Wait for planning to finish before applying, publishing, or running." in workspace
+    assert "Auto Protocol is still designing this session. Wait for planning to finish before applying, publishing, or running." in workspace
     assert "Auto Protocol is still designing. The dialog reattached to the active planner job." in workspace
     assert "planning = _autoProtocolPlanning(session)" in workspace
     assert "actionable = hasSession && !planning && hasDraft" in workspace
@@ -1334,7 +1335,7 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "!Number.isFinite(parsedNextCursor)" in workspace
     assert "next.disabled = autoProtocolSessionsNextCursor === null;" in workspace
     assert "autoProtocolQueueActionInFlight" in workspace
-    assert "idempotency_key: _autoProtocolRunAttemptKey(sessionId)" in workspace
+    assert "idempotency_key: _autoProtocolRunAttemptKey(normalizedSessionId)" in workspace
     assert "_autoProtocolSelectedAgentLabel(session" in workspace
     assert "card.setAttribute('role', 'alert');" in workspace
     assert "closeOnOverlay: false" in workspace

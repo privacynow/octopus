@@ -68,9 +68,7 @@ async function mockAgents(page, { waitFor = null } = {}) {
   });
 }
 
-async function mockProtocolRunForImprove(page) {
-  const runId = 'run-improve-e2e';
-  const protocolId = 'protocol-improve-e2e';
+async function mockProtocolRunForImprove(page, { runId = 'run-improve-e2e', protocolId = 'protocol-improve-e2e' } = {}) {
   const runSummary = {
     protocol_run_id: runId,
     protocol_id: protocolId,
@@ -165,6 +163,7 @@ async function mockAutoProtocolSessions(page, options = {}) {
   const sessions = options.sessions || defaultMockSessions();
   const actionHandler = typeof options.actionHandler === 'function' ? options.actionHandler : null;
   const createHandler = typeof options.createHandler === 'function' ? options.createHandler : null;
+  const sessionGetHandler = typeof options.sessionGetHandler === 'function' ? options.sessionGetHandler : null;
 
   await page.route('**/v1/protocol-auto/sessions**', async (route) => {
     const url = new URL(route.request().url());
@@ -222,6 +221,10 @@ async function mockAutoProtocolSessions(page, options = {}) {
       await json(session);
       return;
     }
+    if (sessionGetHandler) {
+      await sessionGetHandler({ route, session, sessionId, json });
+      return;
+    }
     await json(session);
   });
 }
@@ -270,6 +273,62 @@ test('improve-run dialog opens and unavailable actions are not actionable', asyn
 
   await dialog.getByRole('button', { name: 'Generate improvement', exact: true }).click();
   await expect(dialog.getByText('Describe what should improve.')).toBeVisible();
+  expect(capture.pageErrors).toEqual([]);
+  expect(capture.consoleErrors).toEqual([]);
+});
+
+test('improve-run dialog rejects remembered sessions from another run', async ({ page }) => {
+  await login(page);
+  await mockAgents(page);
+  const protocolId = 'protocol-shared-improve-e2e';
+  const runId = await mockProtocolRunForImprove(page, { runId: 'run-improve-b-e2e', protocolId });
+  let rememberedFetches = 0;
+  const rememberedSession = mockSession(11, {
+    session_id: 'session-run-a',
+    status: 'planning',
+    mode: 'revise',
+    target_protocol_id: protocolId,
+    source_run_id: 'run-improve-a-e2e',
+    requirement_text: 'Run A remembered planning session',
+    plan: { protocol_name: 'Run A remembered planner' },
+    draft_definition_json: {},
+    validation: { ok: false },
+    planner_state: {
+      planner_status: 'running',
+      selected_agent_display_name: 'M2',
+      queued_at: '2026-07-07T12:11:00Z',
+      started_at: '2026-07-07T12:12:00Z',
+      last_progress_at: '2026-07-07T12:13:00Z',
+      progress_summary: 'Run A planner is active.',
+      queue_position: 0,
+    },
+  });
+  await mockAutoProtocolSessions(page, {
+    sessions: [rememberedSession],
+    sessionGetHandler: async ({ sessionId, json, session }) => {
+      if (sessionId === 'session-run-a') rememberedFetches += 1;
+      await json(session);
+    },
+  });
+  const capture = attachErrorCapture(page);
+  await page.evaluate(([key, value]) => window.localStorage.setItem(key, value), [
+    'octopus.protocolAuto.activeSessionId',
+    'session-run-a',
+  ]);
+
+  await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Improve this run', exact: true })).toBeVisible({ timeout: 15000 });
+  await page.getByRole('button', { name: 'Improve this run', exact: true }).click();
+
+  const dialog = page.locator('.confirm-dialog.protocol-auto-modal').filter({ hasText: 'Improve this run' }).first();
+  await expect(dialog).toBeVisible({ timeout: 15000 });
+  await expect.poll(() => rememberedFetches).toBe(1);
+  await expect(dialog.getByRole('button', { name: 'Generate improvement', exact: true })).toBeVisible();
+  await expect(dialog.getByPlaceholder(/make the runtime start/i)).toBeVisible();
+  await expect(dialog.getByText('Run A planner is active.')).toHaveCount(0);
+  await expect(dialog.getByText('Run A remembered planner')).toHaveCount(0);
+  const queueButton = dialog.locator('button').filter({ hasText: 'View in queue' }).first();
+  await expect(queueButton).toBeHidden();
   expect(capture.pageErrors).toEqual([]);
   expect(capture.consoleErrors).toEqual([]);
 });

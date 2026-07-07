@@ -5051,7 +5051,7 @@ def test_auto_protocol_planner_task_progress_and_result_finalize_session(postgre
     assert completed.draft_definition_json.as_dict()["metadata"]["auto_protocol"]["requirement"] == request_payload.requirement_text
 
 
-def test_auto_protocol_legacy_management_request_finalizes_during_maintenance(postgres_registry_truncated: str) -> None:
+def test_auto_protocol_legacy_management_request_is_not_finalized_during_maintenance(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     enroll = store.enroll(
         agent_card(bot_key="legacy-planner").model_copy(update={
@@ -5115,11 +5115,10 @@ def test_auto_protocol_legacy_management_request_finalizes_during_maintenance(po
 
     maintenance = store.run_protocol_maintenance(now="2026-04-16T00:00:00+00:00")
 
-    assert "auto-legacy-session" in maintenance.affected_auto_session_ids
+    assert "auto-legacy-session" not in maintenance.affected_auto_session_ids
     completed = store.get_protocol_auto_design_session("auto-legacy-session", access=operator_access())
-    assert completed.status in {"ready", "blocked"}
-    assert completed.model_response is not None
-    assert completed.model_response.domain == "legacy browser app"
+    assert completed.status == "planning"
+    assert completed.model_response is None
 
 
 def test_auto_protocol_planner_task_timeout_fails_session_during_maintenance(postgres_registry_truncated: str) -> None:

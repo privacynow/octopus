@@ -46,8 +46,9 @@ function mockSession(index, overrides = {}) {
   };
 }
 
-async function mockAgents(page) {
+async function mockAgents(page, { waitFor = null } = {}) {
   await page.route('**/v1/agents**', async (route) => {
+    if (waitFor) await waitFor;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -138,7 +139,7 @@ async function mockProtocolRunForImprove(page) {
   return runId;
 }
 
-async function mockAutoProtocolSessions(page) {
+function defaultMockSessions() {
   const sessions = Array.from({ length: 25 }, (_value, index) => mockSession(index));
   sessions[2] = mockSession(2, {
     status: 'planning',
@@ -157,7 +158,13 @@ async function mockAutoProtocolSessions(page) {
       queue_position: 1,
     },
   });
+  return sessions;
+}
+
+async function mockAutoProtocolSessions(page, options = {}) {
+  const sessions = options.sessions || defaultMockSessions();
   const byId = new Map(sessions.map((session) => [session.session_id, session]));
+  const actionHandler = typeof options.actionHandler === 'function' ? options.actionHandler : null;
 
   await page.route('**/v1/protocol-auto/sessions**', async (route) => {
     const url = new URL(route.request().url());
@@ -202,13 +209,33 @@ async function mockAutoProtocolSessions(page) {
       await json({ detail: { message: 'Not found', error_code: 'NOT_FOUND' } }, 404);
       return;
     }
+    const action = parts[parts.indexOf('sessions') + 2] || '';
+    if (['apply', 'publish', 'run', 'revise'].includes(action)) {
+      if (actionHandler) {
+        await actionHandler({ route, session, sessionId, action, json });
+        return;
+      }
+      await json(session);
+      return;
+    }
     await json(session);
   });
 }
 
+function visibleReadySessions() {
+  return [
+    mockSession(1, { session_id: 'session-01', requirement_text: 'Ready design one', target_protocol_id: 'protocol-01' }),
+    mockSession(2, { session_id: 'session-02', requirement_text: 'Ready design two', target_protocol_id: 'protocol-02' }),
+  ];
+}
+
 test('improve-run dialog opens and unavailable actions are not actionable', async ({ page }) => {
   await login(page);
-  await mockAgents(page);
+  let releaseAgents;
+  const agentsReady = new Promise((resolve) => {
+    releaseAgents = resolve;
+  });
+  await mockAgents(page, { waitFor: agentsReady });
   const runId = await mockProtocolRunForImprove(page);
   await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
 
@@ -222,7 +249,10 @@ test('improve-run dialog opens and unavailable actions are not actionable', asyn
   await expect(dialog.getByRole('button', { name: 'Generate improvement', exact: true })).toBeVisible();
   const plannerSelect = dialog.getByLabel('Planner agent');
   await expect(plannerSelect).toBeVisible();
+  await expect(plannerSelect).toBeDisabled();
+  releaseAgents();
   await expect.poll(() => plannerSelect.locator('option').evaluateAll((options) => options.map((option) => option.textContent || ''))).toContain('M2');
+  await expect(plannerSelect).toBeEnabled();
 
   const unavailableActions = ['Apply draft', 'Publish', 'Publish & Run', 'View in queue'];
   for (const label of unavailableActions) {
@@ -262,6 +292,176 @@ test('design-session queue shows active work and does not loop pagination', asyn
   await expect(page.locator('[data-auto-protocol-session-id="session-24"]')).toBeVisible();
   await expect(next).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeEnabled();
+
+  expect(capture.pageErrors).toEqual([]);
+  expect(capture.consoleErrors).toEqual([]);
+});
+
+test('queue action deterministic errors render once without retry', async ({ page }) => {
+  await login(page);
+  await mockAutoProtocolSessions(page, {
+    sessions: visibleReadySessions(),
+    actionHandler: async ({ action, json }) => {
+      if (action === 'apply') {
+        await json({
+          detail: {
+            message: 'Operator authoring role is required.',
+            error_code: 'PROTOCOL_AUTO_APPLY_ROLE_REQUIRED',
+          },
+        }, 403);
+        return;
+      }
+      await json({});
+    },
+  });
+  const capture = attachErrorCapture(page, { ignoreConsole: [/403 \(Forbidden\)/] });
+
+  await page.goto('/ui/design-sessions?session_id=session-01', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('[data-auto-protocol-session-id="session-01"]')).toHaveClass(/selected/);
+  await page.getByRole('button', { name: 'Apply draft', exact: true }).click();
+
+  const detail = page.locator('.protocol-auto-session-detail');
+  const errorCard = detail.locator('.protocol-auto-error');
+  await expect(errorCard).toHaveCount(1);
+  await expect(errorCard).toContainText('PROTOCOL_AUTO_APPLY_ROLE_REQUIRED');
+  await expect(errorCard).toContainText('Operator authoring role is required.');
+  await expect(errorCard.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+  await expect(detail.getByText('Operator authoring role is required.')).toHaveCount(1);
+
+  expect(capture.pageErrors).toEqual([]);
+  expect(capture.consoleErrors).toEqual([]);
+});
+
+test('retryable queue errors allow one in-flight retry', async ({ page }) => {
+  await login(page);
+  let applyAttempts = 0;
+  let retryReleased = false;
+  let releaseRetry;
+  const retryStarted = new Promise((resolve) => {
+    releaseRetry = () => {
+      retryReleased = true;
+      resolve();
+    };
+  });
+  await mockAutoProtocolSessions(page, {
+    sessions: visibleReadySessions(),
+    actionHandler: async ({ action, json }) => {
+      if (action !== 'apply') {
+        await json({});
+        return;
+      }
+      applyAttempts += 1;
+      if (applyAttempts === 1) {
+        await json({ detail: { message: 'Transient planner action failure.', error_code: 'TEMPORARY_FAILURE' } }, 500);
+        return;
+      }
+      await retryStarted;
+      await json({ detail: { message: 'Retry should not complete in this assertion.', error_code: 'TEMPORARY_FAILURE' } }, 500);
+    },
+  });
+
+  await page.goto('/ui/design-sessions?session_id=session-01', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Apply draft', exact: true }).click();
+  const retry = page.locator('.protocol-auto-session-detail .protocol-auto-error').getByRole('button', { name: 'Retry', exact: true });
+  await expect(retry).toBeVisible();
+
+  await retry.click();
+  await expect.poll(() => applyAttempts).toBe(2);
+  const apply = page.getByRole('button', { name: 'Apply draft', exact: true });
+  await expect(apply).toBeDisabled();
+  await apply.click({ force: true });
+  await page.waitForTimeout(100);
+  expect(applyAttempts).toBe(2);
+  releaseRetry();
+  await expect(retry).toBeVisible();
+  await expect(apply).toBeEnabled();
+  expect(retryReleased).toBe(true);
+});
+
+test('planning sessions remain visible after closing a generation dialog', async ({ page }) => {
+  await login(page);
+  const sessions = visibleReadySessions();
+  await mockAutoProtocolSessions(page, {
+    sessions,
+    actionHandler: async ({ json }) => {
+      await json({});
+    },
+  });
+  await page.route('**/v1/protocol-auto/sessions', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    const created = mockSession(9, {
+      session_id: 'session-created',
+      status: 'planning',
+      requirement_text: 'New visible planning session',
+      target_protocol_id: '',
+      draft_definition_json: {},
+      validation: { ok: false },
+      planner_state: {
+        planner_status: 'queued',
+        queued_at: '2026-07-07T12:09:00Z',
+        progress_summary: 'Queued for planner assignment.',
+        queue_position: 0,
+      },
+    });
+    sessions.unshift(created);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(created),
+    });
+  });
+  const capture = attachErrorCapture(page);
+
+  await page.goto('/ui/design-sessions', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'New Auto Protocol', exact: true }).click();
+  const dialog = page.locator('.confirm-dialog.protocol-auto-modal').filter({ hasText: 'Auto protocol' }).first();
+  await expect(dialog).toBeVisible();
+  await dialog.getByPlaceholder(/Describe the outcome you want/i).fill('Build a planning session that stays visible.');
+  await dialog.getByRole('button', { name: 'Generate protocol', exact: true }).click();
+  await expect(dialog.getByText('Queued for planner assignment.')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+
+  await expect(page.locator('[data-auto-protocol-session-id="session-created"]')).toBeVisible();
+  await page.locator('[data-auto-protocol-session-id="session-created"]').click();
+  await expect(page.locator('.protocol-auto-session-detail')).toContainText('New visible planning session');
+  expect(capture.pageErrors).toEqual([]);
+  expect(capture.consoleErrors).toEqual([]);
+});
+
+test('concurrent planning sessions stay independently selectable', async ({ page }) => {
+  await login(page);
+  const sessions = defaultMockSessions();
+  sessions[3] = mockSession(3, {
+    status: 'planning',
+    requirement_text: 'Second active queue design',
+    plan: { protocol_name: 'Second Active Queue Design' },
+    draft_definition_json: {},
+    validation: { ok: false },
+    planner_state: {
+      planner_status: 'running',
+      selected_agent_display_name: 'M3',
+      queued_at: '2026-07-07T12:03:00Z',
+      started_at: '2026-07-07T12:04:00Z',
+      last_progress_at: '2026-07-07T12:05:00Z',
+      progress_summary: 'Drafting the second design.',
+      queue_position: 0,
+    },
+  });
+  await mockAutoProtocolSessions(page, { sessions });
+  const capture = attachErrorCapture(page);
+
+  await page.goto('/ui/design-sessions?session_id=session-02', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.protocol-auto-session-detail')).toContainText('Active Queue Design');
+  await page.locator('[data-auto-protocol-session-id="session-03"]').click();
+  await expect(page).toHaveURL(/session_id=session-03/);
+  await expect(page.locator('[data-auto-protocol-session-id="session-03"]')).toHaveClass(/selected/);
+  await expect(page.locator('.protocol-auto-session-detail')).toContainText('Second Active Queue Design');
+  await expect(page.locator('.protocol-auto-session-detail')).toContainText('Drafting the second design.');
+  await page.locator('[data-auto-protocol-session-id="session-02"]').click();
+  await expect(page.locator('.protocol-auto-session-detail')).toContainText('Active Queue Design');
 
   expect(capture.pageErrors).toEqual([]);
   expect(capture.consoleErrors).toEqual([]);

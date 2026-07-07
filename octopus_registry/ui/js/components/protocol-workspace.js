@@ -238,6 +238,7 @@ function _autoProtocolPlannerAgentsFrom(agents = []) {
 function _populateAutoProtocolPlannerSelect(select, agents = []) {
     if (!select) return;
     const currentValue = String(select.value || '').trim();
+    select.disabled = false;
     select.textContent = '';
     const auto = document.createElement('option');
     auto.value = '';
@@ -254,7 +255,18 @@ function _populateAutoProtocolPlannerSelect(select, agents = []) {
     }
 }
 
-function _createAutoProtocolPlannerField(agents = []) {
+function _setAutoProtocolPlannerSelectLoading(select) {
+    if (!select) return;
+    select.disabled = true;
+    select.textContent = '';
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Loading planner agents...';
+    option.selected = true;
+    select.appendChild(option);
+}
+
+function _createAutoProtocolPlannerField(agents = [], { loading = false } = {}) {
     const label = document.createElement('label');
     label.className = 'kit-details-field';
     const title = document.createElement('span');
@@ -264,7 +276,11 @@ function _createAutoProtocolPlannerField(agents = []) {
     const select = document.createElement('select');
     select.className = 'input';
     select.setAttribute('aria-label', 'Planner agent');
-    _populateAutoProtocolPlannerSelect(select, agents);
+    if (loading) {
+        _setAutoProtocolPlannerSelectLoading(select);
+    } else {
+        _populateAutoProtocolPlannerSelect(select, agents);
+    }
     label.appendChild(select);
     const help = document.createElement('span');
     help.className = 'kit-details-help';
@@ -3423,6 +3439,12 @@ function renderProtocolWorkspace(container) {
             session = nextSession;
             if (session?.session_id) {
                 _rememberActiveAutoProtocolSession(session);
+                if (designSessionsRoute) {
+                    selectedAutoProtocolSessionId = String(session.session_id || '');
+                    selectedAutoProtocolSession = session;
+                    _writeState({ push: true });
+                    void loadAutoProtocolSessions({ quiet: true });
+                }
             }
             if (_autoProtocolPlanning(session)) {
                 _setAutoProtocolStatus(status, progressMessage);
@@ -10299,7 +10321,7 @@ function renderProtocolRuns(container) {
         qualityHint.textContent = 'Good improvements should produce a prepared runtime package, a routed UI/API users can actually exercise, a pass/fail outcome-readiness matrix, and customer-facing copy that uses the requested product/domain brand rather than Octopus.';
         form.appendChild(qualityHint);
 
-        const plannerField = _createAutoProtocolPlannerField();
+        const plannerField = _createAutoProtocolPlannerField([], { loading: true });
         form.appendChild(plannerField.element);
 
         const lessonPreview = document.createElement('details');
@@ -10408,6 +10430,7 @@ function renderProtocolRuns(container) {
             _populateAutoProtocolPlannerSelect(plannerField.select, agents);
         }).catch((err) => {
             console.warn('Failed to load planner agents for run improvement dialog', err);
+            _populateAutoProtocolPlannerSelect(plannerField.select, []);
         });
 
         const syncActions = () => {

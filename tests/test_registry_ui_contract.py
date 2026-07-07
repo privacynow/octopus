@@ -375,9 +375,49 @@ def test_improve_run_apply_adopts_the_applied_protocol_draft() -> None:
     apply_body = apply_match.group("body")
 
     assert "const applied = await API.applyProtocolAutoSession(session.session_id);" in apply_body
-    assert "if (await _adoptAutoProtocolSession(applied)) {" in apply_body
+    assert "const protocolId = _autoProtocolTargetProtocolId(applied);" in apply_body
+    assert "if (protocolId) {" in apply_body
     assert "view.close();" in apply_body
+    assert "Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`);" in apply_body
     assert "Draft applied. Open the protocol editor" not in apply_body
+
+
+def test_protocol_runs_does_not_read_workspace_closure_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    def function_body(name: str) -> str:
+        start = workspace.index(f"function {name}(")
+        brace = workspace.index("{", start)
+        depth = 0
+        for index in range(brace, len(workspace)):
+            char = workspace[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return workspace[brace + 1:index]
+        raise AssertionError(f"Could not locate body for {name}")
+
+    def declared_underscore_names(body: str) -> set[str]:
+        names = set(re.findall(r"(?:^|\n)\s*function\s+(_[A-Za-z_$][\w$]*)\s*\(", body))
+        names.update(re.findall(r"(?:^|\n)\s*(?:const|let|var)\s+(_[A-Za-z_$][\w$]*)\s*=", body))
+        return names
+
+    workspace_body = function_body("renderProtocolWorkspace")
+    runs_body = function_body("renderProtocolRuns")
+    workspace_names = declared_underscore_names(workspace_body)
+    runs_names = declared_underscore_names(runs_body)
+    leaked_reads = sorted(
+        name
+        for name in workspace_names - runs_names
+        if re.search(rf"\b{re.escape(name)}\b", runs_body)
+    )
+
+    assert leaked_reads == []
 
 
 def test_protocol_artifact_runtime_controls_recover_after_status_or_start_failures() -> None:

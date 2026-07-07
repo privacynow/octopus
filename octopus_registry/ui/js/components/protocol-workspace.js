@@ -220,6 +220,49 @@ function _autoProtocolSelectedAgentLabel(session, catalog = []) {
     ).trim();
 }
 
+function _autoProtocolTargetProtocolId(session) {
+    return String(
+        session?.target_protocol_id
+        || session?.applied_protocol?.protocol?.protocol_id
+        || session?.protocol?.protocol_id
+        || '',
+    ).trim();
+}
+
+function _autoProtocolPlannerAgentsFrom(agents = []) {
+    return (Array.isArray(agents) ? agents : []).filter((agent) =>
+        (Array.isArray(agent?.supported_admin_operations) ? agent.supported_admin_operations : [])
+            .some((operation) => String(operation || '').trim() === 'design_auto_protocol'));
+}
+
+function _createAutoProtocolPlannerField(agents = []) {
+    const label = document.createElement('label');
+    label.className = 'kit-details-field';
+    const title = document.createElement('span');
+    title.className = 'kit-details-label';
+    title.textContent = 'Planner agent';
+    label.appendChild(title);
+    const select = document.createElement('select');
+    select.className = 'input';
+    select.setAttribute('aria-label', 'Planner agent');
+    const auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = 'Auto-select available planner';
+    select.appendChild(auto);
+    _autoProtocolPlannerAgentsFrom(agents).forEach((agent) => {
+        const option = document.createElement('option');
+        option.value = String(agent.agent_id || '');
+        option.textContent = UI.visibleLabel(agent.display_name, agent.slug || agent.agent_id, 'Agent');
+        select.appendChild(option);
+    });
+    label.appendChild(select);
+    const help = document.createElement('span');
+    help.className = 'kit-details-help';
+    help.textContent = 'Auto uses the planner queue and rotates across capable connected agents. Choose an agent only when you need to target one explicitly.';
+    label.appendChild(help);
+    return { element: label, select };
+}
+
 function _autoProtocolHasDraft(session) {
     const draft = session?.draft_definition_json || {};
     return Boolean(draft.metadata && Array.isArray(draft.stages));
@@ -3172,15 +3215,6 @@ function renderProtocolWorkspace(container) {
         return String(session?.run_result?.run?.protocol_run_id || '').trim();
     }
 
-    function _autoProtocolTargetProtocolId(session) {
-        return String(
-            session?.target_protocol_id
-            || session?.applied_protocol?.protocol?.protocol_id
-            || session?.protocol?.protocol_id
-            || '',
-        ).trim();
-    }
-
     async function _adoptAutoProtocolSession(session, { push = true } = {}) {
         const protocolId = _autoProtocolTargetProtocolId(session);
         if (!protocolId) return false;
@@ -3196,40 +3230,6 @@ function renderProtocolWorkspace(container) {
         await loadProtocols({ quiet: true });
         await loadProtocolDetail();
         return true;
-    }
-
-    function _autoProtocolPlannerAgents() {
-        return _availableAuthoringAgents().filter((agent) =>
-            (Array.isArray(agent?.supported_admin_operations) ? agent.supported_admin_operations : [])
-                .some((operation) => String(operation || '').trim() === 'design_auto_protocol'));
-    }
-
-    function _createAutoProtocolPlannerField() {
-        const label = document.createElement('label');
-        label.className = 'kit-details-field';
-        const title = document.createElement('span');
-        title.className = 'kit-details-label';
-        title.textContent = 'Planner agent';
-        label.appendChild(title);
-        const select = document.createElement('select');
-        select.className = 'input';
-        select.setAttribute('aria-label', 'Planner agent');
-        const auto = document.createElement('option');
-        auto.value = '';
-        auto.textContent = 'Auto-select available planner';
-        select.appendChild(auto);
-        _autoProtocolPlannerAgents().forEach((agent) => {
-            const option = document.createElement('option');
-            option.value = String(agent.agent_id || '');
-            option.textContent = UI.visibleLabel(agent.display_name, agent.slug || agent.agent_id, 'Agent');
-            select.appendChild(option);
-        });
-        label.appendChild(select);
-        const help = document.createElement('span');
-        help.className = 'kit-details-help';
-        help.textContent = 'Auto uses the planner queue and rotates across capable connected agents. Choose an agent only when you need to target one explicitly.';
-        label.appendChild(help);
-        return { element: label, select };
     }
 
     function _openAutoProtocolDialog({ mode = 'create', sessionId = '', ignoreRememberedSession = false } = {}) {
@@ -3255,7 +3255,7 @@ function renderProtocolWorkspace(container) {
             relation: 'context',
         });
         form.appendChild(resourcePicker.element);
-        const plannerField = _createAutoProtocolPlannerField();
+        const plannerField = _createAutoProtocolPlannerField(_availableAuthoringAgents());
         form.appendChild(plannerField.element);
         const status = document.createElement('p');
         status.className = 'quiet-note';
@@ -10399,6 +10399,14 @@ function renderProtocolRuns(container) {
                 _rememberActiveAutoProtocolSession(null);
                 return null;
             }
+            if (options.requireSourceProtocol) {
+                const expectedProtocolId = String(sourceRun.run?.protocol_id || '').trim();
+                const sessionProtocolId = _autoProtocolTargetProtocolId(updated);
+                if (expectedProtocolId && sessionProtocolId !== expectedProtocolId) {
+                    _rememberActiveAutoProtocolSession(null);
+                    return null;
+                }
+            }
             renderSessionState(updated, options);
             subscribeToSession();
             return session;
@@ -10437,7 +10445,7 @@ function renderProtocolRuns(container) {
         cancelBtn.addEventListener('click', () => view.close());
         const rememberedSessionId = activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();
         if (rememberedSessionId) {
-            void attachSession(rememberedSessionId, { requirePlanning: true }).catch((err) => {
+            void attachSession(rememberedSessionId, { requirePlanning: true, requireSourceProtocol: true }).catch((err) => {
                 console.warn('Could not reattach Auto Protocol session', err);
             });
         }
@@ -10509,9 +10517,11 @@ function renderProtocolRuns(container) {
                 const applied = await API.applyProtocolAutoSession(session.session_id);
                 session = applied;
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                if (await _adoptAutoProtocolSession(applied)) {
+                const protocolId = _autoProtocolTargetProtocolId(applied);
+                if (protocolId) {
                     view.close();
                     UI.notify('Improved protocol draft applied.', 'success');
+                    Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`);
                     return;
                 }
                 _setAutoProtocolStatus(status, 'Draft applied, but the protocol id was not returned.');

@@ -2119,6 +2119,7 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
     client = TestClient(app)
 
     def _session(index: int):
+        stamp = f"2026-04-{16 + (index // 60):02d}T00:{index % 60:02d}:00+00:00"
         return generate_auto_protocol_session(
             ProtocolAutoDesignRequestRecord(
                 surface="registry",
@@ -2140,8 +2141,8 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
                 ),
             ),
             session_id=f"auto-session-{index}",
-            created_at=f"2026-04-16T00:0{index}:00+00:00",
-            updated_at=f"2026-04-16T00:0{index}:00+00:00",
+            created_at=stamp,
+            updated_at=stamp,
         ).model_copy(update={
             "status": "planning",
             "planner_task_id": f"auto-design-{index}",
@@ -2149,12 +2150,12 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
             "planner_policy": "auto_select",
             "planner_state": RegistryJsonRecord.model_validate({
                 "planner_status": "queued",
-                "queued_at": f"2026-04-16T00:0{index}:00+00:00",
+                "queued_at": stamp,
                 "progress_summary": "Queued.",
             }),
         })
 
-    sessions = [_session(1), _session(2), _session(3)]
+    sessions = [_session(index) for index in range(1, 106)]
 
     class _Store:
         def list_protocol_auto_design_sessions(self, *, access, cursor=0, limit=25, status=""):
@@ -2173,7 +2174,9 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
     )
     try:
         response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2")
-        final_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=2")
+        second_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=2")
+        deep_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=102")
+        final_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=104")
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
@@ -2183,10 +2186,19 @@ def test_protocol_auto_session_list_returns_pagination_and_queue_position(monkey
     assert payload["next_cursor"] == 2
     assert [item["session_id"] for item in payload["items"]] == ["auto-session-1", "auto-session-2"]
     assert [item["planner_state"]["queue_position"] for item in payload["items"]] == [0, 1]
+    assert second_response.status_code == 200, second_response.text
+    second_payload = second_response.json()
+    assert second_payload["next_cursor"] == 4
+    assert [item["session_id"] for item in second_payload["items"]] == ["auto-session-3", "auto-session-4"]
+    assert deep_response.status_code == 200, deep_response.text
+    deep_payload = deep_response.json()
+    assert deep_payload["next_cursor"] == 104
+    assert [item["session_id"] for item in deep_payload["items"]] == ["auto-session-103", "auto-session-104"]
+    assert [item["planner_state"]["queue_position"] for item in deep_payload["items"]] == [102, 103]
     assert final_response.status_code == 200, final_response.text
     final_payload = final_response.json()
     assert final_payload["next_cursor"] is None
-    assert [item["session_id"] for item in final_payload["items"]] == ["auto-session-3"]
+    assert [item["session_id"] for item in final_payload["items"]] == ["auto-session-105"]
 
 
 def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkeypatch, tmp_path: Path):

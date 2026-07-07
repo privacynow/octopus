@@ -508,12 +508,20 @@ def build_protocol_router(
         if not any(str(item.status or "") == "planning" for item in sessions):
             return list(sessions)
         try:
-            planning_sessions = store.list_protocol_auto_design_sessions(
-                access=access,
-                status="planning",
-                limit=100,
-                cursor=0,
-            )
+            planning_sessions: list[ProtocolAutoDesignSessionRecord] = []
+            cursor = 0
+            page_size = 101
+            while True:
+                page = store.list_protocol_auto_design_sessions(
+                    access=access,
+                    status="planning",
+                    limit=page_size,
+                    cursor=cursor,
+                )
+                planning_sessions.extend(page)
+                if len(page) < page_size:
+                    break
+                cursor += len(page)
         except Exception:
             planning_sessions = list(sessions)
         return [

@@ -2044,6 +2044,7 @@ def test_registry_store_generated_auto_protocol_dispatch_uses_derived_timeout(
     postgres_registry_truncated: str,
 ) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll = store.enroll(agent_card(bot_key="m1"))
     session = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(
             surface="registry",
@@ -2053,7 +2054,7 @@ def test_registry_store_generated_auto_protocol_dispatch_uses_derived_timeout(
             ),
             available_agents=[
                 {
-                    "agent_id": "agent-1",
+                    "agent_id": enroll.agent_id,
                     "display_name": "Builder",
                     "routing_skills": [
                         "architecture",
@@ -2076,7 +2077,7 @@ def test_registry_store_generated_auto_protocol_dispatch_uses_derived_timeout(
                         rationale="The product requires a backend and provider adapters.",
                         purpose="Implement API, persistence, and provider abstractions.",
                         quality_bar="The backend behavior is testable and verified.",
-                        required_skills=["backend", "testing"],
+                        required_skills=["implementation"],
                     )
                 ],
             ),
@@ -2087,17 +2088,25 @@ def test_registry_store_generated_auto_protocol_dispatch_uses_derived_timeout(
     )
     document = session.draft_definition_json.as_dict()
     assert {int(stage.get("timeout_seconds") or 0) for stage in document["stages"]} == {0}
-    runtime_document = protocol_document()
-    runtime_document["metadata"]["auto_protocol"] = {
-        "generated": True,
-        "contract_required": True,
-        "primary_artifact": {"open_behavior": "runtime"},
-        "acceptance_contract": {"schema_version": 1},
-    }
-    for stage in runtime_document["stages"]:
-        stage["timeout_seconds"] = 0
+    assert any(str(stage.get("stage_key") or "").startswith("produce_") for stage in document["stages"])
 
-    _enrolled, _published, _created, detail = running_protocol_run(store, document=runtime_document)
+    published = published_protocol(store, document=document)
+    created = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": enroll.agent_id,
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the generated product.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+    assert created.ok is True
+    assert created.run is not None
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    loaded = store.get_protocol(published.protocol.protocol_id, access=operator_access())
+    assert loaded.draft_definition_json.as_dict()["stages"] == document["stages"]
     stage_execution = next(
         item for item in detail.stage_executions
         if item.protocol_stage_execution_id == detail.run.current_stage_execution_id

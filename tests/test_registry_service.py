@@ -1861,7 +1861,7 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
             authoring_surface="standard",
             expected_revision=None,
         ):
-            assert authoring_surface == "standard"
+            assert authoring_surface == "operator"
             assert slug
             return ProtocolMutationRecord(
                 ok=True,
@@ -2051,7 +2051,7 @@ def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkey
         ):
             assert protocol_id == "risk-protocol"
             assert expected_revision == 4
-            assert authoring_surface == "standard"
+            assert authoring_surface == "operator"
             self.calls.append("save_draft")
             return ProtocolMutationRecord(
                 ok=True,

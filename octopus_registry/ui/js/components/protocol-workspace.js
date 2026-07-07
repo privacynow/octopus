@@ -60,7 +60,9 @@ function _autoProtocolErrorMessage(label, err) {
 }
 
 function _autoProtocolErrorEl(label, err, retryFn) {
-    const card = UI.createErrorCard(_autoProtocolErrorMessage(label, err), retryFn);
+    const status = Number(err?.status || 0);
+    const retryable = !status || status === 408 || status === 409 || status === 429 || status >= 500;
+    const card = UI.createErrorCard(_autoProtocolErrorMessage(label, err), retryable ? retryFn : null);
     card.classList.add('protocol-auto-error');
     card.setAttribute('role', 'alert');
     return card;
@@ -72,9 +74,8 @@ function _setAutoProtocolStatus(status, message) {
 }
 
 function _setAutoProtocolDialogError(preview, status, label, err, retryFn) {
-    const message = _autoProtocolErrorMessage(label, err);
     status.className = 'quiet-note protocol-auto-error-note';
-    status.textContent = message;
+    status.textContent = 'The operation did not complete. Review the error details below.';
     UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);
     console.error(label, err);
 }
@@ -1217,6 +1218,8 @@ function renderProtocolWorkspace(container) {
     let protocols = [];
     let authoringOptions = null;
     let protocolTemplates = [];
+    let autoProtocolSessions = [];
+    let autoProtocolSessionsLoading = false;
     let currentProtocolId = UI.readQueryParam('protocol_id', '');
     let templateChooserMode = String(UI.readQueryParam('new', '') || '').trim().toLowerCase() === 'template' ? 'template' : '';
     let includeGeneratedCatalog = UI.readQueryParam('include_generated', '') === '1';
@@ -3117,7 +3120,7 @@ function renderProtocolWorkspace(container) {
         return { element: label, select };
     }
 
-    function _openAutoProtocolDialog({ mode = 'create' } = {}) {
+    function _openAutoProtocolDialog({ mode = 'create', sessionId = '' } = {}) {
         const isRevision = mode === 'revise' && currentProtocolId;
         const form = document.createElement('div');
         form.className = 'protocol-package-dialog protocol-auto-dialog';
@@ -3313,7 +3316,7 @@ function renderProtocolWorkspace(container) {
         };
         revise.addEventListener('input', syncActions);
         cancelBtn.addEventListener('click', () => view.close());
-        const rememberedSessionId = activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();
+        const rememberedSessionId = String(sessionId || '').trim() || activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();
         if (rememberedSessionId) {
             void attachSession(rememberedSessionId).catch((err) => {
                 console.warn('Could not reattach Auto Protocol session', err);
@@ -8093,10 +8096,143 @@ function renderProtocolWorkspace(container) {
         return shell;
     }
 
+    function _autoProtocolSessionStatusLabel(session) {
+        const status = String(session?.status || '').trim().toLowerCase();
+        const taskStatus = String(session?.planner_state?.planner_status || '').trim().toLowerCase();
+        if (status === 'planning') return taskStatus ? `Planning · ${taskStatus.replace(/_/g, ' ')}` : 'Planning';
+        if (status === 'ready') return 'Ready to review';
+        if (status === 'applied') return 'Draft applied';
+        if (status === 'published') return 'Published';
+        if (status === 'running') return 'Run started';
+        if (status === 'blocked') return 'Blocked';
+        if (status === 'failed') return 'Failed';
+        return status ? _titleCaseWords(status.replace(/_/g, ' ')) : 'Unknown';
+    }
+
+    function _autoProtocolSessionTitle(session) {
+        const plan = session?.plan || {};
+        const analysis = session?.analysis || {};
+        return String(
+            plan.protocol_name
+            || analysis.focus
+            || session?.requirement_text
+            || 'Auto Protocol design',
+        ).replace(/\s+/g, ' ').trim();
+    }
+
+    function _autoProtocolSessionCard(session) {
+        const card = document.createElement('section');
+        card.className = 'kit-catalog-card protocol-auto-session-card';
+        card.dataset.autoProtocolSessionId = String(session?.session_id || '');
+
+        const top = document.createElement('div');
+        top.className = 'kit-catalog-card-top';
+        const copy = document.createElement('div');
+        copy.className = 'kit-catalog-card-copy';
+        const title = document.createElement('div');
+        title.className = 'kit-catalog-card-title';
+        const titleText = _autoProtocolSessionTitle(session);
+        title.textContent = titleText.length > 100 ? `${titleText.slice(0, 97).trim()}...` : titleText;
+        copy.appendChild(title);
+        const slug = document.createElement('div');
+        slug.className = 'kit-catalog-card-slug';
+        slug.textContent = _autoProtocolSessionStatusLabel(session);
+        copy.appendChild(slug);
+        top.appendChild(copy);
+
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = String(session?.status || '') === 'planning' ? 'btn btn-primary' : 'btn';
+        open.textContent = String(session?.status || '') === 'planning' ? 'Open progress' : 'Open design';
+        open.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));
+        actions.appendChild(open);
+        top.appendChild(actions);
+        card.appendChild(top);
+
+        const facts = document.createElement('div');
+        facts.className = 'kit-catalog-card-meta';
+        const plannerState = session?.planner_state || {};
+        const selectedAgent = plannerState.selected_agent || {};
+        const agentLabel = String(
+            selectedAgent.display_name
+            || selectedAgent.slug
+            || session?.planner_agent_id
+            || 'Auto-selecting planner',
+        ).trim();
+        [
+            `Agent: ${agentLabel || 'Auto-selecting planner'}`,
+            session?.planner_policy ? `Policy: ${String(session.planner_policy).replace(/_/g, ' ')}` : '',
+            session?.updated_at ? `Updated ${UI.relativeTime(session.updated_at)}` : '',
+        ].filter(Boolean).forEach((label) => {
+            const item = document.createElement('span');
+            item.className = 'kit-catalog-card-meta-item';
+            item.textContent = label;
+            facts.appendChild(item);
+        });
+        card.appendChild(facts);
+
+        const progress = String(plannerState.progress_summary || '').trim();
+        if (progress || session?.planner_task_id) {
+            const body = document.createElement('p');
+            body.className = 'kit-catalog-card-body';
+            body.textContent = progress || `Planner job ${session.planner_task_id}`;
+            card.appendChild(body);
+        }
+        return card;
+    }
+
+    function _autoProtocolQueueEl() {
+        const items = Array.isArray(autoProtocolSessions) ? autoProtocolSessions : [];
+        if (!autoProtocolSessionsLoading && !items.length) return null;
+
+        const shell = document.createElement('section');
+        shell.className = 'editor-panel protocol-panel protocol-auto-queue';
+        shell.dataset.key = 'protocol-auto-design-queue';
+
+        const head = document.createElement('div');
+        head.className = 'kit-catalog-hero';
+        const copy = document.createElement('div');
+        copy.className = 'kit-catalog-hero-copy';
+        const title = document.createElement('h3');
+        title.className = 'kit-catalog-hero-title';
+        title.textContent = 'Auto Protocol designs';
+        copy.appendChild(title);
+        const body = document.createElement('p');
+        body.className = 'kit-catalog-hero-body';
+        body.textContent = 'Planner jobs keep running after a dialog closes. Open a design here to watch progress, review the draft, apply, publish, or run it.';
+        copy.appendChild(body);
+        head.appendChild(copy);
+
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        const refresh = document.createElement('button');
+        refresh.type = 'button';
+        refresh.className = 'btn';
+        refresh.textContent = 'Refresh';
+        refresh.addEventListener('click', () => void loadAutoProtocolSessions({ quiet: false }));
+        actions.appendChild(refresh);
+        head.appendChild(actions);
+        shell.appendChild(head);
+
+        const list = document.createElement('div');
+        list.className = 'kit-catalog-list';
+        if (autoProtocolSessionsLoading && !items.length) {
+            list.appendChild(UI.renderEmptyState('Loading Auto Protocol designs…', true));
+        } else {
+            items.slice(0, 8).forEach((session) => list.appendChild(_autoProtocolSessionCard(session)));
+        }
+        shell.appendChild(list);
+        return shell;
+    }
+
     function _catalogEl() {
         const records = UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog });
         const wrapper = document.createElement('div');
         wrapper.className = 'protocol-catalog-shell';
+        const queue = _autoProtocolQueueEl();
+        if (queue) wrapper.appendChild(queue);
         if (templateChooserMode === 'template' && protocolTemplates.length) {
             wrapper.appendChild(_templateChooserEl());
         }
@@ -8229,6 +8365,21 @@ function renderProtocolWorkspace(container) {
         if (!quiet) render();
     }
 
+    async function loadAutoProtocolSessions({ quiet = false } = {}) {
+        autoProtocolSessionsLoading = true;
+        if (!quiet) render();
+        try {
+            const payload = await API.listProtocolAutoSessions({ limit: 12 });
+            autoProtocolSessions = Array.isArray(payload?.items) ? payload.items : [];
+        } catch (err) {
+            autoProtocolSessions = [];
+            if (!quiet) UI.reportError('Failed to load Auto Protocol designs', err);
+        } finally {
+            autoProtocolSessionsLoading = false;
+        }
+        if (!quiet) render();
+    }
+
     async function loadAuthoringOptions() {
         const [options, templates] = await Promise.all([
             API.getProtocolAuthoringOptions(),
@@ -8321,7 +8472,11 @@ function renderProtocolWorkspace(container) {
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
-            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringOptions()]);
+            await Promise.all([
+                loadProtocols({ quiet: true }),
+                loadAutoProtocolSessions({ quiet: true }),
+                loadAuthoringOptions(),
+            ]);
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {
@@ -8345,7 +8500,13 @@ function renderProtocolWorkspace(container) {
     window.addEventListener('resize', onResize);
     cleanups.add(() => window.removeEventListener('resize', onResize));
 
-    UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols({ quiet: false }), 350);
+    UI.subscribeWithRefresh(cleanups, 'protocols', async () => {
+        await Promise.all([
+            loadProtocols({ quiet: true }),
+            loadAutoProtocolSessions({ quiet: true }),
+        ]);
+        render();
+    }, 350);
     container.__routeReady = bootstrap();
 }
 

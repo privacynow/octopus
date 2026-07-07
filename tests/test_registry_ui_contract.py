@@ -1229,7 +1229,7 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "function _autoProtocolPlanning(session)" in workspace
     assert "function _autoProtocolHasDraft(session)" in workspace
     assert "function _subscribeAutoProtocolSession(sessionId, onUpdate)" in workspace
-    assert "const rememberedSessionId = activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();" in workspace
+    assert "const rememberedSessionId = String(sessionId || '').trim() || activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();" in workspace
     assert "const updated = await API.getProtocolAutoSession(session.session_id);" in workspace
     assert "Auto Protocol is still designing. Wait for planning to finish before applying, publishing, or running." in workspace
     assert "Auto Protocol is still designing. The dialog reattached to the active planner job." in workspace
@@ -1237,7 +1237,13 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "actionable = hasSession && !planning && hasDraft" in workspace
     assert "plannerField.select.value" in workspace
     assert "preferred_design_agent_id: plannerField.select.value" in workspace
+    assert "status.textContent = 'The operation did not complete. Review the error details below.';" in workspace
+    assert "retryable ? retryFn : null" in workspace
     assert "UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);" in workspace
+    assert "function _autoProtocolQueueEl()" in workspace
+    assert "Planner jobs keep running after a dialog closes." in workspace
+    assert "open.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));" in workspace
+    assert "loadAutoProtocolSessions({ quiet: true })" in workspace
     assert "card.setAttribute('role', 'alert');" in workspace
     assert "closeOnOverlay: false" in workspace
     assert workspace.count("closeOnOverlay: false") >= 2

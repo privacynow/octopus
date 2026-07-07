@@ -1524,7 +1524,7 @@ def build_protocol_router(
             display_name=metadata["display_name"],
             description=metadata["description"],
             definition_json=definition_json,
-            authoring_surface="standard",
+            authoring_surface="operator",
             expected_revision=int(session.target_draft_revision or 0) if session.target_protocol_id else None,
         )
         if not result.ok and str(result.status or "") == "duplicate_slug" and not str(session.target_protocol_id or "").strip():
@@ -1542,7 +1542,7 @@ def build_protocol_router(
                 display_name=metadata["display_name"],
                 description=metadata["description"],
                 definition_json=definition_json,
-                authoring_surface="standard",
+                authoring_surface="operator",
                 expected_revision=None,
             )
         if not result.ok:

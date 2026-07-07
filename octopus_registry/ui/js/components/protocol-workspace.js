@@ -8601,6 +8601,7 @@ function renderProtocolWorkspace(container) {
                         ? (nextSession) => {
                             selectedAutoProtocolSessionId = String(nextSession?.session_id || '');
                             selectedAutoProtocolSession = nextSession;
+                            selectedAutoProtocolEvents = [];
                             autoProtocolQueueActionError = null;
                             autoProtocolQueueRetryAction = '';
                             _rememberActiveAutoProtocolSession(selectedAutoProtocolSession);
@@ -8973,6 +8974,10 @@ function renderProtocolWorkspace(container) {
             return;
         }
         autoProtocolDetailLoading = true;
+        if (String(selectedAutoProtocolSession?.session_id || '') !== sessionId) {
+            selectedAutoProtocolSession = null;
+            selectedAutoProtocolEvents = [];
+        }
         if (!quiet) render();
         try {
             const [session, events] = await Promise.all([

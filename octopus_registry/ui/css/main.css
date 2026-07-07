@@ -4222,6 +4222,33 @@ select {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
+    max-width: 100%;
+    padding: 2px 7px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.protocol-auto-queue .kit-catalog-controls {
+    padding: 0 var(--space-1);
+}
+
+.protocol-auto-session-card .badge {
+    flex: 0 0 auto;
+    max-width: 100%;
+}
+
+.protocol-auto-session-card .kit-catalog-card-slug,
+.protocol-auto-session-card .kit-catalog-card-body {
+    overflow-wrap: anywhere;
+}
+
+.protocol-auto-session-card .kit-catalog-card-body {
+    min-height: 3.4em;
 }
 
 .kit-catalog-empty {

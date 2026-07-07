@@ -8109,6 +8109,22 @@ function renderProtocolWorkspace(container) {
         return status ? _titleCaseWords(status.replace(/_/g, ' ')) : 'Unknown';
     }
 
+    function _autoProtocolSessionStatusBadgeClass(session) {
+        const status = String(session?.status || '').trim().toLowerCase();
+        const taskStatus = String(session?.planner_state?.planner_status || '').trim().toLowerCase();
+        if (status === 'planning') {
+            if (taskStatus === 'queued') return 'badge-queued';
+            if (taskStatus === 'cancelled' || taskStatus === 'canceled') return 'badge-cancelled';
+            if (taskStatus === 'failed' || taskStatus === 'timed_out') return 'badge-failed';
+            return 'badge-running';
+        }
+        if (status === 'ready' || status === 'applied' || status === 'published' || status === 'running') return 'badge-connected';
+        if (status === 'blocked') return 'badge-degraded';
+        if (status === 'failed') return 'badge-failed';
+        if (status === 'cancelled' || status === 'canceled') return 'badge-cancelled';
+        return 'badge-open';
+    }
+
     function _autoProtocolSessionTitle(session) {
         const plan = session?.plan || {};
         const analysis = session?.analysis || {};
@@ -8120,10 +8136,31 @@ function renderProtocolWorkspace(container) {
         ).replace(/\s+/g, ' ').trim();
     }
 
+    function _autoProtocolSessionBody(session) {
+        const plannerState = session?.planner_state || {};
+        const progress = String(plannerState.progress_summary || '').trim();
+        if (progress) return progress;
+        const status = String(session?.status || '').trim().toLowerCase();
+        if (status === 'planning') return 'Planner work is in progress and will keep updating this design session.';
+        if (status === 'ready') return 'Generated draft is ready for review before applying, publishing, or running.';
+        if (status === 'applied') return 'Generated draft has been applied to the protocol catalog.';
+        if (status === 'published') return 'Generated protocol has been published.';
+        if (status === 'running') return 'Generated protocol was published and a run has been started.';
+        if (status === 'blocked') return 'Design session needs operator review before it can move forward.';
+        if (status === 'failed') return String(session?.error_message || 'Planner failed before producing a usable protocol draft.');
+        if (session?.planner_task_id) return `Planner job ${session.planner_task_id}`;
+        return 'Auto Protocol design session.';
+    }
+
     function _autoProtocolSessionCard(session) {
-        const card = document.createElement('section');
+        const item = document.createElement('li');
+        item.className = 'kit-catalog-item';
+
+        const card = document.createElement('button');
+        card.type = 'button';
         card.className = 'kit-catalog-card protocol-auto-session-card';
         card.dataset.autoProtocolSessionId = String(session?.session_id || '');
+        card.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));
 
         const top = document.createElement('div');
         top.className = 'kit-catalog-card-top';
@@ -8136,23 +8173,6 @@ function renderProtocolWorkspace(container) {
         copy.appendChild(title);
         const slug = document.createElement('div');
         slug.className = 'kit-catalog-card-slug';
-        slug.textContent = _autoProtocolSessionStatusLabel(session);
-        copy.appendChild(slug);
-        top.appendChild(copy);
-
-        const actions = document.createElement('div');
-        actions.className = 'editor-actions';
-        const open = document.createElement('button');
-        open.type = 'button';
-        open.className = String(session?.status || '') === 'planning' ? 'btn btn-primary' : 'btn';
-        open.textContent = String(session?.status || '') === 'planning' ? 'Open progress' : 'Open design';
-        open.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));
-        actions.appendChild(open);
-        top.appendChild(actions);
-        card.appendChild(top);
-
-        const facts = document.createElement('div');
-        facts.className = 'kit-catalog-card-meta';
         const plannerState = session?.planner_state || {};
         const selectedAgent = plannerState.selected_agent || {};
         const agentLabel = String(
@@ -8161,10 +8181,22 @@ function renderProtocolWorkspace(container) {
             || session?.planner_agent_id
             || 'Auto-selecting planner',
         ).trim();
+        slug.textContent = agentLabel || 'Auto-selecting planner';
+        copy.appendChild(slug);
+        top.appendChild(copy);
+
+        const badge = document.createElement('span');
+        badge.className = `badge ${_autoProtocolSessionStatusBadgeClass(session)}`;
+        badge.textContent = _autoProtocolSessionStatusLabel(session);
+        top.appendChild(badge);
+        card.appendChild(top);
+
+        const facts = document.createElement('div');
+        facts.className = 'kit-catalog-card-meta';
         [
-            `Agent: ${agentLabel || 'Auto-selecting planner'}`,
             session?.planner_policy ? `Policy: ${String(session.planner_policy).replace(/_/g, ' ')}` : '',
             session?.updated_at ? `Updated ${UI.relativeTime(session.updated_at)}` : '',
+            session?.planner_task_id ? `Job ${String(session.planner_task_id).slice(0, 8)}` : '',
         ].filter(Boolean).forEach((label) => {
             const item = document.createElement('span');
             item.className = 'kit-catalog-card-meta-item';
@@ -8173,14 +8205,13 @@ function renderProtocolWorkspace(container) {
         });
         card.appendChild(facts);
 
-        const progress = String(plannerState.progress_summary || '').trim();
-        if (progress || session?.planner_task_id) {
-            const body = document.createElement('p');
-            body.className = 'kit-catalog-card-body';
-            body.textContent = progress || `Planner job ${session.planner_task_id}`;
-            card.appendChild(body);
-        }
-        return card;
+        const body = document.createElement('p');
+        body.className = 'kit-catalog-card-body';
+        body.textContent = _autoProtocolSessionBody(session);
+        card.appendChild(body);
+
+        item.appendChild(card);
+        return item;
     }
 
     function _autoProtocolQueueEl() {
@@ -8205,21 +8236,53 @@ function renderProtocolWorkspace(container) {
         copy.appendChild(body);
         head.appendChild(copy);
 
+        const metrics = document.createElement('div');
+        metrics.className = 'kit-catalog-hero-metrics';
+        const planningCount = items.filter((item) => String(item?.status || '').toLowerCase() === 'planning').length;
+        const readyCount = items.filter((item) => String(item?.status || '').toLowerCase() === 'ready').length;
+        [
+            { label: 'Designing', value: planningCount },
+            { label: 'Ready', value: readyCount },
+            { label: 'Recent', value: items.length },
+        ].forEach((metric) => {
+            const chip = document.createElement('div');
+            chip.className = 'kit-catalog-hero-metric';
+            const value = document.createElement('strong');
+            value.className = 'kit-catalog-hero-metric-value';
+            value.textContent = String(metric.value);
+            chip.appendChild(value);
+            const label = document.createElement('span');
+            label.className = 'kit-catalog-hero-metric-label';
+            label.textContent = metric.label;
+            chip.appendChild(label);
+            metrics.appendChild(chip);
+        });
+        head.appendChild(metrics);
+        shell.appendChild(head);
+
         const actions = document.createElement('div');
-        actions.className = 'editor-actions';
+        actions.className = 'kit-catalog-controls';
+        const create = document.createElement('button');
+        create.type = 'button';
+        create.className = 'btn btn-primary';
+        create.textContent = 'New Auto Protocol';
+        create.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create' }));
+        actions.appendChild(create);
         const refresh = document.createElement('button');
         refresh.type = 'button';
         refresh.className = 'btn';
         refresh.textContent = 'Refresh';
         refresh.addEventListener('click', () => void loadAutoProtocolSessions({ quiet: false }));
         actions.appendChild(refresh);
-        head.appendChild(actions);
-        shell.appendChild(head);
+        shell.appendChild(actions);
 
-        const list = document.createElement('div');
+        const list = document.createElement('ul');
         list.className = 'kit-catalog-list';
         if (autoProtocolSessionsLoading && !items.length) {
-            list.appendChild(UI.renderEmptyState('Loading Auto Protocol designs…', true));
+            const loadingItem = document.createElement('li');
+            loadingItem.className = 'kit-catalog-item kit-catalog-item-empty';
+            loadingItem.appendChild(UI.renderEmptyState('Loading Auto Protocol designs…', true));
+            list.appendChild(loadingItem);
         } else {
             items.slice(0, 8).forEach((session) => list.appendChild(_autoProtocolSessionCard(session)));
         }

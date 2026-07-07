@@ -1242,7 +1242,12 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);" in workspace
     assert "function _autoProtocolQueueEl()" in workspace
     assert "Planner jobs keep running after a dialog closes." in workspace
-    assert "open.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));" in workspace
+    assert "function _autoProtocolSessionStatusBadgeClass(session)" in workspace
+    assert "function _autoProtocolSessionBody(session)" in workspace
+    assert "card.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));" in workspace
+    assert "badge.className = `badge ${_autoProtocolSessionStatusBadgeClass(session)}`;" in workspace
+    assert "open.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));" not in workspace
+    assert "open.textContent = String(session?.status || '') === 'planning' ? 'Open progress' : 'Open design';" not in workspace
     assert "loadAutoProtocolSessions({ quiet: true })" in workspace
     assert "card.setAttribute('role', 'alert');" in workspace
     assert "closeOnOverlay: false" in workspace
@@ -1252,6 +1257,8 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "status.textContent = 'Generation failed.'" not in workspace
     assert ".protocol-auto-error-note" in css
     assert ".protocol-auto-error.error-card" in css
+    assert ".protocol-auto-session-card .badge" in css
+    assert ".protocol-auto-queue .kit-catalog-controls" in css
 
     api = (repo_root / "octopus_registry" / "ui" / "js" / "api.js").read_text(encoding="utf-8")
     assert "createProtocolAutoSession: (body = {}) =>\n            request('POST', '/v1/protocol-auto/sessions', { body })," in api

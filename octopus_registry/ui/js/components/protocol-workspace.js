@@ -8136,6 +8136,24 @@ function renderProtocolWorkspace(container) {
         ).replace(/\s+/g, ' ').trim();
     }
 
+    function _autoProtocolSessionAgentLabel(session) {
+        const plannerState = session?.planner_state || {};
+        const selectedAgent = plannerState.selected_agent || {};
+        const agentId = String(session?.planner_agent_id || selectedAgent.agent_id || '').trim();
+        const catalogAgent = agentId
+            ? [..._availableAuthoringAgents(), ..._authoringAssignableAgents()]
+                .find((agent) => String(agent?.agent_id || '').trim() === agentId)
+            : null;
+        return String(
+            selectedAgent.display_name
+            || selectedAgent.slug
+            || catalogAgent?.display_name
+            || catalogAgent?.slug
+            || agentId
+            || 'Auto-selecting planner',
+        ).trim();
+    }
+
     function _autoProtocolSessionBody(session) {
         const plannerState = session?.planner_state || {};
         const progress = String(plannerState.progress_summary || '').trim();
@@ -8173,14 +8191,7 @@ function renderProtocolWorkspace(container) {
         copy.appendChild(title);
         const slug = document.createElement('div');
         slug.className = 'kit-catalog-card-slug';
-        const plannerState = session?.planner_state || {};
-        const selectedAgent = plannerState.selected_agent || {};
-        const agentLabel = String(
-            selectedAgent.display_name
-            || selectedAgent.slug
-            || session?.planner_agent_id
-            || 'Auto-selecting planner',
-        ).trim();
+        const agentLabel = _autoProtocolSessionAgentLabel(session);
         slug.textContent = agentLabel || 'Auto-selecting planner';
         copy.appendChild(slug);
         top.appendChild(copy);

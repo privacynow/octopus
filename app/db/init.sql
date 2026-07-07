@@ -902,6 +902,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     source_protocol_id TEXT NOT NULL DEFAULT '',
     source_version_id TEXT NOT NULL DEFAULT '',
     source_draft_revision INTEGER NOT NULL DEFAULT 0,
+    source_run_id TEXT NOT NULL DEFAULT '',
     target_protocol_id TEXT NOT NULL DEFAULT '',
     target_draft_revision INTEGER NOT NULL DEFAULT 0,
     requirement_text TEXT NOT NULL DEFAULT '',
@@ -931,6 +932,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
 );
 ALTER TABLE agent_registry.protocol_auto_sessions
     ADD COLUMN IF NOT EXISTS planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS source_run_id TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN IF NOT EXISTS run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN IF NOT EXISTS planner_request_id TEXT NOT NULL DEFAULT '',

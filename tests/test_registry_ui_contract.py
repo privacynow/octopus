@@ -1271,6 +1271,13 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "function _subscribeAutoProtocolSession(sessionId, onUpdate)" in workspace
     assert "function _setAutoProtocolButtonBusy(button, busy)" in workspace
     assert "function _setAutoProtocolButtonState(button, { visible = true, disabled = false } = {})" in workspace
+    assert "function _autoProtocolRunAttemptKey(sessionId)" in workspace
+    assert "function _autoProtocolSessionMatchesRememberedContext(session" in workspace
+    assert "auto-protocol-session:${normalized}:run:${nonce}" in workspace
+    assert "auto-protocol-session:${session.session_id}:run" not in workspace
+    assert "auto-protocol-session:${sessionId}:run" not in workspace
+    assert "sourceRunId: sourceRun.run.protocol_run_id" in workspace
+    assert "mode: isRevision ? 'revise' : 'create'" in workspace
     assert "button.hidden = !shown;" in workspace
     assert "button.disabled = true;" in workspace
     assert "button.tabIndex = -1;" in workspace
@@ -1327,7 +1334,7 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "!Number.isFinite(parsedNextCursor)" in workspace
     assert "next.disabled = autoProtocolSessionsNextCursor === null;" in workspace
     assert "autoProtocolQueueActionInFlight" in workspace
-    assert "idempotency_key: `auto-protocol-session:${sessionId}:run`" in workspace
+    assert "idempotency_key: _autoProtocolRunAttemptKey(sessionId)" in workspace
     assert "_autoProtocolSelectedAgentLabel(session" in workspace
     assert "card.setAttribute('role', 'alert');" in workspace
     assert "closeOnOverlay: false" in workspace

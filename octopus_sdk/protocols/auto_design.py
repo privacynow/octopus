@@ -749,6 +749,7 @@ class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     target_protocol_id: str = ""
     target_version_id: str = ""
     target_draft_revision: int = 0
+    source_run_id: str = ""
     source_document: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     available_agents: list[RegistryJsonRecord] = Field(default_factory=list)
     available_skills: list[RegistryJsonRecord] = Field(default_factory=list)
@@ -778,6 +779,7 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     source_protocol_id: str = ""
     source_version_id: str = ""
     source_draft_revision: int = 0
+    source_run_id: str = ""
     target_protocol_id: str = ""
     target_draft_revision: int = 0
     requirement_text: str = ""
@@ -3517,6 +3519,7 @@ def generate_auto_protocol_session(
         source_protocol_id=request.target_protocol_id,
         source_version_id=request.target_version_id,
         source_draft_revision=request.target_draft_revision,
+        source_run_id=request.source_run_id,
         target_protocol_id=request.target_protocol_id,
         target_draft_revision=request.target_draft_revision,
         requirement_text=request.requirement_text,

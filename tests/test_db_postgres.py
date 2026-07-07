@@ -629,6 +629,7 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "source_protocol_id",
             "source_version_id",
             "source_draft_revision",
+            "source_run_id",
             "target_protocol_id",
             "target_draft_revision",
             "requirement_text",

@@ -3,18 +3,6 @@ const { attachErrorCapture, login } = require('./helpers/protocol-helpers');
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
-async function firstRunId(page) {
-  const response = await page.request.get('/v1/protocol-runs?limit=50');
-  expect(response.ok()).toBeTruthy();
-  const payload = await response.json();
-  const runs = Array.isArray(payload?.runs) ? payload.runs : (Array.isArray(payload) ? payload : []);
-  const run = runs.find((item) => String(item?.protocol_run_id || item?.id || '').trim());
-  if (!run) {
-    throw new Error('Expected at least one protocol run for the Auto Protocol improve dialog check.');
-  }
-  return String(run.protocol_run_id || run.id);
-}
-
 function mockSession(index, overrides = {}) {
   const now = new Date(Date.UTC(2026, 6, 7, 12, index, 0)).toISOString();
   const sessionId = `session-${String(index).padStart(2, '0')}`;
@@ -24,6 +12,7 @@ function mockSession(index, overrides = {}) {
     mode: index % 2 ? 'create' : 'revise',
     requirement_text: `Mock design ${index}`,
     target_protocol_id: `protocol-${index}`,
+    source_run_id: '',
     planner_policy: index % 2 ? 'auto_select' : 'specific_agent',
     planner_task_id: `auto-task-${index}`,
     updated_at: now,
@@ -55,6 +44,98 @@ function mockSession(index, overrides = {}) {
     },
     ...overrides,
   };
+}
+
+async function mockAgents(page) {
+  await page.route('**/v1/agents**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agents: [
+          {
+            agent_id: 'agent-m2',
+            display_name: 'M2',
+            slug: 'm2',
+            provider: 'codex',
+            connectivity_state: 'connected',
+            supported_admin_operations: ['design_auto_protocol'],
+          },
+        ],
+      }),
+    });
+  });
+}
+
+async function mockProtocolRunForImprove(page) {
+  const runId = 'run-improve-e2e';
+  const protocolId = 'protocol-improve-e2e';
+  const runSummary = {
+    protocol_run_id: runId,
+    protocol_id: protocolId,
+    status: 'blocked',
+    current_stage_key: 'final_evidence',
+    blocked_code: 'runtime_evidence_required',
+    blocked_detail: 'Runtime evidence is incomplete.',
+    updated_at: '2026-07-07T12:05:00Z',
+  };
+  const runDetail = {
+    run: {
+      ...runSummary,
+      workspace_ref: 'workspace:e2e',
+      run_objective: 'Improve the Auto Protocol run evidence.',
+    },
+    protocol: {
+      protocol_id: protocolId,
+      display_name: 'Improve E2E Protocol',
+      lifecycle_state: 'published',
+    },
+    version: {
+      protocol_version_id: 'version-improve-e2e',
+      definition_json: {
+        metadata: { display_name: 'Improve E2E Protocol' },
+        stages: [{ stage_key: 'final_evidence', display_name: 'Final evidence' }],
+        artifacts: [{ artifact_key: 'package', display_name: 'Package' }],
+      },
+    },
+    stage_executions: [
+      {
+        protocol_stage_execution_id: 'stage-final-e2e',
+        stage_key: 'final_evidence',
+        display_name: 'Final evidence',
+        status: 'blocked',
+        failure_code: 'runtime_evidence_required',
+        failure_detail: 'Runtime evidence is incomplete.',
+      },
+    ],
+    runtime_events: [],
+    transitions: [],
+    artifacts: [],
+  };
+
+  await page.route('**/v1/protocol-runs**', async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const json = (payload, status = 200) => route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(payload),
+    });
+    if (path === '/v1/protocol-runs/issues') {
+      await json({ issues: [] });
+      return;
+    }
+    if (path === '/v1/protocol-runs') {
+      await json({ runs: [runSummary], next_cursor: null });
+      return;
+    }
+    if (path.endsWith(`/${runId}`)) {
+      await json(runDetail);
+      return;
+    }
+    await json({ detail: { message: 'Not found', error_code: 'NOT_FOUND' } }, 404);
+  });
+  return runId;
 }
 
 async function mockAutoProtocolSessions(page) {
@@ -127,7 +208,8 @@ async function mockAutoProtocolSessions(page) {
 
 test('improve-run dialog opens and unavailable actions are not actionable', async ({ page }) => {
   await login(page);
-  const runId = await firstRunId(page);
+  await mockAgents(page);
+  const runId = await mockProtocolRunForImprove(page);
   await page.goto(`/ui/runs?run_id=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
 
   const capture = attachErrorCapture(page);
@@ -138,6 +220,9 @@ test('improve-run dialog opens and unavailable actions are not actionable', asyn
   await expect(dialog).toBeVisible({ timeout: 15000 });
   await expect(dialog.getByText('Candidate lessons from this run')).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Generate improvement', exact: true })).toBeVisible();
+  const plannerSelect = dialog.getByLabel('Planner agent');
+  await expect(plannerSelect).toBeVisible();
+  await expect.poll(() => plannerSelect.locator('option').evaluateAll((options) => options.map((option) => option.textContent || ''))).toContain('M2');
 
   const unavailableActions = ['Apply draft', 'Publish', 'Publish & Run', 'View in queue'];
   for (const label of unavailableActions) {
@@ -167,8 +252,8 @@ test('design-session queue shows active work and does not loop pagination', asyn
   await expect(page.locator('.protocol-auto-session-detail')).toContainText('Analyzing product goals and verification scope.');
   await expect(page.locator('.protocol-auto-session-detail')).toContainText('Planner agent');
   await expect(page.locator('.protocol-auto-session-detail')).toContainText('M2');
-  await expect(page.locator('.protocol-auto-session-detail')).toContainText('Queue position');
-  await expect(page.locator('.protocol-auto-session-detail')).toContainText('2');
+  const queuePositionRow = page.locator('.protocol-auto-session-detail .kit-details-row').filter({ hasText: 'Queue position' });
+  await expect(queuePositionRow).toContainText('2');
 
   const next = page.getByRole('button', { name: 'Next', exact: true });
   await expect(next).toBeEnabled();

@@ -4082,6 +4082,7 @@ class ProtocolPostgresAdapter:
                     "target_protocol_id": session.target_protocol_id,
                     "target_version_id": session.source_version_id,
                     "target_draft_revision": session.source_draft_revision,
+                    "source_run_id": session.source_run_id,
                     "source_document": session.source_document_json.as_dict(),
                     "workspace_ref": "",
                     "preferred_design_agent_id": session.planner_agent_id,
@@ -4423,6 +4424,7 @@ class ProtocolPostgresAdapter:
                 "source_protocol_id": row.get("source_protocol_id", ""),
                 "source_version_id": row.get("source_version_id", ""),
                 "source_draft_revision": int(row.get("source_draft_revision", 0) or 0),
+                "source_run_id": row.get("source_run_id", ""),
                 "target_protocol_id": row.get("target_protocol_id", ""),
                 "target_draft_revision": int(row.get("target_draft_revision", 0) or 0),
                 "requirement_text": row.get("requirement_text", ""),
@@ -4471,6 +4473,7 @@ class ProtocolPostgresAdapter:
             "source_protocol_id": session.source_protocol_id,
             "source_version_id": session.source_version_id,
             "source_draft_revision": int(session.source_draft_revision or 0),
+            "source_run_id": session.source_run_id,
             "target_protocol_id": session.target_protocol_id,
             "target_draft_revision": int(session.target_draft_revision or 0),
             "requirement_text": session.requirement_text,
@@ -4558,14 +4561,14 @@ class ProtocolPostgresAdapter:
                     INSERT INTO {SCHEMA}.protocol_auto_sessions (
                         session_id, status, mode, surface, actor_ref, chat_ref,
                         source_protocol_id, source_version_id, source_draft_revision,
-                        target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
+                        source_run_id, target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
                         planner_request_id, planner_task_id, planner_policy, planner_agent_id,
                         planner_state_json, prompt_diagnostics_json, source_document_json,
                         planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                         warnings_json, unresolved_decisions_json, change_summary_json,
                         applied_protocol_json, run_result_json, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (session_id) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -4576,6 +4579,7 @@ class ProtocolPostgresAdapter:
                         source_protocol_id = EXCLUDED.source_protocol_id,
                         source_version_id = EXCLUDED.source_version_id,
                         source_draft_revision = EXCLUDED.source_draft_revision,
+                        source_run_id = EXCLUDED.source_run_id,
                         target_protocol_id = EXCLUDED.target_protocol_id,
                         target_draft_revision = EXCLUDED.target_draft_revision,
                         requirement_text = EXCLUDED.requirement_text,
@@ -4613,6 +4617,7 @@ class ProtocolPostgresAdapter:
                         payload["source_protocol_id"],
                         payload["source_version_id"],
                         payload["source_draft_revision"],
+                        payload["source_run_id"],
                         payload["target_protocol_id"],
                         payload["target_draft_revision"],
                         payload["requirement_text"],
@@ -4702,14 +4707,14 @@ class ProtocolPostgresAdapter:
                 INSERT INTO {SCHEMA}.protocol_auto_sessions (
                     session_id, status, mode, surface, actor_ref, chat_ref,
                     source_protocol_id, source_version_id, source_draft_revision,
-                    target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
+                    source_run_id, target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
                     planner_request_id, planner_task_id, planner_policy, planner_agent_id,
                     planner_state_json, prompt_diagnostics_json, source_document_json,
                     planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                     warnings_json, unresolved_decisions_json, change_summary_json,
                     applied_protocol_json, run_result_json, created_at, updated_at
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (session_id) DO UPDATE SET
                     status = EXCLUDED.status,
@@ -4720,6 +4725,7 @@ class ProtocolPostgresAdapter:
                     source_protocol_id = EXCLUDED.source_protocol_id,
                     source_version_id = EXCLUDED.source_version_id,
                     source_draft_revision = EXCLUDED.source_draft_revision,
+                    source_run_id = EXCLUDED.source_run_id,
                     target_protocol_id = EXCLUDED.target_protocol_id,
                     target_draft_revision = EXCLUDED.target_draft_revision,
                     requirement_text = EXCLUDED.requirement_text,
@@ -4757,6 +4763,7 @@ class ProtocolPostgresAdapter:
                     payload["source_protocol_id"],
                     payload["source_version_id"],
                     payload["source_draft_revision"],
+                    payload["source_run_id"],
                     payload["target_protocol_id"],
                     payload["target_draft_revision"],
                     payload["requirement_text"],

@@ -235,16 +235,10 @@ function _autoProtocolPlannerAgentsFrom(agents = []) {
             .some((operation) => String(operation || '').trim() === 'design_auto_protocol'));
 }
 
-function _createAutoProtocolPlannerField(agents = []) {
-    const label = document.createElement('label');
-    label.className = 'kit-details-field';
-    const title = document.createElement('span');
-    title.className = 'kit-details-label';
-    title.textContent = 'Planner agent';
-    label.appendChild(title);
-    const select = document.createElement('select');
-    select.className = 'input';
-    select.setAttribute('aria-label', 'Planner agent');
+function _populateAutoProtocolPlannerSelect(select, agents = []) {
+    if (!select) return;
+    const currentValue = String(select.value || '').trim();
+    select.textContent = '';
     const auto = document.createElement('option');
     auto.value = '';
     auto.textContent = 'Auto-select available planner';
@@ -255,12 +249,55 @@ function _createAutoProtocolPlannerField(agents = []) {
         option.textContent = UI.visibleLabel(agent.display_name, agent.slug || agent.agent_id, 'Agent');
         select.appendChild(option);
     });
+    if (currentValue && Array.from(select.options).some((option) => option.value === currentValue)) {
+        select.value = currentValue;
+    }
+}
+
+function _createAutoProtocolPlannerField(agents = []) {
+    const label = document.createElement('label');
+    label.className = 'kit-details-field';
+    const title = document.createElement('span');
+    title.className = 'kit-details-label';
+    title.textContent = 'Planner agent';
+    label.appendChild(title);
+    const select = document.createElement('select');
+    select.className = 'input';
+    select.setAttribute('aria-label', 'Planner agent');
+    _populateAutoProtocolPlannerSelect(select, agents);
     label.appendChild(select);
     const help = document.createElement('span');
     help.className = 'kit-details-help';
     help.textContent = 'Auto uses the planner queue and rotates across capable connected agents. Choose an agent only when you need to target one explicitly.';
     label.appendChild(help);
     return { element: label, select };
+}
+
+function _autoProtocolRunAttemptKey(sessionId) {
+    const normalized = String(sessionId || '').trim();
+    const uuid = window.crypto?.randomUUID ? window.crypto.randomUUID().replace(/-/g, '') : '';
+    const nonce = uuid || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    return `auto-protocol-session:${normalized}:run:${nonce}`;
+}
+
+function _autoProtocolSessionSourceRunId(session) {
+    return String(session?.source_run_id || '').trim();
+}
+
+function _autoProtocolSessionMatchesRememberedContext(session, { mode = 'create', targetProtocolId = '', sourceRunId = '' } = {}) {
+    if (!session?.session_id) return false;
+    const expectedRunId = String(sourceRunId || '').trim();
+    const sessionRunId = _autoProtocolSessionSourceRunId(session);
+    if (expectedRunId) {
+        return sessionRunId === expectedRunId;
+    }
+    if (sessionRunId) return false;
+    const expectedProtocolId = String(targetProtocolId || '').trim();
+    const sessionProtocolId = _autoProtocolTargetProtocolId(session);
+    if (String(mode || '') === 'revise') {
+        return Boolean(expectedProtocolId && sessionProtocolId === expectedProtocolId);
+    }
+    return !sessionProtocolId;
 }
 
 function _setAutoProtocolButtonBusy(button, busy) {
@@ -3422,6 +3459,10 @@ function renderProtocolWorkspace(container) {
                 _rememberActiveAutoProtocolSession(null);
                 return null;
             }
+            if (options.rememberedContext && !_autoProtocolSessionMatchesRememberedContext(updated, options.rememberedContext)) {
+                _rememberActiveAutoProtocolSession(null);
+                return null;
+            }
             renderSessionState(updated, options);
             subscribeToSession();
             return session;
@@ -3443,7 +3484,11 @@ function renderProtocolWorkspace(container) {
         };
         const handlePlanningError = async (err, options = {}) => {
             if (!_autoProtocolPlanningError(err)) return false;
-            await refreshSessionState(options);
+            try {
+                await refreshSessionState(options);
+            } catch (refreshErr) {
+                console.warn('Failed to refresh Auto Protocol session after planning error', refreshErr);
+            }
             UI.notify('Auto Protocol is still designing. The dialog reattached to the active planner job.', 'warning', { timeout: 0 });
             return true;
         };
@@ -3467,7 +3512,15 @@ function renderProtocolWorkspace(container) {
         const implicitSessionId = ignoreRememberedSession ? '' : (activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId());
         const rememberedSessionId = explicitSessionId || implicitSessionId;
         if (rememberedSessionId) {
-            void attachSession(rememberedSessionId, { requirePlanning: !explicitSessionId }).catch((err) => {
+            void attachSession(rememberedSessionId, {
+                requirePlanning: !explicitSessionId,
+                rememberedContext: explicitSessionId
+                    ? null
+                    : {
+                        mode: isRevision ? 'revise' : 'create',
+                        targetProtocolId: isRevision ? currentProtocolId : '',
+                    },
+            }).catch((err) => {
                 console.warn('Could not reattach Auto Protocol session', err);
             });
         }
@@ -3633,7 +3686,7 @@ function renderProtocolWorkspace(container) {
                 }
                 session = await API.runProtocolAutoSession(session.session_id, {
                     origin_channel: 'registry',
-                    idempotency_key: `auto-protocol-session:${session.session_id}:run`,
+                    idempotency_key: _autoProtocolRunAttemptKey(session.session_id),
                 });
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 await _adoptAutoProtocolSession(session);
@@ -8941,7 +8994,7 @@ function renderProtocolWorkspace(container) {
             } else if (action === 'run') {
                 selectedAutoProtocolSession = await API.runProtocolAutoSession(sessionId, {
                     origin_channel: 'registry',
-                    idempotency_key: `auto-protocol-session:${sessionId}:run`,
+                    idempotency_key: _autoProtocolRunAttemptKey(sessionId),
                 });
             }
             await loadAutoProtocolSessions({ quiet: true });
@@ -10350,6 +10403,12 @@ function renderProtocolRuns(container) {
             }
             originalClose();
         };
+        void API.listAgents({ limit: 100 }).then((payload) => {
+            const agents = Array.isArray(payload?.agents) ? payload.agents : (Array.isArray(payload) ? payload : []);
+            _populateAutoProtocolPlannerSelect(plannerField.select, agents);
+        }).catch((err) => {
+            console.warn('Failed to load planner agents for run improvement dialog', err);
+        });
 
         const syncActions = () => {
             const hasSession = Boolean(session?.session_id);
@@ -10421,13 +10480,9 @@ function renderProtocolRuns(container) {
                 _rememberActiveAutoProtocolSession(null);
                 return null;
             }
-            if (options.requireSourceProtocol) {
-                const expectedProtocolId = String(sourceRun.run?.protocol_id || '').trim();
-                const sessionProtocolId = _autoProtocolTargetProtocolId(updated);
-                if (expectedProtocolId && sessionProtocolId !== expectedProtocolId) {
-                    _rememberActiveAutoProtocolSession(null);
-                    return null;
-                }
+            if (options.rememberedContext && !_autoProtocolSessionMatchesRememberedContext(updated, options.rememberedContext)) {
+                _rememberActiveAutoProtocolSession(null);
+                return null;
             }
             renderSessionState(updated, options);
             subscribeToSession();
@@ -10450,7 +10505,11 @@ function renderProtocolRuns(container) {
         };
         const handlePlanningError = async (err, options = {}) => {
             if (!_autoProtocolPlanningError(err)) return false;
-            await refreshSessionState(options);
+            try {
+                await refreshSessionState(options);
+            } catch (refreshErr) {
+                console.warn('Failed to refresh Auto Protocol session after planning error', refreshErr);
+            }
             UI.notify('Auto Protocol is still designing. The dialog reattached to the active planner job.', 'warning', { timeout: 0 });
             return true;
         };
@@ -10467,7 +10526,10 @@ function renderProtocolRuns(container) {
         cancelBtn.addEventListener('click', () => view.close());
         const rememberedSessionId = activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();
         if (rememberedSessionId) {
-            void attachSession(rememberedSessionId, { requirePlanning: true, requireSourceProtocol: true }).catch((err) => {
+            void attachSession(rememberedSessionId, {
+                requirePlanning: true,
+                rememberedContext: { sourceRunId: sourceRun.run.protocol_run_id },
+            }).catch((err) => {
                 console.warn('Could not reattach Auto Protocol session', err);
             });
         }
@@ -10600,7 +10662,7 @@ function renderProtocolRuns(container) {
                 }
                 session = await API.runProtocolAutoSession(session.session_id, {
                     origin_channel: 'registry',
-                    idempotency_key: `auto-protocol-session:${session.session_id}:run`,
+                    idempotency_key: _autoProtocolRunAttemptKey(session.session_id),
                 });
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
                 const runId = _runAutoSessionRunId(session);

@@ -4933,6 +4933,8 @@ def test_auto_protocol_planner_task_progress_and_result_finalize_session(postgre
     request_payload = ProtocolAutoDesignRequestRecord(
         surface="registry",
         requirement_text=model_request.requirement_text,
+        target_protocol_id="protocol-source",
+        source_run_id="run-source-1",
         available_agents=model_request.available_agents,
     )
     routed_task_id = "auto-design:auto-task-session:task"
@@ -4964,6 +4966,9 @@ def test_auto_protocol_planner_task_progress_and_result_finalize_session(postgre
         surface="registry",
         actor_ref=operator_access().actor_ref,
         requirement_text=request_payload.requirement_text,
+        source_protocol_id=request_payload.target_protocol_id,
+        source_run_id=request_payload.source_run_id,
+        target_protocol_id=request_payload.target_protocol_id,
         planner_task_id=routed_task_id,
         planner_policy="auto_select",
         planner_agent_id=enroll.agent_id,
@@ -5029,6 +5034,8 @@ def test_auto_protocol_planner_task_progress_and_result_finalize_session(postgre
     completed = store.get_protocol_auto_design_session("auto-task-session", access=operator_access())
     assert completed.status in {"ready", "blocked"}
     assert completed.planner_task_id == routed_task_id
+    assert completed.source_run_id == "run-source-1"
+    assert completed.target_protocol_id == "protocol-source"
     assert completed.analysis.domain == "browser app"
     assert completed.model_response is not None
     assert completed.model_response.domain == "browser app"

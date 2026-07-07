@@ -3443,7 +3443,13 @@ function renderProtocolWorkspace(container) {
                     selectedAutoProtocolSessionId = String(session.session_id || '');
                     selectedAutoProtocolSession = session;
                     _writeState({ push: true });
-                    void loadAutoProtocolSessions({ quiet: true });
+                    void loadAutoProtocolSessions({ quiet: true })
+                        .then(() => {
+                            if (designSessionsRoute) render();
+                        })
+                        .catch((err) => {
+                            console.warn('Failed to refresh Auto Protocol design sessions after dialog update', err);
+                        });
                 }
             }
             if (_autoProtocolPlanning(session)) {

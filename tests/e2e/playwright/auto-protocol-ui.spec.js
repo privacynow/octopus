@@ -163,8 +163,8 @@ function defaultMockSessions() {
 
 async function mockAutoProtocolSessions(page, options = {}) {
   const sessions = options.sessions || defaultMockSessions();
-  const byId = new Map(sessions.map((session) => [session.session_id, session]));
   const actionHandler = typeof options.actionHandler === 'function' ? options.actionHandler : null;
+  const createHandler = typeof options.createHandler === 'function' ? options.createHandler : null;
 
   await page.route('**/v1/protocol-auto/sessions**', async (route) => {
     const url = new URL(route.request().url());
@@ -176,6 +176,10 @@ async function mockAutoProtocolSessions(page, options = {}) {
     });
 
     if (path === '/v1/protocol-auto/sessions') {
+      if (route.request().method() === 'POST' && createHandler) {
+        await createHandler({ route, sessions, json });
+        return;
+      }
       const limit = Math.max(1, Number(url.searchParams.get('limit') || 24));
       const cursor = Math.max(0, Number(url.searchParams.get('cursor') || 0));
       const statusFilter = String(url.searchParams.get('status') || '').trim();
@@ -204,7 +208,7 @@ async function mockAutoProtocolSessions(page, options = {}) {
       return;
     }
 
-    const session = byId.get(sessionId);
+    const session = sessions.find((item) => String(item?.session_id || '') === sessionId);
     if (!session) {
       await json({ detail: { message: 'Not found', error_code: 'NOT_FOUND' } }, 404);
       return;
@@ -386,32 +390,24 @@ test('planning sessions remain visible after closing a generation dialog', async
     actionHandler: async ({ json }) => {
       await json({});
     },
-  });
-  await page.route('**/v1/protocol-auto/sessions', async (route) => {
-    if (route.request().method() !== 'POST') {
-      await route.fallback();
-      return;
-    }
-    const created = mockSession(9, {
-      session_id: 'session-created',
-      status: 'planning',
-      requirement_text: 'New visible planning session',
-      target_protocol_id: '',
-      draft_definition_json: {},
-      validation: { ok: false },
-      planner_state: {
-        planner_status: 'queued',
-        queued_at: '2026-07-07T12:09:00Z',
-        progress_summary: 'Queued for planner assignment.',
-        queue_position: 0,
-      },
-    });
-    sessions.unshift(created);
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(created),
-    });
+    createHandler: async ({ sessions: currentSessions, json }) => {
+      const created = mockSession(9, {
+        session_id: 'session-created',
+        status: 'planning',
+        requirement_text: 'New visible planning session',
+        target_protocol_id: '',
+        draft_definition_json: {},
+        validation: { ok: false },
+        planner_state: {
+          planner_status: 'queued',
+          queued_at: '2026-07-07T12:09:00Z',
+          progress_summary: 'Queued for planner assignment.',
+          queue_position: 0,
+        },
+      });
+      currentSessions.unshift(created);
+      await json(created);
+    },
   });
   const capture = attachErrorCapture(page);
 

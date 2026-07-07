@@ -122,6 +122,7 @@ _PROTOCOL_CALLBACK_ACTIONS = frozenset({
     "auto_apply",
     "auto_publish",
     "auto_run",
+    "protocol_start",
     "status",
     "artifacts",
     "preview",
@@ -1483,16 +1484,76 @@ def protocol_usage_message() -> TelegramRenderedMessage:
     )
 
 
-def protocol_list_message(protocols: list[Any]) -> TelegramRenderedMessage:
+def protocol_list_message(
+    protocols: list[Any],
+    *,
+    protocol_links: Mapping[str, str] | None = None,
+) -> TelegramRenderedMessage:
     if not protocols:
         return TelegramRenderedMessage(text="No protocols are published in the registry yet.")
-    lines = ["<b>Protocols</b>"]
-    for raw in protocols[:12]:
+    links = protocol_links or {}
+    lines = [
+        "<b>Protocols</b>",
+        "Tap Start to get a launch command template, or run <code>/protocol start &lt;slug&gt; &lt;objective&gt;</code>.",
+    ]
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+    for index, raw in enumerate(protocols[:12], start=1):
         item = raw.model_dump() if hasattr(raw, "model_dump") else raw
         label = html.escape(str(item.get("display_name") or item.get("slug") or item.get("protocol_id") or "Protocol"))
         token = html.escape(str(item.get("slug") or item.get("protocol_id") or ""))
-        lines.append(f"- {label} (<code>{token}</code>)")
-    return _html_message("\n".join(lines))
+        description = re.sub(r"\s+", " ", str(item.get("description") or "").strip())
+        if len(description) > 120:
+            description = description[:117].rstrip() + "..."
+        lines.append(f"{index}. {label} · <code>{token}</code>")
+        if description:
+            lines.append(f"   {html.escape(description)}")
+        row: list[InlineKeyboardButton] = []
+        raw_token = str(item.get("protocol_id") or item.get("slug") or "").strip()
+        _append_button(row, f"Start {index}", "protocol_start", raw_token)
+        for link_key in (str(item.get("protocol_id") or "").strip(), raw_token):
+            link = str(links.get(link_key) or "").strip()
+            button = _telegram_url_button(link, f"Open {index}") if link else None
+            if button is not None:
+                row.append(button)
+                break
+        if row and len(keyboard_rows) < 8:
+            keyboard_rows.append(row)
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None,
+        disable_web_page_preview=True,
+    )
+
+
+def protocol_launch_hint_message(definition: Any, *, deep_link: str = "") -> TelegramRenderedMessage:
+    item = definition.model_dump() if hasattr(definition, "model_dump") else definition
+    label = str(item.get("display_name") or item.get("slug") or item.get("protocol_id") or "Protocol").strip()
+    token = str(item.get("slug") or item.get("protocol_id") or "").strip()
+    description = re.sub(r"\s+", " ", str(item.get("description") or "").strip())
+    lines = [
+        "<b>Start protocol</b>",
+        f"Protocol: <code>{html.escape(label)}</code>",
+        f"Slug: <code>{html.escape(token)}</code>",
+    ]
+    if description:
+        lines.append(html.escape(description))
+    lines.extend([
+        "",
+        "Send this with your objective:",
+        f"<code>/protocol start {html.escape(token)} &lt;what you want this run to accomplish&gt;</code>",
+        "Optional: add <code>--context</code>, <code>--constraints</code>, or <code>--workspace</code>.",
+    ])
+    keyboard: list[list[InlineKeyboardButton]] = []
+    button = _telegram_url_button(deep_link, "Open in Registry") if deep_link else None
+    if button is not None:
+        keyboard.append([button])
+    return TelegramRenderedMessage(
+        text="\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+        disable_web_page_preview=True,
+    )
 
 
 def protocol_auto_session_message(

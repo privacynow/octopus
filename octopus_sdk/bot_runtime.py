@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import re
 import signal
 import time
@@ -76,6 +77,7 @@ from octopus_sdk.workflows.skills import (
 )
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+log = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -1973,6 +1975,13 @@ class BotRuntime:
                             raise
                         except Exception:
                             last_error = "dispatch_exception"
+                            log.exception(
+                                "Dispatch failed for work item %s kind=%s conversation=%s event=%s",
+                                item_id,
+                                current_kind,
+                                current_conversation_key,
+                                item.event_id,
+                            )
                             self.work_queue.fail_work_item(
                                 self.config.data_dir,
                                 item_id,

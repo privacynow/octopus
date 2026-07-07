@@ -28,7 +28,10 @@ from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
     ProtocolAutoDesignEventSummaryRecord,
+    ProtocolAutoDesignModelResponseRecord,
+    ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
+    ProtocolAutoDesignWarningRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
     ProtocolArtifactSnapshotRecord,
@@ -76,12 +79,14 @@ from octopus_sdk.protocols import (
     stage_target_for_decision,
     auto_protocol_event_summary,
     auto_protocol_runtime_expected_from_text,
+    generate_auto_protocol_session,
+    revise_auto_protocol_session,
     validate_protocol_document,
 )
 from octopus_sdk.protocols.documents import draft_protocol_document_data, protocol_materialize_artifact_path
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.registry.models import normalized_requested_skills, utcnow_iso
-from octopus_sdk.registry.management import CancelRoutedTaskRequest, ManagementRequest
+from octopus_sdk.registry.management import CancelRoutedTaskRequest, DesignAutoProtocolResult, ManagementRequest, ManagementResult
 
 from .artifact_snapshots import artifact_snapshot_storage_path, create_artifact_snapshot
 from .config import RegistryConfig, load_registry_config
@@ -3892,23 +3897,270 @@ class ProtocolPostgresAdapter:
             affected_run_ids=sorted(set(item for item in affected_run_ids if item)),
         )
 
+    def _sweep_auto_protocol_planning_in_tx(self, conn, *, now: str) -> ProtocolMaintenanceResultRecord:
+        affected_session_ids: list[str] = []
+        task_rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT s.*, t.status AS task_status, t.result_json AS task_result_json,
+                   t.request_json AS task_request_json, t.created_at AS task_created_at
+            FROM {SCHEMA}.protocol_auto_sessions s
+            JOIN {SCHEMA}.routed_tasks t
+              ON t.routed_task_id = s.planner_task_id
+            WHERE s.status = 'planning'
+              AND coalesce(s.planner_task_id, '') <> ''
+            ORDER BY s.created_at ASC
+            """,
+            (),
+        )
+        parsed_now = datetime.fromisoformat(now)
+        for row in task_rows:
+            session = self._auto_design_session_from_row(row)
+            task_status = str(row.get("task_status") or "").strip()
+            task_result = row.get("task_result_json") or {}
+            if task_status in {"completed", "failed", "timed_out", "cancelled"}:
+                if not isinstance(task_result, Mapping):
+                    task_result = {"status": task_status, "summary": f"Planner task ended with {task_status}."}
+                self.finalize_auto_design_task_result_in_tx(
+                    conn,
+                    routed_task_id=session.planner_task_id,
+                    result_json=task_result,
+                    now=now,
+                )
+                affected_session_ids.append(session.session_id)
+                continue
+            request_json = row.get("task_request_json") or {}
+            constraints = request_json.get("constraints", {}) if isinstance(request_json, Mapping) else {}
+            try:
+                timeout_seconds = int(constraints.get("timeout_seconds") or 0) if isinstance(constraints, Mapping) else 0
+            except Exception:
+                timeout_seconds = 0
+            if timeout_seconds <= 0:
+                continue
+            try:
+                created_at = datetime.fromisoformat(str(row.get("task_created_at") or ""))
+            except Exception:
+                continue
+            if created_at + timedelta(seconds=timeout_seconds) > parsed_now:
+                continue
+            detail = "Auto Protocol planner task timed out before reporting a result."
+            result_payload = {
+                "routed_task_id": session.planner_task_id,
+                "status": "timed_out",
+                "transition_id": f"auto-design-timeout-{uuid.uuid4().hex}",
+                "summary": detail,
+                "full_text": detail,
+                "completed_at": now,
+            }
+            with cur(conn) as db_cur:
+                db_cur.execute(
+                    f"""
+                    UPDATE {SCHEMA}.routed_tasks
+                    SET status = 'timed_out',
+                        summary = %s,
+                        result_json = %s,
+                        updated_at = %s
+                    WHERE routed_task_id = %s
+                    """,
+                    (detail, jsonb(result_payload), now, session.planner_task_id),
+                )
+            failed = self._auto_design_failed_session(
+                session,
+                code="planner.task_timeout",
+                message=detail,
+                state={
+                    **session.planner_state.as_dict(),
+                    "planner_status": "timed_out",
+                    "completed_at": now,
+                    "progress_summary": detail,
+                },
+            )
+            self._save_auto_design_session_in_tx(
+                conn,
+                failed,
+                actor_ref="system:auto_design",
+                event_kind="planner_failed",
+                now=now,
+            )
+            affected_session_ids.append(session.session_id)
+
+        rows = POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT s.*, mr.status AS request_status, mr.result_json AS request_result_json,
+                   mr.error_code AS request_error_code, mr.error_detail AS request_error_detail,
+                   mr.timeout_seconds AS request_timeout_seconds, mr.created_at AS request_created_at
+            FROM {SCHEMA}.protocol_auto_sessions s
+            JOIN {SCHEMA}.management_requests mr
+              ON mr.request_id = s.planner_request_id
+            WHERE s.status = 'planning'
+              AND coalesce(s.planner_task_id, '') = ''
+              AND coalesce(s.planner_request_id, '') <> ''
+              AND (
+                    mr.status IN ('completed', 'failed')
+                    OR (
+                        mr.status = 'queued'
+                        AND coalesce(mr.timeout_seconds, 0) > 0
+                        AND (mr.created_at::timestamptz + make_interval(secs => mr.timeout_seconds)) <= %s::timestamptz
+                    )
+              )
+            ORDER BY s.created_at ASC
+            """,
+            (now,),
+        )
+        for row in rows:
+            session = self._auto_design_session_from_row(row)
+            request_status = str(row.get("request_status") or "")
+            request_result = row.get("request_result_json") or {}
+            state = dict(session.planner_state.as_dict())
+            state.update({
+                "planner_status": request_status or "failed",
+                "completed_at": now,
+                "progress_summary": str(row.get("request_error_detail") or ""),
+            })
+            if request_status == "queued":
+                detail = "Auto Protocol planner timed out before reporting a result."
+                with cur(conn) as db_cur:
+                    db_cur.execute(
+                        f"""
+                        UPDATE {SCHEMA}.management_requests
+                        SET status = 'failed',
+                            error_code = 'request_timeout',
+                            error_detail = %s,
+                            completed_at = %s
+                        WHERE request_id = %s
+                        """,
+                        (detail, now, session.planner_request_id),
+                    )
+                failed = self._auto_design_failed_session(
+                    session,
+                    code="planner.request_timeout",
+                    message=detail,
+                    state=state,
+                )
+                self._save_auto_design_session_in_tx(
+                    conn,
+                    failed,
+                    actor_ref="system:auto_design",
+                    event_kind="planner_failed",
+                    now=now,
+                )
+                affected_session_ids.append(session.session_id)
+                continue
+            try:
+                result = ManagementResult.model_validate(request_result)
+            except Exception as exc:
+                result = ManagementResult(
+                    request_id=session.planner_request_id,
+                    agent_id=session.planner_agent_id,
+                    success=False,
+                    error_code="result_invalid",
+                    error_detail=f"Planner result could not be decoded: {exc}",
+                )
+            if not result.success or not isinstance(result.payload, DesignAutoProtocolResult):
+                failed = self._auto_design_failed_session(
+                    session,
+                    code="planner.request_failed",
+                    message=result.error_detail or result.error_code or "Auto Protocol planner failed.",
+                    state=state,
+                )
+                self._save_auto_design_session_in_tx(
+                    conn,
+                    failed,
+                    actor_ref="system:auto_design",
+                    event_kind="planner_failed",
+                    now=now,
+                )
+                affected_session_ids.append(session.session_id)
+                continue
+            try:
+                request_payload = ProtocolAutoDesignRequestRecord.model_validate({
+                    "mode": session.mode,
+                    "surface": session.surface,
+                    "requirement_text": session.requirement_text,
+                    "constraints_text": session.constraints_text,
+                    "target_protocol_id": session.target_protocol_id,
+                    "target_version_id": session.source_version_id,
+                    "target_draft_revision": session.source_draft_revision,
+                    "source_document": session.source_document_json.as_dict(),
+                    "workspace_ref": "",
+                    "preferred_design_agent_id": session.planner_agent_id,
+                    "actor_ref": session.actor_ref,
+                    "chat_ref": session.chat_ref,
+                    "resource_refs": list(session.resource_refs or []),
+                    "run_lessons": [item.model_dump(mode="json") for item in session.run_lessons or []],
+                    "model_response": result.payload.response,
+                })
+                completed = (
+                    revise_auto_protocol_session(
+                        request_payload,
+                        session_id=session.session_id,
+                        created_at=session.created_at,
+                        updated_at=session.updated_at,
+                    )
+                    if session.mode == "revise"
+                    else generate_auto_protocol_session(
+                        request_payload,
+                        session_id=session.session_id,
+                        created_at=session.created_at,
+                        updated_at=session.updated_at,
+                    )
+                )
+                completed = completed.model_copy(update={
+                    "planner_request_id": session.planner_request_id,
+                    "planner_agent_id": session.planner_agent_id,
+                    "planner_state": RegistryJsonRecord.model_validate(state),
+                    "prompt_diagnostics": session.prompt_diagnostics,
+                    "source_document_json": session.source_document_json,
+                })
+                self._save_auto_design_session_in_tx(
+                    conn,
+                    completed,
+                    actor_ref="system:auto_design",
+                    event_kind="revised" if session.mode == "revise" else "generated",
+                    now=now,
+                )
+            except Exception as exc:
+                failed = self._auto_design_failed_session(
+                    session,
+                    code="planner.compile_failed",
+                    message=f"Auto Protocol planner result could not be compiled: {exc}",
+                    state=state,
+                )
+                self._save_auto_design_session_in_tx(
+                    conn,
+                    failed,
+                    actor_ref="system:auto_design",
+                    event_kind="planner_failed",
+                    now=now,
+                )
+            affected_session_ids.append(session.session_id)
+        return ProtocolMaintenanceResultRecord(
+            swept_count=len(affected_session_ids),
+            affected_auto_session_ids=sorted(set(item for item in affected_session_ids if item)),
+        )
+
     def run_protocol_maintenance(self, *, now: str = "") -> ProtocolMaintenanceResultRecord:
         maintenance_now = str(now or utcnow_iso())
         with self._connect() as conn, write_tx(conn):
             timeout_result = self._sweep_protocol_timeouts_in_tx(conn, now=maintenance_now)
             runtime_result = self._sweep_protocol_artifact_runtimes_in_tx(conn, now=maintenance_now)
-            swept_count = timeout_result.swept_count + runtime_result.swept_count
+            auto_result = self._sweep_auto_protocol_planning_in_tx(conn, now=maintenance_now)
+            swept_count = timeout_result.swept_count + runtime_result.swept_count + auto_result.swept_count
             affected_run_ids = sorted(set([*timeout_result.affected_run_ids, *runtime_result.affected_run_ids]))
+            affected_auto_session_ids = sorted(set(auto_result.affected_auto_session_ids))
             if swept_count:
                 log.info(
-                    "protocol maintenance swept_timeouts=%s swept_artifact_runtimes=%s at=%s",
+                    "protocol maintenance swept_timeouts=%s swept_artifact_runtimes=%s swept_auto_protocol=%s at=%s",
                     timeout_result.swept_count,
                     runtime_result.swept_count,
+                    auto_result.swept_count,
                     maintenance_now,
                 )
             return ProtocolMaintenanceResultRecord(
                 swept_count=swept_count,
                 affected_run_ids=affected_run_ids,
+                affected_auto_session_ids=affected_auto_session_ids,
             )
 
     def list_protocols(
@@ -4178,7 +4430,11 @@ class ProtocolPostgresAdapter:
                 "resource_refs": row.get("resource_refs_json") or [],
                 "run_lessons": row.get("run_lessons_json") or [],
                 "planner_request_id": row.get("planner_request_id", ""),
+                "planner_task_id": row.get("planner_task_id", ""),
+                "planner_policy": row.get("planner_policy", "auto_select"),
                 "planner_agent_id": row.get("planner_agent_id", ""),
+                "planner_state": row.get("planner_state_json") or {},
+                "prompt_diagnostics": row.get("prompt_diagnostics_json") or {},
                 "source_document_json": row.get("source_document_json") or {},
                 "model_response": row.get("planner_response_json") or None,
                 "analysis": row.get("analysis_json") or {},
@@ -4222,7 +4478,11 @@ class ProtocolPostgresAdapter:
             "resource_refs_json": list(session.resource_refs or []),
             "run_lessons_json": [item.model_dump(mode="json") for item in session.run_lessons or []],
             "planner_request_id": str(session.planner_request_id or ""),
+            "planner_task_id": str(session.planner_task_id or ""),
+            "planner_policy": str(session.planner_policy or "auto_select"),
             "planner_agent_id": str(session.planner_agent_id or ""),
+            "planner_state_json": session.planner_state.as_dict(),
+            "prompt_diagnostics_json": session.prompt_diagnostics.as_dict(),
             "source_document_json": session.source_document_json.as_dict(),
             "planner_response_json": session.model_response.model_dump(mode="json") if session.model_response is not None else {},
             "analysis_json": session.analysis.model_dump(mode="json"),
@@ -4299,12 +4559,13 @@ class ProtocolPostgresAdapter:
                         session_id, status, mode, surface, actor_ref, chat_ref,
                         source_protocol_id, source_version_id, source_draft_revision,
                         target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
-                        planner_request_id, planner_agent_id, source_document_json,
+                        planner_request_id, planner_task_id, planner_policy, planner_agent_id,
+                        planner_state_json, prompt_diagnostics_json, source_document_json,
                         planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
                         warnings_json, unresolved_decisions_json, change_summary_json,
                         applied_protocol_json, run_result_json, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (session_id) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -4322,7 +4583,11 @@ class ProtocolPostgresAdapter:
                         resource_refs_json = EXCLUDED.resource_refs_json,
                         run_lessons_json = EXCLUDED.run_lessons_json,
                         planner_request_id = EXCLUDED.planner_request_id,
+                        planner_task_id = EXCLUDED.planner_task_id,
+                        planner_policy = EXCLUDED.planner_policy,
                         planner_agent_id = EXCLUDED.planner_agent_id,
+                        planner_state_json = EXCLUDED.planner_state_json,
+                        prompt_diagnostics_json = EXCLUDED.prompt_diagnostics_json,
                         source_document_json = EXCLUDED.source_document_json,
                         planner_response_json = EXCLUDED.planner_response_json,
                         analysis_json = EXCLUDED.analysis_json,
@@ -4355,7 +4620,11 @@ class ProtocolPostgresAdapter:
                         jsonb(payload["resource_refs_json"]),
                         jsonb(payload["run_lessons_json"]),
                         payload["planner_request_id"],
+                        payload["planner_task_id"],
+                        payload["planner_policy"],
                         payload["planner_agent_id"],
+                        jsonb(payload["planner_state_json"]),
+                        jsonb(payload["prompt_diagnostics_json"]),
                         jsonb(payload["source_document_json"]),
                         jsonb(payload["planner_response_json"]),
                         jsonb(payload["analysis_json"]),
@@ -4389,6 +4658,291 @@ class ProtocolPostgresAdapter:
             raise RuntimeError("Failed to save Auto Protocol session")
         return self._auto_design_session_from_row(row)
 
+    @staticmethod
+    def _auto_design_failed_session(
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        code: str,
+        message: str,
+        state: Mapping[str, object] | None = None,
+    ) -> ProtocolAutoDesignSessionRecord:
+        detail = re.sub(r"\s+", " ", str(message or "Auto Protocol planner failed.")).strip()
+        warning = ProtocolAutoDesignWarningRecord(
+            code=code,
+            message=detail[:1000],
+            severity="error",
+            section="planner",
+            action="retry_generation",
+        )
+        return session.model_copy(update={
+            "status": "failed",
+            "planner_state": RegistryJsonRecord.model_validate(dict(state or {})),
+            "warnings": [warning],
+            "unresolved_decisions": [warning],
+            "change_summary": [detail[:1000]],
+        })
+
+    def _save_auto_design_session_in_tx(
+        self,
+        conn,
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        actor_ref: str,
+        event_kind: str,
+        now: str,
+    ) -> ProtocolAutoDesignSessionRecord:
+        session_for_save = session.model_copy(update={"updated_at": now})
+        payload = self._auto_design_payload(session_for_save)
+        if not str(payload.get("created_at", "") or "").strip():
+            payload["created_at"] = now
+            session_for_save = session_for_save.model_copy(update={"created_at": now})
+        with cur(conn) as db_cur:
+            db_cur.execute(
+                f"""
+                INSERT INTO {SCHEMA}.protocol_auto_sessions (
+                    session_id, status, mode, surface, actor_ref, chat_ref,
+                    source_protocol_id, source_version_id, source_draft_revision,
+                    target_protocol_id, target_draft_revision, requirement_text, constraints_text, resource_refs_json, run_lessons_json,
+                    planner_request_id, planner_task_id, planner_policy, planner_agent_id,
+                    planner_state_json, prompt_diagnostics_json, source_document_json,
+                    planner_response_json, analysis_json, plan_json, draft_definition_json, run_profile_json, validation_json,
+                    warnings_json, unresolved_decisions_json, change_summary_json,
+                    applied_protocol_json, run_result_json, created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (session_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    mode = EXCLUDED.mode,
+                    surface = EXCLUDED.surface,
+                    actor_ref = EXCLUDED.actor_ref,
+                    chat_ref = EXCLUDED.chat_ref,
+                    source_protocol_id = EXCLUDED.source_protocol_id,
+                    source_version_id = EXCLUDED.source_version_id,
+                    source_draft_revision = EXCLUDED.source_draft_revision,
+                    target_protocol_id = EXCLUDED.target_protocol_id,
+                    target_draft_revision = EXCLUDED.target_draft_revision,
+                    requirement_text = EXCLUDED.requirement_text,
+                    constraints_text = EXCLUDED.constraints_text,
+                    resource_refs_json = EXCLUDED.resource_refs_json,
+                    run_lessons_json = EXCLUDED.run_lessons_json,
+                    planner_request_id = EXCLUDED.planner_request_id,
+                    planner_task_id = EXCLUDED.planner_task_id,
+                    planner_policy = EXCLUDED.planner_policy,
+                    planner_agent_id = EXCLUDED.planner_agent_id,
+                    planner_state_json = EXCLUDED.planner_state_json,
+                    prompt_diagnostics_json = EXCLUDED.prompt_diagnostics_json,
+                    source_document_json = EXCLUDED.source_document_json,
+                    planner_response_json = EXCLUDED.planner_response_json,
+                    analysis_json = EXCLUDED.analysis_json,
+                    plan_json = EXCLUDED.plan_json,
+                    draft_definition_json = EXCLUDED.draft_definition_json,
+                    run_profile_json = EXCLUDED.run_profile_json,
+                    validation_json = EXCLUDED.validation_json,
+                    warnings_json = EXCLUDED.warnings_json,
+                    unresolved_decisions_json = EXCLUDED.unresolved_decisions_json,
+                    change_summary_json = EXCLUDED.change_summary_json,
+                    applied_protocol_json = EXCLUDED.applied_protocol_json,
+                    run_result_json = EXCLUDED.run_result_json,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING *
+                """,
+                (
+                    payload["session_id"],
+                    payload["status"],
+                    payload["mode"],
+                    payload["surface"],
+                    payload["actor_ref"],
+                    payload["chat_ref"],
+                    payload["source_protocol_id"],
+                    payload["source_version_id"],
+                    payload["source_draft_revision"],
+                    payload["target_protocol_id"],
+                    payload["target_draft_revision"],
+                    payload["requirement_text"],
+                    payload["constraints_text"],
+                    jsonb(payload["resource_refs_json"]),
+                    jsonb(payload["run_lessons_json"]),
+                    payload["planner_request_id"],
+                    payload["planner_task_id"],
+                    payload["planner_policy"],
+                    payload["planner_agent_id"],
+                    jsonb(payload["planner_state_json"]),
+                    jsonb(payload["prompt_diagnostics_json"]),
+                    jsonb(payload["source_document_json"]),
+                    jsonb(payload["planner_response_json"]),
+                    jsonb(payload["analysis_json"]),
+                    jsonb(payload["plan_json"]),
+                    jsonb(payload["draft_definition_json"]),
+                    jsonb(payload["run_profile_json"]),
+                    jsonb(payload["validation_json"]),
+                    jsonb(payload["warnings_json"]),
+                    jsonb(payload["unresolved_decisions_json"]),
+                    jsonb(payload["change_summary_json"]),
+                    jsonb(payload["applied_protocol_json"]),
+                    jsonb(payload["run_result_json"]),
+                    payload["created_at"],
+                    payload["updated_at"],
+                ),
+            )
+            row = db_cur.fetchone()
+        self._append_auto_design_event_in_tx(
+            conn,
+            session_id=str(payload["session_id"]),
+            event_kind=str(event_kind or "updated"),
+            actor_ref=str(actor_ref or session.actor_ref or "system"),
+            payload=auto_protocol_event_summary(
+                session_for_save,
+                event_kind=str(event_kind or "updated"),
+                created_at=now,
+            ).model_dump(mode="json"),
+            now=now,
+        )
+        if row is None:
+            raise RuntimeError("Failed to save Auto Protocol session")
+        return self._auto_design_session_from_row(row)
+
+    def _auto_design_session_for_task_in_tx(self, conn, routed_task_id: str) -> ProtocolAutoDesignSessionRecord | None:
+        task_id = str(routed_task_id or "").strip()
+        if not task_id:
+            return None
+        row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_auto_sessions WHERE planner_task_id = %s",
+            (task_id,),
+        )
+        if row is None:
+            return None
+        return self._auto_design_session_from_row(row)
+
+    def update_auto_design_task_progress_in_tx(
+        self,
+        conn,
+        *,
+        routed_task_id: str,
+        status: str,
+        summary: str,
+        progress: int | None,
+        now: str,
+    ) -> ProtocolAutoDesignSessionRecord | None:
+        session = self._auto_design_session_for_task_in_tx(conn, routed_task_id)
+        if session is None or str(session.status or "") != "planning":
+            return session
+        state = dict(session.planner_state.as_dict())
+        state.update({
+            "planner_status": str(status or "running"),
+            "progress_summary": str(summary or ""),
+            "last_progress_at": now,
+            "updated_at": now,
+        })
+        if progress is not None:
+            state["progress"] = int(progress)
+        updated = session.model_copy(update={
+            "planner_state": RegistryJsonRecord.model_validate(state),
+        })
+        return self._save_auto_design_session_in_tx(
+            conn,
+            updated,
+            actor_ref="system:auto_design",
+            event_kind="planner_progress",
+            now=now,
+        )
+
+    def finalize_auto_design_task_result_in_tx(
+        self,
+        conn,
+        *,
+        routed_task_id: str,
+        result_json: Mapping[str, object],
+        now: str,
+    ) -> ProtocolAutoDesignSessionRecord | None:
+        session = self._auto_design_session_for_task_in_tx(conn, routed_task_id)
+        if session is None or str(session.status or "") != "planning":
+            return session
+        state = dict(session.planner_state.as_dict())
+        status = str(result_json.get("status") or "").strip()
+        state.update({
+            "planner_status": status or "completed",
+            "completed_at": str(result_json.get("completed_at") or now),
+            "progress_summary": str(result_json.get("summary") or ""),
+        })
+        if status != "completed":
+            failed = self._auto_design_failed_session(
+                session,
+                code=f"planner.{status or 'failed'}",
+                message=str(result_json.get("full_text") or result_json.get("summary") or "Auto Protocol planner failed."),
+                state=state,
+            )
+            return self._save_auto_design_session_in_tx(
+                conn,
+                failed,
+                actor_ref="system:auto_design",
+                event_kind="planner_failed",
+                now=now,
+            )
+        try:
+            raw_response = result_json.get("full_text") or "{}"
+            response = ProtocolAutoDesignModelResponseRecord.model_validate_json(str(raw_response))
+            task_row = POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT request_json FROM {SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            task_request = json.loads(json.dumps(task_row.get("request_json") if task_row else {}))
+            context = task_request.get("context", {}) if isinstance(task_request, dict) else {}
+            auto_design = context.get("auto_design", {}) if isinstance(context, dict) else {}
+            request_source = auto_design.get("request_payload", {}) if isinstance(auto_design, dict) else {}
+            request_payload = ProtocolAutoDesignRequestRecord.model_validate({
+                **(request_source if isinstance(request_source, dict) else {}),
+                "model_response": response,
+            })
+            if session.mode == "revise":
+                completed = revise_auto_protocol_session(
+                    request_payload,
+                    session_id=session.session_id,
+                    created_at=session.created_at,
+                    updated_at=session.updated_at,
+                )
+                event_kind = "revised"
+            else:
+                completed = generate_auto_protocol_session(
+                    request_payload,
+                    session_id=session.session_id,
+                    created_at=session.created_at,
+                    updated_at=session.updated_at,
+                )
+                event_kind = "generated"
+            completed = completed.model_copy(update={
+                "planner_request_id": session.planner_request_id,
+                "planner_task_id": session.planner_task_id,
+                "planner_policy": session.planner_policy,
+                "planner_agent_id": session.planner_agent_id,
+                "planner_state": RegistryJsonRecord.model_validate(state),
+                "prompt_diagnostics": session.prompt_diagnostics,
+                "source_document_json": session.source_document_json,
+            })
+        except Exception as exc:
+            failed = self._auto_design_failed_session(
+                session,
+                code="planner.compile_failed",
+                message=f"Auto Protocol planner result could not be compiled: {exc}",
+                state=state,
+            )
+            return self._save_auto_design_session_in_tx(
+                conn,
+                failed,
+                actor_ref="system:auto_design",
+                event_kind="planner_failed",
+                now=now,
+            )
+        return self._save_auto_design_session_in_tx(
+            conn,
+            completed,
+            actor_ref="system:auto_design",
+            event_kind=event_kind,
+            now=now,
+        )
+
     def get_protocol_auto_design_session(
         self,
         session_id: str,
@@ -4406,6 +4960,39 @@ class ProtocolPostgresAdapter:
         if row is None:
             raise KeyError(session_id)
         return self._auto_design_session_from_row(row)
+
+    def list_protocol_auto_design_sessions(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[ProtocolAutoDesignSessionRecord]:
+        if not any(self._access_has_role(access, role) for role in ("agent", "author", "publisher", "admin")):
+            raise PermissionError("Auto Protocol requires agent or author access.")
+        clauses: list[str] = []
+        params: list[object] = []
+        if not any(self._access_has_role(access, role) for role in ("admin", "publisher")):
+            params.append(self._access_actor_ref(access))
+            clauses.append("actor_ref = %s")
+        if str(status or "").strip():
+            params.append(str(status or "").strip())
+            clauses.append("status = %s")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.extend([max(1, min(int(limit or 25), 100)), max(0, int(cursor or 0))])
+        with self._connect() as conn:
+            rows = POSTGRES_STORE_DIALECT.fetchall(
+                conn,
+                f"""
+                SELECT * FROM {SCHEMA}.protocol_auto_sessions
+                {where}
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params),
+            )
+        return [self._auto_design_session_from_row(row) for row in rows]
 
     def list_protocol_auto_design_session_events(
         self,

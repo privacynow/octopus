@@ -76,15 +76,25 @@ does not want to manually design every stage.
 From `Build -> Protocols`, choose `Auto protocol`, describe the desired outcome,
 attach any source files that should inform the work, and add optional
 constraints. Registry sends the design job to a connected provider-capable bot,
-and immediately saves a durable `planning` session. The dialog stays open and
-polls the session while the bot performs heavyweight semantic planning. When the
-management result arrives, Registry compiles the typed planner response into a
-normal editable protocol draft with inferred roles, stages, artifacts,
-adversarial review loops, run inputs, resource references, and final evidence.
+and immediately saves a durable `planning` session backed by a hidden
+`auto_design` routed task. The dialog stays open, subscribes to the
+`protocol-auto-session:{id}` update topic, and polls as a fallback while the bot
+performs heavyweight semantic planning. The operator can leave and re-open the
+dialog; the session re-attaches to the same planner job instead of starting a
+duplicate one. When the routed task posts the typed planner result, Registry
+compiles it into a normal editable protocol draft with inferred roles, stages,
+artifacts, adversarial review loops, run inputs, resource references, and final
+evidence.
 Review the generated structure, ask for changes if needed, then apply it as a
 normal draft. When validation and assignments are already ready, the Auto
 Protocol panel can also publish or publish and run directly; otherwise use the
 normal editor to resolve the warnings first.
+
+Planner assignment is queue-based. `Auto` is the default and chooses among
+connected agents that advertise `design_auto_protocol`, skipping agents already
+busy with another Auto Protocol design when another capable agent is available.
+Operators may explicitly target a planner agent from the dialog; invalid,
+disconnected, or unsupported targets are rejected server-side.
 
 Auto Protocol validates its generated draft before it shows it as ready. The
 generator repairs structural issues such as missing slugs, missing artifact

@@ -232,10 +232,13 @@ authoring notes, stay with [PROTOCOLS.md](PROTOCOLS.md) and
 Auto Protocol design can be intentionally heavyweight. Large run-improvement
 requests may take several minutes because the planner is reading prior run
 context, lessons, artifact expectations, assignments, review loops, and runtime
-evidence needs. The Registry dialog should remain open and show planning
-progress until the session becomes ready, blocked, or failed. A failed planner
-session remains visible with an actionable error instead of disappearing behind
-a browser timeout.
+evidence needs. The Registry dialog shows the planner agent, planner job,
+elapsed/quiet progress, timeout expectations, and large-input hints while the
+session is `planning`. `Apply draft`, `Publish`, and `Publish & Run` are not
+valid actions until planning finishes; if the browser reloads or the dialog is
+closed, reopening Auto Protocol re-attaches to the active session instead of
+starting another planner job. A failed planner session remains visible with an
+actionable error instead of disappearing behind a browser timeout.
 
 When the request is a serious product, Auto Protocol shows the inferred product
 class and whether a full product/system contract is required. Full contract mode

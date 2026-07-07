@@ -309,9 +309,12 @@ CREATE TABLE IF NOT EXISTS agent_registry.management_requests (
     result_json JSONB,
     error_code TEXT NOT NULL DEFAULT '',
     error_detail TEXT NOT NULL DEFAULT '',
+    timeout_seconds INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     completed_at TEXT NOT NULL DEFAULT ''
 );
+ALTER TABLE agent_registry.management_requests
+    ADD COLUMN IF NOT EXISTS timeout_seconds INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_registry_management_requests_agent_status
     ON agent_registry.management_requests (target_agent_id, status, created_at);
 
@@ -906,7 +909,11 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     planner_request_id TEXT NOT NULL DEFAULT '',
+    planner_task_id TEXT NOT NULL DEFAULT '',
+    planner_policy TEXT NOT NULL DEFAULT 'auto_select',
     planner_agent_id TEXT NOT NULL DEFAULT '',
+    planner_state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    prompt_diagnostics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     source_document_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -927,7 +934,11 @@ ALTER TABLE agent_registry.protocol_auto_sessions
     ADD COLUMN IF NOT EXISTS resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN IF NOT EXISTS run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     ADD COLUMN IF NOT EXISTS planner_request_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS planner_task_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS planner_policy TEXT NOT NULL DEFAULT 'auto_select',
     ADD COLUMN IF NOT EXISTS planner_agent_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS planner_state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS prompt_diagnostics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS source_document_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_actor
     ON agent_registry.protocol_auto_sessions (actor_ref, updated_at DESC);

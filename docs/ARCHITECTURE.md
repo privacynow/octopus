@@ -269,12 +269,13 @@ Auto Protocol uses the same protocol lifecycle as manual authoring. Registry
 owns sessions, persistence, HTTP actions, and UI state. It does not execute a
 model provider in-process. When a user creates or revises an Auto Protocol
 session, Registry creates a durable session in `planning` status and queues a
-`design_auto_protocol` management request to a connected provider-capable bot.
-The create/revise HTTP request returns the planning session immediately; UI and
-client surfaces poll the session. When the bot posts the typed planner result,
-the next session read finalizes it through the SDK compiler. The compiler turns
-those records into one canonical protocol document and applies validation,
-semantic policy, stage budgets, review policy, and primary-artifact metadata.
+hidden `auto_design` routed task to a connected provider-capable bot. The
+create/revise HTTP request returns the planning session immediately; UI and
+client surfaces subscribe to `protocol-auto-session:{id}` and poll as fallback.
+When the bot posts the typed planner result, routed-task result ingestion
+finalizes the session through the SDK compiler. The compiler turns those
+records into one canonical protocol document and applies validation, semantic
+policy, stage budgets, review policy, and primary-artifact metadata.
 Planner failures are persisted on the same session as failed/blocking details
 instead of being represented only as transport timeouts.
 When a generated serious-product protocol runs, each stage's timeout budget is
@@ -288,14 +289,19 @@ The request path is:
 Registry UI or Telegram
   -> /v1/protocol-auto/sessions
   -> protocol_auto_sessions status=planning
-  -> queued management request
+  -> hidden auto_design routed task
   -> bot registry-delivery transport
   -> app/runtime/auto_protocol_design.py provider call
-  -> management result
-  -> GET /v1/protocol-auto/sessions/{id} finalization
+  -> routed task result ingestion
   -> SDK Auto Protocol compiler
   -> normal protocol draft / publish / run lifecycle
 ```
+
+New planner work must use routed tasks because they already provide queueing,
+task status, cancellation, delivery leases, hidden task records, and task
+result ingestion. Management requests remain for short synchronous operations
+and only legacy Auto Protocol sessions continue to reconcile through
+management-request status during maintenance.
 
 Generated protocols declare a primary artifact in `metadata.auto_protocol`.
 Runs UI and Telegram use that metadata to promote the user-facing output before

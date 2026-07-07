@@ -667,9 +667,10 @@ class ProtocolAutoDesignModelRequestRecord(RegistryRecordModel):
     actor_ref: str = ""
     chat_ref: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    resource_summaries: list[RegistryJsonRecord] = Field(default_factory=list)
     run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
 
-    @field_validator("available_agents", "available_skills", mode="before")
+    @field_validator("available_agents", "available_skills", "resource_summaries", mode="before")
     @classmethod
     def _json_list(cls, value: object) -> list[RegistryJsonRecord]:
         return [RegistryJsonRecord.model_validate(_dict(item)) for item in _list(value)]
@@ -759,11 +760,12 @@ class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     actor_ref: str = ""
     chat_ref: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    resource_summaries: list[RegistryJsonRecord] = Field(default_factory=list)
     run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
     idempotency_key: str = ""
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
 
-    @field_validator("available_agents", "available_skills", mode="before")
+    @field_validator("available_agents", "available_skills", "resource_summaries", mode="before")
     @classmethod
     def _json_list(cls, value: object) -> list[RegistryJsonRecord]:
         return [RegistryJsonRecord.model_validate(_dict(item)) for item in _list(value)]
@@ -786,7 +788,11 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     resource_refs: list[str] = Field(default_factory=list)
     run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
     planner_request_id: str = ""
+    planner_task_id: str = ""
+    planner_policy: str = "auto_select"
     planner_agent_id: str = ""
+    planner_state: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    prompt_diagnostics: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     source_document_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord, exclude=True)
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
     analysis: ProtocolAutoDesignAnalysisRecord = Field(default_factory=ProtocolAutoDesignAnalysisRecord)
@@ -2562,7 +2568,7 @@ def _build_plan(
                 "This protocol expects a runnable primary artifact. Package it as a user-facing product: include a coherent UI/API, "
                 "tests or smoke steps, an outcome-readiness matrix, a root octopus-runtime.json manifest, and enough start/health/smoke metadata for the Registry to start it, proxy it, and let users try it. "
                 "Build and smoke-test the package during this stage so the manifest start_command launches a prepared artifact quickly instead of installing dependencies, compiling, testing, or packaging on user start. "
-                "Any user-triggered action in the UI must surface a clear result/outcome in the app itself, not require log inspection or raw JSON archaeology. "
+                "Every user-triggered action in the UI must surface a clear result/outcome in the app itself, not require log inspection or raw JSON archaeology. "
                 f"{AUTO_PROTOCOL_CUSTOMER_ARTIFACT_BRANDING_GUIDANCE} "
                 f"{AUTO_PROTOCOL_OUTCOME_READINESS_GUIDANCE} "
                 f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE}"

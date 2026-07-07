@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import re
 import signal
@@ -34,7 +35,8 @@ from octopus_sdk.inbound_types import InboundCallback
 from octopus_sdk.inbound_types import InboundCommand
 from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, deserialize_inbound, serialize_inbound
 from octopus_sdk.messages import MessageTemplatePort
-from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, Provider, ProviderStateRecord, RunContext
+from octopus_sdk.protocols.auto_design import ProtocolAutoDesignModelRequestRecord, ProtocolAutoDesignModelResponseRecord
+from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, ProgressSink, Provider, ProviderStateRecord, RunContext
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.runtime.skills import (
@@ -282,6 +284,17 @@ class RuntimeCapabilityExchangePort(Protocol):
 
 
 @runtime_checkable
+class AutoDesignPlannerPort(Protocol):
+    async def design_auto_protocol(
+        self,
+        request: ProtocolAutoDesignModelRequestRecord,
+        *,
+        progress: ProgressSink,
+        cancel: asyncio.Event | None = None,
+    ) -> ProtocolAutoDesignModelResponseRecord: ...
+
+
+@runtime_checkable
 class ControlPlanePort(Protocol):
     conversation_projection: ConversationProjectionPort
     task_routing: TaskRoutingPort
@@ -442,6 +455,7 @@ class BotRuntime:
     allow_test_mode: bool = False
     cancellations: MutableMapping[str, asyncio.Event] = field(default_factory=dict)
     execution_inflight: MutableSet[str] = field(default_factory=set)
+    auto_design_planner: AutoDesignPlannerPort | None = None
 
     async def submit(
         self,
@@ -880,6 +894,107 @@ class BotRuntime:
                 working_dir=str(event.working_dir_hint or ""),
             ),
         )
+
+    def _auto_design_context(self, event: InboundMessage) -> dict[str, object]:
+        if not str(getattr(event, "routed_task_id", "") or "").strip():
+            return {}
+        try:
+            context = json.loads(str(getattr(event, "context_text", "") or "{}"))
+        except Exception:
+            return {}
+        if not isinstance(context, dict):
+            return {}
+        if str(context.get("task_source_kind") or context.get("source_kind") or "") != "auto_design":
+            return {}
+        auto_design = context.get("auto_design", {})
+        return auto_design if isinstance(auto_design, dict) else {}
+
+    async def _dispatch_auto_design_routed_task(
+        self,
+        event: InboundMessage,
+        item: WorkItemRecord,
+        *,
+        cancel_event: asyncio.Event | None,
+    ) -> bool:
+        auto_design = self._auto_design_context(event)
+        if not auto_design:
+            return False
+        routed_task_id = str(getattr(event, "routed_task_id", "") or "")
+        authority_ref = str(getattr(event, "authority_ref", "") or "")
+        if self.control_plane is None or not routed_task_id or not authority_ref:
+            raise RuntimeError("Auto Protocol planner task requires registry task routing.")
+
+        async def update_status(summary: str, *, progress: int | None = None, force: bool = False) -> None:
+            del force
+            await self.control_plane.task_routing.update_routed_task_status(
+                update=RoutedTaskUpdate(
+                    routed_task_id=routed_task_id,
+                    status="running",
+                    transition_id=uuid4().hex,
+                    summary=summarize_text(summary, limit=220) or "Auto Protocol planner is running.",
+                    progress=progress,
+                ),
+                authority_ref=authority_ref,
+            )
+
+        class _TaskProgress:
+            def __init__(self) -> None:
+                self._last_update = 0.0
+
+            async def update(self, html_text: str, *, force: bool = False) -> None:
+                now = asyncio.get_running_loop().time()
+                if not force and self._last_update and now - self._last_update < 10.0:
+                    return
+                self._last_update = now
+                text = html.unescape(_HTML_TAG_RE.sub(" ", html_text or ""))
+                await update_status(text or "Auto Protocol planner is running.")
+
+        await update_status("Auto Protocol planner started.", progress=1)
+        try:
+            if self.auto_design_planner is None:
+                raise RuntimeError("Auto Protocol planner execution is not configured for this runtime.")
+            request_payload = auto_design.get("request", {})
+            request = ProtocolAutoDesignModelRequestRecord.model_validate(request_payload)
+            response = await self.auto_design_planner.design_auto_protocol(
+                request,
+                progress=_TaskProgress(),
+                cancel=cancel_event,
+            )
+            await self.control_plane.task_routing.report_routed_task_result(
+                routed_task_id=routed_task_id,
+                authority_ref=authority_ref,
+                result=RoutedTaskResult(
+                    routed_task_id=routed_task_id,
+                    status="completed",
+                    transition_id=uuid4().hex,
+                    summary="Auto Protocol planner completed.",
+                    full_text=response.model_dump_json(),
+                    artifacts=[],
+                    follow_up_questions=(),
+                    provider=self.provider.name,
+                    working_dir=str(getattr(self.config, "working_dir", "") or ""),
+                ),
+            )
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.control_plane.task_routing.report_routed_task_result(
+                routed_task_id=routed_task_id,
+                authority_ref=authority_ref,
+                result=RoutedTaskResult(
+                    routed_task_id=routed_task_id,
+                    status="failed",
+                    transition_id=uuid4().hex,
+                    summary="Auto Protocol planner failed.",
+                    full_text=str(exc),
+                    artifacts=[],
+                    follow_up_questions=(),
+                    provider=self.provider.name,
+                    working_dir=str(getattr(self.config, "working_dir", "") or ""),
+                ),
+            )
+            return True
 
     def _build_transport_identity(
         self,
@@ -1631,6 +1746,13 @@ class BotRuntime:
         title = str(getattr(event, "title_text", "") or "").strip() or summarize_text(event.text) or "Conversation"
         routed_task_id = str(getattr(event, "routed_task_id", "") or "")
         authority_ref = str(getattr(event, "authority_ref", "") or "")
+
+        if routed_task_id and await self._dispatch_auto_design_routed_task(
+            event,
+            item,
+            cancel_event=cancel_event,
+        ):
+            return
 
         if item.dispatch_mode == "recovery":
             if routed_task_id:

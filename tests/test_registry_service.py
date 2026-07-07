@@ -73,7 +73,7 @@ from octopus_sdk.registry.management import (
     WorkspaceCleanupRequest,
     WorkspaceCleanupResult,
 )
-from octopus_sdk.registry.models import AgentRecord, RegistryJsonRecord, TaskRecord
+from octopus_sdk.registry.models import AgentRecord, ConversationRecord, RegistryJsonRecord, RoutedTaskRequest, TaskRecord
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
@@ -1810,17 +1810,29 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
                 supported_admin_operations=["design_auto_protocol"],
             )
 
-        def create_management_request(self, request: ManagementRequest) -> ManagementRequest:
-            return request
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            return []
 
-        def get_management_result(self, request_id: str):
-            return ManagementResult(
-                request_id=request_id,
-                agent_id="agent-1",
-                success=True,
-                payload=DesignAutoProtocolResult(
-                    response=_auto_design_model_response("experience_design", "domain_grounding", "supporting_assets")
-                ),
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id="auto-conversation",
+                target_agent_id=str(kwargs.get("target_agent_id") or "agent-1"),
+                source_kind=str(kwargs.get("source_kind") or "auto_design"),
+                hidden_from_default_views=bool(kwargs.get("hidden_from_default_views")),
+                title=str(kwargs.get("title") or "Auto Protocol planner"),
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.routed_task = request
+            assert request.routed_task_id.startswith("auto-design:")
+            assert request.context.get("task_source_kind") == "auto_design"
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id="agent-1",
+                request=request.context,
             )
 
         def list_routing_skills(self):
@@ -1936,7 +1948,29 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
                 "requirement_text": "Build a 2D browser fighting game with historical figures, playtesting, and release evidence.",
             },
         )
+        assert create_response.status_code == 200, create_response.text
         session_id = create_response.json()["session_id"]
+        blocked_apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
+        store.session = generate_auto_protocol_session(
+            ProtocolAutoDesignRequestRecord(
+                surface="registry",
+                requirement_text="Build a 2D browser fighting game with historical figures, playtesting, and release evidence.",
+                available_agents=[
+                    {
+                        "agent_id": "agent-1",
+                        "display_name": "Builder",
+                        "routing_skills": ["game", "testing"],
+                    }
+                ],
+                model_response=_auto_design_model_response("experience_design", "domain_grounding", "supporting_assets"),
+            ),
+            session_id=session_id,
+            created_at="2026-04-16T00:00:00+00:00",
+            updated_at="2026-04-16T00:00:00+00:00",
+        ).model_copy(update={
+            "planner_task_id": create_response.json()["planner_task_id"],
+            "planner_agent_id": "agent-1",
+        })
         loaded_response = client.get(f"/v1/protocol-auto/sessions/{session_id}")
         apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
         publish_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/publish")
@@ -1947,7 +1981,11 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
 
     assert create_response.status_code == 200
     assert create_response.json()["status"] == "planning"
-    assert create_response.json()["planner_request_id"]
+    assert create_response.json()["planner_task_id"].startswith("auto-design:")
+    assert create_response.json()["planner_policy"] == "auto_select"
+    assert create_response.json()["planner_request_id"] == ""
+    assert blocked_apply_response.status_code == 409
+    assert blocked_apply_response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_PLANNING"
     assert loaded_response.status_code == 200
     assert loaded_response.json()["status"] in {"ready", "blocked"}
     assert loaded_response.json()["analysis"]["domain"] == "requirement-specific"
@@ -2140,17 +2178,29 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                 supported_admin_operations=["design_auto_protocol"],
             )
 
-        def create_management_request(self, request: ManagementRequest) -> ManagementRequest:
-            return request
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            return []
 
-        def get_management_result(self, request_id: str):
-            return ManagementResult(
-                request_id=request_id,
-                agent_id="agent-1",
-                success=True,
-                payload=DesignAutoProtocolResult(
-                    response=_auto_design_model_response("experience_design", "supporting_assets")
-                ),
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id="auto-conversation",
+                target_agent_id=str(kwargs.get("target_agent_id") or "agent-1"),
+                source_kind=str(kwargs.get("source_kind") or "auto_design"),
+                hidden_from_default_views=bool(kwargs.get("hidden_from_default_views")),
+                title=str(kwargs.get("title") or "Auto Protocol planner"),
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.routed_task = request
+            assert request.routed_task_id.startswith("auto-design:")
+            assert request.context.get("task_source_kind") == "auto_design"
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id="agent-1",
+                request=request.context,
             )
 
         def list_routing_skills(self):
@@ -2219,7 +2269,29 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                 "requirement_text": "Build a compact browser-runnable 2D historical platform fighter prototype.",
             },
         )
-        apply_response = client.post(f"/v1/protocol-auto/sessions/{create_response.json()['session_id']}/apply")
+        assert create_response.status_code == 200, create_response.text
+        session_id = create_response.json()["session_id"]
+        store.session = generate_auto_protocol_session(
+            ProtocolAutoDesignRequestRecord(
+                surface="registry",
+                requirement_text="Build a compact browser-runnable 2D historical platform fighter prototype.",
+                available_agents=[
+                    {
+                        "agent_id": "agent-1",
+                        "display_name": "Builder",
+                        "routing_skills": [],
+                    }
+                ],
+                model_response=_auto_design_model_response("experience_design", "supporting_assets"),
+            ),
+            session_id=session_id,
+            created_at="2026-04-16T00:00:00+00:00",
+            updated_at="2026-04-16T00:00:00+00:00",
+        ).model_copy(update={
+            "planner_task_id": create_response.json()["planner_task_id"],
+            "planner_agent_id": "agent-1",
+        })
+        apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
@@ -2235,6 +2307,118 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
     assert payload["target_protocol_id"] == "protocol-generated-copy"
     assert payload["draft_definition_json"]["metadata"]["slug"] == "build-a-compact-browser-runnable-2d-historical-platform-fighter-generated-2"
     assert payload["draft_definition_json"]["metadata"]["display_name"].endswith("(Generated 2)")
+
+
+def test_protocol_auto_planner_selection_skips_busy_agent_and_honors_preference(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __init__(self):
+            self.sessions = {}
+            self.created_tasks: list[RoutedTaskRequest] = []
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id=f"agent-{index}",
+                    display_name=f"M{index}",
+                    slug=f"m{index}",
+                    provider="codex",
+                    role="worker",
+                    routing_skills=["architecture", "testing"],
+                    supported_admin_operations=["design_auto_protocol"],
+                    connectivity_state="connected",
+                )
+                for index in (1, 2, 3)
+            ]
+
+        def get_agent_status(self, agent_id: str):
+            return next(agent for agent in self.list_agents(connectivity_state="connected") if agent.agent_id == agent_id)
+
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            if for_agent_id == "agent-1" and status == "running":
+                return [
+                    TaskRecord(
+                        routed_task_id="auto-design:old:task",
+                        source_kind="auto_design",
+                        status="running",
+                        target_agent_id="agent-1",
+                        updated_at="2026-04-16T00:00:00+00:00",
+                    )
+                ]
+            return []
+
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id=f"conversation-{len(self.created_tasks) + 1}",
+                target_agent_id=str(kwargs.get("target_agent_id") or ""),
+                source_kind=str(kwargs.get("source_kind") or "auto_design"),
+                hidden_from_default_views=bool(kwargs.get("hidden_from_default_views")),
+                title=str(kwargs.get("title") or "Auto Protocol planner"),
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.created_tasks.append(request)
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id=request.target_agent_id,
+                request=request.context,
+            )
+
+        def list_routing_skills(self):
+            return []
+
+        def get_protocol_auto_design_session(self, session_id: str, *, access):
+            try:
+                return self.sessions[session_id]
+            except KeyError as exc:
+                raise KeyError(session_id) from exc
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind == "planning_started"
+            self.sessions[session.session_id] = session
+            return session
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        auto_response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build a serious browser app.",
+            },
+        )
+        preferred_response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build another serious browser app.",
+                "preferred_design_agent_id": "agent-3",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert auto_response.status_code == 200, auto_response.text
+    assert auto_response.json()["planner_agent_id"] == "agent-2"
+    assert auto_response.json()["planner_policy"] == "auto_select"
+    assert store.created_tasks[0].target_agent_id == "agent-2"
+    assert preferred_response.status_code == 200, preferred_response.text
+    assert preferred_response.json()["planner_agent_id"] == "agent-3"
+    assert preferred_response.json()["planner_policy"] == "specific_agent"
+    assert store.created_tasks[1].target_agent_id == "agent-3"
 
 
 def test_protocol_auto_publish_blocks_unresolved_assignments(monkeypatch, tmp_path: Path):

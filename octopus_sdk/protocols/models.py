@@ -1080,6 +1080,7 @@ class ProtocolIssueRecord(RegistryRecordModel):
 class ProtocolMaintenanceResultRecord(RegistryRecordModel):
     swept_count: int = 0
     affected_run_ids: list[str] = Field(default_factory=list)
+    affected_auto_session_ids: list[str] = Field(default_factory=list)
 
 
 class ProtocolTextDocumentRecord(RegistryRecordModel):

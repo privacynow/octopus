@@ -416,7 +416,7 @@ async def test_protocol_auto_stages_callback_renders_generated_stage_view(monkey
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         assert "Stages" in reply
-        assert "Map requirement" in reply
+        assert "Produce product and domain contract" in reply
         assert "Outputs:" in reply
 
 

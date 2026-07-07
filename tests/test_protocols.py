@@ -13,7 +13,11 @@ import pytest
 from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
     ProtocolAccessContextRecord,
+    ProtocolAutoDesignModelRequestRecord,
+    ProtocolAutoDesignModelResponseRecord,
     ProtocolAutoDesignRequestRecord,
+    ProtocolAutoDesignSessionRecord,
+    ProtocolAutoDesignWorkPackageRecord,
     ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeEventRecord,
     ProtocolArtifactRuntimeInstanceRecord,
@@ -43,7 +47,8 @@ from octopus_sdk.protocols import (
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.protocols.launch import ProtocolConversationLaunchRequestRecord
 from octopus_sdk.protocols.models import ProtocolDefinitionRecord, ProtocolRunMutationRecord
-from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
+from octopus_sdk.registry.management import DesignAutoProtocolRequest, DesignAutoProtocolResult, ManagementRequest, ManagementResult
+from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
 from octopus_registry.protocol_runtime import evaluate_protocol_dispatch, runtime_protocol_selector
 from octopus_registry.protocol_store import ProtocolPostgresAdapter
 from octopus_registry.postgres import get_connection
@@ -4814,6 +4819,275 @@ def test_protocol_fork_missing_snapshot_blocks_with_actionable_list(
     assert forked.ok is False
     assert forked.status == "missing_snapshots"
     assert any("plan" in item for item in forked.missing_snapshots)
+
+
+def test_auto_protocol_planner_task_progress_and_result_finalize_session(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll = store.enroll(
+        agent_card(bot_key="planner").model_copy(update={
+            "supported_admin_operations": ["design_auto_protocol"],
+        })
+    )
+    conversation = store.create_conversation(
+        target_agent_id=enroll.agent_id,
+        title="Auto Protocol planner",
+        origin_channel="registry",
+        external_conversation_ref="protocol-auto-session:auto-task-session",
+        source_kind="auto_design",
+        hidden_from_default_views=True,
+    )
+    model_request = ProtocolAutoDesignModelRequestRecord(
+        requirement_text="Build a small browser app with runtime evidence.",
+        available_agents=[
+            {
+                "agent_id": enroll.agent_id,
+                "display_name": "Planner",
+                "routing_skills": ["architecture", "testing"],
+            }
+        ],
+    )
+    request_payload = ProtocolAutoDesignRequestRecord(
+        surface="registry",
+        requirement_text=model_request.requirement_text,
+        available_agents=model_request.available_agents,
+    )
+    routed_task_id = "auto-design:auto-task-session:task"
+    store.create_routed_task(
+        RoutedTaskRequest(
+            routed_task_id=routed_task_id,
+            parent_conversation_id=conversation.conversation_id,
+            origin_transport_ref="protocol-auto-session:auto-task-session",
+            origin_agent_id=enroll.agent_id,
+            target_agent_id=enroll.agent_id,
+            title="Design Auto Protocol",
+            instructions="Run the Auto Protocol planner.",
+            context=RegistryJsonRecord.model_validate({
+                "task_source_kind": "auto_design",
+                "auto_design": {
+                    "session_id": "auto-task-session",
+                    "request": model_request.model_dump(mode="json"),
+                    "request_payload": request_payload.model_dump(mode="json"),
+                },
+            }),
+            constraints=RegistryJsonRecord.model_validate({"timeout_seconds": 3600, "source": "auto_protocol"}),
+            requested_skills=["architecture", "testing"],
+            priority="high",
+        )
+    )
+    planning = ProtocolAutoDesignSessionRecord(
+        session_id="auto-task-session",
+        status="planning",
+        surface="registry",
+        actor_ref=operator_access().actor_ref,
+        requirement_text=request_payload.requirement_text,
+        planner_task_id=routed_task_id,
+        planner_policy="auto_select",
+        planner_agent_id=enroll.agent_id,
+        planner_state=RegistryJsonRecord.model_validate({"planner_status": "queued"}),
+    )
+    store.update_protocol_auto_design_session(planning, access=operator_access(), event_kind="planning_started")
+
+    poll = store.poll(enroll.agent_token, cursor=0, limit=10)
+    assert any(item.kind == "routed_task" and item.payload.get("routed_task_id") == routed_task_id for item in poll.deliveries)
+
+    store.update_routed_task_status(
+        enroll.agent_token,
+        routed_task_id,
+        RoutedTaskUpdate(
+            routed_task_id=routed_task_id,
+            status="running",
+            transition_id="auto-progress-1",
+            summary="Planner is analyzing the requirement.",
+            progress=20,
+        ),
+    )
+    progressed = store.get_protocol_auto_design_session("auto-task-session", access=operator_access())
+    assert progressed.status == "planning"
+    assert progressed.planner_state["planner_status"] == "running"
+    assert progressed.planner_state["progress_summary"] == "Planner is analyzing the requirement."
+    assert progressed.planner_state["progress"] == 20
+
+    response = ProtocolAutoDesignModelResponseRecord(
+        requirement_summary="Build a small browser app.",
+        domain="browser app",
+        risk_assessment="medium",
+        work_packages=[
+            ProtocolAutoDesignWorkPackageRecord(
+                package_key="implementation",
+                display_name="Implementation",
+                rationale="Build the app and its evidence.",
+                role_key="builder",
+                role_display_name="Builder",
+                role_responsibility="Build the requested app.",
+                required_skills=["implementation", "testing"],
+                purpose="Create a runnable app.",
+                quality_bar="Runtime evidence is captured.",
+                artifact_key="app",
+                artifact_display_name="Runnable app",
+                artifact_description="Browser app package.",
+                artifact_path="artifacts/app",
+            )
+        ],
+    )
+    store.update_routed_task_result(
+        enroll.agent_token,
+        routed_task_id,
+        RoutedTaskResult(
+            routed_task_id=routed_task_id,
+            status="completed",
+            transition_id="auto-complete-1",
+            summary="Planner completed.",
+            full_text=response.model_dump_json(),
+            provider="codex",
+        ),
+    )
+
+    completed = store.get_protocol_auto_design_session("auto-task-session", access=operator_access())
+    assert completed.status in {"ready", "blocked"}
+    assert completed.planner_task_id == routed_task_id
+    assert completed.analysis.domain == "browser app"
+    assert completed.model_response is not None
+    assert completed.model_response.domain == "browser app"
+    assert completed.draft_definition_json.as_dict()["metadata"]["auto_protocol"]["requirement"] == request_payload.requirement_text
+
+
+def test_auto_protocol_legacy_management_request_finalizes_during_maintenance(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll = store.enroll(
+        agent_card(bot_key="legacy-planner").model_copy(update={
+            "supported_admin_operations": ["design_auto_protocol"],
+        })
+    )
+    response = ProtocolAutoDesignModelResponseRecord(
+        requirement_summary="Build a small browser app.",
+        domain="legacy browser app",
+        risk_assessment="medium",
+        work_packages=[
+            ProtocolAutoDesignWorkPackageRecord(
+                package_key="implementation",
+                display_name="Implementation",
+                rationale="Build the app and evidence.",
+                role_key="builder",
+                role_display_name="Builder",
+                role_responsibility="Build the requested app.",
+                required_skills=["implementation"],
+                purpose="Create a runnable app.",
+                quality_bar="Runtime evidence is captured.",
+                artifact_key="app",
+                artifact_display_name="Runnable app",
+                artifact_description="Browser app package.",
+                artifact_path="artifacts/app",
+            )
+        ],
+    )
+    request = store.create_management_request(
+        ManagementRequest(
+            agent_id=enroll.agent_id,
+            payload=DesignAutoProtocolRequest(
+                request=ProtocolAutoDesignModelRequestRecord(
+                    requirement_text="Build a legacy-routed browser app.",
+                ),
+            ),
+            timeout_seconds=3600,
+        )
+    )
+    planning = ProtocolAutoDesignSessionRecord(
+        session_id="auto-legacy-session",
+        status="planning",
+        surface="registry",
+        actor_ref=operator_access().actor_ref,
+        requirement_text="Build a legacy-routed browser app.",
+        planner_request_id=request.request_id,
+        planner_agent_id=enroll.agent_id,
+        planner_state=RegistryJsonRecord.model_validate({"planner_status": "queued"}),
+    )
+    store.update_protocol_auto_design_session(planning, access=operator_access(), event_kind="planning_started")
+    store.report_management_result(
+        enroll.agent_token,
+        request.request_id,
+        ManagementResult(
+            request_id=request.request_id,
+            agent_id=enroll.agent_id,
+            success=True,
+            payload=DesignAutoProtocolResult(response=response),
+        ),
+    )
+
+    maintenance = store.run_protocol_maintenance(now="2026-04-16T00:00:00+00:00")
+
+    assert "auto-legacy-session" in maintenance.affected_auto_session_ids
+    completed = store.get_protocol_auto_design_session("auto-legacy-session", access=operator_access())
+    assert completed.status in {"ready", "blocked"}
+    assert completed.model_response is not None
+    assert completed.model_response.domain == "legacy browser app"
+
+
+def test_auto_protocol_planner_task_timeout_fails_session_during_maintenance(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll = store.enroll(
+        agent_card(bot_key="timeout-planner").model_copy(update={
+            "supported_admin_operations": ["design_auto_protocol"],
+        })
+    )
+    conversation = store.create_conversation(
+        target_agent_id=enroll.agent_id,
+        title="Auto Protocol planner",
+        origin_channel="registry",
+        external_conversation_ref="protocol-auto-session:auto-timeout-session",
+        source_kind="auto_design",
+        hidden_from_default_views=True,
+    )
+    routed_task_id = "auto-design:auto-timeout-session:task"
+    request_payload = ProtocolAutoDesignRequestRecord(
+        surface="registry",
+        requirement_text="Build an app that should time out.",
+    )
+    store.create_routed_task(
+        RoutedTaskRequest(
+            routed_task_id=routed_task_id,
+            parent_conversation_id=conversation.conversation_id,
+            origin_transport_ref="protocol-auto-session:auto-timeout-session",
+            origin_agent_id=enroll.agent_id,
+            target_agent_id=enroll.agent_id,
+            title="Design Auto Protocol",
+            instructions="Run the Auto Protocol planner.",
+            context=RegistryJsonRecord.model_validate({
+                "task_source_kind": "auto_design",
+                "auto_design": {
+                    "session_id": "auto-timeout-session",
+                    "request": ProtocolAutoDesignModelRequestRecord(requirement_text=request_payload.requirement_text).model_dump(mode="json"),
+                    "request_payload": request_payload.model_dump(mode="json"),
+                },
+            }),
+            constraints=RegistryJsonRecord.model_validate({"timeout_seconds": 1, "source": "auto_protocol"}),
+            requested_skills=["architecture"],
+            priority="high",
+            created_at="2026-04-16T00:00:00+00:00",
+        )
+    )
+    store.update_protocol_auto_design_session(
+        ProtocolAutoDesignSessionRecord(
+            session_id="auto-timeout-session",
+            status="planning",
+            surface="registry",
+            actor_ref=operator_access().actor_ref,
+            requirement_text=request_payload.requirement_text,
+            planner_task_id=routed_task_id,
+            planner_policy="auto_select",
+            planner_agent_id=enroll.agent_id,
+            planner_state=RegistryJsonRecord.model_validate({"planner_status": "queued"}),
+        ),
+        access=operator_access(),
+        event_kind="planning_started",
+    )
+
+    maintenance = store.run_protocol_maintenance(now="2026-07-08T00:00:03+00:00")
+
+    assert "auto-timeout-session" in maintenance.affected_auto_session_ids
+    failed = store.get_protocol_auto_design_session("auto-timeout-session", access=operator_access())
+    assert failed.status == "failed"
+    assert failed.warnings[0].code == "planner.task_timeout"
+    assert failed.planner_state["planner_status"] == "timed_out"
 
 
 def test_auto_protocol_run_lessons_round_trip(postgres_registry_truncated: str) -> None:

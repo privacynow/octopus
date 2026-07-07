@@ -68,5 +68,8 @@ def test_protocol_timeout_and_duplicate_late_results_keep_one_terminal_run(postg
     assert first_maintenance.swept_count == 1
     assert second_maintenance.swept_count == 0
     assert after.run.status == "failed"
-    assert [item.protocol_transition_id for item in after.transitions] == before_transition_ids
+    after_transition_ids = [item.protocol_transition_id for item in after.transitions]
+    assert after_transition_ids[1:] == before_transition_ids
+    assert after.transitions[0].transition_kind == "late_result"
+    assert after.transitions[0].decision == "late_result_preserved"
     assert [item.protocol_stage_execution_id for item in after.stage_executions] == before_stage_ids

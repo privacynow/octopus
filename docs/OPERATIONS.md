@@ -142,12 +142,16 @@ to one of `low`, `medium`, `high`, `xhigh`, or `max` to pass the Claude CLI
 `CLAUDE_EFFORT` overrides it).
 
 Auto Protocol design is expected to be heavyweight. The Registry stores a
-`planning` session and queues a `design_auto_protocol` management request to a
-provider-capable bot; the browser polls the session rather than holding one
-long request open. If a design appears stuck, check the Auto Protocol session
-status, the linked management request, and the target bot/provider logs. A
-provider timeout should surface as a failed session with planner details, not as
-a transient dialog that vanishes before the operator can read it.
+`planning` session and queues a hidden `auto_design` routed task to a
+provider-capable bot; the browser watches the session topic rather than holding
+one long request open. If a design appears stuck, check the Auto Protocol
+session status, the linked routed task, the assigned planner agent, the last
+progress timestamp, and the target bot/provider logs. A provider timeout or
+planner-task timeout should surface as a failed session with planner details,
+not as a transient dialog that vanishes before the operator can read it.
+Legacy planning sessions that still point at old management requests are
+reconciled by the same maintenance sweep so completed, failed, or timed-out
+planner work does not remain in `planning` indefinitely.
 
 After publish/run, serious Auto Protocol stages use the stage timeout embedded
 in their runtime contract, not just `BOT_TIMEOUT_SECONDS`. A generated

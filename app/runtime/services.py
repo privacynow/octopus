@@ -13,6 +13,7 @@ from app.agents.state import runtime_registry_agent_id
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.config import BotConfig
+from app.runtime.auto_protocol_planner import AppAutoDesignPlanner
 from app.runtime.bot_services import BotServices, ControlPlaneServices, build_bus_bot_services
 from app.runtime.session_runtime import LocalSessionRuntime
 from app.skill_activation_service import get_skill_activation_service
@@ -100,6 +101,7 @@ def build_runtime(config: BotConfig, provider: Provider) -> RuntimeBuild:
             "execution_inflight",
             set(),
         ),
+        auto_design_planner=AppAutoDesignPlanner(config, provider),
     )
 
     return RuntimeBuild(

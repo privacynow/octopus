@@ -918,6 +918,16 @@ class AbstractRegistryStore(Protocol):
     ) -> ProtocolAutoDesignSessionRecord:
         """Return one Auto Protocol session visible to this actor."""
 
+    def list_protocol_auto_design_sessions(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[ProtocolAutoDesignSessionRecord]:
+        """Return recent Auto Protocol sessions visible to this actor."""
+
     def update_protocol_auto_design_session(
         self,
         session: ProtocolAutoDesignSessionRecord,

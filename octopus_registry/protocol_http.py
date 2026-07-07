@@ -62,7 +62,6 @@ from octopus_sdk.registry.management import (
     ArtifactRuntimeHealthResult,
     ArtifactRuntimeLogsRequest,
     ArtifactRuntimeLogsResult,
-    DesignAutoProtocolRequest,
     DesignAutoProtocolResult,
     ManagementRequest,
     RunArtifactJourneyRequest,
@@ -76,7 +75,7 @@ from octopus_sdk.registry.management import (
     WorkspaceUsageRequest,
     WorkspaceUsageResult,
 )
-from octopus_sdk.registry.models import RegistryJsonRecord, utcnow_iso
+from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskRequest, utcnow_iso
 from octopus_sdk.skill_packages import (
     skill_document_from_text,
     skill_document_to_text,
@@ -591,6 +590,84 @@ def build_protocol_router(
             message=f"Connect an agent that supports {operation}.",
         )
 
+    def _auto_design_active_tasks(store: AbstractRegistryStore, agent_id: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for status in ("queued", "leased", "running"):
+            for task in store.list_tasks(
+                for_agent_id=agent_id,
+                status=status,
+                limit=100,
+                include_generated=True,
+            ):
+                if str(task.source_kind or "") == "auto_design":
+                    rows.append(task.model_dump(mode="json"))
+        return rows
+
+    def _latest_auto_design_task_updated_at(store: AbstractRegistryStore, agent_id: str) -> str:
+        latest = ""
+        for status in ("completed", "failed", "cancelled", "timed_out"):
+            rows = [
+                task
+                for task in store.list_tasks(
+                    for_agent_id=agent_id,
+                    status=status,
+                    limit=10,
+                    include_generated=True,
+                )
+                if str(task.source_kind or "") == "auto_design"
+            ]
+            if rows:
+                latest = max(latest, str(rows[0].updated_at or ""))
+        return latest
+
+    def _auto_design_agent_id(
+        store: AbstractRegistryStore,
+        *,
+        requested_agent_id: str = "",
+    ) -> tuple[str, str, dict[str, object]]:
+        agents = _connected_agents(store)
+        eligible: list[dict[str, object]] = []
+        for agent in agents:
+            operations = {str(item or "").strip() for item in agent.get("supported_admin_operations", []) or []}
+            if "design_auto_protocol" not in operations:
+                continue
+            agent_id = str(agent.get("agent_id") or "").strip()
+            active = _auto_design_active_tasks(store, agent_id)
+            eligible.append({
+                **agent,
+                "active_auto_design_count": len(active),
+                "latest_auto_design_updated_at": _latest_auto_design_task_updated_at(store, agent_id),
+            })
+        if requested_agent_id:
+            candidate = next((item for item in eligible if str(item.get("agent_id") or "") == requested_agent_id), None)
+            if candidate is None:
+                connected = next((item for item in agents if str(item.get("agent_id") or "") == requested_agent_id), None)
+                if connected is None:
+                    raise _protocol_http_error(
+                        404,
+                        error_code="AGENT_NOT_CONNECTED",
+                        message="Requested planner agent is not connected.",
+                    )
+                raise _protocol_http_error(
+                    409,
+                    error_code="AGENT_OPERATION_UNSUPPORTED",
+                    message="Requested planner agent does not support Auto Protocol design.",
+                )
+            return requested_agent_id, "specific_agent", candidate
+        if not eligible:
+            raise _protocol_http_error(
+                409,
+                error_code="AGENT_OPERATION_UNAVAILABLE",
+                message="Connect an agent that supports Auto Protocol design.",
+            )
+        eligible.sort(key=lambda item: (
+            int(item.get("active_auto_design_count") or 0),
+            str(item.get("latest_auto_design_updated_at") or ""),
+            str(item.get("display_name") or "").lower(),
+        ))
+        selected = eligible[0]
+        return str(selected.get("agent_id") or ""), "auto_select", selected
+
     def _routing_skill_json(skill) -> dict[str, Any]:
         row = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
         return {
@@ -662,6 +739,55 @@ def build_protocol_router(
                 )
         return lessons[:20]
 
+    def _auto_protocol_resource_summaries(
+        store: AbstractRegistryStore,
+        resource_refs: list[str],
+    ) -> list[dict[str, object]]:
+        summaries: list[dict[str, object]] = []
+        for resource_id in resource_refs[:20]:
+            token = str(resource_id or "").strip()
+            if not token:
+                continue
+            resource = store.get_resource(token)
+            metadata = resource.metadata_json.as_dict()
+            summary: dict[str, object] = {
+                "resource_id": resource.resource_id,
+                "name": resource.original_name,
+                "mime_type": resource.mime_type,
+                "size_bytes": int(resource.size_bytes or 0),
+                "content_hash": resource.content_hash,
+                "source_surface": resource.source_surface,
+            }
+            for key in ("summary", "description", "caption", "text_preview"):
+                value = str(metadata.get(key, "") or "").strip()
+                if value:
+                    summary[key] = value[:2000]
+            summaries.append(summary)
+        return summaries
+
+    def _auto_protocol_prompt_diagnostics(
+        request_payload: ProtocolAutoDesignRequestRecord,
+        *,
+        selected_agent: Mapping[str, object],
+    ) -> dict[str, object]:
+        source_document = request_payload.source_document.as_dict()
+        source_size = len(json.dumps(source_document, sort_keys=True, default=str)) if source_document else 0
+        requirement_size = len(request_payload.requirement_text or "")
+        constraints_size = len(request_payload.constraints_text or "")
+        lesson_count = len(request_payload.run_lessons or [])
+        resource_count = len(request_payload.resource_refs or [])
+        return {
+            "requirement_chars": requirement_size,
+            "constraints_chars": constraints_size,
+            "source_document_chars": source_size,
+            "lesson_count": lesson_count,
+            "resource_count": resource_count,
+            "large_input": requirement_size + constraints_size + source_size > 20000 or lesson_count > 8 or resource_count > 4,
+            "selected_agent_id": str(selected_agent.get("agent_id") or ""),
+            "selected_agent_display_name": str(selected_agent.get("display_name") or ""),
+            "selected_agent_provider": str(selected_agent.get("provider") or ""),
+        }
+
     def _auto_protocol_request(
         payload: dict[str, Any],
         *,
@@ -726,6 +852,7 @@ def build_protocol_router(
         source_run_id = str(payload.get("source_run_id") or "").strip()
         run_lessons = [item for item in explicit_lessons if isinstance(item, Mapping)]
         run_lessons.extend(_auto_protocol_run_lessons(store, source_run_id, access))
+        resource_summaries = _auto_protocol_resource_summaries(store, resource_refs)
         return ProtocolAutoDesignRequestRecord.model_validate({
             "mode": mode,
             "surface": str(payload.get("surface") or ("telegram" if auth.is_agent else "registry")),
@@ -742,45 +869,88 @@ def build_protocol_router(
             "actor_ref": access.actor_ref,
             "chat_ref": str(payload.get("chat_ref") or ""),
             "resource_refs": resource_refs,
+            "resource_summaries": resource_summaries,
             "run_lessons": run_lessons,
             "idempotency_key": str(payload.get("idempotency_key") or ""),
         })
 
-    def _queue_auto_protocol_planner(
+    def _auto_protocol_model_request(
+        request_payload: ProtocolAutoDesignRequestRecord,
+    ) -> ProtocolAutoDesignModelRequestRecord:
+        return ProtocolAutoDesignModelRequestRecord(
+            mode=request_payload.mode,
+            requirement_text=request_payload.requirement_text,
+            constraints_text=request_payload.constraints_text,
+            source_document=request_payload.source_document,
+            available_agents=request_payload.available_agents,
+            available_skills=request_payload.available_skills,
+            workspace_ref=request_payload.workspace_ref,
+            actor_ref=request_payload.actor_ref,
+            chat_ref=request_payload.chat_ref,
+            resource_refs=request_payload.resource_refs,
+            resource_summaries=request_payload.resource_summaries,
+            run_lessons=request_payload.run_lessons,
+        )
+
+    def _queue_auto_protocol_planner_task(
         store: AbstractRegistryStore,
         request_payload: ProtocolAutoDesignRequestRecord,
-    ) -> ManagementRequest:
-        agent_id = _management_agent_id_for_operation(
+        *,
+        session_id: str,
+    ) -> tuple[str, str, str, dict[str, object]]:
+        requested_agent_id = str(request_payload.preferred_design_agent_id or "").strip()
+        agent_id, planner_policy, selected_agent = _auto_design_agent_id(
             store,
-            requested_agent_id=str(request_payload.preferred_design_agent_id or "").strip(),
-            operation="design_auto_protocol",
+            requested_agent_id=requested_agent_id,
         )
-        return store.create_management_request(
-            ManagementRequest(
-                agent_id=agent_id,
-                payload=DesignAutoProtocolRequest(
-                    request=ProtocolAutoDesignModelRequestRecord(
-                        mode=request_payload.mode,
-                        requirement_text=request_payload.requirement_text,
-                        constraints_text=request_payload.constraints_text,
-                        source_document=request_payload.source_document,
-                        available_agents=request_payload.available_agents,
-                        available_skills=request_payload.available_skills,
-                        workspace_ref=request_payload.workspace_ref,
-                        actor_ref=request_payload.actor_ref,
-                        chat_ref=request_payload.chat_ref,
-                        resource_refs=request_payload.resource_refs,
-                        run_lessons=request_payload.run_lessons,
-                    ),
-                ),
-                timeout_seconds=3600,
+        conversation = store.create_conversation(
+            target_agent_id=agent_id,
+            title="Auto Protocol planner",
+            origin_channel="registry",
+            external_conversation_ref=f"protocol-auto-session:{session_id}",
+            source_kind="auto_design",
+            hidden_from_default_views=True,
+        )
+        routed_task_id = f"auto-design:{session_id}:{uuid.uuid4().hex[:12]}"
+        model_request = _auto_protocol_model_request(request_payload)
+        task_context = RegistryJsonRecord.model_validate({
+            "task_source_kind": "auto_design",
+            "auto_design": {
+                "session_id": session_id,
+                "request": model_request.model_dump(mode="json"),
+                "request_payload": request_payload.model_dump(mode="json"),
+            },
+        })
+        store.create_routed_task(
+            RoutedTaskRequest(
+                routed_task_id=routed_task_id,
+                parent_conversation_id=conversation.conversation_id,
+                origin_transport_ref=f"protocol-auto-session:{session_id}",
+                origin_agent_id=agent_id,
+                target_agent_id=agent_id,
+                title="Design Auto Protocol",
+                instructions="Run the Auto Protocol planner for this session and report the structured planner JSON.",
+                context=task_context,
+                constraints=RegistryJsonRecord.model_validate({
+                    "timeout_seconds": 3600,
+                    "source": "auto_protocol",
+                }),
+                requested_skills=["architecture", "testing"],
+                resource_refs=list(request_payload.resource_refs or []),
+                priority="high",
             )
         )
+        return routed_task_id, agent_id, planner_policy, selected_agent
 
     def _planning_auto_protocol_session(
         request_payload: ProtocolAutoDesignRequestRecord,
         *,
-        planner_request: ManagementRequest,
+        planner_request: ManagementRequest | None = None,
+        planner_task_id: str = "",
+        planner_agent_id: str = "",
+        planner_policy: str = "auto_select",
+        planner_state: Mapping[str, object] | None = None,
+        prompt_diagnostics: Mapping[str, object] | None = None,
         session_id: str = "",
         created_at: str = "",
     ) -> ProtocolAutoDesignSessionRecord:
@@ -801,8 +971,12 @@ def build_protocol_router(
             constraints_text=request_payload.constraints_text,
             resource_refs=list(request_payload.resource_refs or []),
             run_lessons=list(request_payload.run_lessons or []),
-            planner_request_id=planner_request.request_id,
-            planner_agent_id=planner_request.agent_id,
+            planner_request_id=planner_request.request_id if planner_request is not None else "",
+            planner_task_id=str(planner_task_id or ""),
+            planner_policy=str(planner_policy or "auto_select"),
+            planner_agent_id=str(planner_agent_id or (planner_request.agent_id if planner_request is not None else "")),
+            planner_state=RegistryJsonRecord.model_validate(dict(planner_state or {})),
+            prompt_diagnostics=RegistryJsonRecord.model_validate(dict(prompt_diagnostics or {})),
             source_document_json=request_payload.source_document,
             change_summary=[
                 "Queued heavyweight Auto Protocol planning.",
@@ -865,7 +1039,7 @@ def build_protocol_router(
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolAutoDesignSessionRecord:
-        if str(session.status or "") != "planning" or not str(session.planner_request_id or "").strip():
+        if str(session.status or "") != "planning" or str(session.planner_task_id or "").strip() or not str(session.planner_request_id or "").strip():
             return session
         result = store.get_management_result(session.planner_request_id)
         if result is None:
@@ -1580,9 +1754,32 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             request_payload = _auto_protocol_request(payload, auth=auth, access=access, store=store)
-            planner_request = _queue_auto_protocol_planner(store, request_payload)
+            session_id = uuid.uuid4().hex
+            planner_task_id, planner_agent_id, planner_policy, selected_agent = _queue_auto_protocol_planner_task(
+                store,
+                request_payload,
+                session_id=session_id,
+            )
+            prompt_diagnostics = _auto_protocol_prompt_diagnostics(request_payload, selected_agent=selected_agent)
+            planner_state = {
+                "planner_status": "queued",
+                "queued_at": utcnow_iso(),
+                "selected_agent_id": planner_agent_id,
+                "selected_agent_display_name": str(selected_agent.get("display_name") or ""),
+                "selected_agent_provider": str(selected_agent.get("provider") or ""),
+                "timeout_seconds": 3600,
+                "progress_summary": "Queued for Auto Protocol planning.",
+            }
             session = store.update_protocol_auto_design_session(
-                _planning_auto_protocol_session(request_payload, planner_request=planner_request),
+                _planning_auto_protocol_session(
+                    request_payload,
+                    planner_task_id=planner_task_id,
+                    planner_agent_id=planner_agent_id,
+                    planner_policy=planner_policy,
+                    planner_state=planner_state,
+                    prompt_diagnostics=prompt_diagnostics,
+                    session_id=session_id,
+                ),
                 access=access,
                 event_kind="planning_started",
             )
@@ -1614,6 +1811,26 @@ def build_protocol_router(
         if before == "planning" and str(session.status or "") != "planning":
             await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.planner_completed")
         return _json_payload(session)
+
+    @router.get("/v1/protocol-auto/sessions")
+    async def resource_list_protocol_auto_sessions(
+        status: str = Query(default=""),
+        limit: int = Query(default=25, ge=1, le=100),
+        cursor: int = Query(default=0, ge=0),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = _auto_protocol_access(auth)
+        try:
+            sessions = store.list_protocol_auto_design_sessions(
+                access=access,
+                cursor=cursor,
+                limit=limit,
+                status=status,
+            )
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        return {"items": [item.model_dump(mode="json") for item in sessions]}
 
     @router.get("/v1/protocol-auto/sessions/{session_id}/events")
     def resource_list_protocol_auto_session_events(
@@ -1655,11 +1872,29 @@ def build_protocol_router(
             }, auth=auth, access=access, store=store, default_mode="revise")
             if not request_payload.source_document.as_dict():
                 request_payload = request_payload.model_copy(update={"source_document": existing.draft_definition_json})
-            planner_request = _queue_auto_protocol_planner(store, request_payload)
+            planner_task_id, planner_agent_id, planner_policy, selected_agent = _queue_auto_protocol_planner_task(
+                store,
+                request_payload,
+                session_id=existing.session_id,
+            )
+            prompt_diagnostics = _auto_protocol_prompt_diagnostics(request_payload, selected_agent=selected_agent)
+            planner_state = {
+                "planner_status": "queued",
+                "queued_at": utcnow_iso(),
+                "selected_agent_id": planner_agent_id,
+                "selected_agent_display_name": str(selected_agent.get("display_name") or ""),
+                "selected_agent_provider": str(selected_agent.get("provider") or ""),
+                "timeout_seconds": 3600,
+                "progress_summary": "Queued for Auto Protocol planning.",
+            }
             session = store.update_protocol_auto_design_session(
                 _planning_auto_protocol_session(
                     request_payload,
-                    planner_request=planner_request,
+                    planner_task_id=planner_task_id,
+                    planner_agent_id=planner_agent_id,
+                    planner_policy=planner_policy,
+                    planner_state=planner_state,
+                    prompt_diagnostics=prompt_diagnostics,
                     session_id=existing.session_id,
                     created_at=existing.created_at,
                 ),

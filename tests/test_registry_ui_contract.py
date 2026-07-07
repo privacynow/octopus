@@ -1228,10 +1228,15 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
     assert "function _setAutoProtocolDialogError(preview, status, label, err, retryFn)" in workspace
     assert "function _autoProtocolPlanning(session)" in workspace
     assert "function _autoProtocolHasDraft(session)" in workspace
-    assert "async function _waitForAutoProtocolPlanning(session" in workspace
-    assert "current = await API.getProtocolAutoSession(current.session_id);" in workspace
+    assert "function _subscribeAutoProtocolSession(sessionId, onUpdate)" in workspace
+    assert "const rememberedSessionId = activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();" in workspace
+    assert "const updated = await API.getProtocolAutoSession(session.session_id);" in workspace
+    assert "Auto Protocol is still designing. Wait for planning to finish before applying, publishing, or running." in workspace
+    assert "Auto Protocol is still designing. The dialog reattached to the active planner job." in workspace
     assert "planning = _autoProtocolPlanning(session)" in workspace
     assert "actionable = hasSession && !planning && hasDraft" in workspace
+    assert "plannerField.select.value" in workspace
+    assert "preferred_design_agent_id: plannerField.select.value" in workspace
     assert "UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);" in workspace
     assert "card.setAttribute('role', 'alert');" in workspace
     assert "closeOnOverlay: false" in workspace
@@ -1244,6 +1249,7 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
 
     api = (repo_root / "octopus_registry" / "ui" / "js" / "api.js").read_text(encoding="utf-8")
     assert "createProtocolAutoSession: (body = {}) =>\n            request('POST', '/v1/protocol-auto/sessions', { body })," in api
+    assert "listProtocolAutoSessions: (params = {}) =>\n            request('GET', '/v1/protocol-auto/sessions', { params })," in api
     assert "reviseProtocolAutoSession: (sessionId, body = {}) =>\n            request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body })," in api
 
 

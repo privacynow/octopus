@@ -67,7 +67,7 @@ def _task_list_payload(row):
             int(payload.get("artifact_count", 0) or 0),
             len(contract.get("output_artifacts", ()) or ()),
         )
-    if payload.get("protocol_run_id") or payload.get("artifact_count"):
+    if payload.get("protocol_run_id") or payload.get("artifact_count") or str(payload.get("source_kind") or "") == "auto_design":
         payload["request"] = request
         payload["result"] = result
     return payload

@@ -313,6 +313,10 @@ async def _registry_lifespan(app: FastAPI):
                         normalized = str(run_id or "").strip()
                         if normalized:
                             topics.add(f"protocol-run:{normalized}")
+                    for session_id in getattr(result, "affected_auto_session_ids", ()) or ():
+                        normalized = str(session_id or "").strip()
+                        if normalized:
+                            topics.add(f"protocol-auto-session:{normalized}")
                     await _broadcast_invalidations(
                         topics=topics,
                         reason="protocol.run.timeout",
@@ -661,7 +665,16 @@ async def routed_task_status(
     if (parent_conversation_id or result.recipient_conversation_id) and (result.inserted_events or result.recipient_inserted_events):
         await _broadcast_task_record_events(result)
     await _broadcast_invalidations(
-        topics=("tasks", "conversations", "summary"),
+        topics=(
+            "tasks",
+            "conversations",
+            "summary",
+            *(
+                (f"protocol-auto-session:{str(result.routed_task_id).split(':')[1]}", "protocols")
+                if str(result.routed_task_id or "").startswith("auto-design:")
+                else ()
+            ),
+        ),
         reason="routed_task.updated",
         conversation_id=parent_conversation_id,
         agent_id=agent_id,
@@ -699,6 +712,11 @@ async def routed_task_result(
         await _broadcast_task_record_events(result)
     topics = {"tasks", "conversations", "summary"}
     reason = "routed_task.completed"
+    if str(result.routed_task_id or "").startswith("auto-design:"):
+        parts = str(result.routed_task_id or "").split(":")
+        if len(parts) >= 2 and parts[1]:
+            topics.add("protocols")
+            topics.add(f"protocol-auto-session:{parts[1]}")
     if protocol_run_id:
         topics.add("protocols")
         topics.add(f"protocol-run:{protocol_run_id}")

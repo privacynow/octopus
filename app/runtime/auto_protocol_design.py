@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import asyncio
 from typing import Any
 
 from octopus_sdk.config import BotConfigBase
@@ -32,6 +33,8 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "available_agents": agents,
         "available_skills": skills,
         "workspace_ref": request.workspace_ref,
+        "resource_refs": list(request.resource_refs or []),
+        "resource_summaries": [item.as_dict() for item in request.resource_summaries],
         "run_lessons": [item.model_dump(mode="json") for item in request.run_lessons or []],
     }
     return (
@@ -124,12 +127,15 @@ async def design_auto_protocol_with_provider(
     config: BotConfigBase,
     provider: Provider,
     provider_state_factory,
+    progress=None,
+    cancel: asyncio.Event | None = None,
 ) -> ProtocolAutoDesignModelResponseRecord:
     del provider_state_factory
+    progress_sink = progress or _NullProgress()
     result = await provider.run_preflight(
         _planner_prompt(request),
         [],
-        _NullProgress(),
+        progress_sink,
         context=PreflightContext(
             extra_dirs=[],
             system_prompt=(
@@ -142,6 +148,7 @@ async def design_auto_protocol_with_provider(
             effective_model=str(getattr(config, "model", "") or ""),
             timeout_seconds=max(300, int(getattr(config, "timeout_seconds", 0) or 0)),
         ),
+        cancel=cancel,
     )
     if result.returncode != 0 or result.timed_out or result.cancelled:
         detail = result.text.strip() or f"provider exited with code {result.returncode}"

@@ -1014,8 +1014,15 @@ class CodexProvider:
         extra_dirs = context.extra_dirs if context else None
         working_dir = context.working_dir if context else ""
         effective_model = getattr(context, 'effective_model', '') if context else ""
+        timeout_seconds = int(getattr(context, 'timeout_seconds', 0) or 0) if context else 0
         cmd = self._build_new_cmd(
             effective_prompt, image_paths, sandbox="read-only", ephemeral=True, safe_mode=True,
             extra_dirs=extra_dirs, effective_model=effective_model, working_dir=working_dir,
         )
-        return await self._run_cmd(cmd, progress, working_dir=working_dir, cancel=cancel)
+        return await self._run_cmd(
+            cmd,
+            progress,
+            working_dir=working_dir,
+            timeout_seconds=timeout_seconds,
+            cancel=cancel,
+        )

@@ -568,12 +568,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
             or routed_task_external_conversation_ref(validated_request.routed_task_id)
         )
         task_context = request_payload.get("context", {})
-        task_source_kind = (
+        explicit_source_kind = ""
+        if isinstance(task_context, dict):
+            explicit_source_kind = str(
+                task_context.get("task_source_kind")
+                or task_context.get("source_kind")
+                or ""
+            ).strip()
+        task_source_kind = explicit_source_kind or (
             "protocol_stage"
             if isinstance(task_context, dict) and str(task_context.get("protocol_run_id", "") or "").strip()
             else "delegation"
         )
-        task_hidden = task_source_kind in {"protocol_stage", "rehearsal", "test"}
+        task_hidden = task_source_kind in {"protocol_stage", "rehearsal", "test", "auto_design"}
         for skill_name in requested_routed_skills(request_payload):
             if skill_name.lower() in disabled_skills:
                 raise RoutingSkillDisabledError(skill_name)
@@ -752,6 +759,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     routed_task_id=routed_task_id,
                     now=now,
                 )
+            try:
+                task = shared_get_task(
+                    conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    routed_task_id=routed_task_id,
+                )
+                if str(getattr(task, "source_kind", "") or "") == "auto_design":
+                    self._protocol_store.update_auto_design_task_progress_in_tx(
+                        conn,
+                        routed_task_id=routed_task_id,
+                        status=status_value,
+                        summary=str(getattr(payload, "summary", "") or ""),
+                        progress=getattr(payload, "progress", None),
+                        now=now,
+                    )
+            except Exception:
+                log.warning("Auto Protocol planner progress sync failed for task %s", routed_task_id, exc_info=True)
             return result
 
     def update_routed_task_result(
@@ -782,6 +806,22 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 routed_task_id=routed_task_id,
                 now=now,
             )
+            try:
+                task = shared_get_task(
+                    conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    routed_task_id=routed_task_id,
+                )
+                if str(getattr(task, "source_kind", "") or "") == "auto_design":
+                    result_payload = task.result.as_dict() if task.result is not None else {}
+                    self._protocol_store.finalize_auto_design_task_result_in_tx(
+                        conn,
+                        routed_task_id=routed_task_id,
+                        result_json=result_payload,
+                        now=now,
+                    )
+            except Exception:
+                log.warning("Auto Protocol planner result sync failed for task %s", routed_task_id, exc_info=True)
             return result
         return run_write_tx_with_retry(self._connect, _operation)
 
@@ -1321,6 +1361,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
         access: ProtocolAccessContextRecord,
     ) -> ProtocolAutoDesignSessionRecord:
         return self._protocol_store.get_protocol_auto_design_session(session_id, access=access)
+
+    def list_protocol_auto_design_sessions(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[ProtocolAutoDesignSessionRecord]:
+        return self._protocol_store.list_protocol_auto_design_sessions(
+            access=access,
+            cursor=cursor,
+            limit=limit,
+            status=status,
+        )
 
     def update_protocol_auto_design_session(
         self,

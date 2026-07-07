@@ -673,7 +673,7 @@ async def handle_registry_delivery(
         if not registry_id:
             return "rejected"
         routed_task_id = str(payload.get("routed_task_id", ""))
-        if routed_task_id.startswith("protocol-stage:"):
+        if routed_task_id.startswith("protocol-stage:") or routed_task_id.startswith("auto-design:"):
             return "accepted"
         parent_conversation_id = qualify_registry_parent_ref(
             registry_id,

@@ -370,6 +370,8 @@ const API = (() => {
             request('POST', '/v1/protocol-drafts', { body }),
         createProtocolAutoSession: (body = {}) =>
             request('POST', '/v1/protocol-auto/sessions', { body }),
+        listProtocolAutoSessions: (params = {}) =>
+            request('GET', '/v1/protocol-auto/sessions', { params }),
         getProtocolAutoSession: (sessionId) =>
             request('GET', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}`),
         listProtocolAutoSessionEvents: (sessionId) =>

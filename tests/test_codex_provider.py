@@ -1145,7 +1145,8 @@ async def test_run_preflight_uses_context_working_dir():
     provider = CodexProvider(make_config())
     calls: list[tuple[list[str], bool, str]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None, timeout_seconds=0):
+        del timeout_seconds
         calls.append((cmd, is_resume, working_dir))
         return RunResult(text="ok")
 
@@ -1166,6 +1167,31 @@ async def test_run_preflight_uses_context_working_dir():
     assert "-C" in cmd
     assert "/workspace/workspace" in cmd
     assert working_dir == "/workspace/workspace"
+
+
+async def test_run_preflight_uses_context_timeout_seconds():
+    provider = CodexProvider(make_config(timeout_seconds=30))
+    calls: list[float] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None, timeout_seconds=0):
+        del cmd, progress, is_resume, extra_env, working_dir, cancel
+        calls.append(timeout_seconds)
+        return RunResult(text="ok")
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        active_skill_tools_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
+        working_dir="",
+        timeout_seconds=1800,
+    )
+
+    await provider.run_preflight("plan", [], FakeProgress(), context=context)
+
+    assert calls == [1800]
 
 
 async def test_check_runtime_health_uses_dangerous_when_approval_off(monkeypatch):

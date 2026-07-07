@@ -11,6 +11,7 @@ from octopus_sdk.bot_runtime import SessionRuntimePort, SkillActivationPort
 from octopus_sdk.execution_context import ResolvedExecutionContext, resolve_execution_context
 from octopus_sdk.sessions import (
     SessionState,
+    normalize_provider_session,
     normalize_single_project_session,
     session_from_dict,
     session_to_dict,
@@ -64,12 +65,18 @@ class LocalSessionRuntime(SessionRuntimePort):
             default_role=default_role,
             default_skills=default_skills,
         )
+        mutated = normalize_provider_session(
+            session,
+            provider_name=provider_name,
+            provider_state_factory=provider_state_factory,
+            conversation_key=conversation_key,
+        )
         mutated = normalize_single_project_session(
             session,
             projects=self.config.projects,
             provider_state_factory=provider_state_factory,
             conversation_key=conversation_key,
-        )
+        ) or mutated
         activation = self._activation()
         if activation is not None and activation.normalize(session):
             mutated = True
@@ -123,12 +130,18 @@ class LocalSessionRuntime(SessionRuntimePort):
             default_role=default_role,
             default_skills=default_skills,
         )
+        mutated = normalize_provider_session(
+            session,
+            provider_name=provider_name,
+            provider_state_factory=provider_state_factory,
+            conversation_key=conversation_key,
+        )
         mutated = normalize_single_project_session(
             session,
             projects=self.config.projects,
             provider_state_factory=provider_state_factory,
             conversation_key=conversation_key,
-        )
+        ) or mutated
         activation = self._activation()
         if activation is not None and activation.normalize(session):
             mutated = True
